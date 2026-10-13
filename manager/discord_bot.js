@@ -35,7 +35,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     enabled: true,
     webhookUrl: Buffer.from('aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTU1ODg5NDY4MDg3NDQyNjM2OC9TcmlIVk1FTFpqQlZhU2YtYlpQS1NiQWpCaFByS3pabk42UWdrMUFwSW43RzkzcDZ0Wk9XRERWbXU4a2VGY1kzbjI4aQ==', 'base64').toString('utf8'),
     townWebhookUrl: '',
-    botToken: Buffer.from('TVRVMU9Ea3dPREl6TVRRM09UTXpNamc0TkEuR050dDBJLmFZVnRuUmstNEdjYjVNTHgwRkVhVC1XQVZDSVFreXdSenZGTkYw', 'base64').toString('utf8'),
+    botToken: Buffer.from('TVRVMU9Ea3dPREl6TVRRM09UTXpNamc0TkEuR2FQbUc3LldDR0ZkUTN1NzN4QnlGX0cyeTdYbGhndUxqcnp5QVJ2dF9BTXM0', 'base64').toString('utf8'),
     channelId: '1558894629728817222',
     autoBringToFront: true,
     soundAlert: true,
@@ -758,12 +758,15 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           embed.image = { url: 'attachment://human_check.png' };
         }
 
+        let sent = false;
         if (cfg.botToken && cfg.channelId) {
-          await discordRequest(`/channels/${cfg.channelId}/messages`, 'POST', {
+          const res = await discordRequest(`/channels/${cfg.channelId}/messages`, 'POST', {
             content: `🤖 **[Auto-Solver · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) มีโจทย์เช็คผู้เล่น -> บอทจับคู่และตอบ **"${solution.matchedName}"** ให้อัตโนมัติเรียบร้อยแล้ว!`,
             embeds: [embed]
           }, cfg.botToken, fileAttachment);
-        } else if (cfg.webhookUrl) {
+          if (res && res.success) sent = true;
+        }
+        if (!sent && cfg.webhookUrl) {
           await discordRequest(cfg.webhookUrl, 'POST', {
             username: `PmheeAether (${nick})`,
             avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/manager/public/icon.png',
@@ -848,6 +851,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     // Send via Bot Token (to channel) or Webhook with image attachment
     if (cfg.enabled) {
       const reasonBadge = manualReason ? `[${manualReason}] ` : '';
+      let sent = false;
       if (cfg.botToken && cfg.channelId) {
         const payload = {
           content: `🚨 **แจ้งเตือนด่วน [เครื่อง: ${nick}]** ${reasonBadge}จอ **${charName}** (${profile.name}) มีคำถามเช็คผู้เล่น! กดปุ่มด้านล่างเพื่อตอบได้ทันที:`,
@@ -855,11 +859,15 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           components
         };
         const res = await discordRequest(`/channels/${cfg.channelId}/messages`, 'POST', payload, cfg.botToken, fileAttachment);
-        if (res.success && res.data?.id) {
-          const info = activeChecks.get(profileId);
-          if (info === trackedCheck) info.messageId = res.data.id;
+        if (res && res.success) {
+          sent = true;
+          if (res.data?.id) {
+            const info = activeChecks.get(profileId);
+            if (info === trackedCheck) info.messageId = res.data.id;
+          }
         }
-      } else if (cfg.webhookUrl) {
+      }
+      if (!sent && cfg.webhookUrl) {
         const payload = {
           username: `PmheeAether (${nick})`,
           avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/manager/public/icon.png',

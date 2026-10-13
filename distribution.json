@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "a7a9947a84075136ac2c1d6ca97168bd2def2e33",
+  "sourceCommit": "92c0fd97903fdf160e8e63a515f3aa6d8a116a67",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -32,7 +32,7 @@
     },
     {
       "path": "manager/discord_bot.js",
-      "sha256": "62d7e401c4426c60f9a68971099b31df7e33d3dc8e7aa1c411738f06aab6a9ab"
+      "sha256": "7f3e39a296e7b4d56ec1c6f80fb0da59291ed0f438c93d0accdcbc4d38be1bbb"
     },
     {
       "path": "manager/embedded_human_check_bridge.js",

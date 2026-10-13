@@ -1,0 +1,1782 @@
+﻿{
+    "gddRevision":  139,
+    "startingClass":  "novice",
+    "jobChangeRequirement":  "Job Lv.10 + Adventurer\u0027s Instinct Lv.9",
+    "classes":  [
+                    {
+                        "id":  "novice",
+                        "name":  "Novice",
+                        "thai":  "โนวิซ",
+                        "tier":  0,
+                        "next":  [
+                                     "swordsman",
+                                     "mage",
+                                     "archer",
+                                     "acolyte",
+                                     "merchant",
+                                     "thief"
+                                 ],
+                        "playable":  true,
+                        "skills":  [
+                                       {
+                                           "id":  "basic-skill",
+                                           "name":  "Adventurer\u0027s Instinct",
+                                           "thai":  "ทักษะพื้นฐาน",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "first-aid",
+                                           "name":  "Field Mend",
+                                           "thai":  "ปฐมพยาบาล",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "whirlwind",
+                                           "name":  "Cyclone Axe",
+                                           "thai":  "ขวานพายุหมุน",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "whirlwind",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  2.5
+                                       },
+                                       {
+                                           "id":  "starfall",
+                                           "name":  "Starfall",
+                                           "thai":  "ฝนดาวตก",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "meteor-storm",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  5
+                                       },
+                                       {
+                                           "id":  "angel-starfall",
+                                           "name":  "Seraph Starfall",
+                                           "thai":  "ฝนดาวตกศักดิ์สิทธิ์",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "holy-starfall",
+                                           "rangeTiles":  12,
+                                           "areaRadiusTiles":  5
+                                       },
+                                       {
+                                           "id":  "berserk",
+                                           "name":  "Berserk",
+                                           "thai":  "คลุ้มคลั่ง",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "berserk"
+                                       },
+                                       {
+                                           "id":  "earthquake",
+                                           "name":  "Tectonic Rage",
+                                           "thai":  "แผ่นดินไหว",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "heavens-drive",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  3
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "swordsman",
+                        "name":  "Swordsman",
+                        "thai":  "นักดาบ",
+                        "tier":  1,
+                        "previous":  "novice",
+                        "next":  [
+                                     "knight",
+                                     "crusader"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  10,
+                                         "skills":  [
+                                                        {
+                                                            "id":  "basic-skill",
+                                                            "name":  "Adventurer\u0027s Instinct",
+                                                            "level":  9
+                                                        }
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "sword-mastery",
+                                           "name":  "Blade Mastery",
+                                           "thai":  "ชำนาญดาบ",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "bash",
+                                           "name":  "Crushing Blow",
+                                           "thai":  "ฟันกระแทก",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "bash",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "provoke",
+                                           "name":  "Challenger\u0027s Roar",
+                                           "thai":  "ยั่วยุ",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "provoke",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  5
+                                       },
+                                       {
+                                           "id":  "hp-recovery",
+                                           "name":  "Iron Vitality",
+                                           "thai":  "ฟื้นฟูพลังชีวิต",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "magnum-break",
+                                           "name":  "Inferno Burst",
+                                           "thai":  "ระเบิดเพลิง",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "magnum-break",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  3
+                                       },
+                                       {
+                                           "id":  "endure",
+                                           "name":  "Unbroken Will",
+                                           "thai":  "จิตมั่นคง",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "endure",
+                                           "rangeTiles":  0
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "mage",
+                        "name":  "Mage",
+                        "thai":  "นักเวท",
+                        "tier":  1,
+                        "previous":  "novice",
+                        "next":  [
+                                     "wizard",
+                                     "sage"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  10,
+                                         "skills":  [
+                                                        {
+                                                            "id":  "basic-skill",
+                                                            "name":  "Adventurer\u0027s Instinct",
+                                                            "level":  9
+                                                        }
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "staff-mastery",
+                                           "name":  "Arcane Focus",
+                                           "thai":  "ชำนาญไม้เท้า",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "sp-recovery",
+                                           "name":  "Mana Flow",
+                                           "thai":  "ฟื้นฟูพลังเวท",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "fire-bolt",
+                                           "name":  "Flame Lance",
+                                           "thai":  "ศรเพลิง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "fire-bolt",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "cold-bolt",
+                                           "name":  "Frost Lance",
+                                           "thai":  "ศรน้ำแข็ง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "cold-bolt",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "lightning-bolt",
+                                           "name":  "Thunder Lance",
+                                           "thai":  "ศรสายฟ้า",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "lightning-bolt",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "soul-strike",
+                                           "name":  "Spirit Barrage",
+                                           "thai":  "ดวงวิญญาณพุ่งชน",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "soul-strike",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "napalm-beat",
+                                           "name":  "Psychic Burst",
+                                           "thai":  "คลื่นจิต",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "napalm-beat",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  1.5
+                                       },
+                                       {
+                                           "id":  "frost-diver",
+                                           "name":  "Glacial Spike",
+                                           "thai":  "ธาราเยือกแข็ง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "frost-diver",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "sight",
+                                           "name":  "Revealing Flame",
+                                           "thai":  "ไฟส่องทาง",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "sight",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "arcane-surge",
+                                           "name":  "Arcane Surge",
+                                           "thai":  "เวทพลุ่งพล่าน",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "arcane-surge"
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "archer",
+                        "name":  "Archer",
+                        "thai":  "นักธนู",
+                        "tier":  1,
+                        "previous":  "novice",
+                        "next":  [
+                                     "hunter",
+                                     "bard",
+                                     "dancer"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  10,
+                                         "skills":  [
+                                                        {
+                                                            "id":  "basic-skill",
+                                                            "name":  "Adventurer\u0027s Instinct",
+                                                            "level":  9
+                                                        }
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "owl-eye",
+                                           "name":  "Keen Eye",
+                                           "thai":  "ตานกฮูก",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "vulture-eye",
+                                           "name":  "Eagle Sight",
+                                           "thai":  "ตาแร้ง",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "double-strafe",
+                                           "name":  "Twin Shot",
+                                           "thai":  "ยิงคู่",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "double-strafe",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "arrow-shower",
+                                           "name":  "Arrow Rain",
+                                           "thai":  "ฝนธนู",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "arrow-shower",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  2
+                                       },
+                                       {
+                                           "id":  "improve-concentration",
+                                           "name":  "Hunter\u0027s Focus",
+                                           "thai":  "เพิ่มสมาธิ",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "improve-concentration",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "focus-shooting",
+                                           "name":  "Focus Shooting",
+                                           "thai":  "ยิงรวมสมาธิ",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "focus-shooting",
+                                           "rangeTiles":  9,
+                                           "area":  {
+                                                        "shape":  "rect",
+                                                        "lengthTiles":  9,
+                                                        "widthTiles":  1
+                                                    }
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "acolyte",
+                        "name":  "Acolyte",
+                        "thai":  "นักบวชฝึกหัด",
+                        "tier":  1,
+                        "previous":  "novice",
+                        "next":  [
+                                     "priest",
+                                     "monk"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  10,
+                                         "skills":  [
+                                                        {
+                                                            "id":  "basic-skill",
+                                                            "name":  "Adventurer\u0027s Instinct",
+                                                            "level":  9
+                                                        }
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "heal",
+                                           "name":  "Mending Light",
+                                           "thai":  "แสงเยียวยา",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "heal",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "divine-protection",
+                                           "name":  "Sacred Ward",
+                                           "thai":  "พรคุ้มครอง",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "blessing",
+                                           "name":  "Heaven\u0027s Favor",
+                                           "thai":  "พรแห่งสวรรค์",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "blessing",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "increase-agi",
+                                           "name":  "Swiftness",
+                                           "thai":  "เพิ่มความว่องไว",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "increase-agi",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "holy-light",
+                                           "name":  "Radiant Smite",
+                                           "thai":  "แสงศักดิ์สิทธิ์",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "holy-light",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "mace-mastery",
+                                           "name":  "Mace Discipline",
+                                           "thai":  "ชำนาญกระบอง",
+                                           "kind":  "passive"
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "merchant",
+                        "name":  "Merchant",
+                        "thai":  "พ่อค้า",
+                        "tier":  1,
+                        "previous":  "novice",
+                        "next":  [
+                                     "blacksmith",
+                                     "alchemist"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  10,
+                                         "skills":  [
+                                                        {
+                                                            "id":  "basic-skill",
+                                                            "name":  "Adventurer\u0027s Instinct",
+                                                            "level":  9
+                                                        }
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "enlarge-weight",
+                                           "name":  "Pack Mule",
+                                           "thai":  "ขยายน้ำหนักบรรทุก",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "discount",
+                                           "name":  "Haggler",
+                                           "thai":  "ต่อราคา",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "axe-mastery",
+                                           "name":  "Axe Discipline",
+                                           "thai":  "ชำนาญขวาน",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "mammonite",
+                                           "name":  "Gold Smash",
+                                           "thai":  "ทุบด้วยเงิน",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "mammonite",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "loud-exclamation",
+                                           "name":  "Battle Shout",
+                                           "thai":  "ตะโกนปลุกใจ",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "loud-exclamation",
+                                           "rangeTiles":  0
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "thief",
+                        "name":  "Thief",
+                        "thai":  "โจร",
+                        "tier":  1,
+                        "previous":  "novice",
+                        "next":  [
+                                     "assassin",
+                                     "rogue"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  10,
+                                         "skills":  [
+                                                        {
+                                                            "id":  "basic-skill",
+                                                            "name":  "Adventurer\u0027s Instinct",
+                                                            "level":  9
+                                                        }
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "dagger-mastery",
+                                           "name":  "Dagger Finesse",
+                                           "thai":  "ชำนาญมีดสั้น",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "double-attack",
+                                           "name":  "Twin Fang",
+                                           "thai":  "โจมตีสองจังหวะ",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "improve-dodge",
+                                           "name":  "Evasion Art",
+                                           "thai":  "หลบหลีกชำนาญ",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "steal",
+                                           "name":  "Pickpocket",
+                                           "thai":  "ขโมย",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "steal",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "hiding",
+                                           "name":  "Vanish",
+                                           "thai":  "ซ่อนตัว",
+                                           "kind":  "toggle",
+                                           "target":  "self",
+                                           "vfx":  "hiding",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "back-slide",
+                                           "name":  "Backflip",
+                                           "thai":  "ถอยฉาก",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "envenom",
+                                           "name":  "Venom Strike",
+                                           "thai":  "จู่โจมพิษ",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "envenom",
+                                           "rangeTiles":  2
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "knight",
+                        "name":  "Knight",
+                        "thai":  "อัศวิน",
+                        "tier":  2,
+                        "previous":  "swordsman",
+                        "next":  [
+                                     "dragon-knight"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "two-hand-sword-mastery",
+                                           "name":  "Greatsword Mastery",
+                                           "thai":  "ชำนาญดาบสองมือ",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "spear-dynamo",
+                                           "name":  "Spear Fervor",
+                                           "thai":  "พลังหอก",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "pierce",
+                                           "name":  "Piercing Lunge",
+                                           "thai":  "แทงทะลวง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "pierce",
+                                           "rangeTiles":  3
+                                       },
+                                       {
+                                           "id":  "bowling-bash",
+                                           "name":  "Cleaving Storm",
+                                           "thai":  "ฟันกวาดกระแทก",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "bowling-bash",
+                                           "rangeTiles":  4,
+                                           "areaRadiusTiles":  3
+                                       },
+                                       {
+                                           "id":  "brandish-spear",
+                                           "name":  "Spear Sweep",
+                                           "thai":  "กวาดใบมีด",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "brandish-spear",
+                                           "rangeTiles":  4,
+                                           "areaRadiusTiles":  3
+                                       },
+                                       {
+                                           "id":  "two-hand-quicken",
+                                           "name":  "Greatsword Haste",
+                                           "thai":  "เร่งดาบสองมือ",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "two-hand-quicken",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "parry",
+                                           "name":  "Riposte Guard",
+                                           "thai":  "ปัดป้อง",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "parry",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "charge-attack",
+                                           "name":  "Valiant Charge",
+                                           "thai":  "พุ่งโจมตี",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "charge-attack",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "spear-mastery",
+                                           "name":  "Lance Mastery",
+                                           "thai":  "ชำนาญหอก",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "peco-peco-ride",
+                                           "name":  "Peco Rider",
+                                           "thai":  "ขี่เปโก้เปโก้",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "peco-peco-master",
+                                           "name":  "Cavalry Mastery",
+                                           "thai":  "ชำนาญการขี่",
+                                           "kind":  "passive"
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "crusader",
+                        "name":  "Crusader",
+                        "thai":  "ครูเซเดอร์",
+                        "tier":  2,
+                        "previous":  "swordsman",
+                        "next":  [
+                                     "paladin",
+                                     "revenant"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "faith",
+                                           "name":  "Devotion",
+                                           "thai":  "ศรัทธา",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "holy-cross",
+                                           "name":  "Sacred Cross",
+                                           "thai":  "กางเขนศักดิ์สิทธิ์",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "holy-cross",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "grand-cross",
+                                           "name":  "Divine Crucible",
+                                           "thai":  "กางเขนมหาศักดิ์สิทธิ์",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "grand-cross",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  5
+                                       },
+                                       {
+                                           "id":  "shield-charge",
+                                           "name":  "Shield Rush",
+                                           "thai":  "พุ่งชนด้วยโล่",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "shield-charge",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "shield-boomerang",
+                                           "name":  "Aegis Throw",
+                                           "thai":  "โล่บูมเมอแรง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "shield-boomerang",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "auto-guard",
+                                           "name":  "Bulwark",
+                                           "thai":  "ป้องกันอัตโนมัติ",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "auto-guard",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "grand-peco-ride",
+                                           "name":  "Grand Peco Rider",
+                                           "thai":  "ขี่แกรนด์เปโก้",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "grand-peco-master",
+                                           "name":  "Holy Cavalry",
+                                           "thai":  "ชำนาญการขี่แกรนด์เปโก้",
+                                           "kind":  "passive"
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "wizard",
+                        "name":  "Wizard",
+                        "thai":  "จอมเวท",
+                        "tier":  2,
+                        "previous":  "mage",
+                        "next":  [
+                                     "stormweaver"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "safety-wall",
+                                           "name":  "Aegis Barrier",
+                                           "thai":  "กำแพงนิรภัย",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "safety-wall",
+                                           "rangeTiles":  7,
+                                           "areaRadiusTiles":  1.5
+                                       },
+                                       {
+                                           "id":  "jupitel-thunder",
+                                           "name":  "Thunder Orb",
+                                           "thai":  "ลูกบอลสายฟ้า",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "jupitel-thunder",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "heavens-drive",
+                                           "name":  "Earth Rupture",
+                                           "thai":  "ธรณีทะลวง",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "heavens-drive",
+                                           "rangeTiles":  12,
+                                           "areaRadiusTiles":  3.5
+                                       },
+                                       {
+                                           "id":  "quagmire",
+                                           "name":  "Sinking Mire",
+                                           "thai":  "บึงโคลน",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "quagmire",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  2.5
+                                       },
+                                       {
+                                           "id":  "storm-gust",
+                                           "name":  "Blizzard Tempest",
+                                           "thai":  "พายุหิมะ",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "storm-gust",
+                                           "rangeTiles":  12,
+                                           "areaRadiusTiles":  6
+                                       },
+                                       {
+                                           "id":  "meteor-storm",
+                                           "name":  "Meteor Rain",
+                                           "thai":  "ฝนอุกกาบาต",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "meteor-storm",
+                                           "rangeTiles":  12,
+                                           "areaRadiusTiles":  5
+                                       },
+                                       {
+                                           "id":  "lord-of-vermilion",
+                                           "name":  "Wrath of Thunder",
+                                           "thai":  "อสนีบาตพิโรธ",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "lord-of-vermilion",
+                                           "rangeTiles":  12,
+                                           "areaRadiusTiles":  5.5
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "sage",
+                        "name":  "Sage",
+                        "thai":  "นักปราชญ์",
+                        "tier":  2,
+                        "previous":  "mage",
+                        "next":  [
+                                     "frost-sage"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "advanced-book",
+                                           "name":  "Tome Mastery",
+                                           "thai":  "ชำนาญหนังสือ",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "dragonology",
+                                           "name":  "Dragon Lore",
+                                           "thai":  "ปราชญ์มังกร",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "earth-spike",
+                                           "name":  "Stone Spikes",
+                                           "thai":  "หนามปฐพี",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "earth-spike",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "endow-blaze",
+                                           "name":  "Flame Enchant",
+                                           "thai":  "อาวุธเพลิง",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "endow-blaze",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "endow-tsunami",
+                                           "name":  "Tide Enchant",
+                                           "thai":  "อาวุธวารี",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "endow-tsunami",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "endow-tornado",
+                                           "name":  "Gale Enchant",
+                                           "thai":  "อาวุธวายุ",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "endow-tornado",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "endow-quake",
+                                           "name":  "Stone Enchant",
+                                           "thai":  "อาวุธปฐพี",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "endow-quake",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "auto-spell",
+                                           "name":  "Spell Echo",
+                                           "thai":  "เวทอัตโนมัติ",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "auto-spell",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "create-converter",
+                                           "name":  "Craft Element Scroll",
+                                           "thai":  "สร้างใบธาตุ",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "create-converter"
+                                       },
+                                       {
+                                           "id":  "land-protector",
+                                           "name":  "Sealed Ground",
+                                           "thai":  "ผนึกปฐพี",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "land-protector",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  5.5
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "hunter",
+                        "name":  "Hunter",
+                        "thai":  "นักล่า",
+                        "tier":  2,
+                        "previous":  "archer",
+                        "next":  [
+                                     "sniper"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "falconry-mastery",
+                                           "name":  "Falcon Bond",
+                                           "thai":  "ฝึกเหยี่ยว",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "blitz-beat",
+                                           "name":  "Falcon Strike",
+                                           "thai":  "เหยี่ยวจู่โจม",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "blitz-beat",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "steel-crow",
+                                           "name":  "Steel Talons",
+                                           "thai":  "เหยี่ยวเหล็ก",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "auto-blitz-beat",
+                                           "name":  "Falcon Instinct",
+                                           "thai":  "เหยี่ยวจู่โจมอัตโนมัติ",
+                                           "kind":  "passive",
+                                           "vfx":  "blitz-beat"
+                                       },
+                                       {
+                                           "id":  "land-mine",
+                                           "name":  "Blast Mine",
+                                           "thai":  "กับระเบิด",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "land-mine",
+                                           "rangeTiles":  3,
+                                           "areaRadiusTiles":  1
+                                       },
+                                       {
+                                           "id":  "ankle-snare",
+                                           "name":  "Snare Trap",
+                                           "thai":  "กับดักข้อเท้า",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "ankle-snare",
+                                           "rangeTiles":  3,
+                                           "areaRadiusTiles":  0.8
+                                       },
+                                       {
+                                           "id":  "claymore-trap",
+                                           "name":  "Inferno Trap",
+                                           "thai":  "กับดักเพลิง",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "claymore-trap",
+                                           "rangeTiles":  3,
+                                           "areaRadiusTiles":  2
+                                       },
+                                       {
+                                           "id":  "detecting",
+                                           "name":  "Falcon Scout",
+                                           "thai":  "เหยี่ยวสอดแนม",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "detecting",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  6
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "bard",
+                        "name":  "Bard",
+                        "thai":  "กวี",
+                        "tier":  2,
+                        "previous":  "archer",
+                        "next":  [
+
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "musical-strike",
+                                           "name":  "Melody Arrow",
+                                           "thai":  "ศรทำนอง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "musical-strike",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "frost-joke",
+                                           "name":  "Chilling Jest",
+                                           "thai":  "มุกเยือกแข็ง",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "frost-joke",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  4
+                                       },
+                                       {
+                                           "id":  "poem-of-bragi",
+                                           "name":  "Ballad of Swiftcast",
+                                           "thai":  "บทเพลงเร่งเวท",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "poem-of-bragi",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "assassin-cross-of-sunset",
+                                           "name":  "Dusk Tempo",
+                                           "thai":  "เพลงยามอัสดง",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "assassin-cross-of-sunset",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "apple-of-idun",
+                                           "name":  "Song of Renewal",
+                                           "thai":  "เพลงฟื้นชีวา",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "apple-of-idun",
+                                           "rangeTiles":  9
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "dancer",
+                        "name":  "Dancer",
+                        "thai":  "นักเต้น",
+                        "tier":  2,
+                        "previous":  "archer",
+                        "next":  [
+
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "throw-arrow",
+                                           "name":  "Dancing Arrow",
+                                           "thai":  "เหวี่ยงศร",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "throw-arrow",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "service-for-you",
+                                           "name":  "Enchanting Dance",
+                                           "thai":  "ระบำบริการ",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "service-for-you",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "fortune-kiss",
+                                           "name":  "Lucky Kiss",
+                                           "thai":  "จุมพิตแห่งโชค",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "fortune-kiss",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "scream",
+                                           "name":  "Banshee Scream",
+                                           "thai":  "กรีดร้อง",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "scream",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  4
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "priest",
+                        "name":  "Priest",
+                        "thai":  "พรีสต์",
+                        "tier":  2,
+                        "previous":  "acolyte",
+                        "next":  [
+                                     "high-priest"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "magnus-exorcismus",
+                                           "name":  "Holy Judgment",
+                                           "thai":  "มหาไล่ผี",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "magnus-exorcismus",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  5
+                                       },
+                                       {
+                                           "id":  "kyrie-eleison",
+                                           "name":  "Divine Shield",
+                                           "thai":  "โล่ศักดิ์สิทธิ์",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "kyrie-eleison",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "impositio-manus",
+                                           "name":  "Blessed Might",
+                                           "thai":  "หัตถ์ประทานพลัง",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "impositio-manus",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "gloria",
+                                           "name":  "Hymn of Fortune",
+                                           "thai":  "บทสรรเสริญ",
+                                           "kind":  "active",
+                                           "target":  "party",
+                                           "vfx":  "gloria"
+                                       },
+                                       {
+                                           "id":  "sanctuary",
+                                           "name":  "Holy Ground",
+                                           "thai":  "แดนศักดิ์สิทธิ์",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "sanctuary",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  2.5
+                                       },
+                                       {
+                                           "id":  "aspersio",
+                                           "name":  "Holy Water",
+                                           "thai":  "น้ำมนต์",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "aspersio",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "pneuma",
+                                           "name":  "Wind Veil",
+                                           "thai":  "ม่านลมคุ้มภัย",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "pneuma",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  1.5
+                                       },
+                                       {
+                                           "id":  "resurrection",
+                                           "name":  "Rebirth",
+                                           "thai":  "ชุบชีวิต",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "heal",
+                                           "rangeTiles":  7
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "monk",
+                        "name":  "Monk",
+                        "thai":  "มองค์",
+                        "tier":  2,
+                        "previous":  "acolyte",
+                        "next":  [
+                                     "champion"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "iron-fists",
+                                           "name":  "Steel Knuckles",
+                                           "thai":  "หมัดเหล็ก",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "triple-attack",
+                                           "name":  "Threefold Strike",
+                                           "thai":  "หมัดสามจังหวะ",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "call-spirits",
+                                           "name":  "Summon Spirit Orbs",
+                                           "thai":  "เรียกลูกแก้ววิญญาณ",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "call-spirits",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "finger-offensive",
+                                           "name":  "Spirit Shot",
+                                           "thai":  "ดีดลูกแก้ววิญญาณ",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "finger-offensive",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "six-saint",
+                                           "name":  "Six-Step Leap",
+                                           "thai":  "หกก้าวเทพ",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "six-saint",
+                                           "rangeTiles":  7,
+                                           "areaRadiusTiles":  0.5
+                                       },
+                                       {
+                                           "id":  "investigate",
+                                           "name":  "Piercing Palm",
+                                           "thai":  "ฝ่ามือทะลวง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "investigate",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "asura-strike",
+                                           "name":  "Asura Fist",
+                                           "thai":  "หมัดอสูร",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "asura-strike",
+                                           "rangeTiles":  2
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "blacksmith",
+                        "name":  "Blacksmith",
+                        "thai":  "ช่างตีเหล็ก",
+                        "tier":  2,
+                        "previous":  "merchant",
+                        "next":  [
+                                     "whitesmith"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "weaponry-research",
+                                           "name":  "Forge Expertise",
+                                           "thai":  "วิจัยอาวุธ",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "two-hand-axe-mastery",
+                                           "name":  "Greataxe Mastery",
+                                           "thai":  "ชำนาญขวานสองมือ",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "hammer-fall",
+                                           "name":  "Earthshaker",
+                                           "thai":  "ทุบพสุธา",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "hammer-fall",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  4
+                                       },
+                                       {
+                                           "id":  "adrenaline-rush",
+                                           "name":  "Battle Frenzy",
+                                           "thai":  "อะดรีนาลีนพลุ่ง",
+                                           "kind":  "active",
+                                           "target":  "party",
+                                           "vfx":  "adrenaline-rush"
+                                       },
+                                       {
+                                           "id":  "over-thrust",
+                                           "name":  "Overdrive",
+                                           "thai":  "พลังเหนือขีด",
+                                           "kind":  "active",
+                                           "target":  "party",
+                                           "vfx":  "over-thrust"
+                                       },
+                                       {
+                                           "id":  "weapon-perfection",
+                                           "name":  "True Edge",
+                                           "thai":  "อาวุธสมบูรณ์แบบ",
+                                           "kind":  "active",
+                                           "target":  "party",
+                                           "vfx":  "weapon-perfection"
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "alchemist",
+                        "name":  "Alchemist",
+                        "thai":  "นักเล่นแร่แปรธาตุ",
+                        "tier":  2,
+                        "previous":  "merchant",
+                        "next":  [
+                                     "creator"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "acid-terror",
+                                           "name":  "Acid Flask",
+                                           "thai":  "ขวดกรดกัดเกราะ",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "acid-terror",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "demonstration",
+                                           "name":  "Firebomb",
+                                           "thai":  "ระเบิดเพลิงขวด",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "demonstration",
+                                           "rangeTiles":  9,
+                                           "areaRadiusTiles":  2
+                                       },
+                                       {
+                                           "id":  "potion-pitcher",
+                                           "name":  "Potion Toss",
+                                           "thai":  "ขว้างยา",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "potion-pitcher",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "chemical-protection",
+                                           "name":  "Alchemic Coating",
+                                           "thai":  "เคลือบสารป้องกัน",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "chemical-protection",
+                                           "rangeTiles":  9
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "assassin",
+                        "name":  "Assassin",
+                        "thai":  "นักฆ่า",
+                        "tier":  2,
+                        "previous":  "thief",
+                        "next":  [
+                                     "assassin-cross"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "katar-mastery",
+                                           "name":  "Katar Edge",
+                                           "thai":  "ชำนาญคาตาร์",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "righthand-mastery",
+                                           "name":  "Main-Hand Finesse",
+                                           "thai":  "ชำนาญมือขวา",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "lefthand-mastery",
+                                           "name":  "Off-Hand Finesse",
+                                           "thai":  "ชำนาญมือซ้าย",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "sonic-blow",
+                                           "name":  "Shadow Fang",
+                                           "thai":  "ฟันเสียงสะท้าน",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "sonic-blow",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "sonic-acceleration",
+                                           "name":  "Swift Fang",
+                                           "thai":  "เร่งโซนิค",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "cloaking",
+                                           "name":  "Shadow Walk",
+                                           "thai":  "เดินในเงา",
+                                           "kind":  "toggle",
+                                           "target":  "self",
+                                           "vfx":  "hiding",
+                                           "rangeTiles":  0
+                                       },
+                                       {
+                                           "id":  "grimtooth",
+                                           "name":  "Reaper\u0027s Bite",
+                                           "thai":  "เขี้ยวเงา",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "grimtooth",
+                                           "rangeTiles":  3,
+                                           "areaRadiusTiles":  1
+                                       },
+                                       {
+                                           "id":  "enchant-poison",
+                                           "name":  "Venom Coat",
+                                           "thai":  "อาบยาพิษ",
+                                           "kind":  "active",
+                                           "target":  "ally",
+                                           "vfx":  "enchant-poison",
+                                           "rangeTiles":  9
+                                       },
+                                       {
+                                           "id":  "venom-dust",
+                                           "name":  "Toxic Cloud",
+                                           "thai":  "ผงพิษ",
+                                           "kind":  "active",
+                                           "target":  "ground",
+                                           "vfx":  "venom-dust",
+                                           "rangeTiles":  2,
+                                           "areaRadiusTiles":  1.5
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "rogue",
+                        "name":  "Rogue",
+                        "thai":  "โร้ก",
+                        "tier":  2,
+                        "previous":  "thief",
+                        "next":  [
+                                     "stalker"
+                                 ],
+                        "playable":  true,
+                        "requires":  {
+                                         "jobLevel":  40,
+                                         "skills":  [
+
+                                                    ]
+                                     },
+                        "skills":  [
+                                       {
+                                           "id":  "plagiarism",
+                                           "name":  "Mimicry",
+                                           "thai":  "ลอกเลียน",
+                                           "kind":  "passive"
+                                       },
+                                       {
+                                           "id":  "back-stab",
+                                           "name":  "Blink Stab",
+                                           "thai":  "แทงข้างหลัง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "back-stab",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "raid",
+                                           "name":  "Ambush",
+                                           "thai":  "จู่โจมจากเงา",
+                                           "kind":  "active",
+                                           "target":  "self",
+                                           "vfx":  "raid",
+                                           "rangeTiles":  0,
+                                           "areaRadiusTiles":  3
+                                       },
+                                       {
+                                           "id":  "strip-armor",
+                                           "name":  "Armor Break",
+                                           "thai":  "ปลดเกราะ",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "strip-armor",
+                                           "rangeTiles":  2
+                                       },
+                                       {
+                                           "id":  "snatcher",
+                                           "name":  "Snatch Strike",
+                                           "thai":  "ฉกชิง",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "snatcher",
+                                           "rangeTiles":  2
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "dragon-knight",
+                        "name":  "Dragon Knight",
+                        "thai":  "อัศวินมังกร",
+                        "tier":  3,
+                        "previous":  "knight",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+                                       {
+                                           "id":  "dragon-breath",
+                                           "name":  "Wyrmfire",
+                                           "thai":  "ลมหายใจมังกร",
+                                           "kind":  "active",
+                                           "target":  "enemy",
+                                           "vfx":  "dragon-breath",
+                                           "rangeTiles":  6,
+                                           "area":  {
+                                                        "shape":  "cone",
+                                                        "lengthTiles":  6,
+                                                        "angleDeg":  70
+                                                    }
+                                       }
+                                   ]
+                    },
+                    {
+                        "id":  "paladin",
+                        "name":  "Paladin",
+                        "thai":  "พาลาดิน",
+                        "tier":  3,
+                        "previous":  "crusader",
+                        "next":  [
+                                     "draken-paladin"
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "revenant",
+                        "name":  "Revenant",
+                        "thai":  "เรเวแนนท์",
+                        "tier":  3,
+                        "previous":  "crusader",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "stormweaver",
+                        "name":  "Stormweaver",
+                        "thai":  "จอมเวทพายุ",
+                        "tier":  3,
+                        "previous":  "wizard",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "frost-sage",
+                        "name":  "Frost Sage",
+                        "thai":  "ปราชญ์น้ำแข็ง",
+                        "tier":  3,
+                        "previous":  "sage",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "sniper",
+                        "name":  "Sniper",
+                        "thai":  "สไนเปอร์",
+                        "tier":  3,
+                        "previous":  "hunter",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "high-priest",
+                        "name":  "High Priest",
+                        "thai":  "ไฮพรีสต์",
+                        "tier":  3,
+                        "previous":  "priest",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "champion",
+                        "name":  "Champion",
+                        "thai":  "แชมเปียน",
+                        "tier":  3,
+                        "previous":  "monk",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "whitesmith",
+                        "name":  "Whitesmith",
+                        "thai":  "ไวท์สมิธ",
+                        "tier":  3,
+                        "previous":  "blacksmith",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "creator",
+                        "name":  "Creator",
+                        "thai":  "ครีเอเตอร์",
+                        "tier":  3,
+                        "previous":  "alchemist",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "assassin-cross",
+                        "name":  "Assassin Cross",
+                        "thai":  "แอสแซสซินครอส",
+                        "tier":  3,
+                        "previous":  "assassin",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "stalker",
+                        "name":  "Stalker",
+                        "thai":  "สตอล์คเกอร์",
+                        "tier":  3,
+                        "previous":  "rogue",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    },
+                    {
+                        "id":  "draken-paladin",
+                        "name":  "Draken Paladin",
+                        "thai":  "พาลาดินมังกร",
+                        "tier":  4,
+                        "previous":  "paladin",
+                        "next":  [
+
+                                 ],
+                        "playable":  false,
+                        "skills":  [
+
+                                   ]
+                    }
+                ]
+}

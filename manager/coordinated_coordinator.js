@@ -179,6 +179,14 @@ function createCoordinatedScriptCoordinator({
       const current = determineMode();
       return current === 'offline' ? offlineCoordinator?.release?.() : undefined;
     },
+    async refreshRelease() {
+      const current = determineMode();
+      if (current === 'offline') {
+        if (offlineCoordinator?.refreshRelease) return await offlineCoordinator.refreshRelease();
+        return offlineCoordinator?.release?.();
+      }
+      return undefined;
+    },
     profileScriptSource(profileId) {
       const current = determineMode();
       return current === 'offline' ? offlineCoordinator?.profileScriptSource?.(profileId) : legacyCoordinator?.profileScriptSource?.(profileId);

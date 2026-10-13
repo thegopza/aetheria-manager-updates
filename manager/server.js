@@ -364,26 +364,35 @@ const LIVE_STATE_EVAL = `(() => {
       const isBoard = Boolean(boardEl || boardImg || (window.__latestHumanCheck && window.__latestHumanCheck.image));
       const isUpdatedFormat = Boolean(window.__humanCheckFormatUpdated || (!isBoard && (!Array.isArray(window.__latestHumanCheck?.items) || !window.__latestHumanCheck.items.length)));
 
-      const options = btns.map((b, i) => {
-        const img = b.querySelector('img');
-        let icon = img ? (img.getAttribute('src') || img.src || '') : '';
-        let itemId = (window.__latestHumanCheck && window.__latestHumanCheck.items) ? window.__latestHumanCheck.items[i] : null;
-        if (itemId == null) {
-          try {
-            const fk = Object.keys(b).find(k => k.startsWith('__reactFiber'));
-            if (fk && b[fk]) {
-              const cp = b[fk].child?.memoizedProps;
-              if (cp && cp.itemId != null) itemId = Number(cp.itemId);
+      const options = btns.length > 0
+        ? btns.map((b, i) => {
+            const img = b.querySelector('img');
+            let icon = img ? (img.getAttribute('src') || img.src || '') : '';
+            let itemId = (window.__latestHumanCheck && window.__latestHumanCheck.items) ? window.__latestHumanCheck.items[i] : null;
+            if (itemId == null) {
+              try {
+                const fk = Object.keys(b).find(k => k.startsWith('__reactFiber'));
+                if (fk && b[fk]) {
+                  const cp = b[fk].child?.memoizedProps;
+                  if (cp && cp.itemId != null) itemId = Number(cp.itemId);
+                }
+              } catch (e) {}
             }
-          } catch (e) {}
-        }
-        return {
-          index: i,
-          label: b.getAttribute('aria-label') || ('ตัวเลือกที่ ' + (i + 1)),
-          icon,
-          itemId: itemId != null ? itemId : null
-        };
-      });
+            return {
+              index: i,
+              label: b.getAttribute('aria-label') || ('ตัวเลือกที่ ' + (i + 1)),
+              icon,
+              itemId: itemId != null ? itemId : null
+            };
+          })
+        : (isBoard
+          ? [0, 1, 2, 3].map(i => ({
+              index: i,
+              label: 'ตัวเลือกที่ ' + (i + 1),
+              icon: '',
+              itemId: null
+            }))
+          : []);
 
       let imageDataUrl = null;
       try {
@@ -457,6 +466,40 @@ const LIVE_STATE_EVAL = `(() => {
 
       if (boardImg && boardImg.src && boardImg.src.startsWith('data:image/')) {
         imageDataUrl = boardImg.src;
+        try {
+          if (boardImg.complete && boardImg.naturalWidth > 0) {
+            const bw = 480;
+            const bh = 330;
+            const stripH = 38;
+            const bCanvas = document.createElement('canvas');
+            bCanvas.width = bw;
+            bCanvas.height = bh + stripH;
+            const bCtx = bCanvas.getContext('2d');
+            if (bCtx) {
+              bCtx.fillStyle = '#0f172a';
+              bCtx.fillRect(0, 0, bw, bh + stripH);
+              bCtx.drawImage(boardImg, 0, 0, bw, bh);
+              const colCenters = [68, 181, 300, 416];
+              for (let i = 0; i < 4; i++) {
+                const cx = colCenters[i];
+                const bx = cx - 44;
+                const by = bh + 5;
+                bCtx.fillStyle = '#1e293b';
+                bCtx.strokeStyle = '#38bdf8';
+                bCtx.lineWidth = 1.5;
+                bCtx.beginPath();
+                if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
+                bCtx.fill();
+                bCtx.stroke();
+                bCtx.fillStyle = '#f8fafc';
+                bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
+                bCtx.textAlign = 'center';
+                bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+              }
+              imageDataUrl = bCanvas.toDataURL('image/png');
+            }
+          }
+        } catch (err) {}
       }
 
       s.humanCheck = {
@@ -1151,7 +1194,7 @@ const botAutoUpdater = createBotAutoUpdater({
   loadProfiles,
   evalProfilePort,
   getGameDir: () => installer.getEffectiveGamePath(),
-  getManagedRelease:()=>scriptCoordinator.release?.(),
+  getManagedRelease:(force)=>force&&scriptCoordinator.refreshRelease?scriptCoordinator.refreshRelease():scriptCoordinator.release?.(),
   dataDir: path.join(__dirname, "data")
 });
 // Auto-login / auto-register: game clients get their profile's ID + password (manager/auth_sync.js)

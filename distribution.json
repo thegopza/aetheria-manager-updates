@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "f57c9f4fbf7fcfb78186e10850e9b419303db106",
+  "sourceCommit": "aba263b528eec78f08e4a1bb7f2380fc583fb1e6",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -8,7 +8,7 @@
     },
     {
       "path": "manager/bot_auto_update.js",
-      "sha256": "b4a65b5e9a772509ff65f62bc5d8a3e719a571ac83cd8b1f7d4c5b134a0c4b74"
+      "sha256": "cbb1c2f82b657ce3aceb409acdbd090f8994a034550e9eaa2e7a732ff7daa1e5"
     },
     {
       "path": "manager/browser_mode.js",
@@ -24,7 +24,7 @@
     },
     {
       "path": "manager/coordinated_coordinator.js",
-      "sha256": "07f9edb99ec9a5290811ff5a272c9f57aa83f22171c627f7a9bf790544f76fa8"
+      "sha256": "f667aa432fc19ff5e4040d16dfc06d0b221b2b534a78e8cc4178cafd30455472"
     },
     {
       "path": "manager/credentials.js",
@@ -32,7 +32,7 @@
     },
     {
       "path": "manager/discord_bot.js",
-      "sha256": "7f3e39a296e7b4d56ec1c6f80fb0da59291ed0f438c93d0accdcbc4d38be1bbb"
+      "sha256": "2cd36601646c9aa8da0a9a22052d46460756ed4680d24495ab3b14ede0d1d3ae"
     },
     {
       "path": "manager/embedded_human_check_bridge.js",
@@ -52,11 +52,11 @@
     },
     {
       "path": "manager/human_check_solver.js",
-      "sha256": "7a0bd7cb7b4ed30a6e81e78690786ed7fd1890caef3297c0a5aac1e2a7aa9266"
+      "sha256": "87396855adeff8d5489abc8149224617c758c8d252b02d731a03cbec71bba740"
     },
     {
       "path": "manager/image_board_solver.js",
-      "sha256": "523944bbed2af22cfb421260ba2c5a1805aa5f44aed74033afb457204fc3ece6"
+      "sha256": "c0106e9c4748260ad470d67528bc3340f73a4f6706c9b36a6c442905e05473a5"
     },
     {
       "path": "manager/installer.js",
@@ -80,7 +80,7 @@
     },
     {
       "path": "manager/offline_coordinator.js",
-      "sha256": "1d6ea122dd3b233bfe684401dc2e42ae0f8abc68729bb2024a4a1fc531051fa6"
+      "sha256": "035ee7e87e7da945ba3bdf44bedc26be6113c1962a9b3e76284a67cf75a50d2a"
     },
     {
       "path": "manager/offline_journal.js",
@@ -212,7 +212,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "6fb3fbadf4aa7453dcf98bbee44e62f7c37f608b162ce872634e659621127110"
+      "sha256": "620dcc97ee040f6e173f158cbace6c2dc5137ccce095d1946bfc9af967fdff2b"
     },
     {
       "path": "manager/test_isolation.js",

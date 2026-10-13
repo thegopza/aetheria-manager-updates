@@ -201,7 +201,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     ].map(key => [key, s[key]])),
     refreshBalance, solveHumanCheck, redeemTrueMoneyVoucher, getMachineFingerprint, reportSecurityEvent, recoverOfflineCredit,
     serviceRequest: (route, payload) => {
-      if (route !== '/v1/aetheria/health' && !/^\/v1\/aetheria\/(?:script|usage|billing|proxy|offline)\/[a-z-]+$/.test(route)) throw new Error('Unsupported coordinator route');
+      if (route !== '/v1/aetheria/health' && !/^\/v1\/aetheria\/(?:script|usage|billing|proxy|offline|machine)\/[a-z-]+(?:\/[a-z-]+)?$/.test(route)) throw new Error('Unsupported coordinator route');
       return call(route, payload);
     },
     proxyReserve: (ip, requestId) => call('/v1/aetheria/proxy/reserve', { ip, ...(requestId ? { requestId } : {}) }),

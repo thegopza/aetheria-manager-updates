@@ -132,7 +132,7 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
     status.lastCheckAt = Date.now();
     try {
       if (getManagedRelease) {
-        const managed = getManagedRelease();
+        const managed = await getManagedRelease(Date.now() - manualAt < 15000);
         if (managed !== undefined) {
           if (!managed) { status.lastError = 'รอ payload ที่ตรวจลายเซ็นแล้วในเครื่อง'; return; }
           if (!/^\d+\.\d+\.\d+$/.test(managed.version || '') || !/^[a-f0-9]{64}$/.test(managed.hash || '')) throw Error('INVALID_MANAGED_RELEASE');

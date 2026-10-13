@@ -263,8 +263,8 @@
             if (d > maxDiff) maxDiff = d;
           }
         }
-        if (maxDiff <= 14) {
-          const kr = Math.round(R[p] / 6), kg = Math.round(G[p] / 6), kb = Math.round(B[p] / 6);
+        if (maxDiff <= 15) {
+          const kr = Math.round(R[p] / 8), kg = Math.round(G[p] / 8), kb = Math.round(B[p] / 8);
           const key = (kr << 12) | (kg << 6) | kb;
           let entry = colorBins.get(key);
           if (!entry) {
@@ -284,7 +284,7 @@
       const mr = entry.sumR / entry.count, mg = entry.sumG / entry.count, mb = entry.sumB / entry.count;
       const sum = mr + mg + mb;
       const sat = Math.max(mr, mg, mb) - Math.min(mr, mg, mb);
-      if (sum < 270 && sat < 140 && (entry.count >= 22 || (entry.count >= 10 && sum < 245))) {
+      if (sum < 270 && sat < 140 && (entry.count >= 14 || (entry.count >= 5 && sum < 245))) {
         bgColors.push({ r: mr, g: mg, b: mb });
       }
     }
@@ -525,20 +525,20 @@
         const normMask = maskDiff / Math.max(1, unionWeight);
         const normLum = overlapWeight > 1 ? lumDiff / overlapWeight : 2.0;
         const normGrad = overlapWeight > 1 ? gradDiff / overlapWeight : 1.0;
-        const dist = normMask * 2.2 + normLum * 0.55 + normGrad * 0.25;
+        const dist = normMask * 2.6 + normLum * 0.65 + normGrad * 0.30;
         if (dist < bestPolarDist) bestPolarDist = dist;
       }
     }
 
-    const elongDiff = Math.abs(Math.log(top.elongation / slot.elongation)) * 1.8;
-    const fillDiff = Math.abs(Math.log(top.fillRatio / slot.fillRatio)) * 1.4;
+    const elongDiff = Math.abs(Math.log(top.elongation / slot.elongation)) * 0.95;
+    const fillDiff = Math.abs(Math.log(top.fillRatio / slot.fillRatio)) * 0.95;
     const scaleRatio = slot.rmsRadius / top.rmsRadius;
     const scalePenalty = (scaleRatio < 0.75 || scaleRatio > 1.15)
       ? Math.abs(Math.log(scaleRatio)) * 1.2
       : Math.abs(Math.log(scaleRatio / 0.94)) * 0.35;
     const areaRatio = slot.area / (top.area * 0.85);
-    const areaPenalty = Math.abs(Math.log(Math.max(0.25, Math.min(4.0, areaRatio)))) * 0.45;
-    const lumStatPenalty = (Math.abs(top.meanLum - slot.meanLum) / 140 + Math.abs(top.stdLum - slot.stdLum) / 90 + Math.abs(top.meanSat - slot.meanSat) / 120) * 0.35;
+    const areaPenalty = Math.abs(Math.log(Math.max(0.25, Math.min(4.0, areaRatio)))) * 0.16;
+    const lumStatPenalty = (Math.abs(top.meanLum - slot.meanLum) / 130 + Math.abs(top.stdLum - slot.stdLum) / 85 + Math.abs(top.meanSat - slot.meanSat) / 55) * 0.45;
     const rgbDiff = (Math.abs(top.meanR - slot.meanR) + Math.abs(top.meanG - slot.meanG) + Math.abs(top.meanB - slot.meanB));
     const rgbPenalty = rgbDiff > 180 ? ((rgbDiff - 180) / 300) * 0.35 : 0;
 
@@ -562,7 +562,7 @@
       [365, 468]
     ];
     const y1 = Math.round(175 * sy);
-    const y2 = Math.min(bh - 5, Math.round(318 * sy));
+    const y2 = Math.min(bh - 5, Math.round(306 * sy));
 
     return rawCols.map(([cx1, cx2], idx) => {
       const x1 = Math.round(cx1 * sx);
@@ -593,7 +593,7 @@
     });
   }
 
-  function solveFrameChallenge(boardData) {
+  function solveFrameChallenge(boardData, options = {}) {
     if (!boardData || !boardData.data) return null;
     const frame = findGoldenFrame(boardData);
     if (!frame) return null;
@@ -619,8 +619,14 @@
         };
       });
       scored.sort((a, b) => a.score - b.score);
-      const best = scored[0];
-      const secondScore = scored.length > 1 ? scored[1].score : best.score + 1.5;
+      const excludeRaw = options && options.excludeSlots;
+      const excludeSet = excludeRaw instanceof Set
+        ? excludeRaw
+        : new Set(Array.isArray(excludeRaw) ? excludeRaw.map(Number) : []);
+      const available = excludeSet.size > 0 ? scored.filter(s => !excludeSet.has(s.slot)) : scored;
+      const best = available[0] || scored[0];
+      const runnerUp = available.length > 1 ? available[1] : (scored.find(s => s !== best) || null);
+      const secondScore = runnerUp ? runnerUp.score : best.score + 1.5;
       const margin = Math.max(0, secondScore - best.score);
 
       // Calibrate confidence (0..100) from best.score and margin over runner-up
@@ -641,6 +647,7 @@
         confidence,
         frame,
         candidates: candidates.map(c => ({ slot: c.slot, x: c.x, y: c.y })),
+        ranked: scored.map(s => ({ slot: s.slot, x: s.x, y: s.y, score: s.score })),
         matchedName: `รูปในกรอบ (ช่องที่ ${best.slot})`
       };
     }

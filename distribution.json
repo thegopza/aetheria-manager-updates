@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "aba263b528eec78f08e4a1bb7f2380fc583fb1e6",
+  "sourceCommit": "38c1aa5a293ed2ac4f60d9857c2f21dce8d3c97d",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -32,7 +32,7 @@
     },
     {
       "path": "manager/discord_bot.js",
-      "sha256": "2cd36601646c9aa8da0a9a22052d46460756ed4680d24495ab3b14ede0d1d3ae"
+      "sha256": "3018eccce4d259dabd0efac8d6a70fd40881bb4cd6f8183ecc6b1dabe25231bb"
     },
     {
       "path": "manager/embedded_human_check_bridge.js",
@@ -56,7 +56,7 @@
     },
     {
       "path": "manager/image_board_solver.js",
-      "sha256": "c0106e9c4748260ad470d67528bc3340f73a4f6706c9b36a6c442905e05473a5"
+      "sha256": "fd00b078b261b737863c9d9e62ff222dd14747b3619797a5c8534a14b5bf21ba"
     },
     {
       "path": "manager/installer.js",
@@ -96,7 +96,7 @@
     },
     {
       "path": "manager/party_api.js",
-      "sha256": "573265e66fd5b69a95a3b857afe5c0436cdf44a681a0aec891fbad4ae45d27bb"
+      "sha256": "63da62cc6bc5244e90dfa26edda90f4b05d6e90bd7a76213dd9017e49ca7e1f3"
     },
     {
       "path": "manager/plan_sync.js",

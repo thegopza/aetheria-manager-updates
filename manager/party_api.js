@@ -88,6 +88,16 @@ const READ_JS = `(() => {
   let party = null, invite = null;
   try { party = g.party ? g.party() : null; } catch (e) {}
   try { invite = g.invite ? g.invite() : null; } catch (e) {}
+  try {
+    if (!invite && typeof document.querySelector === 'function') {
+      const toast = document.querySelector('.invite-toast');
+      if (toast) {
+        const txt = (toast.innerText || toast.textContent || '').trim();
+        const m = txt.match(/^(\S+)\s+เชิญคุณเข้าปาร์ตี้/m);
+        if (m) invite = { kind: 'party', from: m[1] };
+      }
+    }
+  } catch (e) {}
   // The game's own "follow" (set by รวมทีม / ติดตามหัวหน้า): walks after that player and AUTO assists them
   let follow = null;
   try { follow = g.follow ? g.follow() : null; } catch (e) {}
@@ -162,7 +172,19 @@ const ACTIONS = {
   // Only accept an invite that really comes from our leader
   accept: leaderName => sendPartyJs({ action: 'accept' }, `
     const g = window.__pmPartyGetters; let inv = null; try { inv = g && g.invite ? g.invite() : null; } catch (e) {}
-    if (!inv || inv.kind !== 'party' || inv.from !== ${JSON.stringify(leaderName)}) return { success: false, error: 'no-invite' };`),
+    let toastBtn = null;
+    try {
+      if (typeof document.querySelector === 'function') {
+        const toast = document.querySelector('.invite-toast');
+        if (toast && (toast.innerText || toast.textContent || '').includes(${JSON.stringify(leaderName)})) {
+          toastBtn = toast.querySelector('.invite-actions button.primary') || toast.querySelector('button.primary');
+          if (!inv) inv = { kind: 'party', from: ${JSON.stringify(leaderName)} };
+        }
+      }
+    } catch (e) {}
+    if (!inv || inv.kind !== 'party' || inv.from !== ${JSON.stringify(leaderName)}) return { success: false, error: 'no-invite' };
+    try { if (inv && typeof inv === 'object') inv.expiresAt = 0; } catch (e) {}
+    try { if (toastBtn && typeof toastBtn.click === 'function') { toastBtn.click(); return { success: true }; } } catch (e) {}`),
   leave: () => sendPartyJs({ action: 'leave' }),
   kick: name => sendPartyJs({ action: 'kick', name }),
   summon: () => sendPartyJs({ action: 'summon' }),
@@ -405,6 +427,17 @@ function createPartyService(opts) {
     let changed = keep.length !== party.memberIds.length;
     party.memberIds = keep;
 
+    if (L.party && L.party.leader === L.name && Array.isArray(L.party.members)) {
+      const assignedBefore = new Set(party.memberIds.map(id => (states.get(id) && states.get(id).name) || (profiles.get(id) && profiles.get(id).lastCharName)).filter(Boolean));
+      for (const m of L.party.members.slice()) {
+        if (!m || !m.name || m.name === L.name) continue;
+        if (!assignedBefore.has(m.name) && m.online === false) {
+          await act(leaderP, ACTIONS.kick(m.name), 'kick-offline');
+          L.party.members = L.party.members.filter(x => x.name !== m.name);
+        }
+      }
+    }
+
     // Top up to 6 (leader included)
     if (party.autoFill) {
       const excluded = new Set(party.excludedIds);
@@ -420,6 +453,17 @@ function createPartyService(opts) {
       if (picks.length) { party.memberIds.push(...picks); changed = true; }
     }
     if (changed) save();
+
+    if (L.party && L.party.leader === L.name && Array.isArray(L.party.members)) {
+      const assignedAfter = new Set(party.memberIds.map(id => (states.get(id) && states.get(id).name) || (profiles.get(id) && profiles.get(id).lastCharName)).filter(Boolean));
+      for (const m of L.party.members.slice()) {
+        if (!m || !m.name || m.name === L.name) continue;
+        if (!assignedAfter.has(m.name) && (m.online === false || managed.has(m.name))) {
+          await act(leaderP, ACTIONS.kick(m.name), 'kick-unassigned');
+          L.party.members = L.party.members.filter(x => x.name !== m.name);
+        }
+      }
+    }
 
     const inGame = new Set(inGameMemberNames(L));
     const isLeader = !L.party || L.party.leader === L.name;

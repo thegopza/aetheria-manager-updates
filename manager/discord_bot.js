@@ -205,8 +205,14 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       let clickAttempted = false;
       try {
         const hc = document.querySelector('.human-check');
-        if(window.__pmEmbeddedHumanCheckSolver && ${JSON.stringify(Boolean(cleanName))}) return {success:false,error:'ตัวแก้คำถามในบอทกำลังจัดการอยู่'};
-        if (!hc) return { success: false, error: 'ไม่พบหน้าต่างเช็คผู้เล่น (อาจปิดหรือตอบไปแล้ว)' };
+        if (!hc) {
+          const last = window.__lastHumanCheckSolved;
+          if (last && Date.now() - (last.timestamp || 0) < 120000) {
+            const slotLabel = Number.isInteger(last.slot) ? ('ช่องที่ ' + last.slot) : (Number.isInteger(last.pickIndex) && last.pickIndex >= 0 ? ('ข้อที่ ' + (last.pickIndex + 1)) : '');
+            return { success: false, alreadySolved: true, error: 'บอทตอบคำถามนี้ให้อัตโนมัติไปแล้ว' + (slotLabel ? (' (' + slotLabel + ')') : '') + ' หน้าต่างเช็คผู้เล่นจึงปิดไปแล้ว' };
+          }
+          return { success: false, error: 'ไม่พบหน้าต่างเช็คผู้เล่น (อาจปิดหรือตอบไปแล้ว)' };
+        }
         const expected = ${JSON.stringify(expectedCheck)};
         const packet = window.__latestHumanCheck;
         if (expected) {
@@ -840,7 +846,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     }
 
     // Catalog matches work offline; points are display data and never gate Humancheck.
-    const shouldAutoAnswer = autoAnswerEnabled && solver?.isRemoteService === true && !check.embeddedSolver;
+    const shouldAutoAnswer = autoAnswerEnabled && (solver?.isRemoteService === true || Boolean(check.embeddedSolver));
     if (shouldAutoAnswer) {
       const baseDelay = parseInt(hcSettings.answerDelayMs || cfg.answerDelayMs, 10) || 1800;
       const jitter = Math.floor(Math.random() * 600) - 250;
@@ -849,41 +855,96 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
 
       let solution = { success: false };
       let ansRes = { success: false, error: 'ไม่สามารถยืนยันสิทธิ์ตอบอัตโนมัติได้' };
-      try {
-        const latestSettings = solver.loadSettings();
-        if (activeChecks.get(profileId) === trackedCheck && latestSettings?.autoAnswer && loadSettings().autoAnswer !== false && typeof solver.solveHumanCheck === 'function') {
-          trackedCheck.requestId = durableRequestId(profileId, check);
-          solution = await solver.solveHumanCheck(check.prompt, check.options, check.items, trackedCheck.requestId);
-          // The service bills for analysis. Game transport errors never refund that analysis.
-          const authorized = solution?.success === true && [0, 1].includes(solution.charged) && solution.requestId === trackedCheck.requestId && Number.isInteger(solution.pickIndex) && solution.pickIndex >= 0 && solution.pickIndex < optionsCount;
-          if (activeChecks.get(profileId) !== trackedCheck) return;
-          const stillEnabled = solver.loadSettings()?.autoAnswer && loadSettings().autoAnswer !== false;
-          if (authorized && stillEnabled) {
-            ansRes = await answerCheckInGame(profileId, solution.pickIndex, solution.matchedName, { id: trackedCheck.checkId, prompt: trackedCheck.prompt });
-          } else {
-            if (!stillEnabled) {
-              manualReason = 'ปิดการตอบอัตโนมัติแล้ว';
-              pointMessage = 'ℹ️ ปิด Auto Humancheck แล้ว กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
-            } else if (solution?.code === 'INSUFFICIENT_POINTS' || solution?.status === 402) {
-              manualReason = 'ส่วนบุญไม่เพียงพอ';
-              pointMessage = '⚠️ เซิร์ฟเวอร์แจ้งว่า ส่วนบุญไม่เพียงพอ กรุณาตอบด้วยตนเองหรือเติมส่วนบุญ ใน Manager';
-            } else if (solution?.code === 'NO_MATCH' || solution?.code === 'MANUAL_REQUIRED') {
-              manualReason = 'จับคู่คำตอบไม่สำเร็จ';
-              pointMessage = '⚠️ ระบบจับคู่คำตอบไม่สำเร็จ กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
-            } else if (solution?.code === 'INVALID_SERVICE_RESPONSE' || solution?.success === true) {
-              manualReason = 'ตรวจสอบคำตอบจาก API ไม่ผ่าน';
-              pointMessage = '⚠️ ไม่สามารถยืนยันคำตอบจาก API ได้ กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
-            } else {
-              manualReason = solution?.code === 'MAINTENANCE' ? 'API กำลังปรับปรุง' : 'บริการ API ขัดข้อง';
-              pointMessage = '⚠️ บริการ Auto Humancheck ไม่พร้อมใช้งานชั่วคราว กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+
+      if (check.embeddedSolver) {
+        for (let pollIdx = 0; pollIdx < 3; pollIdx++) {
+          await new Promise(r => setTimeout(r, pollIdx === 0 ? 700 : 2100));
+          if (activeChecks.get(profileId) !== trackedCheck) {
+            // If server.js live-state polling already cleared activeChecks because .human-check closed, try reading __lastHumanCheckSolved once to send the green alert
+            if (profile.debugPort && typeof evalProfilePort === 'function') {
+              try {
+                const probe = await evalProfilePort(profile.debugPort, `(() => ({ stillOpen: !!document.querySelector('.human-check'), solved: window.__lastHumanCheckSolved || null }))()`);
+                const st = probe && probe.result ? probe.result : null;
+                if (st && !st.stillOpen && st.solved && (Date.now() - (st.solved.timestamp || 0) < 30000)) {
+                  const s = st.solved;
+                  const pickIdx = Number.isInteger(s.pickIndex) && s.pickIndex >= 0 ? s.pickIndex : (Number.isInteger(s.slot) && s.slot >= 1 ? s.slot - 1 : 0);
+                  solution = {
+                    success: true,
+                    pickIndex: pickIdx,
+                    matchedName: s.matchedName || `ตัวเลือกที่ ${pickIdx + 1}`,
+                    charged: 0,
+                    remaining: 0,
+                    source: 'local-catalog'
+                  };
+                  ansRes = { success: true, picked: pickIdx };
+                }
+              } catch (e) {}
             }
-            ansRes = { success: false, error: 'บริการส่วนกลางไม่อนุมัติคำตอบ หรือปิดการตอบอัตโนมัติแล้ว' };
+            if (!ansRes.success) return;
+            break;
+          }
+          if (profile.debugPort && typeof evalProfilePort === 'function') {
+            try {
+              const probe = await evalProfilePort(profile.debugPort, `(() => ({ stillOpen: !!document.querySelector('.human-check'), solved: window.__lastHumanCheckSolved || null }))()`);
+              const st = probe && probe.result ? probe.result : null;
+              if (st && !st.stillOpen) {
+                const s = st.solved || {};
+                const pickIdx = Number.isInteger(s.pickIndex) && s.pickIndex >= 0 ? s.pickIndex : (Number.isInteger(s.slot) && s.slot >= 1 ? s.slot - 1 : 0);
+                solution = {
+                  success: true,
+                  pickIndex: pickIdx,
+                  matchedName: s.matchedName || `ตัวเลือกที่ ${pickIdx + 1}`,
+                  charged: 0,
+                  remaining: 0,
+                  source: 'local-catalog'
+                };
+                ansRes = { success: true, picked: pickIdx };
+                break;
+              }
+            } catch (e) {}
           }
         }
-      } catch (err) {
-        manualReason = 'การเชื่อมต่อขัดข้อง';
-        pointMessage = '⚠️ ไม่สามารถยืนยันคำตอบจากบริการส่วนกลางได้ กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
-        console.warn('[PmheeAether HumanCheck] Remote authorization unavailable; auto-answer disabled.');
+        if (!ansRes.success) {
+          manualReason = 'รอผู้เล่นช่วยตรวจสอบคำตอบ';
+          pointMessage = '⚠️ ระบบพยายามตอบอัตโนมัติแล้วแต่หน้าต่างเช็คผู้เล่นยังไม่ปิด กรุณาเลือกตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+        }
+      } else {
+        try {
+          const latestSettings = solver.loadSettings();
+          if (activeChecks.get(profileId) === trackedCheck && latestSettings?.autoAnswer && loadSettings().autoAnswer !== false && typeof solver.solveHumanCheck === 'function') {
+            trackedCheck.requestId = durableRequestId(profileId, check);
+            solution = await solver.solveHumanCheck(check.prompt, check.options, check.items, trackedCheck.requestId);
+            // The service bills for analysis. Game transport errors never refund that analysis.
+            const authorized = solution?.success === true && [0, 1].includes(solution.charged) && solution.requestId === trackedCheck.requestId && Number.isInteger(solution.pickIndex) && solution.pickIndex >= 0 && solution.pickIndex < optionsCount;
+            if (activeChecks.get(profileId) !== trackedCheck) return;
+            const stillEnabled = solver.loadSettings()?.autoAnswer && loadSettings().autoAnswer !== false;
+            if (authorized && stillEnabled) {
+              ansRes = await answerCheckInGame(profileId, solution.pickIndex, solution.matchedName, { id: trackedCheck.checkId, prompt: trackedCheck.prompt });
+            } else {
+              if (!stillEnabled) {
+                manualReason = 'ปิดการตอบอัตโนมัติแล้ว';
+                pointMessage = 'ℹ️ ปิด Auto Humancheck แล้ว กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+              } else if (solution?.code === 'INSUFFICIENT_POINTS' || solution?.status === 402) {
+                manualReason = 'ส่วนบุญไม่เพียงพอ';
+                pointMessage = '⚠️ เซิร์ฟเวอร์แจ้งว่า ส่วนบุญไม่เพียงพอ กรุณาตอบด้วยตนเองหรือเติมส่วนบุญ ใน Manager';
+              } else if (solution?.code === 'NO_MATCH' || solution?.code === 'MANUAL_REQUIRED') {
+                manualReason = 'จับคู่คำตอบไม่สำเร็จ';
+                pointMessage = '⚠️ ระบบจับคู่คำตอบไม่สำเร็จ กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+              } else if (solution?.code === 'INVALID_SERVICE_RESPONSE' || solution?.success === true) {
+                manualReason = 'ตรวจสอบคำตอบจาก API ไม่ผ่าน';
+                pointMessage = '⚠️ ไม่สามารถยืนยันคำตอบจาก API ได้ กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+              } else {
+                manualReason = solution?.code === 'MAINTENANCE' ? 'API กำลังปรับปรุง' : 'บริการ API ขัดข้อง';
+                pointMessage = '⚠️ บริการ Auto Humancheck ไม่พร้อมใช้งานชั่วคราว กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+              }
+              ansRes = { success: false, error: 'บริการส่วนกลางไม่อนุมัติคำตอบ หรือปิดการตอบอัตโนมัติแล้ว' };
+            }
+          }
+        } catch (err) {
+          manualReason = 'การเชื่อมต่อขัดข้อง';
+          pointMessage = '⚠️ ไม่สามารถยืนยันคำตอบจากบริการส่วนกลางได้ กรุณาตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+          console.warn('[PmheeAether HumanCheck] Remote authorization unavailable; auto-answer disabled.');
+        }
       }
 
       if (ansRes && ansRes.success) {

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "1948b39d1b8186976306eab5f5cd4954d3330696",
+  "sourceCommit": "a7a9947a84075136ac2c1d6ca97168bd2def2e33",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -112,7 +112,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "3d571f73852ef12006d199b7cf8f180c9e6a1199110177a8cc73099158f6c611"
+      "sha256": "e90a67e2c81ac6dfa8006f20c065ac4321e8ea51ad0397cc522d1a2bf23467cc"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -144,7 +144,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "92a0dd6d738195d04744db99d6e920343f972de4c75e1a932f154607b651f114"
+      "sha256": "174512ab11967efb3625e703b4303556bbf40afbf8adf1f5dc2d36fecaafeb12"
     },
     {
       "path": "manager/public/inventory_market.css",

@@ -778,6 +778,8 @@ window.closeHumanCheckSimulatorModal = closeHumanCheckSimulatorModal;
 function initHumanCheckSimulator() {
   const btnOpen = document.getElementById('btn-hc-simulate');
   if (btnOpen) btnOpen.onclick = openHumanCheckSimulatorModal;
+  const btnToolbar = document.getElementById('btn-toolbar-simulate-hc');
+  if (btnToolbar) btnToolbar.onclick = openHumanCheckSimulatorModal;
 
   const btnClose = document.getElementById('btn-hc-sim-close');
   const btnDone = document.getElementById('btn-hc-sim-done');

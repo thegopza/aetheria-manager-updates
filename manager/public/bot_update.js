@@ -65,6 +65,7 @@
   function userBusy() {
     const a = document.activeElement;
     if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
+    if (document.body.classList.contains('pt-open') || document.body.classList.contains('pm-open')) return true;
     if (document.querySelector('.modal-overlay.active, .im-market')) return true;
     const ch = document.getElementById('char-detail-modal');
     return Boolean(ch && ch.style.display && ch.style.display !== 'none');

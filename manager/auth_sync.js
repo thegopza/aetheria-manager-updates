@@ -122,8 +122,16 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
         });
         console.warn(`[AuthSync] ⚠️ ${profile.name}: Proxy ไม่อนุมัติการสมัคร -> สมัครผ่านหน้าเกมแทน`);
       }
-    } catch (_) {
-      updateProfile(profile.id, { proxyRegistrationState: 'retry-pending', registerError: 'ยังยืนยันผล Proxy ไม่ได้ เก็บรายการเดิมไว้ก่อนลองใหม่' });
+    } catch (err) {
+      if (err?.message === 'PROXY_DISABLED' || (typeof proxyRegister?.isEnabled === 'function' && !proxyRegister.isEnabled())) {
+        updateProfile(profile.id, {
+          proxyFallbackBrowser: true,
+          registerError: 'ระบบ Proxy ปิดอยู่ — เปลี่ยนไปสมัครผ่านหน้าเกมแทน'
+        });
+        console.warn(`[AuthSync] ⚠️ ${profile.name}: Proxy ปิดอยู่ -> เปลี่ยนไปสมัครผ่านหน้าเกมแทน`);
+      } else {
+        updateProfile(profile.id, { proxyRegistrationState: 'retry-pending', registerError: 'ยังยืนยันผล Proxy ไม่ได้ เก็บรายการเดิมไว้ก่อนลองใหม่' });
+      }
     }
   }
 
@@ -157,10 +165,9 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
         return;
       }
 
-      // If Proxy is available and not in browser fallback, use proxy registration
+      // If Proxy is enabled and not in browser fallback, use proxy registration
       const proxyAvailable = !profile.proxyFallbackBrowser && proxyRegister && (
-        (typeof proxyRegister.isEnabled === 'function' && proxyRegister.isEnabled()) ||
-        (typeof proxyRegister.publicSettings === 'function' && proxyRegister.publicSettings().configured)
+        typeof proxyRegister.isEnabled === 'function' && proxyRegister.isEnabled()
       );
       if (proxyAvailable) {
         await syncProxyRegistration(profile);

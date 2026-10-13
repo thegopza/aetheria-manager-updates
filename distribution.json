@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "38c1aa5a293ed2ac4f60d9857c2f21dce8d3c97d",
+  "sourceCommit": "3f89a6b5b5ab3029869c777048a0611079386fed",
   "files": [
     {
       "path": "manager/auth_sync.js",

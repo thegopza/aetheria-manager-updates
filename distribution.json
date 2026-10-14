@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "1976dbda5363192bda579febe437b664f57d1d2e",
+  "sourceCommit": "7711af54557d5bbdae9cf848a2ceefd6b31d34db",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -108,7 +108,7 @@
     },
     {
       "path": "manager/guild_api.js",
-      "sha256": "ace8bff449ace2ac9c55c59cc77a5842fe9aa3dbc75f01976a89e05aad6c790a"
+      "sha256": "5b3805bba60031c26624853a4b703dbcb135bedd28f747754ddaffb5f5a44cb5"
     },
     {
       "path": "manager/proxy_register.js",

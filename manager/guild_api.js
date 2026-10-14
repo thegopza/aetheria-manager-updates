@@ -29,7 +29,7 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
         if (start && start.stateNode && start.stateNode.current) start = start.stateNode.current;
         const stack = [start];
         let n = 0;
-        while (stack.length && n++ < 100000 && !(out.character && out.inventory && out.guild && out.invite)) {
+        while (stack.length && n++ < 100000 && !(out.character && out.inventory && out.guild && out.invite && out.chat)) {
           const f = stack.pop();
           if (!f) continue;
           let h = f.memoizedState, g = 0;
@@ -41,6 +41,7 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
               if (!out.inventory && /^\\(\\)=>[A-Za-z_$][\\w$]*\\.inventory$/.test(src)) out.inventory = q.getSnapshot;
               if (!out.guild && /^\\(\\)=>[A-Za-z_$][\\w$]*\\.guild$/.test(src)) out.guild = q.getSnapshot;
               if (!out.invite && /^\\(\\)=>[A-Za-z_$][\\w$]*\\.invite$/.test(src)) out.invite = q.getSnapshot;
+              if (!out.chat && /^\\(\\)=>[A-Za-z_$][\\w$]*\\.chat$/.test(src)) out.chat = q.getSnapshot;
             }
             h = h.next;
           }
@@ -52,7 +53,7 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
     };
 
     let getters = window.__pmGuildGetters;
-    if (!getters || !getters.character || !getters.inventory || !getters.guild || !getters.invite) {
+    if (!getters || !getters.character || !getters.inventory || !getters.guild || !getters.invite || !getters.chat) {
       getters = findGetters();
       window.__pmGuildGetters = getters;
     }
@@ -94,6 +95,23 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
           if (txt.includes('กิลด์')) {
             const m = txt.match(/^(\\S+)\\s+เชิญคุณเข้ากิลด์(?:\\s+(.+))?/m);
             inv = { kind: 'guild', from: m ? m[1] : '', label: m && m[2] ? m[2].trim() : txt };
+          }
+        }
+      }
+    } catch (e) {}
+
+    let newMemberCooldownNote = null;
+    try {
+      const chatArr = getters.chat ? getters.chat() : null;
+      if (Array.isArray(chatArr) && chatArr.length > 0) {
+        const recent = chatArr.slice(-30);
+        for (let i = recent.length - 1; i >= 0; i--) {
+          const entry = recent[i];
+          const txt = String((entry && (entry.text || entry.message || entry.content)) || entry || '');
+          if (txt.includes('สมาชิกใหม่ต้องอยู่กิลด์ครบ')) {
+            const m = txt.match(/\\(([^)]+)\\)/);
+            newMemberCooldownNote = m && m[1] ? ('รอครบ 24 ชม. (' + m[1] + ')') : 'รอสมาชิกใหม่ครบ 24 ชม.';
+            break;
           }
         }
       }
@@ -200,7 +218,8 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
       mapName,
       inGameGuild,
       pendingGuildInvite,
-      donatableTiers
+      donatableTiers,
+      newMemberCooldownNote
     };
   } catch (e) {
     return { inWorld: false, error: e.message };
@@ -246,6 +265,8 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
   let state = loadState();
   // Runtime status per profileId
   const liveStatus = {};
+  const donateBackoffUntil = {};
+  const donateBackoffNote = {};
   let syncInFlight = false;
   let timer = null;
 
@@ -314,6 +335,12 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       const pr = await probeClient(p.debugPort);
       results.set(id, pr);
       if (pr && pr.inWorld) {
+        if (pr.newMemberCooldownNote) {
+          donateBackoffNote[id] = pr.newMemberCooldownNote;
+          if (!donateBackoffUntil[id] || donateBackoffUntil[id] < Date.now()) {
+            donateBackoffUntil[id] = Date.now() + 15 * 60 * 1000;
+          }
+        }
         liveStatus[id] = {
           ...(liveStatus[id] || {}),
           online: true,
@@ -390,6 +417,8 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     const ig = probe.inGameGuild;
     if (!ig || !ig.id) return false;
     if (ig.donatedToday) {
+      delete donateBackoffUntil[profileId];
+      delete donateBackoffNote[profileId];
       const today = getThaiDateKey();
       if (g.lastDonatedDateByProfile[profileId] !== today) {
         g.lastDonatedDateByProfile[profileId] = today;
@@ -397,16 +426,49 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       }
       return false;
     }
+    if (probe.newMemberCooldownNote) {
+      donateBackoffUntil[profileId] = Date.now() + 15 * 60 * 1000;
+      donateBackoffNote[profileId] = probe.newMemberCooldownNote;
+      setActionNote(profileId, probe.newMemberCooldownNote);
+      return false;
+    }
+    if (donateBackoffUntil[profileId] && donateBackoffUntil[profileId] > Date.now()) {
+      setActionNote(profileId, donateBackoffNote[profileId] || 'รอครบ 24 ชม. จึงบริจาคได้');
+      return false;
+    }
     const tiers = Array.isArray(probe.donatableTiers) ? probe.donatableTiers : [];
     if (tiers.length === 0) return false;
 
     const chosen = tiers[0]; // highest exp / tier available
     await evalProfilePort(profile.debugPort, sendGuildActionJs({ action: 'donateMaterial', tier: chosen.tier }), 3000);
-    const today = getThaiDateKey();
-    g.lastDonatedDateByProfile[profileId] = today;
-    saveState();
-    setActionNote(profileId, `บริจาครายวัน Tier ${chosen.tier} (+${chosen.exp} EXP)`);
-    return true;
+    await new Promise(r => setTimeout(r, 550));
+    const after = await probeClient(profile.debugPort);
+    if (after && after.inWorld) {
+      liveStatus[profileId] = {
+        ...(liveStatus[profileId] || {}),
+        online: true,
+        charName: after.charName,
+        inGameGuild: after.inGameGuild,
+        donatedToday: !!(after.inGameGuild && after.inGameGuild.donatedToday),
+        myPoints: after.inGameGuild ? after.inGameGuild.myPoints : 0,
+        donatableTiers: after.donatableTiers || []
+      };
+      if (after.inGameGuild && after.inGameGuild.donatedToday) {
+        delete donateBackoffUntil[profileId];
+        delete donateBackoffNote[profileId];
+        const today = getThaiDateKey();
+        g.lastDonatedDateByProfile[profileId] = today;
+        saveState();
+        setActionNote(profileId, `บริจาครายวัน Tier ${chosen.tier} (+${chosen.exp} EXP)`);
+        return true;
+      }
+      const note = after.newMemberCooldownNote || 'รอครบ 24 ชม. จึงบริจาคได้';
+      donateBackoffUntil[profileId] = Date.now() + 15 * 60 * 1000;
+      donateBackoffNote[profileId] = note;
+      setActionNote(profileId, note);
+      return false;
+    }
+    return false;
   }
 
   async function syncSingleGuild(g, byId, probes) {
@@ -479,6 +541,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       setActionNote(g.leaderId, igGuild.donatedToday ? 'หัวกิลด์ (บริจาครายวันแล้ว)' : 'หัวกิลด์พร้อม');
     }
 
+    // Authoritative guild roster from the leader's in-game guild state
     const inGameMemberNames = new Set((igGuild.members || []).map(m => normName(m.name)));
     let currentMemberCount = (igGuild.members || []).length || 1;
     const maxMembers = igGuild.maxMembers || 20;
@@ -494,23 +557,23 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         continue;
       }
 
-      const memInSameGuild = (
-        (memProbe.inGameGuild && (memProbe.inGameGuild.id === igGuild.id || normName(memProbe.inGameGuild.name) === normName(igGuild.name))) ||
-        inGameMemberNames.has(normName(memProbe.charName))
-      );
+      const memInSameGuild = inGameMemberNames.size > 0
+        ? inGameMemberNames.has(normName(memProbe.charName))
+        : !!(memProbe.inGameGuild && (memProbe.inGameGuild.id === igGuild.id || normName(memProbe.inGameGuild.name) === normName(igGuild.name)));
 
       if (memInSameGuild) {
         const donated = await tryAutoDonateForProfile(g, memId, memProfile, memProbe);
         if (donated) anyChanged = true;
         else {
           const isDonated = !!(memProbe.inGameGuild && memProbe.inGameGuild.donatedToday);
-          setActionNote(memId, isDonated ? 'บริจาครายวันแล้ว' : 'อยู่ในกิลด์แล้ว');
+          const cooldownNote = memProbe.newMemberCooldownNote || (donateBackoffUntil[memId] > Date.now() ? donateBackoffNote[memId] : null);
+          setActionNote(memId, isDonated ? 'บริจาครายวันแล้ว' : (cooldownNote || 'อยู่ในกิลด์แล้ว'));
         }
         continue;
       }
 
-      // If member is in a different guild, leave it only if they are not master of that guild
-      if (memProbe.inGameGuild && memProbe.inGameGuild.id !== igGuild.id) {
+      // If member is in a genuinely different guild, leave it only if they are not master of that guild
+      if (memProbe.inGameGuild && memProbe.inGameGuild.id !== igGuild.id && normName(memProbe.inGameGuild.name) !== normName(igGuild.name)) {
         const myEntry = (memProbe.inGameGuild.members || []).find(m => normName(m.name) === normName(memProbe.charName));
         if (myEntry && myEntry.role === 'master') {
           setActionNote(memId, `เป็นหัวกิลด์อื่นอยู่ (${memProbe.inGameGuild.name})`);
@@ -518,7 +581,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         }
         setActionNote(memId, `ออกจากกิลด์เดิม (${memProbe.inGameGuild.name})`);
         await evalProfilePort(memProfile.debugPort, sendGuildActionJs({ action: 'leave' }), 3000);
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 500));
       }
 
       // Check if member already has a pending guild invite from this guild/leader
@@ -531,7 +594,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       if (inviteMatches) {
         await evalProfilePort(memProfile.debugPort, sendGuildActionJs({ action: 'accept' }), 3000);
         setActionNote(memId, 'กดรับคำเชิญเข้ากิลด์');
-        await new Promise(r => setTimeout(r, 450));
+        await new Promise(r => setTimeout(r, 700));
         memProbe = await probeClient(memProfile.debugPort);
         if (memProbe && memProbe.inWorld) {
           probes.set(memId, memProbe);
@@ -546,6 +609,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
           };
           if (memProbe.inGameGuild) {
             currentMemberCount++;
+            inGameMemberNames.add(normName(memProbe.charName));
             anyChanged = true;
             await tryAutoDonateForProfile(g, memId, memProfile, memProbe);
           }
@@ -558,26 +622,23 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         continue;
       }
 
-      if (toInvite.length < 6) {
+      if (toInvite.length < 4) {
         toInvite.push({ memId, memProfile, memProbe });
       } else {
         setActionNote(memId, 'รอคิวเชิญเข้ากิลด์...');
       }
     }
 
-    // 5. Batch invite + parallel accept for queued members (up to 6 per cycle)
+    // 5. Sequential invite + accept (1 member at a time to avoid cross-channel DB race condition)
     if (toInvite.length > 0) {
-      for (const item of toInvite) {
-        setActionNote(item.memId, `เชิญ ${item.memProbe.charName} เข้ากิลด์`);
-        await evalProfilePort(leaderProfile.debugPort, sendGuildActionJs({ action: 'invite', name: item.memProbe.charName }), 3000);
-        await new Promise(r => setTimeout(r, 120));
-      }
-      await new Promise(r => setTimeout(r, 750));
-      await Promise.all(toInvite.map(async ({ memId, memProfile }) => {
+      for (const { memId, memProfile, memProbe } of toInvite) {
         try {
+          setActionNote(memId, `เชิญ ${memProbe.charName} เข้ากิลด์`);
+          await evalProfilePort(leaderProfile.debugPort, sendGuildActionJs({ action: 'invite', name: memProbe.charName }), 3000);
+          await new Promise(r => setTimeout(r, 650));
           await evalProfilePort(memProfile.debugPort, sendGuildActionJs({ action: 'accept' }), 3000);
           setActionNote(memId, 'รับคำเชิญเข้ากิลด์แล้ว');
-          await new Promise(r => setTimeout(r, 500));
+          await new Promise(r => setTimeout(r, 700));
           const joinedProbe = await probeClient(memProfile.debugPort);
           if (joinedProbe && joinedProbe.inWorld) {
             probes.set(memId, joinedProbe);
@@ -594,12 +655,13 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
               anyChanged = true;
               const donated = await tryAutoDonateForProfile(g, memId, memProfile, joinedProbe);
               if (!donated) {
-                setActionNote(memId, joinedProbe.inGameGuild.donatedToday ? 'บริจาครายวันแล้ว' : 'อยู่ในกิลด์แล้ว');
+                const cooldownNote = joinedProbe.newMemberCooldownNote || (donateBackoffUntil[memId] > Date.now() ? donateBackoffNote[memId] : null);
+                setActionNote(memId, joinedProbe.inGameGuild.donatedToday ? 'บริจาครายวันแล้ว' : (cooldownNote || 'อยู่ในกิลด์แล้ว'));
               }
             }
           }
         } catch (_) {}
-      }));
+      }
     }
 
     // 6. Refresh leader probe if guild membership or donations changed
@@ -690,7 +752,22 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     const guilds = state.guilds.map(g => {
       const leader = decorateProfile(g.leaderId);
       const leaderIg = (liveStatus[g.leaderId] && liveStatus[g.leaderId].inGameGuild) || null;
-      const members = g.memberIds.map(decorateProfile);
+      const inGameRoster = leaderIg && Array.isArray(leaderIg.members) && leaderIg.members.length > 0
+        ? new Set(leaderIg.members.map(m => normName(m.name)))
+        : null;
+      const members = g.memberIds.map(id => {
+        const m = decorateProfile(id);
+        if (inGameRoster && m.charName) {
+          const inRoster = inGameRoster.has(normName(m.charName));
+          if (!inRoster && m.inGameGuildName && leaderIg && normName(m.inGameGuildName) === normName(leaderIg.name)) {
+            m.inGameGuildName = null;
+          } else if (inRoster && !m.inGameGuildName && leaderIg) {
+            m.inGameGuildName = leaderIg.name;
+            m.inGameGuildLevel = leaderIg.level;
+          }
+        }
+        return m;
+      });
       const allMembers = [leader, ...members];
       const donatedCount = allMembers.filter(m => m.donatedToday).length;
       return {

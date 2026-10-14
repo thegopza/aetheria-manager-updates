@@ -2052,15 +2052,18 @@ function isJailMapName(mapStr) {
 
 const jailStoppingInFlight = new Set();
 async function recordProfileJailedAndStop(profile, state) {
-  if (!profile || !profile.id) return;
+  if (!profile || !profile.id) return false;
   const pid = String(profile.id);
   const now = Date.now();
   const mapName = (state && typeof state.map === 'string' && state.map.trim()) ? state.map.trim() : 'คุก';
+  let shouldStop = false;
   try {
     const fresh = loadProfiles();
     const target = fresh.find(f => String(f.id) === pid);
     if (target) {
+      shouldStop = !target.jailAutoStopped;
       target.isJailed = true;
+      target.jailAutoStopped = true;
       target.jailedAt = target.jailedAt || now;
       target.jailedMap = mapName;
       if (state && state.charName) target.lastCharName = state.charName;
@@ -2069,27 +2072,33 @@ async function recordProfileJailedAndStop(profile, state) {
     }
   } catch (_) {}
 
-  if (!jailStoppingInFlight.has(pid)) {
+  if (shouldStop && !jailStoppingInFlight.has(pid)) {
     jailStoppingInFlight.add(pid);
     try {
-      console.warn(`[JAIL AUTO-STOP] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — ปิดจออัตโนมัติทันที!`);
+      console.warn(`[JAIL AUTO-STOP] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุกครั้งแรก (${mapName}) — ปิดจออัตโนมัติทันที!`);
       await stopSingleProfile(pid);
     } catch (_) {} finally {
       setTimeout(() => jailStoppingInFlight.delete(pid), 4000);
     }
   }
+  return shouldStop;
 }
 
-function clearProfileJailStatus(profileId) {
+function clearProfileJailStatus(profileId, resetAutoStop = false) {
   const pid = String(profileId || '');
   const fresh = loadProfiles();
   let changed = false;
   for (const p of fresh) {
     if (!profileId || String(p.id) === pid) {
-      if (p.isJailed || p.jailedAt || p.jailedMap) {
+      if (p.isJailed || p.jailedAt || p.jailedMap || (resetAutoStop && p.jailAutoStopped)) {
         delete p.isJailed;
         delete p.jailedAt;
         delete p.jailedMap;
+        if (resetAutoStop) {
+          delete p.jailAutoStopped;
+        } else {
+          p.jailAutoStopped = true;
+        }
         changed = true;
       }
     }
@@ -2144,15 +2153,17 @@ setInterval(async () => {
             discordService.clearHumanCheck(p.id);
           }
           if (state && isJailMapName(state.map)) {
-            const lastPrisonBeep = prisonAlertedByProfile.get(p.id) || 0;
-            if (Date.now() - lastPrisonBeep > 60000) {
-              prisonAlertedByProfile.set(p.id, Date.now());
-              shouldBeepUrgent = true;
+            if (!p.jailAutoStopped) {
+              const lastPrisonBeep = prisonAlertedByProfile.get(p.id) || 0;
+              if (Date.now() - lastPrisonBeep > 60000) {
+                prisonAlertedByProfile.set(p.id, Date.now());
+                shouldBeepUrgent = true;
+              }
+              await recordProfileJailedAndStop(p, state);
             }
-            await recordProfileJailedAndStop(p, state);
           } else if (state && typeof state.map === 'string' && state.map.trim() && state.map.trim() !== '--') {
             prisonAlertedByProfile.delete(p.id);
-            if (p.isJailed) clearProfileJailStatus(p.id);
+            if (p.isJailed || p.jailAutoStopped) clearProfileJailStatus(p.id, true);
           }
           if (state && state.unexpectedTown && state.unexpectedTown.active) {
             discordService.notifyUnexpectedTown({ profile: p, unexpectedTown: state.unexpectedTown });
@@ -2599,14 +2610,20 @@ const server = http.createServer(async (req, res) => {
 
         if (alive && liveState && !liveState.error && liveState.map) {
           if (isJailMapName(liveState.map)) {
-            recordProfileJailedAndStop(p, liveState).catch(() => {});
-            p.isJailed = true;
-            p.jailedAt = p.jailedAt || Date.now();
-            p.jailedMap = liveState.map;
-            alive = false;
-          } else if (p.isJailed) {
-            clearProfileJailStatus(p.id);
+            if (!p.jailAutoStopped) {
+              recordProfileJailedAndStop(p, liveState).catch(() => {});
+              p.isJailed = true;
+              p.jailAutoStopped = true;
+              p.jailedAt = p.jailedAt || Date.now();
+              p.jailedMap = liveState.map;
+              alive = false;
+            } else {
+              p.jailedMap = liveState.map;
+            }
+          } else if (typeof liveState.map === 'string' && liveState.map.trim() && liveState.map.trim() !== '--' && (p.isJailed || p.jailAutoStopped)) {
+            clearProfileJailStatus(p.id, true);
             p.isJailed = false;
+            p.jailAutoStopped = false;
             p.jailedAt = null;
             p.jailedMap = null;
           }
@@ -2706,7 +2723,7 @@ const server = http.createServer(async (req, res) => {
   // POST /api/profiles/:id/clear-jail
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/clear-jail$/)) {
     const id = pathname.split("/")[3];
-    const cleared = clearProfileJailStatus(id);
+    const cleared = clearProfileJailStatus(id, false);
     return sendJSON({ success: true, cleared });
   }
 
@@ -2716,9 +2733,10 @@ const server = http.createServer(async (req, res) => {
     let clearedCount = 0;
     fresh.forEach(p => {
       if (p.isJailed) {
-        p.isJailed = false;
-        p.jailedAt = null;
-        p.jailedMap = null;
+        delete p.isJailed;
+        delete p.jailedAt;
+        delete p.jailedMap;
+        p.jailAutoStopped = true;
         clearedCount++;
       }
     });
@@ -3001,8 +3019,13 @@ const server = http.createServer(async (req, res) => {
   // 5. POST /api/profiles/:id/launch
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/launch$/)) {
     const id = pathname.split("/")[3];
-    const p0 = loadProfiles().find(p => p.id === id);
+    const profilesForLaunch = loadProfiles();
+    const p0 = profilesForLaunch.find(p => p.id === id);
     if (!p0) return sendJSON({ success: false, error: "Profile not found" }, 404);
+    if (p0.isJailed && !p0.jailAutoStopped) {
+      p0.jailAutoStopped = true;
+      saveProfiles(profilesForLaunch);
+    }
     // already open (also after a Manager restart, or as the other kind of window): bring it up, don't open a 2nd
     if (!browserMode.isOpen(id) && await clientAlreadyOpen(p0)) {
       http.get(`http://127.0.0.1:${p0.debugPort}/api/window?action=top`, r => r.resume()).on("error", () => {});

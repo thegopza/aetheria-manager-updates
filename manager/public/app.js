@@ -1384,11 +1384,14 @@ function buildProfileCard(p) {
   // Bot Activity Status
   let activityText = "ออฟไลน์";
   let activityTone = "offline";
-  if (isJailed) {
+  if (isJailed && !isOnline) {
     activityText = "🚨 ติดคุก (ปิดจออัตโนมัติแล้ว)";
     activityTone = "danger";
   } else if (isOnline) {
-    if (state) {
+    if (isJailed) {
+      activityText = "⛓️ อยู่ในคุก (เปิดจอโดยผู้ใช้)";
+      activityTone = "danger";
+    } else if (state) {
       if (state.botStatus) {
         activityText = state.botStatus;
         activityTone = getActivityTone(activityText);
@@ -1414,8 +1417,8 @@ function buildProfileCard(p) {
 
   return `
     <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isBotRunning ? 'is-farming' : ''} ${isJailed ? 'is-jailed' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
-      ${isJailed ? `
-      <div class="card-jail-cross-overlay" title="ตัวละครนี้ตรวจพบว่าอยู่ในคุก ระบบได้ทำการปิดจอเกมอัตโนมัติแล้ว">
+      ${isJailed && !isOnline ? `
+      <div class="card-jail-cross-overlay" title="ตัวละครนี้ตรวจพบว่าอยู่ในคุก ระบบได้ทำการปิดจอเกมอัตโนมัติแล้ว (เปิดจอใหม่ได้โดยไม่ปิดซ้ำ)">
         <svg class="jail-cross-svg" viewBox="0 0 200 200" preserveAspectRatio="none" aria-hidden="true">
           <line x1="12" y1="12" x2="188" y2="188" />
           <line x1="188" y1="12" x2="12" y2="188" />

@@ -68,9 +68,37 @@ const READ_JS = `(async () => {
     const label = t => t.type === 'base_level' ? 'Base ' + t.targetLevel : t.type === 'job_level' ? 'Job ' + t.targetLevel + (t.classId ? ' ' + t.classId : '')
       : t.type === 'zeny' ? 'เงิน ' + Number(t.targetZeny || 0).toLocaleString() + ' z' : String(t.type);
     const blocked = [];
-    for (const t of (p.triggers || [])) {
-      if (!t || done[t.id]) continue;
-      if (pend[t.id]) { blocked.push(label(t) + ' (ยังทำไม่เสร็จ)'); continue; }
+    const trigs = p.triggers || [];
+    const trigId = (t, i) => t.id || ((t.type || 'base_level') + '_' + t.targetLevel + '_' + i);
+    const gearStartIdx = (p.gearPlan && Array.isArray(p.gearPlan.steps) && p.gearPlan.steps.length)
+      ? order.indexOf(String(p.gearPlan.startClass || 'novice').toLowerCase())
+      : -1;
+    const gearActive = gearStartIdx >= 0 && ci >= gearStartIdx;
+    let stateDirty = false;
+    for (let i = 0; i < trigs.length; i++) {
+      const t = trigs[i];
+      if (!t) continue;
+      const tid = trigId(t, i);
+      if (done[tid]) continue;
+      if (pend[tid]) {
+        const pe = pend[tid];
+        const left = Array.isArray(pe.actions) ? pe.actions.map(ai => (t.actions || [])[ai]).filter(Boolean) : (t.actions || []);
+        const onlyEquipLeft = left.length > 0 && left.every(a => a && a.type === 'equip_item');
+        const timedOut = pe.firstAt && (Date.now() - pe.firstAt > 30 * 60 * 1000);
+        const laterDone = trigs.some((t2, j) => {
+          if (!t2 || j === i || !done[trigId(t2, j)]) return false;
+          if (t.type === 'base_level' && t2.type === 'base_level') return (Number(t2.targetLevel) || 0) > (Number(t.targetLevel) || 0);
+          return false;
+        });
+        if (onlyEquipLeft && (timedOut || gearActive || laterDone || base >= 99)) {
+          delete pend[tid];
+          done[tid] = Date.now();
+          stateDirty = true;
+          continue;
+        }
+        blocked.push(label(t) + ' (ยังทำไม่เสร็จ)');
+        continue;
+      }
       let ok = true;
       if (t.type === 'base_level') ok = base >= (Number(t.targetLevel) || 0);
       else if (t.type === 'job_level') {
@@ -80,6 +108,9 @@ const READ_JS = `(async () => {
         else ok = job >= (Number(t.targetLevel) || 0);
       } else if (t.type === 'zeny') ok = zeny >= (Number(t.targetZeny) || 0);
       if (!ok) blocked.push(label(t));
+    }
+    if (stateDirty && st) {
+      try { localStorage.setItem('pelican_plan_state_' + nm + '_' + (p.id || p.name || 'plan'), JSON.stringify(st)); } catch (e) {}
     }
     return { id: String(p.id || p.name || 'plan'), name: p.name || null, blocked };
   })();

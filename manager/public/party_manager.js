@@ -16,6 +16,7 @@
 
   let data = { parties: [], clients: [], maxMembers: 6 };
   let open = false, pollTimer = null, busy = false, pointerDown = false, pendingRender = false;
+  const expandedParties = new Set();
 
   function build() {
     const tab = document.createElement('button');
@@ -163,10 +164,17 @@
         <button class="pt-iconbtn" type="button" title="รวมทีม (เรียกสมาชิกมาหาหัวตี้)" data-act="summon" data-party="${esc(p.id)}">⤓</button>
         <button class="pt-iconbtn danger" type="button" title="ยุบตี้" data-act="delete" data-party="${esc(p.id)}">🗑</button>
       </div>
-      <div class="pt-members"></div>
-      <div class="pt-row pt-slot" hidden>
-        <div class="pt-ava">+</div>
-        <div class="pt-who pt-slot-text"></div>
+      <div class="pt-leader-box"></div>
+      <button class="pt-expand-bar" type="button" data-act="toggle-members" data-party="${esc(p.id)}" aria-expanded="false">
+        <span class="pt-expand-summary"></span>
+        <span class="pt-expand-label"></span>
+      </button>
+      <div class="pt-members-wrap" hidden>
+        <div class="pt-members"></div>
+        <div class="pt-row pt-slot" hidden>
+          <div class="pt-ava">+</div>
+          <div class="pt-who pt-slot-text"></div>
+        </div>
       </div>
       <div class="pt-modes">
         <div class="pt-field"><label for="pt-exp-${esc(p.id)}">โหมด EXP</label>
@@ -187,6 +195,7 @@
     const full = p.count >= p.max;
     const slots = Math.max(0, p.max - p.count);
     const evenBlocked = p.inGame && p.inGame.evenShareAllowed === false;
+    const isExpanded = expandedParties.has(String(p.id));
 
     setText(cardEl.querySelector('.pt-card-title'), 'ตี้ ' + p.index);
     const cnt = cardEl.querySelector('.pt-count');
@@ -196,16 +205,54 @@
       setText(cnt, p.count + '/' + p.max);
     }
 
-    // Reconcile member rows in-place
+    // Leader row (always visible)
+    const leaderBox = cardEl.querySelector('.pt-leader-box');
+    if (leaderBox && p.leader) {
+      let leaderRow = leaderBox.firstElementChild;
+      const leaderKey = 'leader:' + p.leader.id;
+      if (leaderRow && leaderRow.dataset && leaderRow.dataset.rowKey === leaderKey) {
+        patchMemberRowEl(leaderRow, p.leader, p.id, true);
+      } else {
+        leaderBox.innerHTML = '';
+        leaderBox.appendChild(createMemberRowEl(p.leader, p.id, true));
+      }
+    }
+
+    // Expand/collapse toggle bar for non-leader members
+    const membersList = p.members || [];
+    const maxFollowers = Math.max(0, (p.max || 6) - 1);
+    const joinedCnt = membersList.filter(m => m.status === 'joined' || m.status === 'apart').length;
+    const pendingCnt = membersList.length - joinedCnt;
+    const summaryParts = [`👥 ลูกทีม ${membersList.length}/${maxFollowers} คน`];
+    if (joinedCnt > 0) summaryParts.push(`ในตี้ ${joinedCnt}`);
+    if (pendingCnt > 0) summaryParts.push(`รอเข้าตี้ ${pendingCnt}`);
+    if (slots > 0) summaryParts.push(`ว่าง ${slots} ที่`);
+
+    const expandBar = cardEl.querySelector('.pt-expand-bar');
+    if (expandBar) {
+      if (expandBar.getAttribute('aria-expanded') !== String(isExpanded)) {
+        expandBar.setAttribute('aria-expanded', String(isExpanded));
+      }
+      expandBar.classList.toggle('open', isExpanded);
+      setText(expandBar.querySelector('.pt-expand-summary'), summaryParts.join(' · '));
+      setText(expandBar.querySelector('.pt-expand-label'), isExpanded ? 'ซ่อนลูกทีม ▲' : 'ดูรายชื่อ ▼');
+    }
+
+    const membersWrap = cardEl.querySelector('.pt-members-wrap');
+    if (membersWrap) {
+      membersWrap.hidden = !isExpanded;
+    }
+
+    // Reconcile non-leader member rows in-place
     const membersBox = cardEl.querySelector('.pt-members');
     if (membersBox) {
-      const desired = [{ m: p.leader, isLeader: true }, ...(p.members || []).map(m => ({ m, isLeader: false }))];
+      const desired = membersList.map(m => ({ m, isLeader: false }));
       const existingByKey = new Map();
       Array.from(membersBox.children).forEach(ch => {
         if (ch.dataset && ch.dataset.rowKey) existingByKey.set(ch.dataset.rowKey, ch);
       });
       const nextNodes = desired.map(({ m, isLeader }) => {
-        const key = (isLeader ? 'leader:' : 'member:') + m.id;
+        const key = 'member:' + m.id;
         let row = existingByKey.get(key);
         if (row) {
           patchMemberRowEl(row, m, p.id, isLeader);
@@ -226,7 +273,7 @@
     if (slotRow) {
       if (slots > 0) {
         slotRow.hidden = false;
-        setText(slotRow.querySelector('.pt-slot-text'), `ว่าง ${slots} ที่${p.autoFill ? ' · รอจอที่ออนไลน์และว่างอยู่' : ''}`);
+        setText(slotRow.querySelector('.pt-slot-text'), `ว่าง ${slots} ที่${p.autoFill ? ' · รอจอที่ออนไลน์และว่างอยู่มาเติมอัตโนมัติ' : ''}`);
       } else {
         slotRow.hidden = true;
       }
@@ -417,9 +464,17 @@
 
   async function onClick(e) {
     const b = e.target.closest('[data-act]'); if (!b) return;
-    const pid = encodeURIComponent(b.dataset.party);
+    const rawPid = String(b.dataset.party || '');
+    const pid = encodeURIComponent(rawPid);
+    if (b.dataset.act === 'toggle-members') {
+      if (expandedParties.has(rawPid)) expandedParties.delete(rawPid);
+      else expandedParties.add(rawPid);
+      render();
+      return;
+    }
     if (b.dataset.act === 'delete') {
       if (!confirm('ยุบตี้นี้? สมาชิกทุกจอจะออกจากปาร์ตี้ในเกม')) return;
+      expandedParties.delete(rawPid);
       const r = await api('/' + pid + '/delete', {});
       toast(r.success === false ? (r.error || 'ยุบตี้ไม่สำเร็จ') : 'ยุบตี้แล้ว', r.success === false ? 'error' : 'success');
     } else if (b.dataset.act === 'remove') {

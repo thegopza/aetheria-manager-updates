@@ -32,17 +32,18 @@ const BUSY_FLAGS = ['__isNavigating', '__isWalkingToMap', '__isShopping', '__isR
 
 const TIMING = {
   tickMs: 10000,
-  inviteCooldownMs: 20000,
-  inviteMaxAttempts: 4,
-  excludeAfterFailMs: 10 * 60 * 1000,
-  dropOfflineAfterMs: 10 * 60 * 1000,
+  inviteCooldownMs: 15000,
+  inviteMaxAttempts: 3,
+  excludeAfterFailMs: 5 * 60 * 1000,
+  dropOfflineAfterMs: 2 * 60 * 1000,
+  dropOtherPartyAfterMs: 45 * 1000,
   settingsCooldownMs: 15000,
   mapCooldownMs: 60000,
   channelCooldownMs: 45000,
   channelFailsBeforeFallback: 2,
   fallbackCooldownMs: 3 * 60 * 1000,
   acceptDelayMs: 1500,
-  leaveCooldownMs: 30000,
+  leaveCooldownMs: 15000,
   disbandGapMs: 1200,
   gatherCooldownMs: 45000,
   memberMoveWaitMs: 120000,
@@ -415,13 +416,34 @@ function createPartyService(opts) {
       return;
     }
 
-    // Drop members that have been offline for a long time / unknown profiles
+    // Drop members that have been offline / disconnected or stuck in another party so autoFill can pull free clients
+    const inGameMembersMap = new Map();
+    if (L.party && Array.isArray(L.party.members)) {
+      for (const gm of L.party.members) if (gm && gm.name) inGameMembersMap.set(gm.name, gm);
+    }
     const keep = [];
     for (const id of party.memberIds) {
       if (!profiles.has(id)) continue;
       const s = states.get(id), m = mrt(party.id, id);
-      if (s && s.ok && s.name) m.seenAt = now();
-      if (now() - m.seenAt >= T.dropOfflineAfterMs) { notes.push('ปลดสมาชิกที่ออฟไลน์นาน: ' + (profiles.get(id).name || id)); continue; }
+      const charName = (s && s.name) || (profiles.get(id) && profiles.get(id).lastCharName) || null;
+      const gm = charName ? inGameMembersMap.get(charName) : null;
+      const isOnlineNow = Boolean(s && s.ok && s.name && (!gm || gm.online !== false));
+      if (isOnlineNow) m.seenAt = now();
+      if (now() - m.seenAt >= T.dropOfflineAfterMs) {
+        notes.push('ปลดสมาชิกที่ออฟไลน์นาน: ' + (charName || profiles.get(id).name || id));
+        continue;
+      }
+      if (s && s.ok && s.name && s.party && s.party.leader !== L.name) {
+        if (!m.otherPartySince) m.otherPartySince = now();
+        if ((m.leaveAttempts || 0) >= 2 || now() - m.otherPartySince >= (T.dropOtherPartyAfterMs || 45000)) {
+          tempExcluded.set(party.id + ':' + id, now() + T.excludeAfterFailMs);
+          m.otherPartySince = 0; m.leaveAttempts = 0;
+          notes.push('สลับ ' + s.name + ' ออก (ติดอยู่ตี้อื่น) เพื่อดึงจอว่างเข้าแทน');
+          continue;
+        }
+      } else {
+        m.otherPartySince = 0; m.leaveAttempts = 0;
+      }
       keep.push(id);
     }
     let changed = keep.length !== party.memberIds.length;
@@ -449,7 +471,11 @@ function createPartyService(opts) {
       const managedInGame = L.party ? L.party.members.filter(m => managed.has(m.name)).length : 1;
       const outsiders = Math.max(0, inGameCount - managedInGame);
       const slots = MAX_MEMBERS - 1 - party.memberIds.length - outsiders;
-      const picks = pickCandidates(party, parties, states, managed, slots, excluded);
+      let picks = pickCandidates(party, parties, states, managed, slots, excluded);
+      // Fallback: if party still has empty slots and no non-excluded candidate is available, allow retrying temp-excluded clients
+      if (!picks.length && slots > 0) {
+        picks = pickCandidates(party, parties, states, managed, slots, new Set(party.excludedIds));
+      }
       if (picks.length) { party.memberIds.push(...picks); changed = true; }
     }
     if (changed) save();
@@ -475,8 +501,10 @@ function createPartyService(opts) {
       if (!S || !S.ok || !S.name) continue;
       if (inGame.has(S.name)) { m.inviteAttempts = 0; continue; }
       if (S.party && S.party.leader !== L.name) {
-        if (managed.has(S.party.leader) && now() - m.leaveAt >= T.leaveCooldownMs) {
-          m.leaveAt = now(); await act(P, ACTIONS.leave(), 'member-leave');
+        if (now() - m.leaveAt >= T.leaveCooldownMs) {
+          m.leaveAt = now();
+          m.leaveAttempts = (m.leaveAttempts || 0) + 1;
+          await act(P, ACTIONS.leave(), 'member-leave');
         }
         continue;
       }
@@ -487,7 +515,7 @@ function createPartyService(opts) {
         tempExcluded.set(party.id + ':' + id, now() + T.excludeAfterFailMs);
         party.memberIds = party.memberIds.filter(x => x !== id);
         m.inviteAttempts = 0;
-        notes.push('ชวน ' + S.name + ' ไม่สำเร็จหลายครั้ง — ข้ามไปก่อน 10 นาที');
+        notes.push('ชวน ' + S.name + ' ไม่สำเร็จหลายครั้ง — สลับหาจอว่างอื่นแทน');
         save();
         continue;
       }

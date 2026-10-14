@@ -8,9 +8,9 @@ function verifyOfflineRelease(release,trustedKeys){
   return claims;
 }
 function createOfflinePayloadCache({dataDir,trustedKeys,protect=dpapi,unprotect=v=>dpapi(v,true)}){
-  const dir=path.join(dataDir,'offline-cache');fs.mkdirSync(dir,{recursive:true});const index=path.join(dir,'index.dat'),store=encryptedStore(dir,protect,unprotect);let release=null;
-  function load(){try{const name=fs.readFileSync(index,'utf8');if(!/^[a-f0-9]{32}\.dat$/.test(name))throw Error('INVALID_CACHE_INDEX');const candidate=store.decode(fs.readFileSync(path.join(dir,name),'utf8'));verifyOfflineRelease(candidate,trustedKeys);release=candidate;}catch(e){if(e.code!=='ENOENT')throw e;if(fs.existsSync(index))throw Error('OFFLINE_PAYLOAD_CACHE_MISSING');}return release;}
-  function save(value){verifyOfflineRelease(value,trustedKeys);const name=crypto.randomBytes(16).toString('hex')+'.dat';fs.writeFileSync(path.join(dir,name),store.encode(value),{mode:0o600});fs.writeFileSync(index+'.tmp',name,{mode:0o600});fs.renameSync(index+'.tmp',index);release=value;return release;}
-  return {load,save,get:()=>release};
+  const dir=path.join(dataDir,'offline-cache');fs.mkdirSync(dir,{recursive:true});const index=path.join(dir,'index.dat'),store=encryptedStore(dir,protect,unprotect);let release=null,loadedName=null;
+  function load(){try{const name=fs.readFileSync(index,'utf8').trim();if(!/^[a-f0-9]{32}\.dat$/.test(name))throw Error('INVALID_CACHE_INDEX');if(release&&loadedName===name)return release;const candidate=store.decode(fs.readFileSync(path.join(dir,name),'utf8'));verifyOfflineRelease(candidate,trustedKeys);release=candidate;loadedName=name;}catch(e){if(e.code!=='ENOENT')throw e;if(fs.existsSync(index))throw Error('OFFLINE_PAYLOAD_CACHE_MISSING');}return release;}
+  function save(value){verifyOfflineRelease(value,trustedKeys);const name=crypto.randomBytes(16).toString('hex')+'.dat';fs.writeFileSync(path.join(dir,name),store.encode(value),{mode:0o600});fs.writeFileSync(index+'.tmp',name,{mode:0o600});fs.renameSync(index+'.tmp',index);release=value;loadedName=name;return release;}
+  return {load,save,get:()=>{try{const name=fs.readFileSync(index,'utf8').trim();if(name!==loadedName)load();}catch(_){}return release;}};
 }
 module.exports={createOfflinePayloadCache,verifyOfflineRelease};

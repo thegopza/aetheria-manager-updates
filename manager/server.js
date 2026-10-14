@@ -629,6 +629,9 @@ const LIVE_STATE_EVAL = `(() => {
     s.hasPremium = pActive;
     s.premiumUntil = pUntil > 0 ? pUntil : null;
   } catch (e) {}
+  try {
+    s.zeroRender = Boolean(window.__pmZeroRender);
+  } catch (e) {}
   return s;
 })()`;
 
@@ -3181,10 +3184,12 @@ const server = http.createServer(async (req, res) => {
     await Promise.all(profiles.map(async p => {
       windowStates[p.id] = { isHidden: allWindowsHidden, zeroRender: allWindowsHidden, updatedAt: Date.now() };
       if (p.debugPort) {
+        clientStateCacheByPort.delete(p.debugPort);
         if (!allWindowsHidden) {
           http.get(`http://127.0.0.1:${p.debugPort}/api/window?action=show`, () => {}).on('error', () => {});
         }
         await evalProfilePort(p.debugPort, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(${allWindowsHidden}) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${allWindowsHidden}))`, 3000).catch(() => {});
+        clientStateCacheByPort.delete(p.debugPort);
       }
     }));
     return sendJSON({ success: true, allWindowsHidden, zeroRender: allWindowsHidden });
@@ -3234,11 +3239,13 @@ const server = http.createServer(async (req, res) => {
 
     const proc = runningProcesses[id];
     windowStates[id] = { isHidden: false, zeroRender: false, updatedAt: Date.now() };
+    clientStateCacheByPort.delete(port);
     if (proc && proc.pid) {
       runPowerShell(`Add-Type 'using System; using System.Runtime.InteropServices; public class PmShow { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }'
         Get-Process -Id ${proc.pid} -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { [PmShow]::ShowWindow($_.MainWindowHandle, 9) }`);
     }
     await evalProfilePort(port, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`, 3000).catch(() => {});
+    clientStateCacheByPort.delete(port);
     // Electron loader: restore + always-on-top for a moment + focus. Browser mode: restore + activate tab.
     await new Promise(resolve => {
       http.get(`http://127.0.0.1:${port}/api/window?action=top`, { timeout: 5000 }, r => { r.resume(); r.on("end", resolve); })
@@ -3300,10 +3307,12 @@ public class PmFocus {
     const isHidden = windowStates[id].isHidden;
 
     if (profile.debugPort) {
+      clientStateCacheByPort.delete(profile.debugPort);
       if (!isHidden) {
         http.get(`http://127.0.0.1:${profile.debugPort}/api/window?action=show`, () => {}).on('error', () => {});
       }
       await evalProfilePort(profile.debugPort, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(${isHidden}) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${isHidden}))`, 3000).catch(() => {});
+      clientStateCacheByPort.delete(profile.debugPort);
     }
 
     return sendJSON({ success: true, isHidden, zeroRender: isHidden });

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "82f7647cbc401293595da8d91ed7252930e8cab1",
+  "sourceCommit": "c3996fa614f582941adf7e97f68cecc8e46f41f9",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -88,7 +88,7 @@
     },
     {
       "path": "manager/offline_payload_cache.js",
-      "sha256": "03f62b3a321454a9a9a4308237e6e030e22073b07b4ee6d5a035cea7003c6c85"
+      "sha256": "90220a26bf6d6513037c62f3b659902a10b8a94129315bd661e141d071216fb6"
     },
     {
       "path": "manager/offline_script_bootstrap.js",
@@ -232,7 +232,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "3218c17afef7fd147cdf44637562ceecb1636304d81a5573896a7cc1b866635d"
+      "sha256": "735547607f301256bf51752af0d02d27f993f9561f2d4d796cf7931a13acc1c4"
     },
     {
       "path": "manager/test_isolation.js",

@@ -368,30 +368,38 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
 
           let roomSent = false;
           try {
-            const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
-              || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
-              || window.__colyseusRoom || window.__gameRoom || null;
-            if (room && typeof room.send === 'function' && packet && packet.id != null && !packet.isDomFallback) {
-              room.send('human_check_answer', { id: packet.id, x: targetX, y: targetY });
-              roomSent = true;
+            if (typeof window.submitHumanCheckBoardAnswer === 'function') {
+              roomSent = Boolean(window.submitHumanCheckBoardAnswer(hc, boardEl, packet, targetX, targetY));
             }
           } catch (_) {}
 
-          try {
-            const targetEl = boardImg || boardEl;
-            if (targetEl && typeof targetEl.getBoundingClientRect === 'function') {
-              const rect = targetEl.getBoundingClientRect();
-              const clientX = rect.left + (targetX / bw) * (rect.width || bw);
-              const clientY = rect.top + (targetY / bh) * (rect.height || bh);
-              const opts = { bubbles: !roomSent, cancelable: true, view: window, clientX, clientY };
-              if (typeof PointerEvent !== 'undefined') targetEl.dispatchEvent(new PointerEvent('pointerdown', opts));
-              if (typeof MouseEvent !== 'undefined') {
-                targetEl.dispatchEvent(new MouseEvent('mousedown', opts));
-                targetEl.dispatchEvent(new MouseEvent('mouseup', opts));
-                targetEl.dispatchEvent(new MouseEvent('click', opts));
+          if (!roomSent) {
+            try {
+              const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
+                || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
+                || window.__colyseusRoom || window.__gameRoom || null;
+              if (room && typeof room.send === 'function' && packet && packet.id != null && !packet.isDomFallback) {
+                room.send('human_check_answer', { id: packet.id, x: targetX, y: targetY });
+                roomSent = true;
               }
-            }
-          } catch (_) {}
+            } catch (_) {}
+
+            try {
+              const targetEl = boardImg || boardEl;
+              if (targetEl && typeof targetEl.getBoundingClientRect === 'function') {
+                const rect = targetEl.getBoundingClientRect();
+                const clientX = rect.left + (targetX / bw) * (rect.width || bw);
+                const clientY = rect.top + (targetY / bh) * (rect.height || bh);
+                const opts = { bubbles: !roomSent, cancelable: true, view: window, clientX, clientY };
+                if (typeof PointerEvent !== 'undefined') targetEl.dispatchEvent(new PointerEvent('pointerdown', opts));
+                if (typeof MouseEvent !== 'undefined') {
+                  targetEl.dispatchEvent(new MouseEvent('mousedown', opts));
+                  targetEl.dispatchEvent(new MouseEvent('mouseup', opts));
+                  targetEl.dispatchEvent(new MouseEvent('click', opts));
+                }
+              }
+            } catch (_) {}
+          }
 
           window.__lastHumanCheckSolved = {
             pickIndex: slotIdx,
@@ -645,7 +653,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
 
       // 3. Still open and triesLeft has NOT decreased -> game/server is lagging!
       // At ~2.3s, re-send the answer packet once in case client lag swallowed the first click.
-      if (!retriedLagClick && elapsed >= 2200) {
+      if (!retriedLagClick && elapsed >= 1900) {
         retriedLagClick = true;
         try {
           await evalProfilePort(profile.debugPort, `(() => {
@@ -653,6 +661,9 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
             const s = window.__lastHumanCheckSolved;
             const packet = window.__latestHumanCheck;
             if (!hc || !s) return false;
+            if (typeof window.submitHumanCheckBoardAnswer === 'function' && typeof s.x === 'number' && typeof s.y === 'number') {
+              return Boolean(window.submitHumanCheckBoardAnswer(hc, hc.querySelector('.human-check-board'), packet, s.x, s.y));
+            }
             const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
               || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
               || window.__colyseusRoom || window.__gameRoom || null;

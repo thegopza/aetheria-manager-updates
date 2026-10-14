@@ -211,9 +211,11 @@ async function fetchProfiles() {
         updateCaptchaSolvedDisplay(data.captchaStats.totalSolved);
       }
 
-      // Play alert chime if any card has humanCheck active
-      if (currentProfiles.some(p => p.liveState && p.liveState.humanCheck && p.liveState.humanCheck.active)) {
-        playHumanCheckAlert();
+      // Play alert chime if any card has humanCheck active or is in prison
+      const hasActiveHumanCheck = currentProfiles.some(p => p.liveState && p.liveState.humanCheck && p.liveState.humanCheck.active);
+      const hasPrisonProfile = currentProfiles.some(p => p.liveState && typeof p.liveState.map === 'string' && p.liveState.map.includes('คุก'));
+      if (hasActiveHumanCheck || hasPrisonProfile) {
+        playHumanCheckAlert(hasPrisonProfile);
       }
     }
   } catch (err) {
@@ -222,25 +224,42 @@ async function fetchProfiles() {
 }
 
 let lastHumanCheckBeep = 0;
-function playHumanCheckAlert() {
+let sharedAlertAudioCtx = null;
+function ensureAlertAudioCtx() {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!sharedAlertAudioCtx || sharedAlertAudioCtx.state === 'closed') {
+    sharedAlertAudioCtx = new AudioCtx();
+  }
+  if (sharedAlertAudioCtx.state === 'suspended' && typeof sharedAlertAudioCtx.resume === 'function') {
+    sharedAlertAudioCtx.resume().catch(() => {});
+  }
+  return sharedAlertAudioCtx;
+}
+window.addEventListener('click', () => { try { ensureAlertAudioCtx(); } catch (_) {} }, { passive: true });
+window.addEventListener('keydown', () => { try { ensureAlertAudioCtx(); } catch (_) {} }, { passive: true });
+
+function playHumanCheckAlert(urgent = false) {
   const now = Date.now();
-  if (now - lastHumanCheckBeep < 8000) return;
+  const cooldown = urgent ? 4500 : 5000;
+  if (now - lastHumanCheckBeep < cooldown) return;
   lastHumanCheckBeep = now;
   try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = new AudioContext();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(880, ctx.currentTime);
-    osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.15);
-    gain.gain.setValueAtTime(0.2, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.55);
+    const ctx = ensureAlertAudioCtx();
+    if (!ctx) return;
+    const notes = urgent ? [987.77, 1318.51, 987.77, 1318.51] : [880, 1174.66, 880, 1318.51];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = urgent ? 'sawtooth' : 'triangle';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.16);
+      gain.gain.setValueAtTime(urgent ? 0.35 : 0.28, ctx.currentTime + idx * 0.16);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.16 + 0.14);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + idx * 0.16);
+      osc.stop(ctx.currentTime + idx * 0.16 + 0.15);
+    });
   } catch (e) {}
 }
 

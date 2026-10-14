@@ -357,6 +357,9 @@ const LIVE_STATE_EVAL = `(() => {
   try {
     const hc = document.querySelector('.human-check');
     if (hc) {
+      if (typeof window.triggerHumanCheckTickNow === 'function') {
+        try { window.triggerHumanCheckTickNow(); } catch (_) {}
+      }
       const promptEl = hc.querySelector('.human-check-prompt');
       const metaEl = hc.querySelector('.human-check-meta');
       const btns = Array.from(hc.querySelectorAll('.human-check-pick'));
@@ -536,15 +539,19 @@ const LIVE_STATE_EVAL = `(() => {
           sLast.verified = null;
           delete sLast.isCorrect;
         }
-        if (!sLast.retriedLagSend && elapsedS >= 2200) {
+        if (!sLast.retriedLagSend && elapsedS >= 1800) {
           sLast.retriedLagSend = true;
           try {
-            const pkt = window.__latestHumanCheck;
-            const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
-              || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
-              || window.__colyseusRoom || window.__gameRoom || null;
-            if (room && typeof room.send === 'function' && pkt && pkt.id != null && typeof sLast.x === 'number' && typeof sLast.y === 'number') {
-              room.send('human_check_answer', { id: pkt.id, x: sLast.x, y: sLast.y });
+            if (typeof window.submitHumanCheckBoardAnswer === 'function' && typeof sLast.x === 'number' && typeof sLast.y === 'number') {
+              window.submitHumanCheckBoardAnswer(hc, hc.querySelector('.human-check-board'), window.__latestHumanCheck, sLast.x, sLast.y);
+            } else {
+              const pkt = window.__latestHumanCheck;
+              const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
+                || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
+                || window.__colyseusRoom || window.__gameRoom || null;
+              if (room && typeof room.send === 'function' && pkt && pkt.id != null && typeof sLast.x === 'number' && typeof sLast.y === 'number') {
+                room.send('human_check_answer', { id: pkt.id, x: sLast.x, y: sLast.y });
+              }
             }
           } catch (e) {}
         }
@@ -625,8 +632,20 @@ const LIVE_STATE_EVAL = `(() => {
   return s;
 })()`;
 
+const clientStateCacheByPort = new Map();
+const clientStateInFlightByPort = new Map();
+
 function queryClientState(port) {
-  return new Promise((resolve) => {
+  if (!port) return Promise.resolve(null);
+  const now = Date.now();
+  const cached = clientStateCacheByPort.get(port);
+  if (cached && now - cached.ts < 950) {
+    return Promise.resolve(cached.state);
+  }
+  if (clientStateInFlightByPort.has(port)) {
+    return clientStateInFlightByPort.get(port);
+  }
+  const promise = new Promise((resolve) => {
     // 1. Try rich state via POST /api/eval (avoids HTTP URL/header overflow on large LIVE_STATE_EVAL)
     const payload = JSON.stringify({ code: LIVE_STATE_EVAL });
     const req = http.request({
@@ -660,7 +679,16 @@ function queryClientState(port) {
     });
     req.write(payload);
     req.end();
+  }).then((state) => {
+    clientStateInFlightByPort.delete(port);
+    if (state) clientStateCacheByPort.set(port, { ts: Date.now(), state });
+    return state;
+  }).catch(() => {
+    clientStateInFlightByPort.delete(port);
+    return null;
   });
+  clientStateInFlightByPort.set(port, promise);
+  return promise;
 }
 
 function queryStandardState(port) {
@@ -1935,38 +1963,97 @@ const discordService = createDiscordBotService({
 
 const embeddedHumanCheckBridge=require('./embedded_human_check_bridge').createEmbeddedHumanCheckBridge({evalProfilePort,recordCaptchaSolved,getConfig:()=>{const hc=humanCheckSolver.loadSettings(),dc=discordService.loadSettings();return {autoAnswer:hc.autoAnswer!==false&&dc.autoAnswer!==false,answerDelayMs:hc.answerDelayMs};}});
 
-// Background monitor for Human Check (alerts Discord even if Manager UI is closed/idle)
+// OS-level Windows sound alert so Human Check / Prison alerts are audible even when browser tabs are backgrounded or muted
+let lastWindowsBeepAt = 0;
+let windowsBeepInFlight = false;
+function triggerWindowsAlertBeep(urgent = false) {
+  if (TEST_INSTANCE || process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test') return;
+  const now = Date.now();
+  const minGap = urgent ? 4500 : 7500;
+  if (windowsBeepInFlight || now - lastWindowsBeepAt < minGap) return;
+  lastWindowsBeepAt = now;
+  windowsBeepInFlight = true;
+  try { process.stdout.write('\x07'); } catch (_) {}
+  const psCmd = urgent
+    ? '[console]::beep(988,160); [console]::beep(1318,160); [console]::beep(988,160); [console]::beep(1318,240)'
+    : '[console]::beep(880,170); [console]::beep(1175,210)';
+  runPowerShell(psCmd).finally(() => { windowsBeepInFlight = false; });
+}
+
+const humanCheckFirstSeenByProfile = new Map();
+const prisonAlertedByProfile = new Map();
+let humanCheckMonitorInFlight = false;
+
+// Background monitor for Human Check (alerts Discord + OS beep even if Manager UI is closed/idle)
 setInterval(async () => {
+  if (humanCheckMonitorInFlight) return;
+  humanCheckMonitorInFlight = true;
   try {
-    const profiles = loadProfiles();
-    for (const p of profiles) {
-      if (!p.debugPort) continue;
-      const state = await queryClientState(p.debugPort);
-      await embeddedHumanCheckBridge.collect(p,state);
-      if (state && Array.isArray(state.humanCheckWrongAttempts) && typeof discordService.notifyHumanCheckWrongAttempt === 'function') {
-        for (const attempt of state.humanCheckWrongAttempts) {
-          discordService.notifyHumanCheckWrongAttempt({ profile: p, attempt });
-        }
-      }
-      if (state && state.humanCheck && state.humanCheck.active) {
-        if (state.humanCheck.isUpdatedFormat) {
-          console.warn(`[EMERGENCY STOP] ตรวจพบ Human Check รูปแบบใหม่บนจอ ${p.name || p.id} — ปิดทุกจออัตโนมัติทันที!`);
-          stopAllProfiles();
-          if (typeof discordService.notifyHumanCheckEmergency === 'function') {
-            discordService.notifyHumanCheckEmergency({ profile: p, check: state.humanCheck, reason: 'ตรวจพบโจทย์รูปแบบใหม่ (Image Board / ไม่มีปุ่มเลือกไอคอนเดิม)' });
+    const profiles = loadProfiles().filter(p => p && p.debugPort);
+    const BATCH_SIZE = 10;
+    let shouldBeepNormal = false;
+    let shouldBeepUrgent = false;
+
+    for (let i = 0; i < profiles.length; i += BATCH_SIZE) {
+      const batch = profiles.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(async (p) => {
+        try {
+          const state = await queryClientState(p.debugPort);
+          await embeddedHumanCheckBridge.collect(p, state);
+          if (state && Array.isArray(state.humanCheckWrongAttempts) && state.humanCheckWrongAttempts.length > 0) {
+            shouldBeepUrgent = true;
+            if (typeof discordService.notifyHumanCheckWrongAttempt === 'function') {
+              for (const attempt of state.humanCheckWrongAttempts) {
+                discordService.notifyHumanCheckWrongAttempt({ profile: p, attempt });
+              }
+            }
           }
-        } else {
-          discordService.notifyHumanCheck({ profile: p, check: state.humanCheck });
-        }
-      } else if (state) {
-        discordService.clearHumanCheck(p.id);
-      }
-      if (state && state.unexpectedTown && state.unexpectedTown.active) {
-        discordService.notifyUnexpectedTown({ profile: p, unexpectedTown: state.unexpectedTown });
-      }
+          if (state && state.humanCheck && state.humanCheck.active) {
+            const now = Date.now();
+            if (!humanCheckFirstSeenByProfile.has(p.id)) {
+              humanCheckFirstSeenByProfile.set(p.id, now);
+              shouldBeepNormal = true;
+            } else if (now - humanCheckFirstSeenByProfile.get(p.id) >= 4000) {
+              shouldBeepUrgent = true;
+            }
+            if (state.humanCheck.isUpdatedFormat) {
+              console.warn(`[EMERGENCY STOP] ตรวจพบ Human Check รูปแบบใหม่บนจอ ${p.name || p.id} — ปิดทุกจออัตโนมัติทันที!`);
+              stopAllProfiles();
+              if (typeof discordService.notifyHumanCheckEmergency === 'function') {
+                discordService.notifyHumanCheckEmergency({ profile: p, check: state.humanCheck, reason: 'ตรวจพบโจทย์รูปแบบใหม่ (Image Board / ไม่มีปุ่มเลือกไอคอนเดิม)' });
+              }
+            } else {
+              discordService.notifyHumanCheck({ profile: p, check: state.humanCheck });
+            }
+          } else if (state) {
+            humanCheckFirstSeenByProfile.delete(p.id);
+            discordService.clearHumanCheck(p.id);
+          }
+          if (state && typeof state.map === 'string' && state.map.includes('คุก')) {
+            const lastPrisonBeep = prisonAlertedByProfile.get(p.id) || 0;
+            if (Date.now() - lastPrisonBeep > 60000) {
+              prisonAlertedByProfile.set(p.id, Date.now());
+              shouldBeepUrgent = true;
+            }
+          } else if (state && typeof state.map === 'string' && state.map) {
+            prisonAlertedByProfile.delete(p.id);
+          }
+          if (state && state.unexpectedTown && state.unexpectedTown.active) {
+            discordService.notifyUnexpectedTown({ profile: p, unexpectedTown: state.unexpectedTown });
+          }
+        } catch (_) {}
+      }));
     }
-  } catch (e) {}
-}, 2500);
+
+    if (shouldBeepUrgent) {
+      triggerWindowsAlertBeep(true);
+    } else if (shouldBeepNormal) {
+      triggerWindowsAlertBeep(false);
+    }
+  } catch (e) {} finally {
+    humanCheckMonitorInFlight = false;
+  }
+}, 2000);
 
 // Poll remote commands from Central Admin Dashboard (https://api.noggunsshop.xyz)
 let centralCommandPollInFlight = false;

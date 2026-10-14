@@ -179,17 +179,63 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
   const MSGPACK = `(function(){ if (!window.msgpack && !window.__pmMsgpackLoading) { window.__pmMsgpackLoading=true; const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/msgpack-lite/0.1.26/msgpack.min.js'; s.onerror=()=>{window.__pmMsgpackLoading=false;}; document.head.appendChild(s); } })(); void 0;`;
 
+  const crashedTargetReloadAt = new Map();
+
   async function health(c) {
-    const value=await evaluate(c,HEALTH_JS);
+    const value=await evaluate(c,HEALTH_JS,4500);
     if(!value || typeof value.documentId!=='string')throw Error('INVALID_DOCUMENT_PROBE');
     if(c.documentId!==value.documentId) {c.documentId=value.documentId;c.generation++;c.attempts=0;clearTimeout(c.retryTimer);c.retryTimer=null;}
     return value;
   }
   const current=(c,token)=>clients.get(c.profileId)===c&&!stoppedProfiles.has(c.profileId)&&c.generation===token.generation&&c.sessionId===token.sessionId;
   function classify(c,h) {
-    if(h.version&&h.hud&&h.liveHook){diagnostic(c,'ready',{version:h.version,documentId:h.documentId,hud:h.hud,liveHook:h.liveHook});return true;}
-    if(h.version||h.hud||h.liveHook||(h.initialized&&h.bootstrapPhase!=='waiting')){diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,hud:h.hud,liveHook:h.liveHook});return true;}
+    if(h.version&&h.hud&&h.liveHook){c.crashReloadCount=0;c.stateFailCount=0;diagnostic(c,'ready',{version:h.version,documentId:h.documentId,hud:h.hud,liveHook:h.liveHook});return true;}
+    if(h.version||h.hud||h.liveHook||(h.initialized&&h.bootstrapPhase!=='waiting')){c.stateFailCount=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,hud:h.hud,liveHook:h.liveHook});return true;}
     return false;
+  }
+
+  async function reloadCrashedClient(c, reason = 'crashed', force = false) {
+    if (!c || stoppedProfiles.has(c.profileId) || clients.get(c.profileId) !== c) return false;
+    const now = Date.now();
+    if (c.crashReloadInFlight) return false;
+    if (!force) {
+      if ((c.crashReloadCount || 0) >= 3) return false;
+      if (now - (c.lastCrashReloadAt || 0) < 20000) return false;
+    }
+    c.crashReloadInFlight = true;
+    c.lastCrashReloadAt = now;
+    c.crashReloadCount = (c.crashReloadCount || 0) + 1;
+    c.stateFailCount = 0;
+    c.generation++;
+    c.documentId = null;
+    c.attempts = 0;
+    clearTimeout(c.retryTimer);
+    c.retryTimer = null;
+    diagnostic(c, 'crashed-reloading', { reason: String(reason), reloadCount: c.crashReloadCount });
+    console.warn(`[BrowserMode] 🔄 จอ ${c.profileId} ค้างหรือแรมเต็ม (${reason}) -> สั่ง Refresh หน้าเกมอัตโนมัติ (ครั้งที่ ${c.crashReloadCount})`);
+    try {
+      await send('Page.reload', { ignoreCache: false }, c.sessionId, 8000);
+      return true;
+    } catch (_) {
+      try {
+        await send('Page.navigate', { url: gameUrl }, c.sessionId, 8000);
+        return true;
+      } catch (_) {
+        try {
+          const { sessionId } = await send('Target.attachToTarget', { targetId: c.targetId, flatten: true }, undefined, 5000);
+          c.sessionId = sessionId;
+          await send('Page.enable', {}, sessionId, 5000).catch(() => {});
+          await send('Runtime.enable', {}, sessionId, 5000).catch(() => {});
+          await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__pmProfileId = ${JSON.stringify(c.profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(c.profileId)}); } catch (_) {}` }, sessionId, 5000).catch(() => {});
+          await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000));
+          return true;
+        } catch (_) {
+          return false;
+        }
+      }
+    } finally {
+      c.crashReloadInFlight = false;
+    }
   }
 
   async function injectBot(c) {
@@ -217,7 +263,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if(!current(c,token))return;
       const after=await health(c);
       if(!current(c,token)||after.documentId!==before.documentId||classify(c,after))return;
-      await evaluate(c,MSGPACK);
+      await evaluate(c,MSGPACK,8000);
       if(!current(c,token))return;
       // Atomic document/runtime guard closes the race with a delayed legacy loader response.
       const expression=`(() => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') return {skipped:true,reason:'INITIALIZATION_FAILED'}; window.__pmBrowserInjectionAttempted=true; (0,eval)(${JSON.stringify(code)}); return {attempted:true}; })()`;
@@ -226,7 +272,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const result=await health(c);if(!classify(c,result))diagnostic(c,'partial-runtime',{code:'POSTCONDITION_MISSING'});
     } catch (e) {
       if(isGoneError(e)){diagnostic(c,'transport-disconnected',{gameAlive:null});drop(c);scheduleReconnect();return;}
-      if(!token){if(clients.get(c.profileId)===c)diagnostic(c,'probe-unavailable',{code:'DOCUMENT_PROBE_FAILED'});return;}
+      if(!token){
+        if(clients.get(c.profileId)===c){
+          diagnostic(c,'probe-unavailable',{code:'DOCUMENT_PROBE_FAILED'});
+          reloadCrashedClient(c,'DOCUMENT_PROBE_FAILED').catch(()=>{});
+        }
+        return;
+      }
       if(!current(c,token))return;
       let existing=false;
       try{existing=classify(c,await health(c));}catch(_){}
@@ -246,27 +298,33 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (!c) return;
     if(msg.method==='Page.frameNavigated'&&!msg.params?.frame?.parentId){c.generation++;c.documentId=null;c.attempts=0;clearTimeout(c.retryTimer);diagnostic(c,'document-pending',{navigationType:String(msg.params?.type||'navigation').slice(0,40)});}
     if(msg.method==='Page.loadEventFired')injectBot(c);
+    if(msg.method==='Inspector.targetCrashed')reloadCrashedClient(c,'Inspector.targetCrashed').catch(()=>{});
   });
   listeners.add(msg => {
-    if (msg.method === 'Target.targetDestroyed' || (msg.method === 'Target.targetCrashed')) {
+    if (msg.method === 'Target.targetDestroyed') {
       for (const c of Array.from(clients.values())) if (c.targetId === msg.params.targetId) {diagnostic(c,'closed');knownTargets.delete(c.profileId);drop(c);}
+    }
+    if (msg.method === 'Target.targetCrashed') {
+      for (const c of Array.from(clients.values())) if (c.targetId === msg.params.targetId) reloadCrashedClient(c, msg.params?.status || 'Target.targetCrashed').catch(() => {});
     }
     if (msg.method === 'Target.detachedFromTarget') {
       for (const c of Array.from(clients.values())) if (c.sessionId === msg.params.sessionId) {diagnostic(c,'transport-disconnected',{gameAlive:null});drop(c);scheduleReconnect();}
     }
   });
 
-  async function attach(profileId, targetId) {
+  async function attach(profileId, targetId, skipIdentityProbe = false) {
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
     try {
     await send('Page.enable', {}, sessionId);
     await send('Runtime.enable', {}, sessionId);
-    await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__pmProfileId = ${JSON.stringify(profileId)};` }, sessionId);
-    const identity=await evaluate({sessionId},`(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; return window.__pmProfileId; })()`);
-    if(identity!==profileId)throw Error('PROFILE_ID_CONFLICT');
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__pmProfileId = ${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {}` }, sessionId);
+    if (!skipIdentityProbe) {
+      const identity=await evaluate({sessionId},`(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`,4500);
+      if(identity!==profileId)throw Error('PROFILE_ID_CONFLICT');
+    }
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
-    const c = { profileId, targetId, sessionId, generation:0,documentId:null,attempts:0,injectionInFlight:null,retryTimer:null };
+    const c = { profileId, targetId, sessionId, generation:0,documentId:null,attempts:0,injectionInFlight:null,retryTimer:null,crashReloadCount:0,lastCrashReloadAt:0,crashReloadInFlight:false,stateFailCount:0 };
     clients.set(profileId, c);
     knownTargets.set(profileId,targetId);diagnostic(c,'document-pending');
     return c;
@@ -288,21 +346,38 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if (Array.from(clients.values()).some(c => c.targetId === t.targetId)) continue;
       try {
         const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
-        let pid;
-        try {const r = await send('Runtime.evaluate', { expression: 'window.__pmProfileId || null', returnByValue: true }, sessionId);if(r.exceptionDetails)throw Error('PROFILE_PROBE_FAILED');pid = r && r.result && r.result.value;}
-        finally {await send('Target.detachFromTarget', { sessionId }).catch(() => {});}
+        let pid, probeFailed = false;
+        try {
+          const r = await send('Runtime.evaluate', { expression: `window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('__pmProfileId')) || null`, returnByValue: true }, sessionId, 4500);
+          if(r.exceptionDetails)throw Error('PROFILE_PROBE_FAILED');
+          pid = r && r.result && r.result.value;
+        } catch (_) {
+          probeFailed = true;
+          const lastAt = crashedTargetReloadAt.get(t.targetId) || 0;
+          if (Date.now() - lastAt > 20000) {
+            crashedTargetReloadAt.set(t.targetId, Date.now());
+            await send('Page.enable', {}, sessionId, 5000).catch(() => {});
+            await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000).catch(() => {}));
+          }
+        } finally {
+          await send('Target.detachFromTarget', { sessionId }).catch(() => {});
+        }
         const identified=pid||loadProfiles().find(p=>knownTargets.get(p.id)===t.targetId)?.id;
         const profile = identified && !stoppedProfiles.has(identified) && loadProfiles().find(p => p.id === identified);
-        if (profile) { const c = await attach(profile.id, t.targetId); startProxy(c, profile.debugPort); }
+        if (profile) {
+          const c = await attach(profile.id, t.targetId, probeFailed);
+          startProxy(c, profile.debugPort);
+          if (probeFailed) await reloadCrashedClient(c, 'rediscover-crashed', true);
+        }
       } catch (e) {}
     }
     for(const c of clients.values())await injectBot(c);
   }
 
   // ---------- per-profile HTTP API (same as the Electron loader's) ----------
-  async function evaluate(c, code) {
+  async function evaluate(c, code, timeoutMs = 300000) {
     // long scripts (channel switch waiting for a free slot, trades) may take minutes, like the Electron loader allows
-    const r = await send('Runtime.evaluate', { expression: code, awaitPromise: true, returnByValue: true }, c.sessionId, 300000);
+    const r = await send('Runtime.evaluate', { expression: code, awaitPromise: true, returnByValue: true }, c.sessionId, timeoutMs);
     if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception && r.exceptionDetails.exception.description) || r.exceptionDetails.text || 'Script failed');
     return r.result ? r.result.value : undefined;
   }
@@ -311,13 +386,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const set = bounds => send('Browser.setWindowBounds', { windowId, bounds });
     if (action === 'hide' || action === 'zero-render-on') {
       await set({ windowState: 'normal' }).catch(() => {});
-      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(true) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(true))`).catch(() => {});
+      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(true) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(true))`, 4500).catch(() => {});
     } else if (action === 'minimize') {
       await set({ windowState: 'minimized' }).catch(() => {});
     } else if (action === 'show' || action === 'restore' || action === 'top' || action === 'focus' || action === 'zero-render-off') {
       await set({ windowState: 'normal' }).catch(() => {});
       if (action === 'top' || action === 'focus') await send('Target.activateTarget', { targetId: c.targetId });
-      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`).catch(() => {});
+      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`, 4500).catch(() => {});
     } else if (action === 'set-bounds') {
       await set({ windowState: 'normal' });
       await set({ left: Number(q.get('x')) || 0, top: Number(q.get('y')) || 0, width: Number(q.get('w')) || 640, height: Number(q.get('h')) || 520 });
@@ -345,7 +420,16 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           catch (e) { if (isGoneError(e)) drop(c); return reply(500, { success: false, error: e.message }); }
         }
         if (url.pathname === '/api/state') {
-          return reply(200, await evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`));
+          try {
+            const st = await evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`, 4500);
+            c.stateFailCount = 0;
+            return reply(200, st);
+          } catch (e) {
+            if (isGoneError(e)) { drop(c); return reply(500, { success: false, error: e.message }); }
+            c.stateFailCount = (c.stateFailCount || 0) + 1;
+            if (c.stateFailCount >= 2) reloadCrashedClient(c, 'state-probe-timeout').catch(() => {});
+            return reply(500, { success: false, error: e.message });
+          }
         }
         if(url.pathname==='/api/browser-status')return reply(200,{success:true,profileId:c.profileId,...diagnostics.get(c.profileId)});
         if (url.pathname === '/api/window') {
@@ -383,20 +467,24 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const { targetInfos } = await send('Target.getTargets');
       if (targetInfos.some(t => t.targetId === existing.targetId)) {
         startProxy(existing, profile.debugPort);
-        let h = null;
+        let h = null, reloaded = false;
         try { h = await health(existing); } catch (_) {}
-        if (!h || !h.version || !h.hud) {
+        if (!h) {
+          reloaded = await reloadCrashedClient(existing, 'launch-recover', true);
+          try { h = await health(existing); } catch (_) {}
+        }
+        if (h && (!h.version || !h.hud)) {
           try {
             await injectBot(existing);
             h = await health(existing).catch(() => null);
           } catch (_) {}
         }
         const isReady = !!(h && h.version && h.hud);
-        const recovered = !wasReady && isReady;
+        const recovered = (!wasReady && isReady) || reloaded;
         await windowAction(existing, 'focus', new URLSearchParams()).catch(() => {});
         return {
           success: true,
-          message: recovered ? 'กู้คืนและเชื่อมต่อจอเดิมสำเร็จ' : 'หน้าต่างนี้เปิดอยู่แล้ว',
+          message: reloaded ? 'รีเฟรชกู้คืนจอที่ค้างสำเร็จ' : (recovered ? 'กู้คืนและเชื่อมต่อจอเดิมสำเร็จ' : 'หน้าต่างนี้เปิดอยู่แล้ว'),
           alreadyOpen: true,
           recovered
         };

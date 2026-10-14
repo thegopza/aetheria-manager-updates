@@ -1449,7 +1449,8 @@ function buildProfileCard(p) {
 
           <div class="card-subline">
             ${charName ? `<span class="char-live-name">👤 ${escapeHTML(charName)}</span>` : ''}
-            <span class="profile-acc">${escapeHTML(p.account || 'บัญชีเริ่มต้น')}</span>
+            <span class="profile-acc">${escapeHTML(p.account || (p.autoRegister ? '⏳ รอสมัครไอดีอัตโนมัติ' : 'บัญชีเริ่มต้น'))}</span>
+            ${p.registerError ? `<span class="profile-acc" style="color:#f59e0b; font-size:0.74rem;" title="${escapeHTML(p.registerError)}">⚠️ ${escapeHTML(p.registerError)}</span>` : ''}
           </div>
           <div class="card-class-row">
             <span class="chip chip-class">${escapeHTML(curClass)}</span>

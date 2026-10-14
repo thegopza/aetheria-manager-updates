@@ -2553,6 +2553,10 @@ const server = http.createServer(async (req, res) => {
         try {
           const data = JSON.parse(body || "{}");
           const updated = proxyRegister.saveSettings(data);
+          if (updated.enabled) {
+            authSync.resetProxyFallback?.();
+            setImmediate(() => authSync.tick().catch(() => {}));
+          }
           sendJSON({ success: true, settings: proxyRegister.publicSettings() });
         } catch (e) {
           sendJSON({ success: false, error: e.message }, 400);
@@ -2574,6 +2578,10 @@ const server = http.createServer(async (req, res) => {
         const current = proxyRegister.loadSettings();
         const nextState = typeof data.enabled === "boolean" ? data.enabled : !current.enabled;
         const updated = proxyRegister.saveSettings({ enabled: nextState });
+        if (updated.enabled) {
+          authSync.resetProxyFallback?.();
+          setImmediate(() => authSync.tick().catch(() => {}));
+        }
         sendJSON({ success: true, enabled: updated.enabled, settings: proxyRegister.publicSettings() });
       } catch (e) {
         sendJSON({ success: false, error: e.message }, 400);
@@ -2805,6 +2813,9 @@ const server = http.createServer(async (req, res) => {
         if (!fs.existsSync(sessionFolder)) fs.mkdirSync(sessionFolder, { recursive: true });
 
         if ((data.loginPassword || "").trim()) credentials.setPassword(newProfile.id, data.loginPassword.trim());
+        if (newProfile.autoRegister && proxyRegister.isEnabled()) {
+          setImmediate(() => authSync.syncOne(newProfile).catch(() => {}));
+        }
         sendJSON({ success: true, profile: newProfile });
       } catch (err) {
         sendJSON({ success: false, error: err.message }, 400);
@@ -2824,14 +2835,27 @@ const server = http.createServer(async (req, res) => {
         const profiles = loadProfiles();
         const idx = profiles.findIndex(p => p.id === id);
         if (idx === -1) return sendJSON({ success: false, error: "Profile not found" }, 404);
-        const changesIdentity = (data.account !== undefined && data.account.trim() !== profiles[idx].account) || !!(data.loginPassword || '').trim();
+        const nextAccount = data.account !== undefined ? data.account.trim() : (profiles[idx].account || "");
+        const nextPassword = (data.loginPassword || "").trim();
+        const accountChanged = data.account !== undefined && nextAccount !== (profiles[idx].account || "");
+        const wantsNewAutoRegister = !nextPassword && (
+          data.autoRegister === true ||
+          (data.account !== undefined && nextAccount === "") ||
+          (accountChanged && nextAccount !== "")
+        );
+        const changesIdentity = accountChanged || !!nextPassword || wantsNewAutoRegister;
         if (changesIdentity) await scriptCoordinator.prepareCredentialChange(profiles[idx]);
+
+        const nextAutoRegister = nextPassword
+          ? false
+          : (wantsNewAutoRegister ? true : !!profiles[idx].autoRegister);
 
         profiles[idx] = {
           ...profiles[idx],
           name: data.name !== undefined ? data.name.trim() : profiles[idx].name,
-          account: data.account !== undefined ? data.account.trim() : profiles[idx].account,
-          autoRegister: (data.loginPassword || "").trim() ? false : profiles[idx].autoRegister,
+          account: nextAccount,
+          autoRegister: nextAutoRegister,
+          ...(wantsNewAutoRegister ? { generatedAccount: false, registerError: "", proxyFallbackBrowser: undefined, proxyRegistrationState: undefined } : {}),
           charClass: data.charClass || profiles[idx].charClass,
           targetMap: data.targetMap || profiles[idx].targetMap,
           debugPort: data.debugPort || profiles[idx].debugPort,
@@ -2839,8 +2863,16 @@ const server = http.createServer(async (req, res) => {
           notes: data.notes !== undefined ? data.notes : profiles[idx].notes,
           whitelist: data.whitelist !== undefined ? data.whitelist : profiles[idx].whitelist
         };
+        if (wantsNewAutoRegister) {
+          delete profiles[idx].proxyFallbackBrowser;
+          delete profiles[idx].proxyRegistrationState;
+          credentials.setPassword(id, "");
+        }
         saveProfiles(profiles);
-        if ((data.loginPassword || "").trim()) credentials.setPassword(id, data.loginPassword.trim());
+        if (nextPassword) credentials.setPassword(id, nextPassword);
+        if (profiles[idx].autoRegister && proxyRegister.isEnabled()) {
+          setImmediate(() => authSync.syncOne(profiles[idx]).catch(() => {}));
+        }
         sendJSON({ success: true, profile: profiles[idx] });
       } catch (err) {
         sendJSON({ success: false, error: err.message }, 400);
@@ -3038,7 +3070,10 @@ const server = http.createServer(async (req, res) => {
       browserMode.launch(profile)
         .then(r => {
           if (r && r.alreadyOpen) scriptCoordinator.cycle?.().catch(() => {});
-          if (profile.autoRegister) setTimeout(() => authSync.syncOne(profile).catch(() => {}), 2500);
+          if (profile.autoRegister || profile.loginSyncPending) {
+            setImmediate(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}));
+            setTimeout(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}), 2500);
+          }
           sendJSON(r);
         })
         .catch(e => sendJSON({ success: false, error: `เปิดในเบราว์เซอร์ไม่สำเร็จ: ${e.message}` }, 500));
@@ -3080,7 +3115,10 @@ const server = http.createServer(async (req, res) => {
       };
 
       console.log(`[PmheeAether Manager] 🚀 Launched client "${profile.name}" (PID: ${child.pid}, Port: ${profile.debugPort})`);
-      if (profile.autoRegister) setTimeout(() => authSync.syncOne(profile).catch(() => {}), 3500);
+      if (profile.autoRegister || profile.loginSyncPending) {
+        setImmediate(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}));
+        setTimeout(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}), 3500);
+      }
       return sendJSON({ success: true, pid: child.pid, port: profile.debugPort, movedFromPort: profile.movedFromPort });
     } catch (err) {
       return sendJSON({ success: false, error: err.message }, 500);
@@ -3127,6 +3165,9 @@ const server = http.createServer(async (req, res) => {
             } else {
               launched.push({ id: p.id, name: p.name });
             }
+            if (p.autoRegister || p.loginSyncPending) {
+              setImmediate(() => authSync.syncOne(loadProfiles().find(x => x.id === p.id) || p).catch(() => {}));
+            }
           }
           catch (e) { failed.push(`${p.name}: ${e.message}`); }
         }
@@ -3156,6 +3197,9 @@ const server = http.createServer(async (req, res) => {
         child.unref();
         runningProcesses[p.id] = { pid: child.pid, startTime: Date.now() };
         launched.push({ id: p.id, name: p.name, pid: child.pid });
+        if (p.autoRegister || p.loginSyncPending) {
+          setImmediate(() => authSync.syncOne(loadProfiles().find(x => x.id === p.id) || p).catch(() => {}));
+        }
       } catch (e) {}
     }
     return sendJSON({ success:failed.length===0, launched, skipped, error:failed.length?failed.join('\n'):undefined });

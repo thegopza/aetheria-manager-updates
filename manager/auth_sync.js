@@ -83,7 +83,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     return updated || profile;
   }
 
-  async function syncProxyRegistration(profile) {
+  async function syncProxyRegistration(profile, { clientOnline = true } = {}) {
     const cred = getCandidateCreds(profile);
     try {
       const result = await proxyRegister.registerAccountWithProxy({
@@ -93,16 +93,18 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
       });
       if (result?.success === true) {
         commitSuccessfulRegistration(profile, cred.username, cred.password);
-        const delivered = await evalProfilePort(profile.debugPort, pushJs({
-          enabled: true, autoResumeBot: true, username: cred.username, password: cred.password,
-          register: false, registerDone: true, autoCreateChar: true
-        }), 3000);
-        if (!delivered?.success || delivered.result?.success !== true) {
-          updateProfile(profile.id, { registerError: 'สมัครสำเร็จแล้ว แต่ยังส่งค่าล็อกอินเข้าจอไม่ได้ รอซิงค์อีกครั้ง' });
-        } else {
-          updateProfile(profile.id, { loginSyncPending: false });
+        if (clientOnline && profile.debugPort) {
+          const delivered = await evalProfilePort(profile.debugPort, pushJs({
+            enabled: true, autoResumeBot: true, username: cred.username, password: cred.password,
+            register: false, registerDone: true, autoCreateChar: true
+          }), 3000);
+          if (!delivered?.success || delivered.result?.success !== true) {
+            updateProfile(profile.id, { registerError: 'สมัครสำเร็จแล้ว แต่ยังส่งค่าล็อกอินเข้าจอไม่ได้ รอซิงค์อีกครั้ง' });
+          } else {
+            updateProfile(profile.id, { loginSyncPending: false });
+          }
         }
-        console.log(`[AuthSync] ✅ ${profile.name}: สมัครบัญชีผ่าน Proxy สำเร็จ ("${cred.username}") -> ส่งคำสั่งล็อกอินเข้าเกม`);
+        console.log(`[AuthSync] ✅ ${profile.name}: สมัครบัญชีผ่าน Proxy สำเร็จ ("${cred.username}")${clientOnline ? ' -> ส่งคำสั่งล็อกอินเข้าเกม' : ' -> รอส่งค่าล็อกอินเมื่อเปิดจอ'}`);
       } else if (result?.code === 'USERNAME_TAKEN') {
         const nextUser = rotateCandidateUser(profile).username;
         if (profile.generatedAccount) {
@@ -112,6 +114,11 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
         } else {
           updateProfile(profile.id, { proxyRegistrationState: 'known-rejected', registerError: 'ชื่อผู้ใช้นี้ถูกใช้แล้ว' });
         }
+      } else if (result?.code === 'IP_RATE_LIMITED') {
+        updateProfile(profile.id, {
+          proxyRegistrationState: 'retry-pending',
+          registerError: result.error || 'IP นี้สมัครครบโควต้าแล้ว กำลังสลับ IP ใหม่ในรอบถัดไป'
+        });
       } else if (result?.pending) {
         updateProfile(profile.id, { proxyRegistrationState: 'review-required', registerError: result.error || 'รายการสมัครยังรอตรวจสอบ' });
       } else {
@@ -136,21 +143,37 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
   }
 
   async function syncOne(profile) {
-    if (!profile.debugPort) return;
+    if (!profile.debugPort && !profile.autoRegister) return;
     if (!profile.autoRegister && !(profile.account && pw(profile))) return;
-    const r = await evalProfilePort(profile.debugPort, READ_JS, 3000);
+
+    const proxyAvailable = !profile.proxyFallbackBrowser && proxyRegister && (
+      typeof proxyRegister.isEnabled === 'function' && proxyRegister.isEnabled()
+    );
+
+    const r = profile.debugPort ? await evalProfilePort(profile.debugPort, READ_JS, 2500) : null;
     const cur = r && r.success ? r.result : null;
-    if (!cur) return;   // offline or bot not loaded yet
+    if (!cur) {
+      // Allow Proxy registration to proceed even before the game client window is online
+      if (profile.autoRegister && (proxyRegister?.hasPending?.(profile.id) || proxyAvailable)) {
+        await syncProxyRegistration(profile, { clientOnline: false });
+      }
+      return;
+    }
 
     if (profile.autoRegister) {
       if (proxyRegister?.hasPending?.(profile.id)) {
-        await syncProxyRegistration(profile);
+        await syncProxyRegistration(profile, { clientOnline: true });
         return;
       }
       if (cur.registerDone && cur.username) {
         const cred = getCandidateCreds(profile);
         commitSuccessfulRegistration(profile, cur.username, cur.password || cred.password);
         console.log(`[AuthSync] ✅ ${profile.name}: สมัครบัญชีผ่านหน้าเกม "${cur.username}" สำเร็จ`);
+        return;
+      }
+      // If Proxy is enabled and not in browser fallback, use proxy registration (even if cur.register was previously set)
+      if (proxyAvailable) {
+        await syncProxyRegistration(profile, { clientOnline: true });
         return;
       }
       if (cur.register) {
@@ -162,15 +185,6 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
       }
       if (cur.registerError) {
         updateProfile(profile.id, { autoRegister: false, registerError: cur.registerError });
-        return;
-      }
-
-      // If Proxy is enabled and not in browser fallback, use proxy registration
-      const proxyAvailable = !profile.proxyFallbackBrowser && proxyRegister && (
-        typeof proxyRegister.isEnabled === 'function' && proxyRegister.isEnabled()
-      );
-      if (proxyAvailable) {
-        await syncProxyRegistration(profile);
         return;
       }
 
@@ -192,12 +206,33 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     }
   }
 
+  function resetProxyFallback() {
+    const profiles = loadProfiles();
+    let changed = false;
+    for (const p of profiles) {
+      if (p.autoRegister && (p.proxyFallbackBrowser || p.proxyRegistrationState === 'known-rejected')) {
+        delete p.proxyFallbackBrowser;
+        if (p.proxyRegistrationState === 'known-rejected') delete p.proxyRegistrationState;
+        if (p.registerError && (p.registerError.includes('Proxy') || p.registerError.includes('เปลี่ยนไปสมัครผ่านหน้าเกมแทน'))) {
+          p.registerError = '';
+        }
+        changed = true;
+      }
+    }
+    if (changed) saveProfiles(profiles);
+  }
+
   let running = false;
   async function tick() {
     if (running) return;
     running = true;
     try {
-      for (const p of loadProfiles()) {
+      const profiles = loadProfiles().slice().sort((a, b) => {
+        const prioA = (a.autoRegister || a.loginSyncPending) ? 0 : 1;
+        const prioB = (b.autoRegister || b.loginSyncPending) ? 0 : 1;
+        return prioA - prioB;
+      });
+      for (const p of profiles) {
         try { await syncOne(p); } catch (e) {}
       }
     } finally {
@@ -209,7 +244,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     setTimeout(() => { tick(); setInterval(tick, SYNC_MS); }, 8000);
   }
 
-  return { start, tick, syncOne };
+  return { start, tick, syncOne, resetProxyFallback };
 }
 
 module.exports = { createAuthSync };

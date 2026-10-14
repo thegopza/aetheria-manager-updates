@@ -1303,12 +1303,21 @@ function resetProfileBandwidth(profileId, event) {
   }
 }
 
+function isProfilePremium(p) {
+  if (!p) return false;
+  if (p.hasPremium === true) return true;
+  if (p.liveState && p.liveState.hasPremium === true) return true;
+  const until = Number(p.premiumUntil || p.liveState?.premiumUntil || p.lastPremiumUntil || 0);
+  return until > Date.now();
+}
+
 function buildProfileCard(p) {
   const isOnline = p.isRunning;
   const isWindowHidden = Boolean(p.windowState?.isHidden);
   const state = isOnline ? p.liveState : null;
   const isBotRunning = Boolean(state && state.isBotRunning);
   const isMenuOpen = openCardMenuProfileId === p.id;
+  const hasPremium = isProfilePremium(p);
 
   const charName = state?.charName || p.lastCharName || null;
   const curClass = state?.charClass || p.lastCharClass || p.charClass || 'Archer';
@@ -1378,7 +1387,7 @@ function buildProfileCard(p) {
         </div>`;
 
   return `
-    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${isBotRunning ? 'is-farming' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
+    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isBotRunning ? 'is-farming' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
       <div class="card-hero">
         ${portraitSrc ? `<div class="card-hero-bg-wrap"><div class="card-hero-bg" style="background-image: url('${portraitSrc}');"></div></div>` : ''}
         <div class="avatar ${portraitSrc ? '' : 'no-img'}" onclick="openCharacterModal('${p.id}')" title="คลิกเพื่อดูหน้าต่างตัวละคร สวมใส่/ถอดอุปกรณ์ และดูสถานะ (Equipment & Stats)">
@@ -1391,6 +1400,7 @@ function buildProfileCard(p) {
         <div class="card-identity">
           <div class="card-title-row">
             <h3 class="profile-title" title="${escapeHTML(p.name)}">${escapeHTML(p.name)}</h3>
+            ${hasPremium ? `<span class="premium-card-badge" title="ตัวละครนี้มีสถานะ Premium (สามารถแลกเปลี่ยน/เทรดโอนเงินได้)">👑 PREMIUM</span>` : ''}
             ${p.isMain ? `<span class="chip chip-main">★ MAIN</span>` : ''}
           </div>
 
@@ -2601,6 +2611,8 @@ function getConsolidationKeepZeny() {
 
 function updateZenyConsolidationView() {
   const onlineProfiles = currentProfiles.filter(p => p.isRunning);
+  const premiumProfiles = currentProfiles.filter(p => isProfilePremium(p));
+  const onlinePremiumProfiles = onlineProfiles.filter(p => isProfilePremium(p));
   
   // 1. Update Top Metrics in Zeny Pane
   const totalOnlineZeny = onlineProfiles.reduce((sum, p) => {
@@ -2615,27 +2627,38 @@ function updateZenyConsolidationView() {
   if (onlineCountEl) onlineCountEl.innerText = `${onlineProfiles.length}`;
 
   const sendersBadge = document.getElementById("zeny-senders-count-badge");
-  if (sendersBadge) sendersBadge.innerText = `${currentProfiles.length} จอ (${onlineProfiles.length} ออนไลน์)`;
+  if (sendersBadge) sendersBadge.innerText = `${currentProfiles.length} จอ (${onlinePremiumProfiles.length} จอมี 👑 Premium ออนไลน์)`;
 
-  // 2. Populate Receiver Select (Preserve selection or default to isMain/first online)
+  // 2. Populate Receiver Select (Only Premium profiles are selectable)
   const receiverSelect = document.getElementById("zeny-receiver-select");
   if (receiverSelect) {
-    if (!selectedReceiverProfileId) {
-      const defaultRec = onlineProfiles.find(p => p.isMain) || onlineProfiles[0] || currentProfiles[0];
-      if (defaultRec) selectedReceiverProfileId = defaultRec.id;
+    const curRecProfile = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+    if (!selectedReceiverProfileId || !curRecProfile || !isProfilePremium(curRecProfile)) {
+      const defaultRec = onlinePremiumProfiles.find(p => p.isMain) || onlinePremiumProfiles[0] || premiumProfiles.find(p => p.isMain) || premiumProfiles[0] || null;
+      selectedReceiverProfileId = defaultRec ? defaultRec.id : "";
     }
 
-    const currentVal = selectedReceiverProfileId || receiverSelect.value;
-    receiverSelect.innerHTML = currentProfiles.map(p => {
-      const charName = p.liveState?.charName || p.name;
-      const isOnline = p.isRunning ? "🟢 ออนไลน์" : "⚪ ออฟไลน์";
-      const zeny = p.liveState && typeof p.liveState.zeny === 'number' ? `${p.liveState.zeny.toLocaleString()} z` : '--';
-      const mainStar = p.isMain ? "⭐ " : "";
-      return `<option value="${p.id}" ${p.id === currentVal ? "selected" : ""}>${mainStar}${escapeHTML(p.name)} [${escapeHTML(charName)}] — ${zeny} (${isOnline})</option>`;
-    }).join("");
+    const currentVal = selectedReceiverProfileId || "";
+    if (premiumProfiles.length === 0) {
+      receiverSelect.innerHTML = `<option value="" disabled selected>⚠️ ไม่มีตัวละครที่มีสถานะ 👑 Premium (การเทรดต้องมี Premium)</option>` +
+        currentProfiles.map(p => {
+          const charName = p.liveState?.charName || p.lastCharName || p.name;
+          return `<option value="${p.id}" disabled>🔒 [ไม่มี Premium] ${escapeHTML(p.name)} [${escapeHTML(charName)}]</option>`;
+        }).join("");
+    } else {
+      receiverSelect.innerHTML = currentProfiles.map(p => {
+        const hasPrem = isProfilePremium(p);
+        const charName = p.liveState?.charName || p.lastCharName || p.name;
+        const isOnline = p.isRunning ? "🟢 ออนไลน์" : "⚪ ออฟไลน์";
+        const zeny = p.liveState && typeof p.liveState.zeny === 'number' ? `${p.liveState.zeny.toLocaleString()} z` : '--';
+        const mainStar = p.isMain ? "⭐ " : "";
+        const premPrefix = hasPrem ? "👑 " : "🔒 [ไม่มี Premium] ";
+        return `<option value="${p.id}" ${p.id === currentVal && hasPrem ? "selected" : ""} ${!hasPrem ? "disabled" : ""}>${premPrefix}${mainStar}${escapeHTML(p.name)} [${escapeHTML(charName)}] — ${zeny} (${isOnline})</option>`;
+      }).join("");
+    }
   }
 
-  // 3. Render Senders Table
+  // 3. Render Senders Table (Only online Premium profiles can be checked)
   const tbody = document.getElementById("zeny-senders-tbody");
   if (tbody) {
     if (currentProfiles.length === 0) {
@@ -2646,24 +2669,27 @@ function updateZenyConsolidationView() {
     let pendingTransferSum = 0;
 
     tbody.innerHTML = currentProfiles.map(p => {
-      const isReceiver = (p.id === selectedReceiverProfileId);
+      const isReceiver = Boolean(selectedReceiverProfileId && p.id === selectedReceiverProfileId);
       const isOnline = !!p.isRunning;
+      const hasPrem = isProfilePremium(p);
+      const canSelectSender = isOnline && hasPrem && !isReceiver;
       const state = p.liveState || {};
-      const charName = state.charName || p.name;
-      const charClass = state.charClass || p.charClass || 'Novice';
+      const charName = state.charName || p.lastCharName || p.name;
+      const charClass = state.charClass || p.lastCharClass || p.charClass || 'Novice';
       const mapName = state.map || p.targetMap || '--';
       const channel = state.channel ? `CH ${state.channel}` : (state.channelText || '--');
       const zeny = typeof state.zeny === 'number' ? state.zeny : 0;
       const zenyText = typeof state.zeny === 'number' ? `${zeny.toLocaleString()} z` : '--';
 
       let isChecked = false;
-      if (isReceiver) {
+      if (!canSelectSender) {
+        selectedSenderIds.delete(p.id);
         isChecked = false;
       } else {
         if (!selectedSenderIds.has(p.id) && selectedSenderIds.size === 0) {
-          if (isOnline) selectedSenderIds.add(p.id);
+          selectedSenderIds.add(p.id);
         }
-        isChecked = selectedSenderIds.has(p.id) && isOnline;
+        isChecked = selectedSenderIds.has(p.id);
         if (isChecked) {
           pendingTransferSum += Math.max(0, zeny - getConsolidationKeepZeny());
         }
@@ -2672,23 +2698,28 @@ function updateZenyConsolidationView() {
       let statusBadge = '';
       if (isReceiver) {
         statusBadge = `<span class="zeny-badge-receiver">👑 ตัวรับเงิน (Receiver)</span>`;
+      } else if (!hasPrem) {
+        statusBadge = `<span class="zeny-badge-status offline" style="color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.12);" title="ต้องมีสถานะ Premium จึงจะเทรดแลกเปลี่ยนเงินกับผู้เล่นอื่นได้">🔒 ไม่มี Premium (เทรดไม่ได้)</span>`;
       } else if (!isOnline) {
         statusBadge = `<span class="zeny-badge-status offline">⚪ ออฟไลน์</span>`;
       } else if (isConsolidationRunning) {
         statusBadge = `<span class="zeny-badge-status transferring">⏳ กำลังทำงาน...</span>`;
       } else {
-        statusBadge = `<span class="zeny-badge-status ready">🟢 พร้อมโอนเงิน</span>`;
+        statusBadge = `<span class="zeny-badge-status ready">🟢 พร้อมโอนเงิน (👑 Premium)</span>`;
       }
 
       const checkboxHtml = isReceiver ? 
         `<span style="color: #facc15; font-size: 14px;" title="ตัวรับเงิน (ยกเว้นจากการส่งเงิน)">👑</span>` :
-        `<input type="checkbox" class="zeny-sender-cb" data-profile-id="${p.id}" ${isChecked ? 'checked' : ''} ${!isOnline ? 'disabled' : ''} style="accent-color: #0ea5e9; cursor: pointer;">`;
+        `<input type="checkbox" class="zeny-sender-cb" data-profile-id="${p.id}" ${isChecked ? 'checked' : ''} ${!canSelectSender ? 'disabled' : ''} title="${!hasPrem ? 'เลือกไม่ได้: ตัวละครนี้ไม่มีสถานะ Premium' : (!isOnline ? 'เลือกไม่ได้: จอนี้ยังไม่ออนไลน์' : 'เลือกเพื่อโอนเงิน')}" style="accent-color: #0ea5e9; cursor: ${canSelectSender ? 'pointer' : 'not-allowed'};">`;
 
       return `
-        <tr class="${isReceiver ? 'receiver-row' : ''}">
+        <tr class="${isReceiver ? 'receiver-row' : ''}" style="${!hasPrem ? 'opacity: 0.65;' : ''}">
           <td style="text-align: center;">${checkboxHtml}</td>
           <td>
-            <div style="font-weight: 700; color: #f8fafc;">${p.isMain ? '⭐ ' : ''}${escapeHTML(p.name)}</div>
+            <div style="font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 5px; flex-wrap: wrap;">
+              <span>${p.isMain ? '⭐ ' : ''}${escapeHTML(p.name)}</span>
+              ${hasPrem ? '<span class="premium-card-badge" style="font-size: 9px; padding: 1px 5px;">👑 PREMIUM</span>' : ''}
+            </div>
             <div style="font-size: 10.5px; color: #64748b;">Port: ${p.debugPort || '--'}</div>
           </td>
           <td>
@@ -2743,6 +2774,12 @@ function initZenyConsolidationEvents() {
   const recSelect = document.getElementById("zeny-receiver-select");
   if (recSelect) {
     recSelect.onchange = (e) => {
+      const chosen = currentProfiles.find(p => p.id === e.target.value);
+      if (!chosen || !isProfilePremium(chosen)) {
+        showToast("⚠️ เลือกได้เฉพาะตัวละครที่มีสถานะ 👑 Premium เท่านั้น", "warning");
+        updateZenyConsolidationView();
+        return;
+      }
       selectedReceiverProfileId = e.target.value;
       selectedSenderIds.delete(selectedReceiverProfileId);
       updateZenyConsolidationView();
@@ -2755,9 +2792,11 @@ function initZenyConsolidationEvents() {
     selectAllCb.onchange = (e) => {
       const checked = e.target.checked;
       currentProfiles.forEach(p => {
-        if (p.id !== selectedReceiverProfileId && p.isRunning) {
+        if (p.id !== selectedReceiverProfileId && p.isRunning && isProfilePremium(p)) {
           if (checked) selectedSenderIds.add(p.id);
           else selectedSenderIds.delete(p.id);
+        } else {
+          selectedSenderIds.delete(p.id);
         }
       });
       updateZenyConsolidationView();
@@ -2770,6 +2809,13 @@ function initZenyConsolidationEvents() {
       const cb = e.target.closest(".zeny-sender-cb");
       if (cb) {
         const pid = cb.dataset.profileId;
+        const prof = currentProfiles.find(p => p.id === pid);
+        if (!prof || !isProfilePremium(prof)) {
+          cb.checked = false;
+          selectedSenderIds.delete(pid);
+          showToast("⚠️ เลือกได้เฉพาะตัวละครที่มีสถานะ 👑 Premium เท่านั้น", "warning");
+          return;
+        }
         if (cb.checked) selectedSenderIds.add(pid);
         else selectedSenderIds.delete(pid);
         updateZenyConsolidationView();
@@ -2812,17 +2858,21 @@ function initZenyConsolidationEvents() {
 
   if (btnStartConsolidation) {
     btnStartConsolidation.onclick = async () => {
-      if (!selectedReceiverProfileId) {
-        alert("กรุณาเลือกตัวละครที่ต้องการให้เป็นตัวรับเงิน (Receiver) ก่อน");
+      const recProfile = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+      if (!selectedReceiverProfileId || !recProfile || !isProfilePremium(recProfile)) {
+        alert("กรุณาเลือกตัวรับเงิน (Receiver) ที่มีสถานะ 👑 Premium ก่อน (การเทรดโอนเงินใช้ได้เฉพาะตัวที่มี Premium เท่านั้น)");
         return;
       }
-      const senderList = Array.from(selectedSenderIds).filter(id => id !== selectedReceiverProfileId);
+      const senderList = Array.from(selectedSenderIds).filter(id => {
+        if (id === selectedReceiverProfileId) return false;
+        const sp = currentProfiles.find(p => p.id === id);
+        return sp && sp.isRunning && isProfilePremium(sp);
+      });
       if (senderList.length === 0) {
-        alert("กรุณาเลือกจอที่จะนำเงินมาโอนให้ตัวหลักอย่างน้อย 1 จอ");
+        alert("กรุณาเลือกจอผู้โอนที่มีสถานะ 👑 Premium อย่างน้อย 1 จอ");
         return;
       }
 
-      const recProfile = currentProfiles.find(p => p.id === selectedReceiverProfileId);
       const recName = recProfile?.liveState?.charName || recProfile?.name || selectedReceiverProfileId;
       const keepZeny = getConsolidationKeepZeny();
       if (!confirm(`คุณต้องการเริ่มต้นรวมเงินจาก ${senderList.length} จอ เข้าตัวหลัก [${recName}] ใช่หรือไม่?\n\n${keepZeny > 0 ? `💰 แต่ละจอจะเหลือเงินติดตัวไว้ ${keepZeny.toLocaleString()} z\n` : '💰 โอนเงินทั้งหมดของแต่ละจอ\n'}(ทุกจอจะหยุดบอท วาร์ปกลับเมืองหลวง และเรียงคิวเทรดเงิน)`)) {
@@ -2956,7 +3006,9 @@ if (document.readyState === 'loading') {
 // FLOATING IN-GAME BOT HUD (DIRECT GITHUB REPLICA)
 // ==========================================
 function getGitHubHudTemplate(profileId, clientData, profile) {
-  const charDisplayName = clientData?.state?.charName || profile.name;
+  const isCentral = (profileId === '__central__');
+  const onlineCount = currentProfiles.filter(p => p.isRunning).length;
+  const charDisplayName = isCentral ? `เมนูส่วนกลาง (${onlineCount} จอออนไลน์)` : (clientData?.state?.charName || profile.name);
   const archer = clientData?.archerConfig || {};
   const sell = clientData?.sellConfig || {};
   const auth = clientData?.authConfig || {};
@@ -2969,11 +3021,11 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
   const planName = clientData?.currentPlanName || '(ยังไม่เลือกแผน)';
 
   return `
-<div class="p-header" id="pelican-drag-handle">
+<div class="p-header" id="pelican-drag-handle" style="${isCentral ? 'background: linear-gradient(135deg, #78350f 0%, #451a03 100%); border-bottom: 1px solid rgba(250, 204, 21, 0.45);' : ''}">
                 <div class="p-header-top">
                     <div class="p-header-name">
-                        <span style="font-size: 13px;">🔄</span>
-                        <span class="p-header-title">${escapeHTML(charDisplayName)}</span>
+                        <span style="font-size: 13px;">${isCentral ? '🎛️' : '🔄'}</span>
+                        <span class="p-header-title" style="${isCentral ? 'color: #fde047;' : ''}">${escapeHTML(charDisplayName)}</span>
                     </div>
                     <div class="p-header-controls">
                         <span class="pelican-toggle" onclick="toggleWebHudCollapse('${profileId}')" title="ย่อ/ขยาย">−</span>
@@ -2981,14 +3033,23 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                     </div>
                 </div>
                 <div class="p-header-badges">
+                    ${isCentral ? `
+                    <span id="p-central-online-pill" style="font-size: 10px; background: rgba(250, 204, 21, 0.22); border: 1px solid rgba(250, 204, 21, 0.5); color: #fef08a; padding: 2px 8px; border-radius: 10px; font-weight: bold;">🖥️ คุมพร้อมกัน ${onlineCount} จอ (ส่งเฉพาะค่าที่คุณกดปรับ)</span>
+                    ` : `
                     <span id="p-quick-zeny" style="font-size: 10px; background: rgba(250, 204, 21, 0.2); border: 1px solid rgba(250, 204, 21, 0.4); color: #facc15; padding: 1px 7px; border-radius: 10px; font-weight: bold;" title="เงินในตัว (Zeny)">💰 ${typeof clientData?.state?.zeny === 'number' ? clientData.state.zeny.toLocaleString() + ' z' : '-- z'}</span>
                     <span id="p-quick-ammo" style="font-size: 10px; background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.4); color: #22c55e; padding: 1px 7px; border-radius: 10px; font-weight: bold;">🏹 ${clientData?.currentAmmo ?? 0}</span>
                     <span id="p-quick-weight" style="font-size: 10px; background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; padding: 1px 7px; border-radius: 10px; font-weight: bold; cursor: pointer;" title="คลิกเพื่อจัดเรียงกระเป๋าและอัปเดตน้ำหนัก">⚖️ ${escapeHTML(clientData?.state?.weight || '--%')}</span>
                     <button type="button" class="p-copy-cfg-btn" onclick="openConfigCopyDialog('${profileId}')" title="คัดลอกการตั้งค่าบอททั้งหมดของจอนี้ไปจออื่น (ยกเว้น ID / รหัสผ่าน / ชื่อตัวละคร)">📋 คัดลอกไปจออื่น</button>
+                    `}
                 </div>
             </div>
 
             <div class="p-body" id="pelican-content">
+                ${isCentral ? `
+                <div style="background: rgba(250, 204, 21, 0.12); border: 1px solid rgba(250, 204, 21, 0.35); color: #fde68a; padding: 6px 8px; border-radius: 6px; font-size: 10px; line-height: 1.45; margin: 6px 10px 2px 10px;">
+                  💡 <b>โหมดเมนูส่วนกลาง:</b> การเปิดหน้าต่างนี้หรือสลับแท็บ<b>จะไม่ทับค่าใดๆ</b> ของแต่ละจอ จนกว่าคุณจะกดปุ่มหรือติ๊กปรับตัวเลือกตัวนั้น ระบบจึงจะส่ง<b>เฉพาะคำสั่งนั้น</b>ไปทุกจอทันที
+                </div>
+                ` : `
                 <div id="p-weight-alert-banner" style="display: none; background: rgba(239, 68, 68, 0.25); border: 1px solid #ef4444; color: #fca5a5; padding: 4px 8px; border-radius: 6px; font-weight: bold; font-size: 10px; text-align: center; margin: 4px 10px 0 10px;">⚠️ น้ำหนักเกินเกณฑ์!</div>
                 <div class="p-status-strip">
                     <span>แมพ: <b id="p-cur-map-display" style="color:#38bdf8;">รอระบุแมพ...</b></span>
@@ -2998,6 +3059,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                     <span>Status: <b id="pelican-status-text" style="color:#22c55e;">Online</b></span>
                     <span>Pos: <b id="p-cur-pos" style="color:#00ffcc;">รอ Minimap...</b></span>
                 </div>
+                `}
 
                 <div class="p-tabs">
                     <button class="p-tab-btn active" data-tab="farm">🚀 ฟาร์ม</button>
@@ -3010,7 +3072,14 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
 
                 <!-- TAB 1: FARM -->
                 <div class="p-tab-pane active" id="p-tab-farm">
+                    ${isCentral ? `
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px;">
+                      <button type="button" class="p-btn" id="p-btn-central-start-bot" style="margin: 0; font-size: 11.5px; padding: 8px 6px; font-weight: bold; border-radius: 6px; background: linear-gradient(135deg, #16a34a, #15803d); color: #fff; border: 1px solid #4ade80;" title="สั่งเริ่มบอททุกจอที่ออนไลน์ (จอที่บอททำงานอยู่แล้วจะทำงานต่อไป ไม่สลับหยุด)">▶️ เริ่มบอททุกจอ</button>
+                      <button type="button" class="p-btn" id="p-btn-central-stop-bot" style="margin: 0; font-size: 11.5px; padding: 8px 6px; font-weight: bold; border-radius: 6px; background: linear-gradient(135deg, #dc2626, #b91c1c); color: #fff; border: 1px solid #f87171;" title="สั่งหยุดบอททุกจอที่ออนไลน์ (จอที่หยุดอยู่แล้วจะหยุดต่อไป ไม่สลับเปิด)">⏹️ หยุดบอททุกจอ</button>
+                    </div>
+                    ` : `
                     <button class="p-btn" id="p-btn-toggle-bot" style="font-size: 12.5px; padding: 8px 10px; font-weight: bold; border-radius: 6px; transition: all 0.2s ease;">▶️ START BOT (เริ่มทำงาน)</button>
+                    `}
 
                     <div class="p-card">
                         <div class="p-card-title" style="font-size: 10.5px; font-weight: bold; color: #e2e8f0; margin-bottom: 4px;">⚙️ โหมดการทำงาน</div>
@@ -3826,8 +3895,25 @@ const MANAGER_SUB_STATS = [
   { value: 'HEAL_POWER', label: 'HEAL% (พลังการฮีล %)' }
 ];
 
+function openCentralBotHUD() {
+  return openWebBotHUD('__central__');
+}
+window.openCentralBotHUD = openCentralBotHUD;
+
+document.addEventListener('DOMContentLoaded', () => {
+  const centralBtn = document.getElementById('btn-open-central-bot-menu');
+  if (centralBtn) centralBtn.addEventListener('click', () => openCentralBotHUD());
+});
+if (document.readyState !== 'loading') {
+  const centralBtn = document.getElementById('btn-open-central-bot-menu');
+  if (centralBtn) centralBtn.onclick = () => openCentralBotHUD();
+}
+
 async function openWebBotHUD(profileId) {
-  const profile = currentProfiles.find(p => p.id === profileId);
+  const isCentral = (profileId === '__central__');
+  const profile = isCentral
+    ? { id: '__central__', name: 'เมนูส่วนกลาง (Master Control)' }
+    : currentProfiles.find(p => p.id === profileId);
   if (!profile) return;
 
   // Bring to top if already exists
@@ -3838,13 +3924,24 @@ async function openWebBotHUD(profileId) {
     return;
   }
 
-  // Fetch initial client data
+  // Fetch initial client data (for __central__, read-only snapshot from first online client or saved draft — NEVER writes to any client!)
   let clientData = null;
-  try {
-    const res = await fetch(API_BASE + '/api/profiles/' + profileId + '/client-data');
-    const json = await res.json();
-    if (json.success) clientData = json.data;
-  } catch(e) {}
+  if (isCentral) {
+    try {
+      const firstOnline = currentProfiles.find(p => p.isRunning);
+      if (firstOnline) {
+        const res = await fetch(API_BASE + '/api/profiles/' + firstOnline.id + '/client-data');
+        const json = await res.json();
+        if (json.success) clientData = json.data;
+      }
+    } catch (e) {}
+  } else {
+    try {
+      const res = await fetch(API_BASE + '/api/profiles/' + profileId + '/client-data');
+      const json = await res.json();
+      if (json.success) clientData = json.data;
+    } catch (e) {}
+  }
 
   const container = document.getElementById("web-huds-container") || document.body;
   const hudCount = Object.keys(activeWebHuds).length;
@@ -3852,11 +3949,15 @@ async function openWebBotHUD(profileId) {
   const leftPos = Math.min(window.innerWidth - 320, 60 + (hudCount * 35) % 400);
 
   const hudEl = document.createElement("div");
-  hudEl.className = "pelican-hud-web";
+  hudEl.className = "pelican-hud-web" + (isCentral ? " is-central-hud" : "");
   hudEl.id = 'pelican-hud-' + profileId;
   hudEl.style.top = topPos + 'px';
   hudEl.style.left = leftPos + 'px';
   hudEl.style.zIndex = ++topHudZIndex;
+  if (isCentral) {
+    hudEl.style.borderColor = "rgba(250, 204, 21, 0.65)";
+    hudEl.style.boxShadow = "0 20px 50px rgba(0, 0, 0, 0.75), 0 0 24px rgba(245, 158, 11, 0.3)";
+  }
 
   hudEl.innerHTML = getGitHubHudTemplate(profileId, clientData, profile);
   container.appendChild(hudEl);
@@ -3866,10 +3967,11 @@ async function openWebBotHUD(profileId) {
     el: hudEl,
     activeTab: 'farm',
     data: clientData,
-    profile: profile
+    profile: profile,
+    isCentral: isCentral
   };
 
-  // Wire Tab Switching directly within this HUD window (exact bot.js logic)
+  // Wire Tab Switching directly within this HUD window (switching tabs NEVER sends any action to clients)
   const tabBtns = hudEl.querySelectorAll('.p-tab-btn');
   const tabPanes = hudEl.querySelectorAll('.p-tab-pane');
   tabBtns.forEach(btn => {
@@ -3926,7 +4028,16 @@ async function openWebBotHUD(profileId) {
   // Auto Sell ตั้งขาย list (web version)
   wireWebAutoSell(profileId, hudEl);
 
-  // Action Buttons Wiring
+  // Action Buttons Wiring (Idempotent Start All / Stop All for Central Menu)
+  const centralStartBtn = hudEl.querySelector('#p-btn-central-start-bot');
+  if (centralStartBtn) {
+    centralStartBtn.onclick = () => setBotOnAllClients(true, centralStartBtn);
+  }
+  const centralStopBtn = hudEl.querySelector('#p-btn-central-stop-bot');
+  if (centralStopBtn) {
+    centralStopBtn.onclick = () => setBotOnAllClients(false, centralStopBtn);
+  }
+
   const toggleBotBtn = hudEl.querySelector('#p-btn-toggle-bot');
   if (toggleBotBtn) {
     toggleBotBtn.onclick = () => {
@@ -3970,11 +4081,11 @@ async function openWebBotHUD(profileId) {
   if (warpMinZenyInp) {
     warpMinZenyInp.onchange = (e) => {
       const minZ = Math.max(0, parseInt(e.target.value, 10) || 0);
-      sendWebHudAction(profileId, { type: 'update-travel', config: { minZenyForWarp: minZ } });
+      sendWebHudAction(profileId, { type: 'update-travel', minZenyForWarp: minZ, config: { minZenyForWarp: minZ } });
     };
   }
 
-  // Security & Humanize listeners
+  // Security & Humanize listeners (each control sends ONLY its own key)
   const unexpGuardCb = hudEl.querySelector('#p-unexpected-town-guard');
   if (unexpGuardCb) {
     unexpGuardCb.onchange = (e) => {
@@ -3989,21 +4100,22 @@ async function openWebBotHUD(profileId) {
     };
   }
 
-  const saveHumanize = () => {
-    const cfg = {
-      enabled: !!hudEl.querySelector('#p-humanize-enabled')?.checked,
-      chancePercent: Math.max(0, Math.min(100, parseInt(hudEl.querySelector('#p-humanize-chance')?.value, 10) || 0)),
-      visitBlacksmith: !!hudEl.querySelector('#p-humanize-blacksmith')?.checked,
-      visitSundries: !!hudEl.querySelector('#p-humanize-sundries')?.checked,
-      randomWalk: !!hudEl.querySelector('#p-humanize-walk')?.checked,
-      openStorage: !!hudEl.querySelector('#p-humanize-storage')?.checked
-    };
-    sendWebHudAction(profileId, { type: 'update-humanize', config: cfg });
-  };
-  ['#p-humanize-enabled', '#p-humanize-chance', '#p-humanize-blacksmith', '#p-humanize-sundries', '#p-humanize-walk', '#p-humanize-storage'].forEach(sel => {
+  const bindHumanizeField = (sel, buildPatch) => {
     const el = hudEl.querySelector(sel);
-    if (el) el.onchange = saveHumanize;
+    if (!el) return;
+    el.onchange = () => {
+      sendWebHudAction(profileId, { type: 'update-humanize', config: buildPatch(el) });
+    };
+  };
+  bindHumanizeField('#p-humanize-enabled', el => ({ enabled: !!el.checked }));
+  bindHumanizeField('#p-humanize-chance', el => {
+    const v = Math.max(0, Math.min(100, parseInt(el.value, 10) || 0));
+    return { chance: v, chancePercent: v };
   });
+  bindHumanizeField('#p-humanize-blacksmith', el => ({ buyBlacksmith: !!el.checked, visitBlacksmith: !!el.checked }));
+  bindHumanizeField('#p-humanize-sundries', el => ({ buySundries: !!el.checked, visitSundries: !!el.checked }));
+  bindHumanizeField('#p-humanize-walk', el => ({ randomWalk: !!el.checked }));
+  bindHumanizeField('#p-humanize-storage', el => ({ storeDeposit: !!el.checked, openStorage: !!el.checked }));
 
   const testHumanizeBtn = hudEl.querySelector('#p-btn-test-humanize');
   if (testHumanizeBtn) {
@@ -4013,24 +4125,21 @@ async function openWebBotHUD(profileId) {
     };
   }
 
-  // Archer event listeners
-  const saveArcher = () => {
-    const cfg = {
-      requireArrow: hudEl.querySelector('#p-archer-req')?.checked,
-      arrowType: parseInt(hudEl.querySelector('#p-archer-type')?.value || '90030'),
-      arrowBuyQty: parseInt(hudEl.querySelector('#p-archer-qty')?.value || '5000'),
-      ammoThreshold: parseInt(hudEl.querySelector('#p-archer-threshold')?.value || '50'),
-      useBwing: hudEl.querySelector('#p-archer-bwing')?.checked,
-      bwingBuyQty: parseInt(hudEl.querySelector('#p-archer-bwing-qty')?.value || '2')
-    };
-    const autoEq = hudEl.querySelector('#p-archer-auto-equip');
-    if (autoEq) cfg.autoEquipArrow = autoEq.checked;
-    sendWebHudAction(profileId, { type: 'update-archer', config: cfg });
-  };
-  ['#p-archer-req', '#p-archer-type', '#p-archer-qty', '#p-archer-threshold', '#p-archer-bwing', '#p-archer-bwing-qty', '#p-archer-auto-equip'].forEach(sel => {
+  // Archer event listeners (each control sends ONLY its own key)
+  const bindArcherField = (sel, buildPatch) => {
     const el = hudEl.querySelector(sel);
-    if (el) el.onchange = saveArcher;
-  });
+    if (!el) return;
+    el.onchange = () => {
+      sendWebHudAction(profileId, { type: 'update-archer', config: buildPatch(el) });
+    };
+  };
+  bindArcherField('#p-archer-req', el => ({ requireArrow: !!el.checked }));
+  bindArcherField('#p-archer-type', el => ({ arrowType: parseInt(el.value || '90030', 10) }));
+  bindArcherField('#p-archer-qty', el => ({ arrowBuyQty: parseInt(el.value || '5000', 10) }));
+  bindArcherField('#p-archer-threshold', el => ({ ammoThreshold: parseInt(el.value || '50', 10) }));
+  bindArcherField('#p-archer-bwing', el => ({ useBwing: !!el.checked }));
+  bindArcherField('#p-archer-bwing-qty', el => ({ bwingBuyQty: parseInt(el.value || '2', 10) }));
+  bindArcherField('#p-archer-auto-equip', el => ({ autoEquipArrow: !!el.checked }));
 
   const syncAmmoBtn = hudEl.querySelector('#p-btn-sync-ammo');
   if (syncAmmoBtn) syncAmmoBtn.onclick = () => sendWebHudAction(profileId, { type: 'sync-ammo' });
@@ -4038,29 +4147,20 @@ async function openWebBotHUD(profileId) {
   const zeroAmmoBtn = hudEl.querySelector('#p-btn-zero-ammo');
   if (zeroAmmoBtn) zeroAmmoBtn.onclick = () => sendWebHudAction(profileId, { type: 'zero-ammo' });
 
-  // Buff Potion event listeners
-  const saveBuffPotions = () => {
-    const cfg = {
-      90306: {
-        enabled: !!hudEl.querySelector('#p-potion-enable-90306')?.checked,
-        targetQty: parseInt(hudEl.querySelector('#p-potion-qty-90306')?.value || '10')
-      },
-      90307: {
-        enabled: !!hudEl.querySelector('#p-potion-enable-90307')?.checked,
-        targetQty: parseInt(hudEl.querySelector('#p-potion-qty-90307')?.value || '10')
-      },
-      90308: {
-        enabled: !!hudEl.querySelector('#p-potion-enable-90308')?.checked,
-        targetQty: parseInt(hudEl.querySelector('#p-potion-qty-90308')?.value || '10')
-      }
-    };
-    sendWebHudAction(profileId, { type: 'update-buff-potions', config: cfg });
-  };
+  // Buff Potion event listeners (each control sends ONLY its own potion & property)
   ['90306', '90307', '90308'].forEach(id => {
     const cb = hudEl.querySelector(`#p-potion-enable-${id}`);
-    if (cb) cb.onchange = saveBuffPotions;
+    if (cb) {
+      cb.onchange = () => {
+        sendWebHudAction(profileId, { type: 'update-buff-potions', config: { [id]: { enabled: !!cb.checked } } });
+      };
+    }
     const qty = hudEl.querySelector(`#p-potion-qty-${id}`);
-    if (qty) qty.onchange = saveBuffPotions;
+    if (qty) {
+      qty.onchange = () => {
+        sendWebHudAction(profileId, { type: 'update-buff-potions', config: { [id]: { targetQty: parseInt(qty.value || '10', 10) } } });
+      };
+    }
   });
 
   const syncPotionBtn = hudEl.querySelector('.p-btn-sync-potion-game');
@@ -4069,8 +4169,7 @@ async function openWebBotHUD(profileId) {
   const buyPotionBtn = hudEl.querySelector('.p-btn-buy-potion-now');
   if (buyPotionBtn) buyPotionBtn.onclick = () => sendWebHudAction(profileId, { type: 'buy-buff-potions' });
 
-
-    // Sell & Stat Filter State & Listeners
+  // Sell & Stat Filter State & Listeners (each control sends ONLY the property that changed!)
   let currentStatsFilter = Object.assign({
     enabled: false,
     filterWeapons: true,
@@ -4081,6 +4180,11 @@ async function openWebBotHUD(profileId) {
     mainStats: [],
     subStats: []
   }, clientData?.sellConfig?.statsFilter || {});
+
+  const sendStatsFilterPatch = (patch) => {
+    Object.assign(currentStatsFilter, patch);
+    sendWebHudAction(profileId, { type: 'update-sell', config: { statsFilterPatch: patch } });
+  };
 
   const renderWebHudStatsFilter = () => {
     const mainList = hudEl.querySelector('.p-statfilter-main-list');
@@ -4145,7 +4249,7 @@ async function openWebBotHUD(profileId) {
         const i = parseInt(e.target.dataset.index);
         if (currentStatsFilter.mainStats?.[i]) {
           currentStatsFilter.mainStats[i].stat = e.target.value;
-          saveSell();
+          sendStatsFilterPatch({ mainStats: currentStatsFilter.mainStats });
         }
       };
     });
@@ -4154,7 +4258,7 @@ async function openWebBotHUD(profileId) {
         const i = parseInt(e.target.dataset.index);
         if (currentStatsFilter.mainStats?.[i]) {
           currentStatsFilter.mainStats[i].mustHave = e.target.checked;
-          saveSell();
+          sendStatsFilterPatch({ mainStats: currentStatsFilter.mainStats });
         }
       };
     });
@@ -4163,7 +4267,7 @@ async function openWebBotHUD(profileId) {
         const i = parseInt(e.target.dataset.index);
         currentStatsFilter.mainStats.splice(i, 1);
         renderWebHudStatsFilter();
-        saveSell();
+        sendStatsFilterPatch({ mainStats: currentStatsFilter.mainStats });
       };
     });
 
@@ -4172,7 +4276,7 @@ async function openWebBotHUD(profileId) {
         const i = parseInt(e.target.dataset.index);
         if (currentStatsFilter.subStats?.[i]) {
           currentStatsFilter.subStats[i].stat = e.target.value;
-          saveSell();
+          sendStatsFilterPatch({ subStats: currentStatsFilter.subStats });
         }
       };
     });
@@ -4181,7 +4285,7 @@ async function openWebBotHUD(profileId) {
         const i = parseInt(e.target.dataset.index);
         if (currentStatsFilter.subStats?.[i]) {
           currentStatsFilter.subStats[i].mustHave = e.target.checked;
-          saveSell();
+          sendStatsFilterPatch({ subStats: currentStatsFilter.subStats });
         }
       };
     });
@@ -4190,63 +4294,55 @@ async function openWebBotHUD(profileId) {
         const i = parseInt(e.target.dataset.index);
         currentStatsFilter.subStats.splice(i, 1);
         renderWebHudStatsFilter();
-        saveSell();
+        sendStatsFilterPatch({ subStats: currentStatsFilter.subStats });
       };
     });
   };
 
-  const saveSell = () => {
-    currentStatsFilter.enabled = !!hudEl.querySelector('#p-statfilter-toggle')?.checked;
-    currentStatsFilter.filterWeapons = hudEl.querySelector('#p-statfilter-weap')?.checked !== false;
-    currentStatsFilter.filterArmors = hudEl.querySelector('#p-statfilter-armor')?.checked !== false;
-    currentStatsFilter.filterAccessories = hudEl.querySelector('#p-statfilter-acc')?.checked !== false;
-    currentStatsFilter.protectGems = hudEl.querySelector('#p-statfilter-protect-gems')?.checked !== false;
-    currentStatsFilter.minOptions = Math.max(1, parseInt(hudEl.querySelector('#p-statfilter-min-opts')?.value) || 2);
-
-    const cfg = {
-      keepRefined: hudEl.querySelector('#p-sell-keep-refined')?.checked,
-      keepSpecial: hudEl.querySelector('#p-sell-keep-special')?.checked,
-      keepSockets: hudEl.querySelector('#p-sell-keep-sockets')?.checked,
-      whitelist: hudEl.querySelector('#p-sell-whitelist')?.value || '',
-      statsFilter: currentStatsFilter
-    };
-    // Only send what is actually on the page (a missing field must never fall back to a default)
-    const sellEn = hudEl.querySelector('#p-sell-enabled');
-    if (sellEn) cfg.enabled = sellEn.checked;
-    const wChk = hudEl.querySelector('#p-weight-check-enabled');
-    if (wChk) cfg.weightCheckEnabled = wChk.checked;
-    const wPct = parseInt(hudEl.querySelector('#p-weight-threshold')?.value, 10);
-    if (wPct >= 10 && wPct <= 95) cfg.weightThreshold = wPct;
-    const pick = id => hudEl.querySelector(id)?.value;
-    if (pick('#p-sell-rarity-weap')) cfg.weaponRarity = pick('#p-sell-rarity-weap');
-    if (pick('#p-sell-rarity-armor')) cfg.armorRarity = pick('#p-sell-rarity-armor');
-    if (pick('#p-sell-rarity-acc')) cfg.accRarity = pick('#p-sell-rarity-acc');
-    const mat = pick('#p-sell-rarity-mat');
-    if (mat) { cfg.sellMaterials = mat !== 'none'; cfg.materialMode = mat === 'common' ? 'common' : 'all'; }
-    const ores = pick('#p-sell-refine-ores');
-    if (ores) cfg.sellRefineOres = ores === 'unlisted';
-    [['#p-store-enabled', 'storeEnabled'], ['#p-store-weapon', 'storeWeapon'], ['#p-store-armor', 'storeArmor'], ['#p-store-acc', 'storeAcc'],
-     ['#p-store-refine', 'storeRefine'], ['#p-store-skip-locked', 'storeSkipLocked']].forEach(([id, key]) => {
-      const el = hudEl.querySelector(id);
-      if (el) cfg[key] = el.checked;
-    });
-    sendWebHudAction(profileId, { type: 'update-sell', config: cfg });
-  };
-
-  ['#p-sell-enabled', '#p-weight-check-enabled', '#p-weight-threshold', '#p-sell-rarity-weap', '#p-sell-rarity-armor', '#p-sell-rarity-acc', '#p-sell-rarity-mat', '#p-sell-refine-ores', '#p-sell-keep-refined', '#p-sell-keep-special', '#p-sell-keep-sockets', '#p-sell-whitelist',
-    '#p-store-enabled', '#p-store-weapon', '#p-store-armor', '#p-store-acc', '#p-store-refine', '#p-store-skip-locked'].forEach(sel => {
+  const bindSellField = (sel, buildPatch) => {
     const el = hudEl.querySelector(sel);
-    if (el) el.onchange = saveSell;
+    if (!el) return;
+    el.onchange = () => {
+      const patch = buildPatch(el);
+      if (patch && Object.keys(patch).length > 0) {
+        sendWebHudAction(profileId, { type: 'update-sell', config: patch });
+      }
+    };
+  };
+  bindSellField('#p-sell-enabled', el => ({ enabled: !!el.checked }));
+  bindSellField('#p-weight-check-enabled', el => ({ weightCheckEnabled: !!el.checked }));
+  bindSellField('#p-weight-threshold', el => {
+    const wPct = parseInt(el.value, 10);
+    return (wPct >= 10 && wPct <= 95) ? { weightThreshold: wPct } : {};
+  });
+  bindSellField('#p-sell-rarity-weap', el => ({ weaponRarity: el.value }));
+  bindSellField('#p-sell-rarity-armor', el => ({ armorRarity: el.value }));
+  bindSellField('#p-sell-rarity-acc', el => ({ accRarity: el.value }));
+  bindSellField('#p-sell-rarity-mat', el => ({ sellMaterials: el.value !== 'none', materialMode: el.value === 'common' ? 'common' : 'all' }));
+  bindSellField('#p-sell-refine-ores', el => ({ sellRefineOres: el.value === 'unlisted' }));
+  bindSellField('#p-sell-keep-refined', el => ({ keepRefined: !!el.checked }));
+  bindSellField('#p-sell-keep-special', el => ({ keepSpecial: !!el.checked }));
+  bindSellField('#p-sell-keep-sockets', el => ({ keepSockets: !!el.checked }));
+  bindSellField('#p-sell-whitelist', el => ({ whitelist: el.value || '' }));
+  [
+    ['#p-store-enabled', 'storeEnabled'],
+    ['#p-store-weapon', 'storeWeapon'],
+    ['#p-store-armor', 'storeArmor'],
+    ['#p-store-acc', 'storeAcc'],
+    ['#p-store-refine', 'storeRefine'],
+    ['#p-store-skip-locked', 'storeSkipLocked']
+  ].forEach(([sel, key]) => {
+    bindSellField(sel, el => ({ [key]: !!el.checked }));
   });
 
-  // Stat Filter Header Controls
+  // Stat Filter Header Controls (each sends only its own statsFilterPatch)
   const addMainBtn = hudEl.querySelector('.p-btn-add-mainstat');
   if (addMainBtn) {
     addMainBtn.onclick = () => {
       if (!Array.isArray(currentStatsFilter.mainStats)) currentStatsFilter.mainStats = [];
       currentStatsFilter.mainStats.push({ stat: 'DEX', mustHave: false });
       renderWebHudStatsFilter();
-      saveSell();
+      sendStatsFilterPatch({ mainStats: currentStatsFilter.mainStats });
     };
   }
   const addSubBtn = hudEl.querySelector('.p-btn-add-substat');
@@ -4255,16 +4351,24 @@ async function openWebBotHUD(profileId) {
       if (!Array.isArray(currentStatsFilter.subStats)) currentStatsFilter.subStats = [];
       currentStatsFilter.subStats.push({ stat: 'ATK_PERCENT', mustHave: false });
       renderWebHudStatsFilter();
-      saveSell();
+      sendStatsFilterPatch({ subStats: currentStatsFilter.subStats });
     };
   }
 
-  ['#p-statfilter-toggle', '#p-statfilter-weap', '#p-statfilter-armor', '#p-statfilter-acc', '#p-statfilter-protect-gems', '#p-statfilter-min-opts'].forEach(sel => {
+  [
+    ['#p-statfilter-toggle', el => ({ enabled: !!el.checked })],
+    ['#p-statfilter-weap', el => ({ filterWeapons: !!el.checked })],
+    ['#p-statfilter-armor', el => ({ filterArmors: !!el.checked })],
+    ['#p-statfilter-acc', el => ({ filterAccessories: !!el.checked })],
+    ['#p-statfilter-protect-gems', el => ({ protectGems: !!el.checked })],
+    ['#p-statfilter-min-opts', el => ({ minOptions: Math.max(1, parseInt(el.value, 10) || 2) })]
+  ].forEach(([sel, fn]) => {
     const el = hudEl.querySelector(sel);
-    if (el) el.onchange = () => {
-      renderWebHudStatsFilter();
-      saveSell();
-    };
+    if (el) {
+      el.onchange = () => {
+        sendStatsFilterPatch(fn(el));
+      };
+    }
   });
 
   if (activeWebHuds[profileId]) {
@@ -4279,22 +4383,34 @@ async function openWebBotHUD(profileId) {
   const testSellBtn = hudEl.querySelector('#p-btn-test-sell-only');
   if (testSellBtn) testSellBtn.onclick = () => sendWebHudAction(profileId, { type: 'test-sell' });
 
-  // Shop (NPC trip) settings
-  const saveShop = () => {
-    const shopCfg = { enabled: !!hudEl.querySelector('#p-shop-enabled')?.checked };
-    const key = (hudEl.querySelector('#p-shop-npckey')?.value || '').trim();
-    if (key) shopCfg.npcKey = key;
-    sendWebHudAction(profileId, { type: 'eval', code: `(() => {
-      window.__shopConfig = Object.assign(window.__shopConfig || {}, ${JSON.stringify(shopCfg)});
-      try { localStorage.setItem('pelican_shop_cfg', JSON.stringify(window.__shopConfig)); } catch (e) {}
-      const a = document.getElementById('p-shop-enabled'); if (a) a.checked = !!window.__shopConfig.enabled;
-      const b = document.getElementById('p-shop-npckey'); if (b) b.value = window.__shopConfig.npcKey || '';
-      return { success: true };
-    })()` });
-  };
-  ['#p-shop-enabled', '#p-shop-npckey'].forEach(sel => { const el = hudEl.querySelector(sel); if (el) el.onchange = saveShop; });
+  // Shop (NPC trip) settings (each control sends only its own key)
+  const shopEnEl = hudEl.querySelector('#p-shop-enabled');
+  if (shopEnEl) {
+    shopEnEl.onchange = () => {
+      const en = !!shopEnEl.checked;
+      sendWebHudAction(profileId, { type: 'eval', code: `(() => {
+        window.__shopConfig = Object.assign(window.__shopConfig || {}, { enabled: ${JSON.stringify(en)} });
+        try { localStorage.setItem('pelican_shop_cfg', JSON.stringify(window.__shopConfig)); } catch (e) {}
+        const a = document.getElementById('p-shop-enabled'); if (a) a.checked = !!window.__shopConfig.enabled;
+        return { success: true };
+      })()` });
+    };
+  }
+  const shopKeyEl = hudEl.querySelector('#p-shop-npckey');
+  if (shopKeyEl) {
+    shopKeyEl.onchange = () => {
+      const key = (shopKeyEl.value || '').trim();
+      if (!key) return;
+      sendWebHudAction(profileId, { type: 'eval', code: `(() => {
+        window.__shopConfig = Object.assign(window.__shopConfig || {}, { npcKey: ${JSON.stringify(key)} });
+        try { localStorage.setItem('pelican_shop_cfg', JSON.stringify(window.__shopConfig)); } catch (e) {}
+        const b = document.getElementById('p-shop-npckey'); if (b) b.value = window.__shopConfig.npcKey || '';
+        return { success: true };
+      })()` });
+    };
+  }
 
-  // Ultra-Low Spec & Auto-Config Char / Mute Display
+  // Ultra-Low Spec & Auto-Config Char / Mute Display (each checkbox sends only its own key)
   const ultraLowSpecCb = hudEl.querySelector('#p-ultra-low-spec');
   if (ultraLowSpecCb) {
     ultraLowSpecCb.onchange = (e) => {
@@ -4302,19 +4418,18 @@ async function openWebBotHUD(profileId) {
     };
   }
 
-  const saveAutoConfig = () => {
-    sendWebHudAction(profileId, {
-      type: 'update-auto-config',
-      config: {
-        autoConfigCharEnabled: !!hudEl.querySelector('#p-auto-config-char')?.checked,
-        autoMuteDisplayEnabled: !!hudEl.querySelector('#p-auto-mute-display')?.checked
-      }
-    });
-  };
-  ['#p-auto-config-char', '#p-auto-mute-display'].forEach(sel => {
-    const el = hudEl.querySelector(sel);
-    if (el) el.onchange = saveAutoConfig;
-  });
+  const autoCfgCharEl = hudEl.querySelector('#p-auto-config-char');
+  if (autoCfgCharEl) {
+    autoCfgCharEl.onchange = () => {
+      sendWebHudAction(profileId, { type: 'update-auto-config', config: { autoConfigCharEnabled: !!autoCfgCharEl.checked } });
+    };
+  }
+  const autoMuteDispEl = hudEl.querySelector('#p-auto-mute-display');
+  if (autoMuteDispEl) {
+    autoMuteDispEl.onchange = () => {
+      sendWebHudAction(profileId, { type: 'update-auto-config', config: { autoMuteDisplayEnabled: !!autoMuteDispEl.checked } });
+    };
+  }
 
   const applyAutoConfigBtn = hudEl.querySelector('#p-btn-apply-autoconfig');
   if (applyAutoConfigBtn) {
@@ -4324,26 +4439,25 @@ async function openWebBotHUD(profileId) {
     };
   }
 
-  // Market sniper filter (pelican_market_filter_cfg)
+  // Market sniper filter (each control sends only its own key)
   const MK_FIELDS = [['#p-mk-search-query', 'q', 'text'], ['#p-mk-cat-select', 'category', 'text'], ['#p-mk-kind-select', 'kind', 'text'],
     ['#p-mk-min-refine', 'minRefine', 'int'], ['#p-mk-max-price', 'maxPrice', 'int'], ['#p-mk-stat1-type', 'statType1', 'text'],
     ['#p-mk-stat1-min', 'statMinVal1', 'int1'], ['#p-mk-stat2-type', 'statType2', 'text'], ['#p-mk-stat2-min', 'statMinVal2', 'int1'],
     ['#p-mk-stat-mode', 'statMatchMode', 'text'], ['#p-mk-sniper-alert', 'sniperAlert', 'bool'], ['#p-mk-auto-buy', 'autoBuy', 'bool']];
-  const saveMarketFilter = () => {
-    const mk = {};
-    MK_FIELDS.forEach(([sel, key, kind]) => {
-      const el = hudEl.querySelector(sel);
-      if (!el) return;
-      mk[key] = kind === 'bool' ? el.checked : kind === 'int' ? (parseInt(el.value, 10) || 0) : kind === 'int1' ? (parseInt(el.value, 10) || 1) : el.value;
-    });
-    sendWebHudAction(profileId, { type: 'eval', code: `(() => {
-      window.__marketFilterConfig = Object.assign(window.__marketFilterConfig || {}, ${JSON.stringify(mk)});
-      try { localStorage.setItem('pelican_market_filter_cfg', JSON.stringify(window.__marketFilterConfig)); } catch (e) {}
-      if (typeof window.applyMarketFilters === 'function') { try { window.applyMarketFilters(); } catch (e) {} }
-      return { success: true };
-    })()` });
-  };
-  MK_FIELDS.forEach(([sel]) => { const el = hudEl.querySelector(sel); if (el) el.onchange = saveMarketFilter; });
+  MK_FIELDS.forEach(([sel, key, kind]) => {
+    const el = hudEl.querySelector(sel);
+    if (!el) return;
+    el.onchange = () => {
+      const val = kind === 'bool' ? el.checked : kind === 'int' ? (parseInt(el.value, 10) || 0) : kind === 'int1' ? (parseInt(el.value, 10) || 1) : el.value;
+      const mk = { [key]: val };
+      sendWebHudAction(profileId, { type: 'eval', code: `(() => {
+        window.__marketFilterConfig = Object.assign(window.__marketFilterConfig || {}, ${JSON.stringify(mk)});
+        try { localStorage.setItem('pelican_market_filter_cfg', JSON.stringify(window.__marketFilterConfig)); } catch (e) {}
+        if (typeof window.applyMarketFilters === 'function') { try { window.applyMarketFilters(); } catch (e) {} }
+        return { success: true };
+      })()` });
+    };
+  });
 
   // Buttons that called functions which only exist inside the game window
   const gameCall = (sel, code, confirmText) => {
@@ -4368,28 +4482,33 @@ async function openWebBotHUD(profileId) {
     if (btn) btn.onclick = () => showToast('ปุ่มนี้เป็นเครื่องมือดูข้อมูล ใช้ได้ในหน้าต่างเกมเท่านั้น', 'warning');
   });
 
-  // Auth event listeners
-  const saveAuth = () => {
-    const cfg = {
-      enabled: hudEl.querySelector('#p-auth-enabled')?.checked,
-      username: hudEl.querySelector('#p-auth-user')?.value || '',
-      charName: hudEl.querySelector('#p-auth-char')?.value || '',
-      autoResumeBot: hudEl.querySelector('#p-auth-resume')?.checked
-    };
-    const typedPass = hudEl.querySelector('#p-auth-pass')?.value || '';
-    if (typedPass) cfg.password = typedPass;   // empty = keep the saved one (it is never shown here)
-    sendWebHudAction(profileId, { type: 'update-auth', config: cfg });
-  };
-  ['#p-auth-enabled', '#p-auth-user', '#p-auth-pass', '#p-auth-char', '#p-auth-resume'].forEach(sel => {
+  // Auth event listeners (each control sends only its own key)
+  const bindAuthField = (sel, buildPatch) => {
     const el = hudEl.querySelector(sel);
-    if (el) el.onchange = saveAuth;
-  });
+    if (!el) return;
+    el.onchange = () => {
+      const patch = buildPatch(el);
+      if (patch && Object.keys(patch).length > 0) {
+        sendWebHudAction(profileId, { type: 'update-auth', config: patch });
+      }
+    };
+  };
+  bindAuthField('#p-auth-enabled', el => ({ enabled: !!el.checked }));
+  bindAuthField('#p-auth-user', el => ({ username: el.value || '' }));
+  bindAuthField('#p-auth-pass', el => (el.value ? { password: el.value } : {}));
+  bindAuthField('#p-auth-char', el => ({ charName: el.value || '' }));
+  bindAuthField('#p-auth-resume', el => ({ autoResumeBot: !!el.checked }));
 
   // Config Export / Import
   const exportBtn = hudEl.querySelector('#p-btn-export-cfg');
   if (exportBtn) {
     exportBtn.onclick = async () => {
-      const res = await sendWebHudAction(profileId, { type: 'export-config' });
+      const targetId = isCentral ? (currentProfiles.find(p => p.isRunning)?.id || '') : profileId;
+      if (!targetId) {
+        alert('❌ ไม่มีจอเกมที่ออนไลน์ให้ดึงตั้งค่า');
+        return;
+      }
+      const res = await sendWebHudAction(targetId, { type: 'export-config' });
       const jsonStr = res?.result?.result?.json || res?.result?.json;
       if (!jsonStr) {
         alert('❌ ส่งออกไม่สำเร็จ: ' + (res?.error || res?.result?.error || 'จอเกมไม่ตอบกลับ (ต้องเปิดจอเกมนี้ไว้)'));
@@ -4586,27 +4705,54 @@ function populateWebHudData(profileId, data) {
   if (!data) return;
   const hud = activeWebHuds[profileId]?.el;
   if (!hud) return;
+  const isCentral = (profileId === '__central__');
   renderWebAutoSellRules(profileId);
   const autoTog = hud.querySelector('#p-autosell-toggle-hud');
   if (autoTog && document.activeElement !== autoTog && data.autoMarketSellConfig) autoTog.checked = !!data.autoMarketSellConfig.enabled;
 
-  // Title: Only character / profile name (NO Pmhee)
+  // Title: Only character / profile name (NO Pmhee), or Central Menu header
   const titleEl = hud.querySelector('.p-header-title');
-  const charName = data.state?.charName || activeWebHuds[profileId]?.profile?.name;
-  if (titleEl && charName) titleEl.innerText = charName;
+  if (isCentral) {
+    const onlineCount = currentProfiles.filter(p => p.isRunning).length;
+    if (titleEl) titleEl.innerText = `🎛️ เมนูส่วนกลาง (${onlineCount} จอออนไลน์)`;
+    const onlinePill = hud.querySelector('#p-central-online-pill');
+    if (onlinePill) onlinePill.innerText = `ออนไลน์ ${onlineCount}/${currentProfiles.length} จอ`;
+  } else {
+    const charName = data.state?.charName || activeWebHuds[profileId]?.profile?.name;
+    if (titleEl && charName) titleEl.innerText = charName;
+  }
 
   // Header quick badges
   const quickZeny = hud.querySelector('#p-quick-zeny');
   if (quickZeny) {
-    const z = data.state?.zeny;
-    quickZeny.innerText = '💰 ' + (typeof z === 'number' ? z.toLocaleString() + ' z' : '-- z');
+    if (isCentral) {
+      const totalZ = currentProfiles.reduce((acc, p) => acc + (typeof p.liveState?.zeny === 'number' ? p.liveState.zeny : 0), 0);
+      quickZeny.innerText = '💰 รวม ' + totalZ.toLocaleString() + ' z';
+    } else {
+      const z = data.state?.zeny;
+      quickZeny.innerText = '💰 ' + (typeof z === 'number' ? z.toLocaleString() + ' z' : '-- z');
+    }
   }
 
   const quickAmmo = hud.querySelector('#p-quick-ammo');
-  if (quickAmmo) quickAmmo.innerText = '🏹 ' + (data.currentAmmo ?? '--');
+  if (quickAmmo) {
+    if (isCentral) {
+      const runningBots = currentProfiles.filter(p => p.isRunning && p.liveState?.isBotRunning).length;
+      quickAmmo.innerText = `🤖 บอทวิ่ง ${runningBots} จอ`;
+    } else {
+      quickAmmo.innerText = '🏹 ' + (data.currentAmmo ?? '--');
+    }
+  }
 
   const quickWeight = hud.querySelector('#p-quick-weight');
-  if (quickWeight) quickWeight.innerText = '⚖️ ' + (data.state?.weight ?? '--%');
+  if (quickWeight) {
+    if (isCentral) {
+      const premCount = currentProfiles.filter(p => isProfilePremium(p)).length;
+      quickWeight.innerText = `👑 VIP ${premCount} จอ`;
+    } else {
+      quickWeight.innerText = '⚖️ ' + (data.state?.weight ?? '--%');
+    }
+  }
 
   // Status strip
   const mapEl = hud.querySelector('#p-cur-map-display');
@@ -4836,6 +4982,27 @@ function populateWebHudData(profileId, data) {
 
 async function sendWebHudAction(profileId, payload) {
   try {
+    if (profileId === '__central__') {
+      const online = currentProfiles.filter(p => p.isRunning);
+      if (online.length === 0) {
+        showToast('⚠️ ไม่มีจอเกมที่กำลังออนไลน์ให้สั่งการ', 'warning');
+        return { success: false, error: 'ไม่มีจอเกมที่กำลังออนไลน์' };
+      }
+      const results = await Promise.allSettled(online.map(async (p) => {
+        const resp = await fetch(API_BASE + '/api/profiles/' + p.id + '/client-action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const j = await resp.json().catch(() => ({}));
+        return Boolean(resp.ok && j.success !== false);
+      }));
+      const okCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
+      showToast(`🎛️ เมนูส่วนกลาง: อัปเดตไปยัง ${okCount}/${online.length} จอเรียบร้อย`, okCount > 0 ? 'success' : 'error');
+      setTimeout(() => { updateActiveWebHuds(); }, 250);
+      return { success: okCount > 0, updatedCount: okCount, totalOnline: online.length };
+    }
+
     const resp = await fetch(API_BASE + '/api/profiles/' + profileId + '/client-action', {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -4862,6 +5029,32 @@ async function sendWebHudAction(profileId, payload) {
 async function updateActiveWebHuds() {
   const openIds = Object.keys(activeWebHuds);
   for (const id of openIds) {
+    if (id === '__central__') {
+      const hud = activeWebHuds[id]?.el;
+      if (hud) {
+        const onlineCount = currentProfiles.filter(p => p.isRunning).length;
+        const titleEl = hud.querySelector('.p-header-title');
+        if (titleEl) titleEl.innerText = `🎛️ เมนูส่วนกลาง (${onlineCount} จอออนไลน์)`;
+        const onlinePill = hud.querySelector('#p-central-online-pill');
+        if (onlinePill) onlinePill.innerText = `ออนไลน์ ${onlineCount}/${currentProfiles.length} จอ`;
+        const quickZeny = hud.querySelector('#p-quick-zeny');
+        if (quickZeny) {
+          const totalZ = currentProfiles.reduce((acc, p) => acc + (typeof p.liveState?.zeny === 'number' ? p.liveState.zeny : 0), 0);
+          quickZeny.innerText = '💰 รวม ' + totalZ.toLocaleString() + ' z';
+        }
+        const quickAmmo = hud.querySelector('#p-quick-ammo');
+        if (quickAmmo) {
+          const runningBots = currentProfiles.filter(p => p.isRunning && p.liveState?.isBotRunning).length;
+          quickAmmo.innerText = `🤖 บอทวิ่ง ${runningBots} จอ`;
+        }
+        const quickWeight = hud.querySelector('#p-quick-weight');
+        if (quickWeight) {
+          const premCount = currentProfiles.filter(p => isProfilePremium(p)).length;
+          quickWeight.innerText = `👑 VIP ${premCount} จอ`;
+        }
+      }
+      continue;
+    }
     try {
       const res = await fetch(API_BASE + '/api/profiles/' + id + '/client-data');
       const json = await res.json();

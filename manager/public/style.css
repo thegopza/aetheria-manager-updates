@@ -969,6 +969,37 @@ body {
 .profile-card.is-online::before { background: linear-gradient(90deg, hsl(var(--h), 70%, 50%), #22e3c4); }
 .profile-card.is-main::before { background: linear-gradient(90deg, #eab308, #f59e0b, #fde047); }
 .profile-card.is-main { border-color: rgba(234, 179, 8, 0.32); }
+.profile-card.is-premium {
+  border: 2px solid #f59e0b !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.38), 0 0 18px rgba(245, 158, 11, 0.42), inset 0 0 14px rgba(250, 204, 21, 0.14) !important;
+}
+.profile-card.is-premium::before {
+  height: 4px;
+  background: linear-gradient(90deg, #fde047, #f59e0b, #eab308, #fef08a, #f59e0b) !important;
+}
+.profile-card.is-premium:hover {
+  border-color: #fde047 !important;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45), 0 0 24px rgba(250, 204, 21, 0.6), inset 0 0 18px rgba(250, 204, 21, 0.2) !important;
+}
+.profile-card.is-premium .avatar {
+  background: linear-gradient(145deg, #fde047, #f59e0b, #b45309);
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.5);
+}
+.premium-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.4px;
+  background: linear-gradient(135deg, rgba(250, 204, 21, 0.28), rgba(217, 119, 6, 0.28));
+  color: #fde047;
+  border: 1px solid rgba(250, 204, 21, 0.6);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.3);
+  white-space: nowrap;
+}
 .profile-card.is-offline .card-hero-bg { filter: blur(18px) grayscale(1); opacity: 0.12; }
 .profile-card.is-offline .avatar img { filter: grayscale(0.85) brightness(0.75); }
 .profile-card.menu-open {

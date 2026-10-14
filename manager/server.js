@@ -87,6 +87,7 @@ const installer = require("./installer");
 const { handleInventoryMarketRoute } = require("./inventory_market_api");
 const { createPartyService } = require("./party_api");
 const { createPremiumService } = require("./premium_api");
+const { createGuildService } = require("./guild_api");
 const { createBotAutoUpdater } = require("./bot_auto_update");
 const { createManagerSelfUpdater } = require("./manager_self_update");
 const { handleConfigCopyRoute } = require("./config_copy_api");
@@ -595,6 +596,31 @@ const LIVE_STATE_EVAL = `(() => {
   } catch (e) {}
   try {
     s.bandwidth = (typeof window.__pmGetBandwidth === 'function') ? window.__pmGetBandwidth() : null;
+  } catch (e) {}
+  try {
+    let pUntil = 0;
+    let pActive = false;
+    const exUntil = Number(window.__pmExchange && window.__pmExchange.premiumUntil) || 0;
+    if (exUntil > Date.now()) {
+      pUntil = exUntil;
+      pActive = true;
+    }
+    let rStore = (typeof getReactStore === 'function') ? getReactStore() : null;
+    const buffs = rStore && rStore.character && Array.isArray(rStore.character.buffs) ? rStore.character.buffs : [];
+    const pBuff = buffs.find(b => b && (b.skillId === 'ui:token' || /premium/i.test(String(b.name || ''))));
+    if (pBuff) {
+      const ends = Number(pBuff.endsAt) || (Number(pBuff.remainingMs) > 0 ? (Date.now() + Number(pBuff.remainingMs)) : 0);
+      if (ends > Date.now() || Number(pBuff.remainingMs) > 0) {
+        pActive = true;
+        if (ends > pUntil) pUntil = ends;
+      }
+    }
+    if (!pActive) {
+      const domBuff = document.querySelector('.hud-buffs img[src*="token"], .hud-buffs [title*="Premium" i]');
+      if (domBuff) pActive = true;
+    }
+    s.hasPremium = pActive;
+    s.premiumUntil = pUntil > 0 ? pUntil : null;
   } catch (e) {}
   return s;
 })()`;
@@ -1788,6 +1814,15 @@ const premiumService = createPremiumService({
 });
 premiumService.start();
 
+// Auto Guild & Daily Material Donation (manager/guild_api.js)
+const guildService = createGuildService({
+  loadProfiles,
+  evalProfilePort,
+  dataFile: path.join(__dirname, "data", "guilds.json"),
+  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
+});
+guildService.start();
+
 function getDefaultDeviceNickname() {
   return process.env.USERNAME || (typeof os.userInfo === 'function' ? os.userInfo()?.username : '') || os.hostname() || 'PmheeUser';
 }
@@ -2071,6 +2106,8 @@ const server = http.createServer(async (req, res) => {
   if (await partyService.handleRoute(req, res, pathname, sendJSON)) return;
   // Auto Premium — see premium_api.js
   if (await premiumService.handleRoute(req, res, pathname, sendJSON)) return;
+  // Guild Manager & Auto Daily Donation — see guild_api.js
+  if (await guildService.handleRoute(req, res, pathname, sendJSON)) return;
 
   // Discord Bot & Webhook Settings & Controls
   if (pathname === "/api/discord/settings") {
@@ -2364,6 +2401,11 @@ const server = http.createServer(async (req, res) => {
         const zenyRate = updateZenyRateTracker(p.id, alive ? liveState : null);
         const bandwidth = await updateBandwidthTracker(p.id, alive ? liveState : null, p.debugPort);
 
+        const liveHasPremium = !!(liveState && !liveState.error && liveState.hasPremium);
+        const livePremiumUntil = (liveState && !liveState.error && Number(liveState.premiumUntil) > 0) ? Number(liveState.premiumUntil) : null;
+        const effectivePremiumUntil = livePremiumUntil || (Number(p.lastPremiumUntil) > Date.now() ? Number(p.lastPremiumUntil) : null);
+        const hasPremium = (alive && liveState && !liveState.error) ? liveHasPremium : Boolean(effectivePremiumUntil && effectivePremiumUntil > Date.now());
+
         return {
           ...p,
           hasLoginPassword: !!credentials.getPassword(p.id),
@@ -2371,6 +2413,8 @@ const server = http.createServer(async (req, res) => {
           pid: alive ? (proc ? proc.pid : null) : null,
           uptime: alive ? (proc ? Math.round((Date.now() - proc.startTime) / 1000) : 0) : 0,
           liveState,
+          hasPremium,
+          premiumUntil: effectivePremiumUntil,
           zenyRate,
           bandwidth,
           windowState: windowStates[p.id] || { isHidden: false }
@@ -2378,13 +2422,15 @@ const server = http.createServer(async (req, res) => {
       })
     );
 
-    // Remember last-seen portrait / character so offline cards still show them.
+    // Remember last-seen portrait / character / premiumUntil so offline cards still show them.
     // Re-read the file here: other requests may have saved profiles while we awaited.
     const changed = enriched.filter(p => {
       const s = p.liveState;
       if (!s || s.error) return false;
       const portrait = s.portrait && portraitPathFromSrc(s.portrait);
-      return (portrait && portrait !== p.lastPortrait) || (s.charName && s.charName !== p.lastCharName);
+      const premChanged = (Number(s.premiumUntil) > 0 && Number(s.premiumUntil) !== Number(p.lastPremiumUntil || 0)) ||
+                          (s.hasPremium === false && Number(p.lastPremiumUntil || 0) > Date.now());
+      return (portrait && portrait !== p.lastPortrait) || (s.charName && s.charName !== p.lastCharName) || premChanged;
     });
     if (changed.length > 0) {
       const fresh = loadProfiles();
@@ -2395,6 +2441,11 @@ const server = http.createServer(async (req, res) => {
         if (portrait) target.lastPortrait = p.lastPortrait = portrait;
         if (p.liveState.charName) target.lastCharName = p.lastCharName = p.liveState.charName;
         if (p.liveState.charClass) target.lastCharClass = p.lastCharClass = p.liveState.charClass;
+        if (Number(p.liveState.premiumUntil) > 0) {
+          target.lastPremiumUntil = p.lastPremiumUntil = Number(p.liveState.premiumUntil);
+        } else if (p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
+          target.lastPremiumUntil = p.lastPremiumUntil = 0;
+        }
       });
       saveProfiles(fresh);
     }
@@ -3115,6 +3166,10 @@ public class PmFocus {
     const targetRunning = action === "start" ? true : (action === "stop" ? false : !isRunning);
 
     const code = targetRunning ? `(() => {
+      if (window.__isBotRunning) {
+        if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
+        return { success: true, running: true, unchanged: true };
+      }
       window.__autoLoopEnabled = true;
       window.__isBotRunning = true;
       try { localStorage.setItem('pelican_auto_loop', true); } catch(e){}
@@ -3123,6 +3178,12 @@ public class PmFocus {
       if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
       return { success: true, running: true };
     })()` : `(() => {
+      if (!window.__isBotRunning) {
+        window.__autoLoopEnabled = false;
+        try { localStorage.setItem('pelican_auto_loop', false); } catch(e){}
+        if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
+        return { success: true, running: false, unchanged: true };
+      }
       window.__autoLoopEnabled = false;
       window.__isBotRunning = false;
       try { localStorage.setItem('pelican_auto_loop', false); } catch(e){}
@@ -3184,11 +3245,11 @@ public class PmFocus {
         unexpectedTownCountdown: document.getElementById('p-unexpected-countdown')?.innerText || '--:--',
         humanizeConfig: {
           enabled: humanize.enabled !== false,
-          chance: Number(humanize.chance) || 70,
-          buyBlacksmith: humanize.buyBlacksmith !== false,
-          buySundries: humanize.buySundries !== false,
+          chance: Number(humanize.chance ?? humanize.chancePercent ?? 70),
+          buyBlacksmith: (humanize.buyBlacksmith ?? humanize.visitBlacksmith) !== false,
+          buySundries: (humanize.buySundries ?? humanize.visitSundries) !== false,
           randomWalk: humanize.randomWalk !== false,
-          storeDeposit: humanize.storeDeposit !== false
+          storeDeposit: (humanize.storeDeposit ?? humanize.openStorage) !== false
         },
         archerConfig: archer,
         bwingCount: bagCount(90311),
@@ -3408,17 +3469,29 @@ public class PmFocus {
         } else if (payload.type === 'update-humanize') {
           codeToRun = `(() => {
             if (!window.__humanizeConfig) window.__humanizeConfig = {};
-            Object.assign(window.__humanizeConfig, ${JSON.stringify(payload.config || {})});
-            try { localStorage.setItem('pelican_humanize_cfg', JSON.stringify(window.__humanizeConfig)); } catch(e){}
+            const patch = ${JSON.stringify(payload.config || {})};
+            Object.assign(window.__humanizeConfig, patch);
+            if (patch.chance !== undefined) window.__humanizeConfig.chancePercent = Number(patch.chance);
+            if (patch.chancePercent !== undefined) window.__humanizeConfig.chance = Number(patch.chancePercent);
+            if (patch.buyBlacksmith !== undefined) window.__humanizeConfig.visitBlacksmith = !!patch.buyBlacksmith;
+            if (patch.visitBlacksmith !== undefined) window.__humanizeConfig.buyBlacksmith = !!patch.visitBlacksmith;
+            if (patch.buySundries !== undefined) window.__humanizeConfig.visitSundries = !!patch.buySundries;
+            if (patch.visitSundries !== undefined) window.__humanizeConfig.buySundries = !!patch.visitSundries;
+            if (patch.storeDeposit !== undefined) window.__humanizeConfig.openStorage = !!patch.storeDeposit;
+            if (patch.openStorage !== undefined) window.__humanizeConfig.storeDeposit = !!patch.openStorage;
+            try {
+              localStorage.setItem('pelican_humanize_cfg', JSON.stringify(window.__humanizeConfig));
+              localStorage.setItem('pelican_humanize_config', JSON.stringify(window.__humanizeConfig));
+            } catch(e){}
             const c = window.__humanizeConfig;
             const setCb = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.checked = !!v; };
-            setCb('p-humanize-enabled', c.enabled);
-            setCb('p-humanize-blacksmith', c.buyBlacksmith);
-            setCb('p-humanize-sundries', c.buySundries);
-            setCb('p-humanize-walk', c.randomWalk);
-            setCb('p-humanize-storage', c.storeDeposit);
+            if (patch.enabled !== undefined) setCb('p-humanize-enabled', c.enabled);
+            if (patch.buyBlacksmith !== undefined || patch.visitBlacksmith !== undefined) setCb('p-humanize-blacksmith', c.buyBlacksmith ?? c.visitBlacksmith);
+            if (patch.buySundries !== undefined || patch.visitSundries !== undefined) setCb('p-humanize-sundries', c.buySundries ?? c.visitSundries);
+            if (patch.randomWalk !== undefined) setCb('p-humanize-walk', c.randomWalk);
+            if (patch.storeDeposit !== undefined || patch.openStorage !== undefined) setCb('p-humanize-storage', c.storeDeposit ?? c.openStorage);
             const chEl = document.getElementById('p-humanize-chance');
-            if (chEl && c.chance !== undefined) chEl.value = String(c.chance);
+            if (chEl && (patch.chance !== undefined || patch.chancePercent !== undefined)) chEl.value = String(c.chance ?? c.chancePercent);
             return { success: true };
           })()`;
         } else if (payload.type === 'test-humanize') {
@@ -3478,22 +3551,24 @@ public class PmFocus {
             return { success: true };
           })()`;
         } else if (payload.type === 'update-archer') {
+          const cfg = payload.config || {};
           codeToRun = `(() => {
             if (!window.__archerConfig) window.__archerConfig = {};
-            Object.assign(window.__archerConfig, ${JSON.stringify(payload.config)});
+            const patch = ${JSON.stringify(cfg)};
+            Object.assign(window.__archerConfig, patch);
             try { localStorage.setItem('pelican_archer_cfg', JSON.stringify(window.__archerConfig)); } catch(e){}
             const reqEl = document.getElementById('p-archer-req');
-            if (reqEl && ${JSON.stringify(payload.config.requireArrow)} !== undefined) reqEl.checked = !!window.__archerConfig.requireArrow;
+            if (reqEl && patch.requireArrow !== undefined) reqEl.checked = !!window.__archerConfig.requireArrow;
             const typeEl = document.getElementById('p-archer-type');
-            if (typeEl && ${JSON.stringify(payload.config.arrowType)} !== undefined) typeEl.value = String(window.__archerConfig.arrowType);
+            if (typeEl && patch.arrowType !== undefined) typeEl.value = String(window.__archerConfig.arrowType);
             const qtyEl = document.getElementById('p-archer-qty');
-            if (qtyEl && ${JSON.stringify(payload.config.arrowBuyQty)} !== undefined) qtyEl.value = String(window.__archerConfig.arrowBuyQty);
+            if (qtyEl && patch.arrowBuyQty !== undefined) qtyEl.value = String(window.__archerConfig.arrowBuyQty);
             const threshEl = document.getElementById('p-archer-threshold');
-            if (threshEl && ${JSON.stringify(payload.config.ammoThreshold)} !== undefined) threshEl.value = String(window.__archerConfig.ammoThreshold);
+            if (threshEl && patch.ammoThreshold !== undefined) threshEl.value = String(window.__archerConfig.ammoThreshold);
             const bwingEl = document.getElementById('p-archer-bwing');
-            if (bwingEl && ${JSON.stringify(payload.config.useBwing)} !== undefined) bwingEl.checked = !!window.__archerConfig.useBwing;
+            if (bwingEl && patch.useBwing !== undefined) bwingEl.checked = !!window.__archerConfig.useBwing;
             const bwingQtyEl = document.getElementById('p-archer-bwing-qty');
-            if (bwingQtyEl && ${JSON.stringify(payload.config.bwingBuyQty)} !== undefined) bwingQtyEl.value = String(window.__archerConfig.bwingBuyQty);
+            if (bwingQtyEl && patch.bwingBuyQty !== undefined) bwingQtyEl.value = String(window.__archerConfig.bwingBuyQty);
             if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
             if (typeof updateAmmoHUD === 'function') updateAmmoHUD();
             return { success: true };
@@ -3512,9 +3587,15 @@ public class PmFocus {
             return { ammo: 0 };
           })()`;
         } else if (payload.type === 'update-buff-potions') {
+          const cfg = payload.config || {};
           codeToRun = `(() => {
             if (!window.__buffPotionConfig) window.__buffPotionConfig = {};
-            Object.assign(window.__buffPotionConfig, ${JSON.stringify(payload.config)});
+            const patch = ${JSON.stringify(cfg)};
+            for (const k of Object.keys(patch)) {
+              if (patch[k] && typeof patch[k] === 'object') {
+                window.__buffPotionConfig[k] = Object.assign({}, window.__buffPotionConfig[k] || {}, patch[k]);
+              }
+            }
             if (typeof window.saveBuffPotionConfig === 'function') window.saveBuffPotionConfig();
             if (typeof window.syncBuffPotionsToGame === 'function') window.syncBuffPotionsToGame();
             if (typeof window.updatePotionHUD === 'function') window.updatePotionHUD();
@@ -3531,31 +3612,58 @@ public class PmFocus {
             return { success: true };
           })()`;
         } else if (payload.type === 'update-sell') {
+          const cfg = payload.config || {};
           codeToRun = `(() => {
             if (!window.__sellConfig) window.__sellConfig = {};
-            Object.assign(window.__sellConfig, ${JSON.stringify(payload.config)});
+            const patch = ${JSON.stringify(cfg)};
+            if (patch.statsFilterPatch && typeof patch.statsFilterPatch === 'object') {
+              if (!window.__sellConfig.statsFilter || typeof window.__sellConfig.statsFilter !== 'object') {
+                window.__sellConfig.statsFilter = {};
+              }
+              Object.assign(window.__sellConfig.statsFilter, patch.statsFilterPatch);
+              delete patch.statsFilterPatch;
+            }
+            Object.assign(window.__sellConfig, patch);
+            if (patch.weaponRarity !== undefined) {
+              window.__sellConfig.sellWeapons = window.__sellConfig.weaponRarity !== 'none';
+            }
+            if (patch.armorRarity !== undefined) {
+              window.__sellConfig.sellArmors = window.__sellConfig.armorRarity !== 'none';
+            }
             try { localStorage.setItem('pelican_sell_cfg', JSON.stringify(window.__sellConfig)); } catch(e){}
             if (typeof window.refreshStoreHud === 'function') window.refreshStoreHud();
             const trashEl = document.getElementById('p-sell-enabled') || document.getElementById('p-sell-trash');
-            if (trashEl && ${JSON.stringify(payload.config.enabled)} !== undefined) trashEl.checked = !!window.__sellConfig.enabled;
+            if (trashEl && patch.enabled !== undefined) trashEl.checked = !!window.__sellConfig.enabled;
             const wChkEl = document.getElementById('p-weight-check-enabled');
-            if (wChkEl && ${JSON.stringify(payload.config.weightCheckEnabled)} !== undefined) wChkEl.checked = !!window.__sellConfig.weightCheckEnabled;
+            if (wChkEl && patch.weightCheckEnabled !== undefined) wChkEl.checked = !!window.__sellConfig.weightCheckEnabled;
             const weightEl = document.getElementById('p-weight-threshold') || document.getElementById('p-sell-weight');
-            if (weightEl && ${JSON.stringify(payload.config.weightThreshold)} !== undefined) weightEl.value = String(window.__sellConfig.weightThreshold);
+            if (weightEl && patch.weightThreshold !== undefined) weightEl.value = String(window.__sellConfig.weightThreshold);
             const weapEl = document.getElementById('p-sell-rarity-weap') || document.getElementById('p-sell-weap');
-            if (weapEl && ${JSON.stringify(payload.config.weaponRarity)} !== undefined) weapEl.value = String(window.__sellConfig.weaponRarity);
+            if (weapEl && patch.weaponRarity !== undefined) weapEl.value = String(window.__sellConfig.weaponRarity);
             const armorEl = document.getElementById('p-sell-rarity-armor') || document.getElementById('p-sell-armor');
-            if (armorEl && ${JSON.stringify(payload.config.armorRarity)} !== undefined) armorEl.value = String(window.__sellConfig.armorRarity);
+            if (armorEl && patch.armorRarity !== undefined) armorEl.value = String(window.__sellConfig.armorRarity);
             const accEl = document.getElementById('p-sell-rarity-acc');
-            if (accEl && ${JSON.stringify(payload.config.accRarity)} !== undefined) accEl.value = String(window.__sellConfig.accRarity);
+            if (accEl && patch.accRarity !== undefined) accEl.value = String(window.__sellConfig.accRarity);
             const refEl = document.getElementById('p-sell-keep-refined');
-            if (refEl && ${JSON.stringify(payload.config.keepRefined)} !== undefined) refEl.checked = !!window.__sellConfig.keepRefined;
+            if (refEl && patch.keepRefined !== undefined) refEl.checked = !!window.__sellConfig.keepRefined;
             const specEl = document.getElementById('p-sell-keep-special');
-            if (specEl && ${JSON.stringify(payload.config.keepSpecial)} !== undefined) specEl.checked = !!window.__sellConfig.keepSpecial;
+            if (specEl && patch.keepSpecial !== undefined) specEl.checked = !!window.__sellConfig.keepSpecial;
             const sockEl = document.getElementById('p-sell-keep-sockets');
-            if (sockEl && ${JSON.stringify(payload.config.keepSockets)} !== undefined) sockEl.checked = !!window.__sellConfig.keepSockets;
+            if (sockEl && patch.keepSockets !== undefined) sockEl.checked = !!window.__sellConfig.keepSockets;
+            const storeEnEl = document.getElementById('p-store-enabled');
+            if (storeEnEl && patch.storeEnabled !== undefined) storeEnEl.checked = !!window.__sellConfig.storeEnabled;
+            const storeRefEl = document.getElementById('p-store-refined');
+            if (storeRefEl && patch.storeRefined !== undefined) storeRefEl.checked = !!window.__sellConfig.storeRefined;
+            const storeSpecEl = document.getElementById('p-store-special');
+            if (storeSpecEl && patch.storeSpecial !== undefined) storeSpecEl.checked = !!window.__sellConfig.storeSpecial;
+            const storeSockEl = document.getElementById('p-store-sockets');
+            if (storeSockEl && patch.storeSockets !== undefined) storeSockEl.checked = !!window.__sellConfig.storeSockets;
+            const storeCardsEl = document.getElementById('p-store-cards');
+            if (storeCardsEl && patch.storeCards !== undefined) storeCardsEl.checked = !!window.__sellConfig.storeCards;
+            const storeWlEl = document.getElementById('p-store-whitelist');
+            if (storeWlEl && patch.storeWhitelist !== undefined) storeWlEl.checked = !!window.__sellConfig.storeWhitelist;
             const wlEl = document.getElementById('p-sell-whitelist');
-            if (wlEl && ${JSON.stringify(payload.config.whitelist)} !== undefined) wlEl.value = String(window.__sellConfig.whitelist);
+            if (wlEl && patch.whitelist !== undefined) wlEl.value = String(window.__sellConfig.whitelist);
             if (typeof window.renderSellStatsFilterUI === 'function') window.renderSellStatsFilterUI();
             return { success: true };
           })()`;
@@ -3564,20 +3672,22 @@ public class PmFocus {
         } else if (payload.type === 'test-sell') {
           codeToRun = `if (typeof window.executeSellTrashAtNpc === 'function') window.executeSellTrashAtNpc(true);`;
         } else if (payload.type === 'update-auth') {
+          const cfg = payload.config || {};
           codeToRun = `(() => {
             if (!window.__authConfig) window.__authConfig = {};
-            Object.assign(window.__authConfig, ${JSON.stringify(payload.config)});
+            const patch = ${JSON.stringify(cfg)};
+            Object.assign(window.__authConfig, patch);
             try { localStorage.setItem('pelican_auth_cfg', JSON.stringify(window.__authConfig)); } catch(e){}
             const authEn = document.getElementById('p-auth-enabled');
-            if (authEn && ${JSON.stringify(payload.config.enabled)} !== undefined) authEn.checked = !!window.__authConfig.enabled;
+            if (authEn && patch.enabled !== undefined) authEn.checked = !!window.__authConfig.enabled;
             const authUs = document.getElementById('p-auth-user');
-            if (authUs && ${JSON.stringify(payload.config.username)} !== undefined) authUs.value = String(window.__authConfig.username);
+            if (authUs && patch.username !== undefined) authUs.value = String(window.__authConfig.username);
             const authPs = document.getElementById('p-auth-pass');
-            if (authPs && ${JSON.stringify(payload.config.password)} !== undefined) authPs.value = String(window.__authConfig.password);
+            if (authPs && patch.password !== undefined) authPs.value = String(window.__authConfig.password);
             const authCh = document.getElementById('p-auth-char');
-            if (authCh && ${JSON.stringify(payload.config.charName)} !== undefined) authCh.value = String(window.__authConfig.charName || '');
+            if (authCh && patch.charName !== undefined) authCh.value = String(window.__authConfig.charName || '');
             const authRes = document.getElementById('p-auth-resume');
-            if (authRes && ${JSON.stringify(payload.config.autoResumeBot)} !== undefined) authRes.checked = !!window.__authConfig.autoResumeBot;
+            if (authRes && patch.autoResumeBot !== undefined) authRes.checked = !!window.__authConfig.autoResumeBot;
             return { success: true };
           })()`;
         } else if (payload.type === 'update-autosell') {
@@ -3661,7 +3771,7 @@ public class PmFocus {
   if (req.method === "POST" && pathname === "/api/consolidation/start") {
     let body = "";
     req.on("data", chunk => body += chunk);
-    req.on("end", () => {
+    req.on("end", async () => {
       try {
         const payload = JSON.parse(body || "{}");
         const receiverId = payload.receiverProfileId;
@@ -3678,8 +3788,36 @@ public class PmFocus {
           return sendJSON({ success: false, error: "ระบบกำลังดำเนินการรวมเงินอยู่แล้วในขณะนี้" }, 409);
         }
 
+        // Verify that Receiver and Senders have active Premium (required for in-game Trade)
+        const profiles = loadProfiles();
+        const checkProfilePremium = async (pid) => {
+          const p = profiles.find(x => x.id === pid);
+          if (!p) return { ok: false, name: pid };
+          if (p.debugPort) {
+            const st = await queryClientState(p.debugPort);
+            if (st && !st.error) {
+              return { ok: !!st.hasPremium, name: st.charName || p.name };
+            }
+          }
+          return { ok: Number(p.lastPremiumUntil || 0) > Date.now(), name: p.lastCharName || p.name };
+        };
+
+        const recCheck = await checkProfilePremium(receiverId);
+        if (!recCheck.ok) {
+          return sendJSON({ success: false, error: `ตัวรับเงิน (${recCheck.name}) ไม่มีสถานะ 👑 Premium — ระบบเทรดรวมเงินเลือกได้เฉพาะตัวละครที่มี Premium เท่านั้น` }, 400);
+        }
+
+        const validSenders = [];
+        for (const sid of senderIds) {
+          const sc = await checkProfilePremium(sid);
+          if (sc.ok) validSenders.push(sid);
+        }
+        if (validSenders.length === 0) {
+          return sendJSON({ success: false, error: "จอผู้โอนที่เลือกไม่มีสถานะ 👑 Premium (การเทรดโอนเงินใช้ได้เฉพาะตัวที่มี Premium เท่านั้น)" }, 400);
+        }
+
         // Run in background
-        runConsolidationWorkflow(receiverId, senderIds, keepZeny);
+        runConsolidationWorkflow(receiverId, validSenders, keepZeny);
         return sendJSON({ success: true, message: "เริ่มต้นกระบวนการรวมเงินเรียบร้อยแล้ว" });
       } catch(e) {
         return sendJSON({ success: false, error: e.message }, 400);

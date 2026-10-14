@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "0475d2d0a7389640a7d057f779e13f8034654097",
+  "sourceCommit": "e63e248bfdf12e7e58f7406e484d09ac90effe44",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -107,12 +107,16 @@
       "sha256": "c3a541b368d81385190e9d7dfd75c82fa0e596bc9b5dcf3d86c920496a5a5c72"
     },
     {
+      "path": "manager/guild_api.js",
+      "sha256": "f989bdcac0eb5538079e78a54a3ee27738ae02b00dfb0bd2bcf011e81fedc4b3"
+    },
+    {
       "path": "manager/proxy_register.js",
       "sha256": "b803867d3afff849839196b7bc9d573bea631ae6d2337976cc71fd82a1a7e781"
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "c15bbb26ae8bc142ad544fd2b83e1a1af4251647955539ca722f8c7164f9cbc4"
+      "sha256": "39dba7d8c9cac73b598806c0b477df1478f6374c3b0869fb7de35fb1995dbfd5"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -139,12 +143,20 @@
       "sha256": "cf0a59601f8ca4c67c07de9136c3bc8037f4da7335507b3372474920608a165e"
     },
     {
+      "path": "manager/public/guild_manager.css",
+      "sha256": "48c2410e0d81843e2cad4d1bfd99196846e6831460370226a4834dd2ffbc342f"
+    },
+    {
+      "path": "manager/public/guild_manager.js",
+      "sha256": "48875382da60fcf57ebd05d5466cb5a17c3689eb0b3dda0b3511778431189297"
+    },
+    {
       "path": "manager/public/image_board_solver.js",
       "sha256": "9d9ede0794a8aa823ed7d8a13b978f955add33d11f3aa812353fb790a9981b1c"
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "7632d2a950ff5ed2e12a2d99a75931f1e53c057b80f2fb772a48fb34ca6b8f51"
+      "sha256": "47a7ce737fd522940dd7b00276503c2483f4548ea8a1e3b3572c20f26c2e22bc"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -160,7 +172,7 @@
     },
     {
       "path": "manager/public/party_manager.js",
-      "sha256": "4fe64c141fad799d44b638c82d137416bd580a77615960b106a5dd811960d88d"
+      "sha256": "d36a6ad2d0b6b1142c90fd682faf9d3f8cfb082bef575b64c6707b35bcc4cf55"
     },
     {
       "path": "manager/public/patcher_module.js",
@@ -176,7 +188,7 @@
     },
     {
       "path": "manager/public/premium_manager.js",
-      "sha256": "2c646c3eff3a3c872d1b1b2e1b113b9d563a37ee3d3613dad8e85113cd6bba84"
+      "sha256": "a5268797444b146ae518ba513e5577ba946badb19e24d0cb5486d391f6c87c3f"
     },
     {
       "path": "manager/public/script_status.html",
@@ -188,7 +200,7 @@
     },
     {
       "path": "manager/public/style.css",
-      "sha256": "2fc7f9fa2610c5ec885f7afcbf5cf8aeefa069be822c4f9eacc50b2f1d0f18ed"
+      "sha256": "029e703fc19df92ed0811daba57215f11cf02dba607eae7cdca2e641f3bf3b6f"
     },
     {
       "path": "manager/script_bootstrap.js",
@@ -212,7 +224,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "df8815233038e2b315af18172668f6de7d8f382a96dbab66e3d66f3108f29cef"
+      "sha256": "d129098a1ba6425c84f5c0b297c1475540aba00ba167a31822ec4e68098fe405"
     },
     {
       "path": "manager/test_isolation.js",

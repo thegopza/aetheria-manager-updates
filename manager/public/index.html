@@ -7,12 +7,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=43920">
+  <link rel="stylesheet" href="style.css?v=44000">
   <link rel="stylesheet" href="inventory_market.css?v=4360">
   <link rel="stylesheet" href="bot_update.css?v=4390">
   <link rel="stylesheet" href="plan_editor.css?v=42900">
   <link rel="stylesheet" href="party_manager.css?v=43880">
   <link rel="stylesheet" href="premium_manager.css?v=4430">
+  <link rel="stylesheet" href="guild_manager.css?v=44000">
 </head>
 <body>
   <div class="app-container">
@@ -164,6 +165,9 @@
             </button>
           </div>
           <div class="toolbar-group">
+            <button id="btn-open-central-bot-menu" class="btn btn-ghost btn-sm" title="เปิดเมนูส่วนกลาง (Master Bot Menu) — เปิดขึ้นมาจะยังไม่ทับค่าใดๆ จนกว่าคุณจะกดปุ่มหรือปรับตัวเลือกตัวนั้น ระบบจึงจะส่งเฉพาะคำสั่งนั้นไปทุกจอ" style="border: 1px solid rgba(250, 204, 21, 0.45); background: linear-gradient(135deg, rgba(250, 204, 21, 0.16), rgba(245, 158, 11, 0.08)); color: #fde68a; font-weight: 700;">
+              <span class="icon">🎛️</span> เมนูส่วนกลาง
+            </button>
             <button id="btn-global-plan-setup" class="btn btn-ghost btn-sm" title="ตั้งค่าแผนการเล่น (Script Plan Builder)">
               <span class="icon">📜</span> Plan Script
             </button>
@@ -1049,15 +1053,16 @@
   </div>
 
   <script src="image_board_solver.js?v=4381"></script>
-  <script src="app.js?v=43930"></script>
+  <script src="app.js?v=44000"></script>
   <script src="patcher_module.js?v=41744"></script>
   <script src="builder_module.js?v=42700"></script>
   <script src="gear_builder.js?v=42900"></script>
   <script src="inventory_market.js?v=4370"></script>
   <script src="bot_update.js?v=43860"></script>
   <script src="config_copy.js?v=4400"></script>
-  <script src="party_manager.js?v=43880"></script>
-  <script src="premium_manager.js?v=43860"></script>
+  <script src="party_manager.js?v=44000"></script>
+  <script src="premium_manager.js?v=44000"></script>
+  <script src="guild_manager.js?v=44000"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

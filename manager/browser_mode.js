@@ -22,6 +22,7 @@ const HEALTH_JS = `(() => {
     href: location.href,
     documentId: String(performance.timeOrigin),
     ready: document.readyState,
+    profileId: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
     version: window.__pelicanBotVersion || null,
     hud: !!document.getElementById('pelican-hud'),
     liveHook: typeof window.__getClientLiveState === 'function',
@@ -71,6 +72,25 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   let rediscovering = null;
   let started = false, reconnectTimer = null, reconnectDelay = 1000, monitorTimer = null;
   const stoppedProfiles = new Set(), knownTargets = new Map(), diagnostics = new Map();
+  const knownTargetsFile = (sessionsDir && sessionsDir !== 'fake') ? path.join(sessionsDir, '_browser_targets.json') : null;
+  function loadKnownTargets() {
+    if (!knownTargetsFile) return;
+    try {
+      if (!fs.existsSync(knownTargetsFile)) return;
+      const raw = JSON.parse(fs.readFileSync(knownTargetsFile, 'utf8'));
+      if (raw && typeof raw === 'object') {
+        for (const [k, v] of Object.entries(raw)) if (typeof k === 'string' && typeof v === 'string') knownTargets.set(k, v);
+      }
+    } catch (_) {}
+  }
+  function saveKnownTargets() {
+    if (!knownTargetsFile) return;
+    try {
+      if (!fs.existsSync(sessionsDir)) return;
+      fs.writeFileSync(knownTargetsFile, JSON.stringify(Object.fromEntries(knownTargets), null, 2), 'utf8');
+    } catch (_) {}
+  }
+  loadKnownTargets();
   const retryDelays = [1000, 3000, 10000];
   function scheduleReconnect() {
     if(!started || reconnectTimer) return;
@@ -180,6 +200,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   const MSGPACK = `(function(){ if (!window.msgpack && !window.__pmMsgpackLoading) { window.__pmMsgpackLoading=true; const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/msgpack-lite/0.1.26/msgpack.min.js'; s.onerror=()=>{window.__pmMsgpackLoading=false;}; document.head.appendChild(s); } })(); void 0;`;
 
   const crashedTargetReloadAt = new Map();
+  const profileInitScript = profileId => `window.__pmProfileId = ${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {}`;
+
+  async function ensureSessionHooks(sessionId, profileId) {
+    await send('Page.enable', {}, sessionId, 5000).catch(() => {});
+    await send('Runtime.enable', {}, sessionId, 5000).catch(() => {});
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: profileInitScript(profileId) }, sessionId, 5000).catch(() => {});
+  }
 
   async function health(c) {
     const value=await evaluate(c,HEALTH_JS,4500);
@@ -213,21 +240,29 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     c.retryTimer = null;
     diagnostic(c, 'crashed-reloading', { reason: String(reason), reloadCount: c.crashReloadCount });
     console.warn(`[BrowserMode] 🔄 จอ ${c.profileId} ค้างหรือแรมเต็ม (${reason}) -> สั่ง Refresh หน้าเกมอัตโนมัติ (ครั้งที่ ${c.crashReloadCount})`);
+    const schedulePostReloadInject = () => {
+      const t = setTimeout(() => {
+        ensureSessionHooks(c.sessionId, c.profileId).finally(() => injectBot(c).catch(() => {}));
+      }, 1800);
+      t.unref?.();
+    };
     try {
+      await ensureSessionHooks(c.sessionId, c.profileId);
       await send('Page.reload', { ignoreCache: false }, c.sessionId, 8000);
+      schedulePostReloadInject();
       return true;
     } catch (_) {
       try {
         await send('Page.navigate', { url: gameUrl }, c.sessionId, 8000);
+        schedulePostReloadInject();
         return true;
       } catch (_) {
         try {
           const { sessionId } = await send('Target.attachToTarget', { targetId: c.targetId, flatten: true }, undefined, 5000);
           c.sessionId = sessionId;
-          await send('Page.enable', {}, sessionId, 5000).catch(() => {});
-          await send('Runtime.enable', {}, sessionId, 5000).catch(() => {});
-          await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__pmProfileId = ${JSON.stringify(c.profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(c.profileId)}); } catch (_) {}` }, sessionId, 5000).catch(() => {});
+          await ensureSessionHooks(sessionId, c.profileId);
           await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000));
+          schedulePostReloadInject();
           return true;
         } catch (_) {
           return false;
@@ -246,6 +281,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     let token;
     try {
       const before=await health(c);token={generation:c.generation,sessionId:c.sessionId};
+      if(before.profileId!==c.profileId){
+        await ensureSessionHooks(c.sessionId,c.profileId);
+        await evaluate(c,profileInitScript(c.profileId),4500).catch(()=>{});
+      }
       if(classify(c,before))return;
       if(!isGameUrl(before.href)||new URL(before.href).pathname!=='/play'||before.ready!=='complete'){
         diagnostic(c,'document-pending');
@@ -266,7 +305,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       await evaluate(c,MSGPACK,8000);
       if(!current(c,token))return;
       // Atomic document/runtime guard closes the race with a delayed legacy loader response.
-      const expression=`(() => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') return {skipped:true,reason:'INITIALIZATION_FAILED'}; window.__pmBrowserInjectionAttempted=true; (0,eval)(${JSON.stringify(code)}); return {attempted:true}; })()`;
+      const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') return {skipped:true,reason:'INITIALIZATION_FAILED'}; window.__pmBrowserInjectionAttempted=true; const evalResult = await (0,eval)(${JSON.stringify(code)}); return {attempted:true, evalResult}; })()`;
       await evaluate(c,expression);
       if(!current(c,token))return;
       const result=await health(c);if(!classify(c,result))diagnostic(c,'partial-runtime',{code:'POSTCONDITION_MISSING'});
@@ -302,7 +341,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   });
   listeners.add(msg => {
     if (msg.method === 'Target.targetDestroyed') {
-      for (const c of Array.from(clients.values())) if (c.targetId === msg.params.targetId) {diagnostic(c,'closed');knownTargets.delete(c.profileId);drop(c);}
+      for (const c of Array.from(clients.values())) if (c.targetId === msg.params.targetId) {diagnostic(c,'closed');knownTargets.delete(c.profileId);saveKnownTargets();drop(c);}
     }
     if (msg.method === 'Target.targetCrashed') {
       for (const c of Array.from(clients.values())) if (c.targetId === msg.params.targetId) reloadCrashedClient(c, msg.params?.status || 'Target.targetCrashed').catch(() => {});
@@ -318,7 +357,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     try {
     await send('Page.enable', {}, sessionId);
     await send('Runtime.enable', {}, sessionId);
-    await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__pmProfileId = ${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {}` }, sessionId);
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: profileInitScript(profileId) }, sessionId);
     if (!skipIdentityProbe) {
       const identity=await evaluate({sessionId},`(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`,4500);
       if(identity!==profileId)throw Error('PROFILE_ID_CONFLICT');
@@ -326,7 +365,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
     const c = { profileId, targetId, sessionId, generation:0,documentId:null,attempts:0,injectionInFlight:null,retryTimer:null,crashReloadCount:0,lastCrashReloadAt:0,crashReloadInFlight:false,stateFailCount:0 };
     clients.set(profileId, c);
-    knownTargets.set(profileId,targetId);diagnostic(c,'document-pending');
+    knownTargets.set(profileId,targetId);saveKnownTargets();diagnostic(c,'document-pending');
     return c;
     } catch(e) {await send('Target.detachFromTarget',{sessionId}).catch(()=>{});throw e;}
   }
@@ -341,16 +380,31 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     await connect();
     const { targetInfos } = await send('Target.getTargets');
     const surviving=new Set(targetInfos.map(t=>t.targetId));
-    for(const c of Array.from(clients.values()))if(!surviving.has(c.targetId)){diagnostic(c,'closed');knownTargets.delete(c.profileId);drop(c);}
-    for (const t of targetInfos.filter(x => x.type === 'page' && isGameUrl(x.url))) {
-      if (Array.from(clients.values()).some(c => c.targetId === t.targetId)) continue;
+    for(const c of Array.from(clients.values()))if(!surviving.has(c.targetId)){diagnostic(c,'closed');knownTargets.delete(c.profileId);saveKnownTargets();drop(c);}
+    const allProfiles = loadProfiles() || [];
+    const unattachedPages = targetInfos.filter(x => x.type === 'page' && isGameUrl(x.url) && !Array.from(clients.values()).some(c => c.targetId === x.targetId));
+    for (const t of unattachedPages) {
       try {
         const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
-        let pid, probeFailed = false;
+        let pid = null, charName = null, bodyText = '', probeFailed = false;
         try {
-          const r = await send('Runtime.evaluate', { expression: `window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('__pmProfileId')) || null`, returnByValue: true }, sessionId, 4500);
+          const r = await send('Runtime.evaluate', {
+            expression: `(() => ({
+              pid: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
+              charName: (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData() && window.getLiveCharacterData().name) || window.__charName || null,
+              bodyText: (typeof document !== 'undefined' && document.body && typeof document.body.innerText === 'string') ? document.body.innerText.slice(0, 1500) : ''
+            }))()`,
+            returnByValue: true
+          }, sessionId, 4500);
           if(r.exceptionDetails)throw Error('PROFILE_PROBE_FAILED');
-          pid = r && r.result && r.result.value;
+          const val = r && r.result && r.result.value;
+          if (val && typeof val === 'object') {
+            pid = val.pid || null;
+            charName = val.charName || null;
+            bodyText = String(val.bodyText || '');
+          } else if (typeof val === 'string') {
+            pid = val;
+          }
         } catch (_) {
           probeFailed = true;
           const lastAt = crashedTargetReloadAt.get(t.targetId) || 0;
@@ -362,8 +416,23 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         } finally {
           await send('Target.detachFromTarget', { sessionId }).catch(() => {});
         }
-        const identified=pid||loadProfiles().find(p=>knownTargets.get(p.id)===t.targetId)?.id;
-        const profile = identified && !stoppedProfiles.has(identified) && loadProfiles().find(p => p.id === identified);
+        let identified = pid || allProfiles.find(p => knownTargets.get(p.id) === t.targetId)?.id || null;
+        if (!identified) {
+          const unclaimed = allProfiles.filter(p => !stoppedProfiles.has(p.id) && !clients.has(p.id) && (!knownTargets.get(p.id) || !surviving.has(knownTargets.get(p.id))));
+          if (charName || bodyText) {
+            const tokens = new Set(bodyText.split(/[\r\n\s·•]+/).filter(Boolean));
+            const byChar = unclaimed.filter(p => {
+              const cn = String(p.lastCharName || '').trim();
+              if (!cn) return false;
+              return charName === cn || tokens.has(cn) || bodyText.includes('เข้าเกมด้วย ' + cn);
+            });
+            if (byChar.length === 1) identified = byChar[0].id;
+          }
+          if (!identified && unattachedPages.length === 1 && unclaimed.length === 1 && clients.size > 0) {
+            identified = unclaimed[0].id;
+          }
+        }
+        const profile = identified && !stoppedProfiles.has(identified) && allProfiles.find(p => p.id === identified);
         if (profile) {
           const c = await attach(profile.id, t.targetId, probeFailed);
           startProxy(c, profile.debugPort);
@@ -423,6 +492,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           try {
             const st = await evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`, 4500);
             c.stateFailCount = 0;
+            if (st === null && !c.injectionInFlight && !c.retryTimer) {
+              injectBot(c).catch(() => {});
+            }
             return reply(200, st);
           } catch (e) {
             if (isGoneError(e)) { drop(c); return reply(500, { success: false, error: e.message }); }
@@ -462,7 +534,17 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     await ensureBrowser();
     const wasReady = diagnostics.get(profile.id)?.botReady === true;
     await rediscover();
-    const existing = clients.get(profile.id);
+    let existing = clients.get(profile.id);
+    if (!existing) {
+      const { targetInfos } = await send('Target.getTargets');
+      const claimedTargets = new Set([...Array.from(clients.values()).map(c => c.targetId), ...Array.from(knownTargets.entries()).filter(([k]) => k !== profile.id).map(([, v]) => v)]);
+      const orphans = targetInfos.filter(t => t.type === 'page' && isGameUrl(t.url) && !claimedTargets.has(t.targetId));
+      if (orphans.length === 1) {
+        try {
+          existing = await attach(profile.id, orphans[0].targetId, true);
+        } catch (_) {}
+      }
+    }
     if (existing) {
       const { targetInfos } = await send('Target.getTargets');
       if (targetInfos.some(t => t.targetId === existing.targetId)) {
@@ -501,7 +583,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   async function stop(profileId) {
     stoppedProfiles.add(profileId);
     const c = clients.get(profileId);
-    const targetId=c?.targetId||knownTargets.get(profileId);knownTargets.delete(profileId);
+    const targetId=c?.targetId||knownTargets.get(profileId);knownTargets.delete(profileId);saveKnownTargets();
     diagnostics.set(profileId,{gameAlive:null,botReady:false,state:'explicitly-stopped'});
     if (!targetId) return false;
     if(c)drop(c);

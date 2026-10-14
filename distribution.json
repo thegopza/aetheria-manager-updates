@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "d615c9510a8abea030d41fa4e1325ef20209a281",
+  "sourceCommit": "d0672a40e69ac5d7a8ee08474b7bb16f2f3ac4f6",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -12,7 +12,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "7ef3caad675c6ba35ae837a6424be550d1f96db4181dbeaf2dcc290a815fb0dc"
+      "sha256": "5919591e14c919028372f5e7c6523e770827252204ddcd2d09c944228868f1c9"
     },
     {
       "path": "manager/captcha_stats.js",

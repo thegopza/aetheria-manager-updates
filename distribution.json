@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "22850d7d9aeab51ade773e4cc0540eddcd4a2743",
+  "sourceCommit": "6e43ab5c9f31b13a84ee2971a9b114269a05a102",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -96,7 +96,7 @@
     },
     {
       "path": "manager/party_api.js",
-      "sha256": "302e4457c186003fec0a4568f001b8f770d1ea5cc5f6bc3cf3f7b8169703db47"
+      "sha256": "86a4873543c7c274a0124619706fc36f27defe83af6ececc25d438f930f327db"
     },
     {
       "path": "manager/plan_sync.js",
@@ -156,7 +156,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "3981890c82be97f528b4ce03517b04cdbacc2f4a30516c369320e8b2da092fc0"
+      "sha256": "2803fbb87b383f5d5db8e1027ae6180926b74e402fcf5da38bf8a349e72b1258"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -176,11 +176,11 @@
     },
     {
       "path": "manager/public/party_manager.css",
-      "sha256": "63bde9e067459137aabfeeb04ea68fe8c7ed0b61fafd735dfd42e1c9c49e255e"
+      "sha256": "412c6ea3bfdeafc06deec615c1d94ee3323d0994261b4cd5d604ff6f96e946eb"
     },
     {
       "path": "manager/public/party_manager.js",
-      "sha256": "d36a6ad2d0b6b1142c90fd682faf9d3f8cfb082bef575b64c6707b35bcc4cf55"
+      "sha256": "f53b39fd6ebe464a6041d8f5aa5038e7ef9676031da41bf4f6d6013a45782647"
     },
     {
       "path": "manager/public/patcher_module.js",

@@ -105,9 +105,10 @@ body.pt-open .pt-drawer { transform: translateX(0); }
 .pt-iconbtn.danger:hover { color: #fca5a5; border-color: rgba(248, 113, 113, 0.5); background: rgba(248, 113, 113, 0.12); }
 
 .pt-row {
-  display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
   border-top: 1px solid rgba(148, 163, 184, 0.07); transition: background 0.2s;
 }
+.pt-row[hidden], .pt-iconbtn[hidden] { display: none !important; }
 .pt-row:hover { background: rgba(255, 255, 255, 0.025); }
 .pt-row.leader { background: linear-gradient(90deg, rgba(245, 197, 66, 0.1), transparent 70%); }
 .pt-ava {
@@ -121,6 +122,22 @@ body.pt-open .pt-drawer { transform: translateX(0); }
 .pt-name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pt-sub { font-size: 11px; color: var(--text-faint, #5d6983); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pt-lv { font: 700 11px var(--font-mono, monospace); color: var(--text-muted, #8d9ab5); margin-left: 4px; }
+.pt-follow-select {
+  flex: none; max-width: 126px; padding: 4px 20px 4px 7px; border-radius: 8px;
+  font: 500 11px var(--font-sans, sans-serif); color: var(--text-muted, #8d9ab5);
+  background: rgba(4, 8, 20, 0.65) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%238d9ab5'/%3E%3C/svg%3E") no-repeat right 6px center;
+  border: 1px solid rgba(148, 163, 184, 0.22); appearance: none; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: border-color 0.2s, color 0.2s, background-color 0.2s, box-shadow 0.2s;
+}
+.pt-follow-select:hover, .pt-follow-select:focus {
+  border-color: rgba(245, 197, 66, 0.55); color: var(--text-main, #eef3fc); outline: none;
+}
+.pt-follow-select.is-following {
+  color: var(--pt-gold); border-color: rgba(245, 197, 66, 0.45);
+  background-color: rgba(245, 197, 66, 0.1);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23f5c542'/%3E%3C/svg%3E");
+}
 .pt-status { font-size: 11px; padding: 2px 8px; border-radius: 999px; white-space: nowrap; border: 1px solid transparent; }
 .pt-status.leader { color: var(--pt-gold); background: rgba(245, 197, 66, 0.1); border-color: rgba(245, 197, 66, 0.3); }
 .pt-status.joined { color: #6ee7b7; background: rgba(52, 211, 153, 0.1); border-color: rgba(52, 211, 153, 0.3); }
@@ -130,11 +147,23 @@ body.pt-open .pt-drawer { transform: translateX(0); }
 @keyframes pt-pulse { 50% { opacity: 0.25; } }
 .pt-status.other { color: #fca5a5; background: rgba(248, 113, 113, 0.08); border-color: rgba(248, 113, 113, 0.25); }
 .pt-status.offline { color: var(--text-faint, #5d6983); background: rgba(148, 163, 184, 0.06); border-color: rgba(148, 163, 184, 0.15); }
-.pt-rm { opacity: 0; width: 24px; height: 24px; border-radius: 7px; border: none; background: transparent; color: var(--text-faint, #5d6983); cursor: pointer; transition: all 0.2s; }
+.pt-rm { opacity: 0.45; width: 24px; height: 24px; border-radius: 7px; border: none; background: transparent; color: var(--text-faint, #5d6983); cursor: pointer; transition: all 0.2s; }
 .pt-row:hover .pt-rm { opacity: 1; }
 .pt-rm:hover { color: #fca5a5; background: rgba(248, 113, 113, 0.12); }
-.pt-slot { color: var(--text-faint, #5d6983); font-size: 12px; font-style: italic; }
-.pt-slot .pt-ava { background: transparent; border: 1px dashed rgba(148, 163, 184, 0.25); color: var(--text-faint, #5d6983); }
+.pt-slot {
+  width: 100%; border-left: none; border-right: none; border-bottom: none;
+  background: rgba(245, 197, 66, 0.02); color: var(--text-muted, #8d9ab5);
+  font: 500 11.5px var(--font-sans, sans-serif); text-align: left; cursor: pointer;
+}
+.pt-slot:hover { background: rgba(245, 197, 66, 0.07); color: var(--text-main, #eef3fc); }
+.pt-slot .pt-ava { background: transparent; border: 1px dashed rgba(245, 197, 66, 0.4); color: var(--pt-gold); transition: all 0.2s; }
+.pt-slot:hover .pt-ava { background: rgba(245, 197, 66, 0.14); border-style: solid; }
+.pt-slot-cta {
+  flex: none; font-size: 11px; font-weight: 600; color: var(--pt-gold);
+  padding: 2px 8px; border-radius: 999px; background: rgba(245, 197, 66, 0.1);
+  border: 1px solid rgba(245, 197, 66, 0.28); white-space: nowrap; transition: all 0.2s;
+}
+.pt-slot:hover .pt-slot-cta { background: rgba(245, 197, 66, 0.2); border-color: rgba(245, 197, 66, 0.55); }
 
 .pt-expand-bar {
   width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;

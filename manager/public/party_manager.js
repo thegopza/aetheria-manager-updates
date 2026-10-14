@@ -16,7 +16,8 @@
 
   let data = { parties: [], clients: [], maxMembers: 6 };
   let open = false, pollTimer = null, busy = false, pointerDown = false, pendingRender = false;
-  const expandedParties = new Set();
+  const collapsedParties = new Set();
+  let pickerState = { mode: 'leader', partyId: null };
 
   function build() {
     const tab = document.createElement('button');
@@ -29,18 +30,18 @@
     drawer.innerHTML = `
       <header class="pt-head">
         <div class="pt-head-icon">${CROWN}</div>
-        <div><h2>ปาร์ตี้</h2><p>จัดตี้อัตโนมัติ สูงสุด 6 คนรวมหัวตี้</p></div>
+        <div><h2>ปาร์ตี้</h2><p>จัดตี้อัตโนมัติหรือเลือกคนเอง สูงสุด 6 คนรวมหัวตี้</p></div>
         <button class="pt-close" id="pt-close" type="button" aria-label="ปิด">✕</button>
       </header>
       <div class="pt-body" id="pt-body"></div>
       <footer class="pt-foot">
         <button class="pt-add" id="pt-add" type="button">➕ เพิ่มตี้</button>
-        <div class="pt-foot-hint">เลือกหัวตี้ แล้วระบบจะชวนจอที่เลเวลใกล้กันเข้าตี้ให้จนครบ 6 คน<br>สมาชิกตามไปแมพ + CH เดียวกับหัวตี้ · จอที่แผนยังเก็บ Base/Job ไม่ครบจะไม่ถูกดึง</div>
+        <div class="pt-foot-hint">เลือกหัวตี้ แล้วให้ระบบดึงคนอัตโนมัติหรือกดเลือกสมาชิกเองก็ได้<br>ตั้งให้ลูกทีมแยกตีอิสระ หรือเดินตามช่วยตีหัวตี้/คนในตี้ได้รายคน</div>
       </footer>
       <section class="pt-picker" id="pt-picker" hidden>
         <div class="pt-picker-head">
           <button class="pt-iconbtn" id="pt-pick-back" type="button" aria-label="กลับ">←</button>
-          <h3>เลือกหัวตี้</h3>
+          <h3 id="pt-picker-title">เลือกหัวตี้</h3>
         </div>
         <input class="pt-search" id="pt-search" type="search" placeholder="ค้นหาชื่อจอ / ชื่อตัวละคร" autocomplete="off">
         <div class="pt-pick-list" id="pt-pick-list"></div>
@@ -50,7 +51,7 @@
     tab.addEventListener('click', () => setOpen(true));
     scrim.addEventListener('click', () => setOpen(false));
     drawer.querySelector('#pt-close').addEventListener('click', () => setOpen(false));
-    drawer.querySelector('#pt-add').addEventListener('click', openPicker);
+    drawer.querySelector('#pt-add').addEventListener('click', () => openPicker({ mode: 'leader', partyId: null }));
     drawer.querySelector('#pt-pick-back').addEventListener('click', closePicker);
     drawer.querySelector('#pt-search').addEventListener('input', renderPicker);
     document.addEventListener('keydown', e => {
@@ -72,7 +73,12 @@
     drawer.querySelector('#pt-body').addEventListener('click', onClick);
     drawer.querySelector('#pt-pick-list').addEventListener('click', e => {
       const b = e.target.closest('[data-pick]');
-      if (b) createParty(b.dataset.pick);
+      if (!b) return;
+      if (pickerState.mode === 'member' && pickerState.partyId) {
+        addMemberToParty(pickerState.partyId, b.dataset.pick);
+      } else {
+        createParty(b.dataset.pick);
+      }
     });
   }
 
@@ -101,7 +107,21 @@
     try { await api(''); } catch (e) { /* Manager restarting */ }
   }
 
-  function createMemberRowEl(m, pid, isLeader) {
+  function buildFollowOptions(m, p) {
+    const opts = [
+      { value: 'none', label: '⚔️ แยกตีอิสระ' },
+      { value: 'leader', label: '👑 ตามหัวตี้' }
+    ];
+    for (const other of (p && p.members) || []) {
+      if (!other || other.id === m.id) continue;
+      const nm = other.charName || other.profileName || other.id;
+      opts.push({ value: 'member:' + other.id, label: '👣 ตาม ' + nm });
+    }
+    return opts;
+  }
+
+  function createMemberRowEl(m, p, isLeader) {
+    const pid = p.id;
     const row = document.createElement('div');
     row.className = 'pt-row' + (isLeader ? ' leader' : '');
     row.dataset.rowKey = isLeader ? 'leader:' + m.id : 'member:' + m.id;
@@ -111,13 +131,15 @@
         <div class="pt-name"><span class="pt-name-txt"></span><span class="pt-lv" hidden></span></div>
         <div class="pt-sub"></div>
       </div>
+      ${isLeader ? '' : `<select class="pt-follow-select" data-set="memberFollow" data-party="${esc(pid)}" data-member="${esc(m.id)}" title="เลือกโหมดเดินตาม / ช่วยตี"></select>`}
       <span class="pt-status"></span>
       ${isLeader ? '' : `<button class="pt-rm" type="button" title="เอาออกจากตี้" data-act="remove" data-party="${esc(pid)}" data-id="${esc(m.id)}">✕</button>`}`;
-    patchMemberRowEl(row, m, pid, isLeader);
+    patchMemberRowEl(row, m, p, isLeader);
     return row;
   }
 
-  function patchMemberRowEl(row, m, pid, isLeader) {
+  function patchMemberRowEl(row, m, p, isLeader) {
+    const pid = p.id;
     const displayName = m.charName || m.profileName || '?';
     const sub = [m.profileName, m.mapName ? m.mapName + (m.channel ? ' · CH ' + m.channel : '') : null].filter(Boolean).join(' · ');
     const ava = row.querySelector('.pt-ava');
@@ -139,6 +161,22 @@
       }
     }
     setText(row.querySelector('.pt-sub'), sub);
+    const followSel = row.querySelector('.pt-follow-select');
+    if (followSel) {
+      if (followSel.dataset.party !== String(pid)) followSel.dataset.party = String(pid);
+      if (followSel.dataset.member !== String(m.id)) followSel.dataset.member = String(m.id);
+      const opts = buildFollowOptions(m, p);
+      const curMode = opts.some(o => o.value === m.followMode) ? m.followMode : 'none';
+      const sig = opts.map(o => o.value + ':' + o.label).join('|');
+      if (document.activeElement !== followSel) {
+        if (followSel.dataset.optSig !== sig) {
+          followSel.dataset.optSig = sig;
+          followSel.innerHTML = opts.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+        }
+        if (followSel.value !== curMode) followSel.value = curMode;
+      }
+      followSel.classList.toggle('is-following', curMode !== 'none');
+    }
     const st = row.querySelector('.pt-status');
     if (st) {
       const nextCls = 'pt-status ' + (m.status || '');
@@ -161,20 +199,22 @@
       <div class="pt-card-top">
         <span class="pt-card-title"></span>
         <span class="pt-count"></span>
+        <button class="pt-iconbtn pt-add-member-btn" type="button" title="เลือกสมาชิกเข้าตี้เอง" data-act="pick-member" data-party="${esc(p.id)}">➕</button>
         <button class="pt-iconbtn" type="button" title="รวมทีม (เรียกสมาชิกมาหาหัวตี้)" data-act="summon" data-party="${esc(p.id)}">⤓</button>
         <button class="pt-iconbtn danger" type="button" title="ยุบตี้" data-act="delete" data-party="${esc(p.id)}">🗑</button>
       </div>
       <div class="pt-leader-box"></div>
-      <button class="pt-expand-bar" type="button" data-act="toggle-members" data-party="${esc(p.id)}" aria-expanded="false">
+      <button class="pt-expand-bar" type="button" data-act="toggle-members" data-party="${esc(p.id)}" aria-expanded="true">
         <span class="pt-expand-summary"></span>
         <span class="pt-expand-label"></span>
       </button>
-      <div class="pt-members-wrap" hidden>
+      <div class="pt-members-wrap">
         <div class="pt-members"></div>
-        <div class="pt-row pt-slot" hidden>
+        <button class="pt-row pt-slot" type="button" data-act="pick-member" data-party="${esc(p.id)}" hidden>
           <div class="pt-ava">+</div>
           <div class="pt-who pt-slot-text"></div>
-        </div>
+          <span class="pt-slot-cta">+ เลือกคนเข้าตี้</span>
+        </button>
       </div>
       <div class="pt-modes">
         <div class="pt-field"><label for="pt-exp-${esc(p.id)}">โหมด EXP</label>
@@ -195,7 +235,7 @@
     const full = p.count >= p.max;
     const slots = Math.max(0, p.max - p.count);
     const evenBlocked = p.inGame && p.inGame.evenShareAllowed === false;
-    const isExpanded = expandedParties.has(String(p.id));
+    const isExpanded = !collapsedParties.has(String(p.id));
 
     setText(cardEl.querySelector('.pt-card-title'), 'ตี้ ' + p.index);
     const cnt = cardEl.querySelector('.pt-count');
@@ -204,6 +244,10 @@
       if (cnt.className !== nextCls) cnt.className = nextCls;
       setText(cnt, p.count + '/' + p.max);
     }
+    const addMemberBtn = cardEl.querySelector('.pt-add-member-btn');
+    if (addMemberBtn) {
+      addMemberBtn.hidden = full;
+    }
 
     // Leader row (always visible)
     const leaderBox = cardEl.querySelector('.pt-leader-box');
@@ -211,10 +255,10 @@
       let leaderRow = leaderBox.firstElementChild;
       const leaderKey = 'leader:' + p.leader.id;
       if (leaderRow && leaderRow.dataset && leaderRow.dataset.rowKey === leaderKey) {
-        patchMemberRowEl(leaderRow, p.leader, p.id, true);
+        patchMemberRowEl(leaderRow, p.leader, p, true);
       } else {
         leaderBox.innerHTML = '';
-        leaderBox.appendChild(createMemberRowEl(p.leader, p.id, true));
+        leaderBox.appendChild(createMemberRowEl(p.leader, p, true));
       }
     }
 
@@ -255,10 +299,10 @@
         const key = 'member:' + m.id;
         let row = existingByKey.get(key);
         if (row) {
-          patchMemberRowEl(row, m, p.id, isLeader);
+          patchMemberRowEl(row, m, p, isLeader);
           existingByKey.delete(key);
         } else {
-          row = createMemberRowEl(m, p.id, isLeader);
+          row = createMemberRowEl(m, p, isLeader);
         }
         return row;
       });
@@ -268,12 +312,12 @@
       });
     }
 
-    // Empty slots row
+    // Empty slots row (clickable to manually add members)
     const slotRow = cardEl.querySelector('.pt-slot');
     if (slotRow) {
       if (slots > 0) {
         slotRow.hidden = false;
-        setText(slotRow.querySelector('.pt-slot-text'), `ว่าง ${slots} ที่${p.autoFill ? ' · รอจอที่ออนไลน์และว่างอยู่มาเติมอัตโนมัติ' : ''}`);
+        setText(slotRow.querySelector('.pt-slot-text'), `ว่าง ${slots} ที่${p.autoFill ? ' · ระบบเติมอัตโนมัติ หรือคลิกเพื่อเลือกเอง' : ' · คลิกเพื่อเลือกสมาชิกเข้าตี้'}`);
       } else {
         slotRow.hidden = true;
       }
@@ -355,12 +399,17 @@
     if (picker && !picker.hidden) renderPicker();
   }
 
-  function openPicker() {
+  function openPicker(opts) {
+    pickerState = Object.assign({ mode: 'leader', partyId: null }, opts || {});
     const pk = document.getElementById('pt-picker');
     pk.hidden = false;
     const s = document.getElementById('pt-search'); s.value = ''; renderPicker(); setTimeout(() => s.focus(), 50);
   }
-  function closePicker() { const pk = document.getElementById('pt-picker'); if (pk) pk.hidden = true; }
+  function closePicker() {
+    const pk = document.getElementById('pt-picker');
+    if (pk) pk.hidden = true;
+    pickerState = { mode: 'leader', partyId: null };
+  }
 
   function createPickBtn(c) {
     const btn = document.createElement('button');
@@ -372,7 +421,7 @@
         <div class="pt-name"><span class="pt-name-txt"></span><span class="pt-lv" hidden></span></div>
         <div class="pt-sub"></div>
       </div>
-      <span class="pt-go">เลือก →</span>`;
+      <span class="pt-go"></span>`;
     patchPickBtn(btn, c);
     return btn;
   }
@@ -404,14 +453,35 @@
       c.planPending ? 'แผนยังเก็บเลเวล (' + c.planPending + ')' : null
     ].filter(Boolean).join(' · ');
     setText(btn.querySelector('.pt-sub'), sub);
+    setText(btn.querySelector('.pt-go'), pickerState.mode === 'member' ? '+ เพิ่มเข้าตี้' : 'เลือก →');
   }
 
   function renderPicker() {
+    const titleEl = document.getElementById('pt-picker-title');
+    const targetParty = pickerState.mode === 'member' && pickerState.partyId
+      ? data.parties.find(p => String(p.id) === String(pickerState.partyId))
+      : null;
+    if (titleEl) {
+      if (targetParty) {
+        const slots = Math.max(0, (targetParty.max || 6) - targetParty.count);
+        setText(titleEl, `เพิ่มสมาชิกเข้าตี้ ${targetParty.index} (ว่าง ${slots} ที่)`);
+      } else {
+        setText(titleEl, 'เลือกหัวตี้');
+      }
+    }
+    const leaderLv = targetParty && targetParty.leader && typeof targetParty.leader.level === 'number' ? targetParty.leader.level : null;
     const q = (document.getElementById('pt-search').value || '').trim().toLowerCase();
     const list = data.clients
       .filter(c => !c.assigned)
       .filter(c => !q || String(c.name).toLowerCase().includes(q) || String(c.charName || '').toLowerCase().includes(q))
-      .sort((a, b) => (b.online - a.online) || ((b.level || 0) - (a.level || 0)) || String(a.name).localeCompare(String(b.name)));
+      .sort((a, b) => {
+        if (b.online !== a.online) return b.online - a.online;
+        if (leaderLv != null && typeof a.level === 'number' && typeof b.level === 'number') {
+          const da = Math.abs(a.level - leaderLv), db = Math.abs(b.level - leaderLv);
+          if (da !== db) return da - db;
+        }
+        return ((b.level || 0) - (a.level || 0)) || String(a.name).localeCompare(String(b.name));
+      });
     const el = document.getElementById('pt-pick-list');
     if (!el) return;
 
@@ -452,13 +522,42 @@
     } finally { busy = false; }
   }
 
-  async function onChange(e) {
-    const t = e.target; if (!t.dataset.set) return;
-    const v = t.type === 'checkbox' ? t.checked : t.value;
+  async function addMemberToParty(partyId, profileId) {
     busy = true;
     try {
-      const r = await api('/' + encodeURIComponent(t.dataset.party) + '/settings', { [t.dataset.set]: v });
+      collapsedParties.delete(String(partyId));
+      const r = await api('/' + encodeURIComponent(partyId) + '/add-member', { profileId });
+      if (r.success === false) {
+        toast(r.error || 'เพิ่มสมาชิกไม่สำเร็จ', 'error');
+        return;
+      }
+      const updatedParty = (data.parties || []).find(p => String(p.id) === String(partyId));
+      const freeLeft = (data.clients || []).some(c => !c.assigned);
+      toast('เพิ่มสมาชิกเข้าตี้แล้ว กำลังชวนในเกม', 'success');
+      if (!updatedParty || updatedParty.count >= updatedParty.max || !freeLeft) {
+        closePicker();
+      } else {
+        renderPicker();
+      }
+    } finally { busy = false; }
+  }
+
+  async function onChange(e) {
+    const t = e.target; if (!t.dataset.set) return;
+    busy = true;
+    try {
+      let payload;
+      if (t.dataset.set === 'memberFollow') {
+        payload = { memberFollow: { profileId: t.dataset.member, mode: t.value } };
+      } else {
+        const v = t.type === 'checkbox' ? t.checked : t.value;
+        payload = { [t.dataset.set]: v };
+      }
+      const r = await api('/' + encodeURIComponent(t.dataset.party) + '/settings', payload);
       if (r.success === false) toast(r.error || 'บันทึกไม่สำเร็จ', 'error');
+      else if (t.dataset.set === 'memberFollow') {
+        toast(t.value === 'none' ? 'เปลี่ยนเป็นโหมดแยกตีอิสระแล้ว' : 'ตั้งค่าโหมดเดินตามแล้ว', 'success');
+      }
     } finally { busy = false; t.blur(); }
   }
 
@@ -467,19 +566,24 @@
     const rawPid = String(b.dataset.party || '');
     const pid = encodeURIComponent(rawPid);
     if (b.dataset.act === 'toggle-members') {
-      if (expandedParties.has(rawPid)) expandedParties.delete(rawPid);
-      else expandedParties.add(rawPid);
+      if (collapsedParties.has(rawPid)) collapsedParties.delete(rawPid);
+      else collapsedParties.add(rawPid);
       render();
+      return;
+    }
+    if (b.dataset.act === 'pick-member') {
+      collapsedParties.delete(rawPid);
+      openPicker({ mode: 'member', partyId: rawPid });
       return;
     }
     if (b.dataset.act === 'delete') {
       if (!confirm('ยุบตี้นี้? สมาชิกทุกจอจะออกจากปาร์ตี้ในเกม')) return;
-      expandedParties.delete(rawPid);
+      collapsedParties.delete(rawPid);
       const r = await api('/' + pid + '/delete', {});
       toast(r.success === false ? (r.error || 'ยุบตี้ไม่สำเร็จ') : 'ยุบตี้แล้ว', r.success === false ? 'error' : 'success');
     } else if (b.dataset.act === 'remove') {
       const r = await api('/' + pid + '/remove-member', { profileId: b.dataset.id });
-      toast(r.success === false ? (r.error || 'เอาออกไม่สำเร็จ') : 'เอาออกจากตี้แล้ว (จะไม่ถูกเลือกเข้าตี้นี้อัตโนมัติอีก)', r.success === false ? 'error' : 'success');
+      toast(r.success === false ? (r.error || 'เอาออกไม่สำเร็จ') : 'เอาออกจากตี้แล้ว (กด + เลือกคนเข้าตี้ เพื่อดึงกลับได้ตลอด)', r.success === false ? 'error' : 'success');
     } else if (b.dataset.act === 'summon') {
       const r = await api('/' + pid + '/summon', {});
       toast(r.success === false ? (r.error || 'รวมทีมไม่สำเร็จ') : 'หัวตี้เรียกสมาชิกมารวมแล้ว', r.success === false ? 'error' : 'success');

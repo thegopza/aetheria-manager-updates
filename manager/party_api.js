@@ -1,8 +1,9 @@
 // manager/party_api.js — Party system: Manager forms in-game parties from its own clients.
 //
-//   GET  /api/parties                      → parties + live status + client list (for the leader picker)
-//   POST /api/parties                      { leaderId }            → create a party
-//   POST /api/parties/:id/settings         { expMode?, lootMode?, syncMap?, autoFill? }
+//   GET  /api/parties                      → parties + live status + client list (for the leader/member picker)
+//   POST /api/parties                      { leaderId, memberIds?, autoFill? } → create a party
+//   POST /api/parties/:id/settings         { expMode?, lootMode?, syncMap?, autoFill?, memberFollow?: { profileId, mode } }
+//   POST /api/parties/:id/add-member       { profileId, profileIds?, followMode? } → manually add member(s)
 //   POST /api/parties/:id/remove-member    { profileId }           → kick + never auto-pick again for this party
 //   POST /api/parties/:id/summon                                   → leader uses the game's "รวมทีม"
 //   POST /api/parties/:id/delete                                   → disband (members leave, then leader)
@@ -48,7 +49,8 @@ const TIMING = {
   gatherCooldownMs: 45000,
   memberMoveWaitMs: 120000,
   leaderMoveWaitMs: 45000,
-  unfollowCooldownMs: 20000
+  unfollowCooldownMs: 20000,
+  followCooldownMs: 8000
 };
 
 // ---------------------------------------------------------------- in-page snippets
@@ -189,12 +191,25 @@ const ACTIONS = {
   leave: () => sendPartyJs({ action: 'leave' }),
   kick: name => sendPartyJs({ action: 'kick', name }),
   summon: () => sendPartyJs({ action: 'summon' }),
-  // Same as pressing the game's "ยกเลิกติดตาม" chip (calls the game's own stopFollow)
-  stopFollow: () => `(() => {
-    const b = document.querySelector('.follow-chip button');
-    if (!b) return { success: false, error: 'no-follow' };
-    b.click();
+  // Engage the game's built-in follow & AUTO party assist on a party member (leader or any other member)
+  startFollow: name => `(() => {
+    const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
+    const handlers = room && room.onMessageHandlers;
+    if (!handlers || typeof handlers.emit !== 'function') return { success: false, error: 'no-follow-handler' };
+    handlers.emit('party_follow', ${JSON.stringify({ name })});
     return { success: true };
+  })()`,
+  // Same as pressing the game's "ยกเลิกติดตาม" chip (calls the game's own stopFollow), with handler fallback
+  stopFollow: () => `(() => {
+    const b = typeof document.querySelector === 'function' ? document.querySelector('.follow-chip button') : null;
+    if (b && typeof b.click === 'function') { b.click(); return { success: true }; }
+    const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
+    const handlers = room && room.onMessageHandlers;
+    if (handlers && typeof handlers.emit === 'function') {
+      handlers.emit('party_follow', { name: null });
+      return { success: true };
+    }
+    return { success: false, error: 'no-follow' };
   })()`,
   settings: patch => sendPartyJs(Object.assign({ action: 'settings' }, patch)),
   setMap: (map, walkNow) => `(() => {
@@ -272,18 +287,57 @@ function planBlocked(s) {
   return !!(s && s.plan && Array.isArray(s.plan.levelPending) && s.plan.levelPending.length);
 }
 
+function normalizeFollowMode(mode, party, memberId) {
+  if (!mode || mode === 'none') return 'none';
+  const leaderId = party && party.leaderId ? String(party.leaderId) : '';
+  if (mode === 'leader' || mode === 'member:' + leaderId) return 'leader';
+  if (typeof mode === 'string' && mode.startsWith('member:')) {
+    const targetId = mode.slice(7);
+    if (!targetId || targetId === String(memberId)) return 'none';
+    if (targetId === leaderId) return 'leader';
+    const memberIds = Array.isArray(party && party.memberIds) ? party.memberIds.map(String) : [];
+    if (memberIds.includes(targetId)) return 'member:' + targetId;
+  }
+  return 'none';
+}
+
+function sanitizeFollowModes(party) {
+  const raw = party && party.followModes && typeof party.followModes === 'object' ? party.followModes : {};
+  const out = {};
+  for (const mid of (party && party.memberIds) || []) {
+    const fm = normalizeFollowMode(raw[mid], party, mid);
+    if (fm !== 'none') out[mid] = fm;
+  }
+  return out;
+}
+
+function resolveFollowTarget(party, memberId, profiles, states) {
+  const mode = normalizeFollowMode(party && party.followModes && party.followModes[memberId], party, memberId);
+  if (mode === 'none') return { mode: 'none', targetId: null, targetName: null, targetSnap: null };
+  const targetId = mode === 'leader' ? party.leaderId : mode.slice(7);
+  const targetSnap = states ? states.get(targetId) : null;
+  const targetProfile = profiles ? profiles.get(targetId) : null;
+  const targetName = (targetSnap && targetSnap.name) || (targetProfile && targetProfile.lastCharName) || null;
+  return { mode, targetId, targetName, targetSnap };
+}
+
 function sanitizeParty(p) {
-  return {
+  const leaderId = String(p.leaderId);
+  const memberIds = Array.isArray(p.memberIds) ? p.memberIds.map(String).filter(id => id && id !== leaderId).slice(0, MAX_MEMBERS - 1) : [];
+  const base = {
     id: String(p.id),
-    leaderId: String(p.leaderId),
-    memberIds: Array.isArray(p.memberIds) ? p.memberIds.map(String).slice(0, MAX_MEMBERS - 1) : [],
+    leaderId,
+    memberIds,
     excludedIds: Array.isArray(p.excludedIds) ? p.excludedIds.map(String) : [],
     expMode: EXP_MODES.includes(p.expMode) ? p.expMode : 'even-share',
     lootMode: LOOT_MODES.includes(p.lootMode) ? p.lootMode : 'personal',
     syncMap: p.syncMap !== false,
     autoFill: p.autoFill !== false,
+    followModes: {},
     createdAt: Number(p.createdAt) || Date.now()
   };
+  base.followModes = sanitizeFollowModes(Object.assign({}, base, { followModes: p.followModes }));
+  return base;
 }
 
 // After a CH / map change the game joins a new room and may keep the old party object in its store even
@@ -417,6 +471,7 @@ function createPartyService(opts) {
     }
 
     // Drop members that have been offline / disconnected or stuck in another party so autoFill can pull free clients
+    // (When autoFill is off, keep manually chosen members in the party until the user removes them)
     const inGameMembersMap = new Map();
     if (L.party && Array.isArray(L.party.members)) {
       for (const gm of L.party.members) if (gm && gm.name) inGameMembersMap.set(gm.name, gm);
@@ -429,11 +484,11 @@ function createPartyService(opts) {
       const gm = charName ? inGameMembersMap.get(charName) : null;
       const isOnlineNow = Boolean(s && s.ok && s.name && (!gm || gm.online !== false));
       if (isOnlineNow) m.seenAt = now();
-      if (now() - m.seenAt >= T.dropOfflineAfterMs) {
+      if (party.autoFill && now() - m.seenAt >= T.dropOfflineAfterMs) {
         notes.push('ปลดสมาชิกที่ออฟไลน์นาน: ' + (charName || profiles.get(id).name || id));
         continue;
       }
-      if (s && s.ok && s.name && s.party && s.party.leader !== L.name) {
+      if (party.autoFill && s && s.ok && s.name && s.party && s.party.leader !== L.name) {
         if (!m.otherPartySince) m.otherPartySince = now();
         if ((m.leaveAttempts || 0) >= 2 || now() - m.otherPartySince >= (T.dropOtherPartyAfterMs || 45000)) {
           tempExcluded.set(party.id + ':' + id, now() + T.excludeAfterFailMs);
@@ -448,6 +503,7 @@ function createPartyService(opts) {
     }
     let changed = keep.length !== party.memberIds.length;
     party.memberIds = keep;
+    if (changed) party.followModes = sanitizeFollowModes(party);
 
     if (L.party && L.party.leader === L.name && Array.isArray(L.party.members)) {
       const assignedBefore = new Set(party.memberIds.map(id => (states.get(id) && states.get(id).name) || (profiles.get(id) && profiles.get(id).lastCharName)).filter(Boolean));
@@ -512,12 +568,16 @@ function createPartyService(opts) {
       if (!isLeader || partyFull) continue;
       if (now() - m.inviteAt < T.inviteCooldownMs) continue;
       if (m.inviteAttempts >= T.inviteMaxAttempts) {
-        tempExcluded.set(party.id + ':' + id, now() + T.excludeAfterFailMs);
-        party.memberIds = party.memberIds.filter(x => x !== id);
+        if (party.autoFill) {
+          tempExcluded.set(party.id + ':' + id, now() + T.excludeAfterFailMs);
+          party.memberIds = party.memberIds.filter(x => x !== id);
+          party.followModes = sanitizeFollowModes(party);
+          m.inviteAttempts = 0;
+          notes.push('ชวน ' + S.name + ' ไม่สำเร็จหลายครั้ง — สลับหาจอว่างอื่นแทน');
+          save();
+          continue;
+        }
         m.inviteAttempts = 0;
-        notes.push('ชวน ' + S.name + ' ไม่สำเร็จหลายครั้ง — สลับหาจอว่างอื่นแทน');
-        save();
-        continue;
       }
       m.inviteAt = now(); m.inviteAttempts++;
       const inv = await act(leaderP, ACTIONS.invite(S.name), 'invite');
@@ -537,15 +597,33 @@ function createPartyService(opts) {
       if (L.party.lootMode !== party.lootMode) { rt.settingsAt = now(); await act(leaderP, ACTIONS.settings({ lootMode: party.lootMode }), 'loot-mode'); }
     }
 
-    // The game's follow (after รวมทีม / ติดตามหัวหน้า) makes members walk after the leader and AUTO only assist
-    // the leader's target → everyone clumps on the leader. Cancel it so each member farms the map on its own.
+    // Per-member follow / assist mode:
+    // - 'none' (default): cancel the game's follow (e.g. after รวมทีม) so the member farms the map independently.
+    // - 'leader' or 'member:<id>': engage the game's follow on that party member so this character walks after
+    //   and AUTO-assists them whenever both are on the same map & CH.
     for (const id of party.memberIds) {
       const P = profiles.get(id), S = states.get(id), m = mrt(party.id, id);
-      if (!S || !S.ok || !S.follow || !inGame.has(S.name)) continue;
-      if (now() - (m.unfollowAt || 0) < T.unfollowCooldownMs) continue;
-      m.unfollowAt = now();
-      const r = await act(P, ACTIONS.stopFollow(), 'stop-follow');
-      if (r.ok) log('stop-follow', S.name, '(was following ' + S.follow + ')');
+      if (!S || !S.ok || !S.name || !inGame.has(S.name)) continue;
+      const ft = resolveFollowTarget(party, id, profiles, states);
+      if (ft.mode === 'none') {
+        if (!S.follow) continue;
+        if (now() - (m.unfollowAt || 0) < T.unfollowCooldownMs) continue;
+        m.unfollowAt = now();
+        const prev = S.follow;
+        const r = await act(P, ACTIONS.stopFollow(), 'stop-follow');
+        if (r.ok) { S.follow = null; log('stop-follow', S.name, '(was following ' + prev + ')'); }
+      } else {
+        if (!ft.targetName) continue;
+        if (planBlocked(S) || (S.busy && S.busy.length)) continue;
+        const TS = ft.targetSnap;
+        const sameMapAndCh = TS && TS.ok && S.mapId && S.mapId === TS.mapId && S.channel === TS.channel;
+        if (!sameMapAndCh) continue;
+        if (S.follow === ft.targetName) continue;
+        if (now() - (m.followAt || 0) < T.followCooldownMs) continue;
+        m.followAt = now();
+        const r = await act(P, ACTIONS.startFollow(ft.targetName), 'start-follow');
+        if (r.ok) { S.follow = ft.targetName; log('start-follow', S.name, '->', ft.targetName); }
+      }
     }
 
     // Same map + same CH as the leader
@@ -647,15 +725,20 @@ function createPartyService(opts) {
     } finally { ticking = false; }
   }
 
-  function memberView(partyId, id, profiles, leaderSnap) {
+  function memberView(party, id, profiles, leaderSnap) {
     const P = profiles.get(id), S = states.get(id);
     const inGame = new Set(inGameMemberNames(leaderSnap));
+    const ft = id === party.leaderId ? { mode: 'none', targetId: null, targetName: null } : resolveFollowTarget(party, id, profiles, states);
     let status = 'offline', text = 'ออฟไลน์';
     if (S && S.ok && S.name) {
       if (inGame.has(S.name)) {
         const same = leaderSnap && S.mapId === leaderSnap.mapId && S.channel === leaderSnap.channel;
         status = same ? 'joined' : 'apart';
-        text = same ? 'อยู่ด้วยกัน' : (S.mapId !== (leaderSnap && leaderSnap.mapId) ? 'กำลังไปแมพหัวตี้' : 'กำลังย้าย CH');
+        if (same && ft.mode !== 'none' && S.follow && (!ft.targetName || S.follow === ft.targetName)) {
+          text = ft.mode === 'leader' ? 'ตามหัวตี้' : ('ตาม ' + (ft.targetName || S.follow));
+        } else {
+          text = same ? 'อยู่ด้วยกัน' : (S.mapId !== (leaderSnap && leaderSnap.mapId) ? 'กำลังไปแมพหัวตี้' : 'กำลังย้าย CH');
+        }
         if (!same && planBlocked(S)) { status = 'plan'; text = 'แผนยังเก็บเลเวล (' + S.plan.levelPending[0] + ')'; }
       } else if (S.party && leaderSnap && S.party.leader !== leaderSnap.name) { status = 'other'; text = 'อยู่ตี้อื่น'; }
       else { status = 'inviting'; text = 'กำลังชวน'; }
@@ -663,6 +746,7 @@ function createPartyService(opts) {
     return {
       id, profileName: P ? P.name : id, charName: (S && S.name) || (P && P.lastCharName) || null,
       charClass: P ? P.lastCharClass || null : null, level: S && S.level, mapName: S && S.mapName, channel: S && S.channel,
+      followMode: ft.mode, followTargetId: ft.targetId, followTargetName: ft.targetName, following: (S && S.follow) || null,
       status, statusText: text
     };
   }
@@ -675,8 +759,9 @@ function createPartyService(opts) {
       const rt = prt(p.id);
       return {
         id: p.id, index: i + 1, expMode: p.expMode, lootMode: p.lootMode, syncMap: p.syncMap, autoFill: p.autoFill,
-        leader: Object.assign(memberView(p.id, p.leaderId, profiles, L), L && L.ok ? { status: 'leader', statusText: L.party && L.party.leader === L.name ? 'หัวตี้' : 'หัวตี้ (ยังไม่มีสมาชิก)' } : {}),
-        members: p.memberIds.map(id => memberView(p.id, id, profiles, L)),
+        followModes: p.followModes || {},
+        leader: Object.assign(memberView(p, p.leaderId, profiles, L), L && L.ok ? { status: 'leader', statusText: L.party && L.party.leader === L.name ? 'หัวตี้' : 'หัวตี้ (ยังไม่มีสมาชิก)' } : {}),
+        members: p.memberIds.map(id => memberView(p, id, profiles, L)),
         count: 1 + p.memberIds.length, max: MAX_MEMBERS,
         inGame: L && L.party ? { expMode: L.party.expMode, lootMode: L.party.lootMode, evenShareAllowed: L.party.evenShareAllowed, levelRange: L.party.levelRange, size: L.party.members.length } : null,
         notes: rt.notes || [], lastTickAt: rt.lastTickAt
@@ -718,12 +803,17 @@ function createPartyService(opts) {
       return true;
     }
     if (pathname === '/api/parties' && req.method === 'POST') {
-      const body = await readBody(req);
+      const body = (await readBody(req)) || {};
       const leaderId = body && String(body.leaderId || '');
       const profiles = profileMap();
+      const taken = assignedIds(parties);
       if (!leaderId || !profiles.has(leaderId)) { sendJSON({ success: false, error: 'ไม่พบจอที่เลือกเป็นหัวตี้' }, 400); return true; }
-      if (assignedIds(parties).has(leaderId)) { sendJSON({ success: false, error: 'จอนี้อยู่ในตี้อื่นแล้ว' }, 409); return true; }
+      if (taken.has(leaderId)) { sendJSON({ success: false, error: 'จอนี้อยู่ในตี้อื่นแล้ว' }, 409); return true; }
+      const initialMembers = Array.isArray(body.memberIds)
+        ? body.memberIds.map(String).filter(id => id && id !== leaderId && profiles.has(id) && !taken.has(id))
+        : [];
       const party = sanitizeParty({ id: 'party_' + now().toString(36) + Math.random().toString(36).slice(2, 6), leaderId,
+        memberIds: initialMembers, autoFill: body.autoFill, syncMap: body.syncMap, followModes: body.followModes,
         expMode: body.expMode, lootMode: body.lootMode, createdAt: now() });
       parties.push(party);
       save();
@@ -731,7 +821,7 @@ function createPartyService(opts) {
       sendJSON(Object.assign(view(), { created: party.id }));
       return true;
     }
-    const m = pathname.match(/^\/api\/parties\/([^/]+)\/(settings|remove-member|summon|delete)$/);
+    const m = pathname.match(/^\/api\/parties\/([^/]+)\/(settings|add-member|remove-member|summon|delete)$/);
     if (!m || req.method !== 'POST') return false;
     const party = parties.find(p => p.id === m[1]);
     if (!party) { sendJSON({ success: false, error: 'ไม่พบตี้นี้' }, 404); return true; }
@@ -741,20 +831,86 @@ function createPartyService(opts) {
       if (body.lootMode !== undefined) { if (!LOOT_MODES.includes(body.lootMode)) { sendJSON({ success: false, error: 'โหมดไอเทมไม่ถูกต้อง' }, 400); return true; } party.lootMode = body.lootMode; }
       if (body.syncMap !== undefined) party.syncMap = !!body.syncMap;
       if (body.autoFill !== undefined) party.autoFill = !!body.autoFill;
+      if (body.followModes && typeof body.followModes === 'object') {
+        party.followModes = Object.assign({}, party.followModes || {}, body.followModes);
+        party.followModes = sanitizeFollowModes(party);
+      }
+      if (body.memberFollow && typeof body.memberFollow === 'object') {
+        const mid = String(body.memberFollow.profileId || '');
+        if (!party.memberIds.includes(mid)) { sendJSON({ success: false, error: 'จอนี้ไม่ได้อยู่ในตี้' }, 400); return true; }
+        if (!party.followModes) party.followModes = {};
+        const fm = normalizeFollowMode(body.memberFollow.mode, party, mid);
+        if (fm === 'none') delete party.followModes[mid];
+        else party.followModes[mid] = fm;
+        party.followModes = sanitizeFollowModes(party);
+        const profiles = profileMap();
+        const P = profiles.get(mid), S = states.get(mid);
+        const mState = mrt(party.id, mid);
+        mState.unfollowAt = 0; mState.followAt = 0;
+        if (P && S && S.ok) {
+          if (fm === 'none') {
+            if (S.follow) {
+              const r = await act(P, ACTIONS.stopFollow(), 'stop-follow');
+              if (r.ok) S.follow = null;
+            }
+          } else {
+            const ft = resolveFollowTarget(party, mid, profiles, states);
+            if (ft.targetName && S.follow !== ft.targetName) {
+              const r = await act(P, ACTIONS.startFollow(ft.targetName), 'start-follow');
+              if (r.ok) S.follow = ft.targetName;
+            }
+          }
+        }
+      }
       prt(party.id).settingsAt = 0;
       save();
       setTimeout(() => tick().catch(() => {}), 50);
       sendJSON(view());
       return true;
     }
+    if (m[2] === 'add-member') {
+      const profiles = profileMap();
+      const taken = assignedIds(parties);
+      const rawIds = Array.isArray(body.profileIds) ? body.profileIds : (body.profileId ? [body.profileId] : []);
+      const ids = rawIds.map(x => String(x || '').trim()).filter(Boolean);
+      if (!ids.length) { sendJSON({ success: false, error: 'กรุณาเลือกสมาชิกที่จะเพิ่มเข้าตี้' }, 400); return true; }
+      let added = 0;
+      for (const id of ids) {
+        if (!profiles.has(id)) { if (ids.length === 1) { sendJSON({ success: false, error: 'ไม่พบจอที่เลือก' }, 400); return true; } continue; }
+        if (id === party.leaderId || party.memberIds.includes(id)) { if (ids.length === 1) { sendJSON({ success: false, error: 'จอนี้อยู่ในตี้นี้แล้ว' }, 409); return true; } continue; }
+        if (taken.has(id)) { if (ids.length === 1) { sendJSON({ success: false, error: 'จอนี้อยู่ในตี้อื่นแล้ว' }, 409); return true; } continue; }
+        if (party.memberIds.length >= MAX_MEMBERS - 1) { if (!added) { sendJSON({ success: false, error: 'ตี้นี้เต็มแล้ว (สูงสุด 6 คนรวมหัวตี้)' }, 409); return true; } break; }
+        party.excludedIds = party.excludedIds.filter(x => x !== id);
+        tempExcluded.delete(party.id + ':' + id);
+        memberRt.delete(party.id + ':' + id);
+        party.memberIds.push(id);
+        taken.add(id);
+        if (body.followMode !== undefined) {
+          if (!party.followModes) party.followModes = {};
+          const fm = normalizeFollowMode(body.followMode, party, id);
+          if (fm !== 'none') party.followModes[id] = fm;
+        }
+        added++;
+      }
+      party.followModes = sanitizeFollowModes(party);
+      save();
+      setTimeout(() => tick().catch(() => {}), 50);
+      sendJSON(Object.assign(view(), { added }));
+      return true;
+    }
     if (m[2] === 'remove-member') {
       const id = String(body.profileId || '');
       if (!party.memberIds.includes(id)) { sendJSON({ success: false, error: 'จอนี้ไม่ได้อยู่ในตี้' }, 400); return true; }
       party.memberIds = party.memberIds.filter(x => x !== id);
+      party.followModes = sanitizeFollowModes(party);
       if (!party.excludedIds.includes(id)) party.excludedIds.push(id);
       save();
       const profiles = profileMap();
       const S = states.get(id), L = states.get(party.leaderId);
+      if (S && S.ok && S.follow) {
+        const r = await act(profiles.get(id), ACTIONS.stopFollow(), 'stop-follow');
+        if (r.ok) S.follow = null;
+      }
       if (S && S.name && L && L.party && L.party.leader === L.name && inGameMemberNames(L).includes(S.name)) {
         await act(profiles.get(party.leaderId), ACTIONS.kick(S.name), 'kick');
       }
@@ -787,4 +943,4 @@ function createPartyService(opts) {
   return { handleRoute, tick, start, stop, view, _parties: () => parties, _states: () => states };
 }
 
-module.exports = { createPartyService, pickCandidates, channelTarget, assignedIds, sanitizeParty, normalizeStates, READ_JS, ACTIONS, MAX_MEMBERS };
+module.exports = { createPartyService, pickCandidates, channelTarget, assignedIds, sanitizeParty, normalizeFollowMode, sanitizeFollowModes, normalizeStates, READ_JS, ACTIONS, MAX_MEMBERS };

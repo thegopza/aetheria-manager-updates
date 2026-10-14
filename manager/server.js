@@ -2364,6 +2364,24 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/api/discord/test-topup" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => {
+      body += c;
+      if (Buffer.byteLength(body, "utf8") > 16384) req.destroy();
+    });
+    req.on("end", async () => {
+      try {
+        const data = JSON.parse(body || "{}");
+        const testResult = await discordService.testTopupNotification(data.webhookUrl, data);
+        sendJSON(testResult || { success: true });
+      } catch (e) {
+        sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
   // GET /api/captcha-stats
   if (req.method === "GET" && pathname === "/api/captcha-stats") {
     const stats = getCaptchaStats();
@@ -2529,7 +2547,30 @@ const server = http.createServer(async (req, res) => {
     req.on("end", async () => {
       try {
         const { voucherUrl } = JSON.parse(body || "{}");
+        const beforeSettings = humanCheckSolver.loadSettings();
         const result = await humanCheckSolver.redeemTrueMoneyVoucher(voucherUrl);
+        if (result && result.success && discordService && typeof discordService.notifyMeritTopup === "function") {
+          const afterSettings = humanCheckSolver.loadSettings();
+          const pointsAdded = Number(result.pointsAdded ?? result.amount ?? 0);
+          const amountBaht = Number(result.amount ?? pointsAdded ?? 0);
+          const netPoints = Number.isFinite(Number(afterSettings?.points))
+            ? Number(afterSettings.points)
+            : (Number.isFinite(Number(result.totalPoints))
+                ? Number(result.totalPoints)
+                : (Number.isSafeInteger(result.balanceUnits) ? result.balanceUnits / 100 : pointsAdded));
+          const previousPoints = Number((netPoints - pointsAdded).toFixed(2));
+          discordService.notifyMeritTopup({
+            amount: amountBaht,
+            pointsAdded,
+            previousPoints,
+            totalPoints: netPoints,
+            balanceUnits: afterSettings?.balanceUnits ?? result.balanceUnits,
+            accountId: afterSettings?.accountId || beforeSettings?.accountId || "",
+            machineHwid: afterSettings?.machineHwid || beforeSettings?.machineHwid || ""
+          }).catch(err => {
+            console.warn("[Discord] Merit top-up notification failed:", err?.message || err);
+          });
+        }
         sendJSON(result, result.success ? 200 : 400);
       } catch (e) {
         sendJSON({ success: false, message: "เกิดข้อผิดพลาดในการประมวลผล: " + e.message }, 500);

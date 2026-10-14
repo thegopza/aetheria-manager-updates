@@ -42,6 +42,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
   const DEFAULT_DISCORD_SETTINGS = {
     enabled: true,
     webhookUrl: Buffer.from('aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTU1ODg5NDY4MDg3NDQyNjM2OC9TcmlIVk1FTFpqQlZhU2YtYlpQS1NiQWpCaFByS3pabk42UWdrMUFwSW43RzkzcDZ0Wk9XRERWbXU4a2VGY1kzbjI4aQ==', 'base64').toString('utf8'),
+    topupWebhookUrl: Buffer.from('aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTU1OTk3MjE4MzYwNDg1NDk3Ny9YUGVjYjFJZEZlR1NhdmpsU3h2c0FJZ25IaHkweFU5ZWNkNDhIc24yUFF0Qnc0aXFULUlISmcwZEVCcm5ERzdjRGF4bQ==', 'base64').toString('utf8'),
     townWebhookUrl: '',
     botToken: Buffer.from('TVRVMU9Ea3dPREl6TVRRM09UTXpNamc0TkEuR2FQbUc3LldDR0ZkUTN1NzN4QnlGX0cyeTdYbGhndUxqcnp5QVJ2dF9BTXM0', 'base64').toString('utf8'),
     channelId: '1558894629728817222',
@@ -60,6 +61,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         return {
           enabled: s.enabled !== undefined ? !!s.enabled : DEFAULT_DISCORD_SETTINGS.enabled,
           webhookUrl: (typeof s.webhookUrl === 'string' && s.webhookUrl.trim()) ? s.webhookUrl.trim() : DEFAULT_DISCORD_SETTINGS.webhookUrl,
+          topupWebhookUrl: (typeof s.topupWebhookUrl === 'string' && s.topupWebhookUrl.trim()) ? s.topupWebhookUrl.trim() : DEFAULT_DISCORD_SETTINGS.topupWebhookUrl,
           townWebhookUrl: (typeof s.townWebhookUrl === 'string' && s.townWebhookUrl.trim()) ? s.townWebhookUrl.trim() : (DEFAULT_DISCORD_SETTINGS.townWebhookUrl || ''),
           botToken: (typeof s.botToken === 'string' && s.botToken.trim()) ? s.botToken.trim() : DEFAULT_DISCORD_SETTINGS.botToken,
           channelId: (typeof s.channelId === 'string' && s.channelId.trim()) ? s.channelId.trim() : DEFAULT_DISCORD_SETTINGS.channelId,
@@ -84,6 +86,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       const updated = {
         ...current,
         ...settings,
+        topupWebhookUrl: (typeof settings.topupWebhookUrl === 'string' && settings.topupWebhookUrl.trim()) ? settings.topupWebhookUrl.trim() : (current.topupWebhookUrl || DEFAULT_DISCORD_SETTINGS.topupWebhookUrl),
         townWebhookUrl: settings.townWebhookUrl !== undefined ? String(settings.townWebhookUrl || '').trim() : current.townWebhookUrl,
         wrongChannelId: (typeof settings.wrongChannelId === 'string' && settings.wrongChannelId.trim()) ? settings.wrongChannelId.trim() : (current.wrongChannelId || DEFAULT_DISCORD_SETTINGS.wrongChannelId),
         autoAnswer: settings.autoAnswer !== false,
@@ -1944,6 +1947,200 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     );
   }
 
+  const MONK_AVATAR_URL = 'https://cdn.discordapp.com/avatars/1559972183604854977/4e0c48fa0e250e2d2b363c0e266a3115.png';
+  const MERIT_BLESSINGS = [
+    (yom) => `เจริญพร โยม **${yom}**... อาตมาขออนุโมทนาบุญในจิตศรัทธาครั้งนี้ ขออำนาจคุณพระศรีรัตนตรัยและสิ่งศักดิ์สิทธิ์ในโลก Aetheria จงดลบันดาลให้โยมปล่อยบอทไหลลื่นไม่มีสะดุด มอนสเตอร์รักใคร่ดรอปการ์ดทอง ดรอปแรร์ไอเทมรัวๆ ตีบวกติด +10 รวดเดียวผ่าน แคล้วคลาดจากคุกและแคปช่าทั้งปวง ร่ำรวยเงินทองไหลมาเทมาเทอญ สาธุ 🙏✨`,
+    (yom) => `เจริญพร โยม **${yom}**... สว่างตาด้วยแสงไฟ สว่างใจด้วยแสงธรรม การเติมส่วนบุญในครั้งนี้ ขอจงเป็นพลวปัจจัยหนุนนำให้ไอดีของโยมมีแต่ความเจริญรุ่งเรือง ฟาร์มได้ EXP พุ่งกระฉูด เงินเต็มคลัง ของเต็มตัว ขายตลาดออกไวปานสายฟ้าฟาด แคล้วคลาดปลอดภัยจากภัยพาลทั้งปวง เจริญพร 🙏🪷`,
+    (yom) => `เจริญพร โยม **${yom}**... น้ำหยดลงหินทุกวันหินยังกร่อน แต่ส่วนบุญที่โยมเติมวันนี้ หนุนนำบารมีให้ปังตั้งแต่วินาทีแรก! ขอให้ทุกจอของโยมฟาร์มหมานๆ ตีมอนสเตอร์ตัวไหนก็ดรอปของใหญ่ ตีบวกไม่รู้จักคำว่าแตก สุขภาพแข็งแรง การงานการเงินคล่องตัว รวยๆ เฮงๆ ตลอดปีเทอญ สาธุ 🙏🌟`,
+    (yom) => `เจริญพร โยม **${yom}**... อานิสงส์แห่งการเติมส่วนบุญในวันนี้ ขอจงบันดาลให้เครื่องของโยมเสถียรยิ่งกว่าหินผา เน็ตแรงไม่มีหลุด บอทเดินหาของดั่งมีตาทิพย์ ดรอปแรร์ทุกชั่วโมง ค้าขายกำไรพุ่งพูนทวี มีส่วนบุญใช้เหลือเฟือไม่ขาดมือ เจริญด้วยอายุ วรรณะ สุขะ พละ และธนสารสมบัติเทอญ สาธุ 🙏📿`,
+    (yom) => `เจริญพร โยม **${yom}**... ผู้ให้ย่อมเป็นที่รักของเทวดาและสิ่งศักดิ์สิทธิ์ ขอผลบุญกุศลที่โยมได้ร่วมทำนุบำรุงสำนัก PmheeAether จงสะท้อนกลับไปเป็นโชคลาภก้อนโต ดรอปของแรร์ชิ้นใหญ่ในเร็ววัน ตีบวกสำเร็จดังใจปรารถนา คิดหวังสิ่งใดในเกมและนอกเกมขอให้สมความมุ่งมาดปรารถนาทุกประการเทอญ สาธุ 🙏✨`,
+    (yom) => `เจริญพร โยม **${yom}**... บุญใดที่โยมได้ตั้งใจบำเพ็ญแล้วในวันนี้ ขอจงแปรเปลี่ยนเป็นพลังแห่งโชคลาภ ให้บอททุกจอของโยมวิ่งฉิวไม่มีค้าง มอนสเตอร์เกิดตรงหน้า ดรอปของแรร์เข้ากระเป๋าไม่หยุดหย่อน ร่ำรวยมั่งคั่งทั้งในโลก Aetheria และโลกความจริงเทอญ เจริญพร 🙏🏆`
+  ];
+
+  function resolveMeritTier(amountBaht) {
+    const amt = Number(amountBaht) || 0;
+    if (amt >= 500) {
+      return { badge: '👑 กองบุญเจ้าภาพอุปถัมภ์ใหญ่', color: 0xEC4899, rank: 'มหาเศรษฐีผู้ค้ำจุนสำนัก' };
+    }
+    if (amt >= 300) {
+      return { badge: '🏆 กองบุญมหากฐินสามัคคี', color: 0xA855F7, rank: 'เจ้าภาพกฐินสามัคคี' };
+    }
+    if (amt >= 100) {
+      return { badge: '✨ กองบุญผ้าป่าสามัคคี', color: 0xFBBF24, rank: 'เจ้าภาพผ้าป่ามหากุศล' };
+    }
+    if (amt >= 50) {
+      return { badge: '🪷 กองบุญสังฆทานบารมี', color: 0x10B981, rank: 'ผู้ร่วมทำบุญสังฆทาน' };
+    }
+    return { badge: '🕯️ กองบุญธูปเทียนมงคล', color: 0xF59E0B, rank: 'ผู้มีจิตศรัทธาทำบุญ' };
+  }
+
+  function formatMeritNumber(val, showPlus = false) {
+    const n = Number(val);
+    if (!Number.isFinite(n)) return '0.00';
+    const absFixed = Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (n < 0) return `-${absFixed}`;
+    if (showPlus && n > 0) return `+${absFixed}`;
+    return absFixed;
+  }
+
+  function shortenIdentifier(raw, prefixLen = 6, suffixLen = 4) {
+    const s = String(raw || '').trim();
+    if (!s) return 'ไม่ระบุ';
+    if (s.length <= prefixLen + suffixLen + 2) return s;
+    return `${s.slice(0, prefixLen)}...${s.slice(-suffixLen)}`;
+  }
+
+  function buildMeritTopupPayload(topupData = {}) {
+    const nick = (typeof topupData.deviceNickname === 'string' && topupData.deviceNickname.trim())
+      ? topupData.deviceNickname.trim()
+      : resolveDeviceNickname();
+    const amountBaht = Number(topupData.amount ?? topupData.pointsAdded ?? 0);
+    const pointsAdded = Number(topupData.pointsAdded ?? topupData.amount ?? 0);
+    const hasNet = Number.isFinite(Number(topupData.totalPoints)) || Number.isSafeInteger(topupData.balanceUnits);
+    const netPoints = Number.isFinite(Number(topupData.totalPoints))
+      ? Number(topupData.totalPoints)
+      : (Number.isSafeInteger(topupData.balanceUnits) ? topupData.balanceUnits / 100 : pointsAdded);
+    const previousPoints = Number.isFinite(Number(topupData.previousPoints))
+      ? Number(topupData.previousPoints)
+      : (hasNet ? Number((netPoints - pointsAdded).toFixed(2)) : 0);
+
+    const debtBefore = previousPoints < 0 ? Math.abs(previousPoints) : 0;
+    const debtSettled = debtBefore > 0 ? Math.min(debtBefore, Math.max(0, pointsAdded)) : 0;
+    const remainingDebt = Math.max(0, Number((debtBefore - debtSettled).toFixed(2)));
+
+    const tier = resolveMeritTier(amountBaht);
+    const nowDate = topupData.timestamp ? new Date(topupData.timestamp) : new Date();
+    const thaiDateTime = nowDate.toLocaleString('th-TH', {
+      timeZone: 'Asia/Bangkok',
+      dateStyle: 'medium',
+      timeStyle: 'medium'
+    });
+
+    const shortAccount = shortenIdentifier(topupData.accountId || solver?.loadSettings?.()?.accountId || '', 8, 4);
+    const rawHwid = topupData.machineHwid || solver?.loadSettings?.()?.machineHwid || '';
+    const shortHwid = rawHwid ? String(rawHwid).slice(0, 8).toUpperCase() : 'ไม่ระบุ';
+    const receiptRef = (topupData.receiptId || crypto.randomBytes(3).toString('hex')).toUpperCase();
+
+    const blessingIndex = Number.isInteger(topupData.blessingIndex)
+      ? Math.abs(topupData.blessingIndex) % MERIT_BLESSINGS.length
+      : Math.floor(Math.random() * MERIT_BLESSINGS.length);
+    const blessingText = MERIT_BLESSINGS[blessingIndex](nick);
+
+    const prevLineLabel = previousPoints < 0 ? 'ยอดก่อนเติม (ค้างชำระ)' : 'ยอดส่วนบุญก่อนเติม  ';
+    const debtLineValue = debtSettled > 0
+      ? `-${formatMeritNumber(debtSettled)} ส่วนบุญ ${remainingDebt > 0 ? `(คงค้าง -${formatMeritNumber(remainingDebt)})` : '(ปลดหนี้ครบ ✅)'}`
+      : '0.00 ส่วนบุญ (ไม่มีหนี้ค้าง)';
+
+    const ledgerBox = [
+      '```yaml',
+      `${prevLineLabel} : ${ formatMeritNumber(previousPoints).padStart(10, ' ') } ส่วนบุญ`,
+      `ส่วนบุญที่เติมเพิ่ม    : ${ formatMeritNumber(pointsAdded, true).padStart(10, ' ') } ส่วนบุญ`,
+      `หักชำระหนี้คงค้าง    : ${ debtLineValue }`,
+      '────────────────────────────────────────────',
+      `ยอดส่วนบุญคงเหลือสุทธิ : ${ formatMeritNumber(netPoints).padStart(10, ' ') } ส่วนบุญ`,
+      '```'
+    ].join('\n');
+
+    const netStatusLine = netPoints >= 0
+      ? `💰 **ยอดสุทธิพร้อมใช้งาน:** 🟢 **\`${formatMeritNumber(netPoints)} ส่วนบุญ\`** *(บัญชีสถานะปกติ)*`
+      : `💰 **ยอดสุทธิหลังหักลดหนี้:** 🟡 **\`${formatMeritNumber(netPoints)} ส่วนบุญ\`** *(ยังมียอดค้างชำระ)*`;
+
+    const isTest = Boolean(topupData.isTest);
+    const titlePrefix = isTest ? '🧪 [ทดสอบ] ' : '';
+
+    const embed = {
+      author: {
+        name: '🏛️ สำนักวัดป่า PmheeAether · ใบอนุโมทนาบัตรดิจิทัล',
+        icon_url: MONK_AVATAR_URL
+      },
+      title: `${titlePrefix}🧧 อนุโมทนาบุญ! เติมส่วนบุญสำเร็จ (+${formatMeritNumber(amountBaht)} บาท)`,
+      description: [
+        `> 🧘 **ผู้มีจิตศรัทธา:** โยม **\`${nick}\`** *(${tier.rank})*`,
+        `> 🏷️ **ระดับกองบุญ:** **${tier.badge}**`,
+        `> 🕒 **เวลาทำรายการ:** \`${thaiDateTime}\``
+      ].join('\n'),
+      color: tier.color,
+      thumbnail: { url: MONK_AVATAR_URL },
+      fields: [
+        {
+          name: '👤 ข้อมูลผู้ร่วมทำบุญ',
+          value: [
+            `💻 **เครื่อง:** \`${nick}\``,
+            `🆔 **บัญชี:** \`${shortAccount}\``,
+            `🔑 **HWID:** \`${shortHwid}\``
+          ].join('\n'),
+          inline: true
+        },
+        {
+          name: '🧧 รายการทำบุญ',
+          value: [
+            `💵 **ยอดเงิน:** **\`+${formatMeritNumber(amountBaht)} บาท\`**`,
+            `✨ **ส่วนบุญที่ได้:** **\`+${formatMeritNumber(pointsAdded)} ส่วนบุญ\`**`,
+            `📡 **ช่องทาง:** \`ซองของขวัญ TrueMoney\``
+          ].join('\n'),
+          inline: true
+        },
+        {
+          name: '📊 สรุปยอดส่วนบุญในบัญชี (Account Merit Summary)',
+          value: `${ledgerBox}\n${netStatusLine}`,
+          inline: false
+        },
+        {
+          name: '📿 พรจากเณรอัลเบิร์ต (Monk Blessing)',
+          value: `>>> 🗣️ *"${blessingText}"*`,
+          inline: false
+        }
+      ],
+      footer: {
+        text: `🙏 สำนัก PmheeAether · ใบอนุโมทนาบัตร #${receiptRef} · สาธุอนุโมทนามิ`,
+        icon_url: MONK_AVATAR_URL
+      },
+      timestamp: nowDate.toISOString()
+    };
+
+    return {
+      content: `${titlePrefix}🔔 **เจริญพร! โยม \`${nick}\` ร่วมทำบุญเติมส่วนบุญ \`+${formatMeritNumber(amountBaht)} บาท\` (\`+${formatMeritNumber(pointsAdded)} ส่วนบุญ\`)** 🙏✨`,
+      allowed_mentions: { parse: [] },
+      embeds: [embed]
+    };
+  }
+
+  async function notifyMeritTopup(topupData = {}, options = {}) {
+    const isNodeTest = !!(process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test');
+    if (isNodeTest && !options.allowInTest && !options.webhookUrl) {
+      return { success: true, skippedInTest: true, payload: buildMeritTopupPayload(topupData) };
+    }
+    const cfg = loadSettings();
+    const targetUrl = (typeof options.webhookUrl === 'string' && options.webhookUrl.trim())
+      ? options.webhookUrl.trim()
+      : (cfg.topupWebhookUrl || DEFAULT_DISCORD_SETTINGS.topupWebhookUrl);
+    if (!targetUrl) {
+      return { success: false, error: 'ไม่ได้ตั้งค่า Top-up Webhook URL' };
+    }
+    const payload = buildMeritTopupPayload(topupData);
+    return await discordRequest(targetUrl, 'POST', payload);
+  }
+
+  async function testTopupNotification(targetWebhookUrl, sampleData = {}) {
+    const settings = solver?.loadSettings?.() || {};
+    const currentPoints = Number.isFinite(Number(settings.points)) ? Number(settings.points) : 50;
+    const sampleAmount = Number(sampleData.amount ?? 100);
+    const sampleAdded = Number(sampleData.pointsAdded ?? sampleAmount);
+    return await notifyMeritTopup({
+      isTest: sampleData.isTest !== undefined ? Boolean(sampleData.isTest) : false,
+      deviceNickname: sampleData.deviceNickname || resolveDeviceNickname(),
+      accountId: sampleData.accountId || settings.accountId || 'acc_pmhee_merit',
+      machineHwid: sampleData.machineHwid || settings.machineHwid || '',
+      previousPoints: sampleData.previousPoints !== undefined ? Number(sampleData.previousPoints) : currentPoints,
+      amount: sampleAmount,
+      pointsAdded: sampleAdded,
+      totalPoints: sampleData.totalPoints !== undefined ? Number(sampleData.totalPoints) : Number((currentPoints + sampleAdded).toFixed(2))
+    }, {
+      webhookUrl: targetWebhookUrl,
+      allowInTest: true
+    });
+  }
+
   // Initialize gateway on startup
   syncGatewayConnection();
 
@@ -1955,6 +2152,9 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     verifyHumanCheckAnswerInGame,
     notifyHumanCheckEmergency,
     notifyUnexpectedTown,
+    notifyMeritTopup,
+    buildMeritTopupPayload,
+    testTopupNotification,
     clearHumanCheck,
     answerCheckInGame,
     testNotification,

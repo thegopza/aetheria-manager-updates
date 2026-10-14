@@ -48,6 +48,7 @@ const READ_JS = `(async () => {
   const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
   if (!room || !room.state) return { ok: false, reason: 'not-in-game' };
   let me = null; try { me = room.state.players.get(room.sessionId); } catch (e) {}
+  try { if (typeof window.getLiveCharacterData === 'function') window.getLiveCharacterData(true); } catch (e) {}
   let live = null; try { live = typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null; } catch (e) {}
   ${EXCHANGE_FETCH}
   const ex = await fetchEx();
@@ -56,7 +57,7 @@ const READ_JS = `(async () => {
   const job = (me && me.jobLevel) || (live && live.jobLv) || 0;
   const cls = String((me && me.classId) || (live && live.classId) || '').toLowerCase();
   const name = (me && me.name) || (live && live.charName) || null;
-  // Plan Script: every trigger must be passed (done, or its condition already reached and nothing left to retry)
+  // Plan Script: every trigger AND Set Gear (gearPlan.steps) must be passed
   const plan = (() => {
     const p = window.__currentScriptPlan;
     if (!window.__planScriptEnabled || !p) return null;
@@ -70,7 +71,8 @@ const READ_JS = `(async () => {
     const blocked = [];
     const trigs = p.triggers || [];
     const trigId = (t, i) => t.id || ((t.type || 'base_level') + '_' + t.targetLevel + '_' + i);
-    const gearStartIdx = (p.gearPlan && Array.isArray(p.gearPlan.steps) && p.gearPlan.steps.length)
+    const gearSteps = (p.gearPlan && Array.isArray(p.gearPlan.steps)) ? p.gearPlan.steps : [];
+    const gearStartIdx = gearSteps.length
       ? order.indexOf(String(p.gearPlan.startClass || 'novice').toLowerCase())
       : -1;
     const gearActive = gearStartIdx >= 0 && ci >= gearStartIdx;
@@ -109,10 +111,43 @@ const READ_JS = `(async () => {
       } else if (t.type === 'zeny') ok = zeny >= (Number(t.targetZeny) || 0);
       if (!ok) blocked.push(label(t));
     }
+    let gearBlocked = false;
+    if (gearSteps.length > 0) {
+      if (gearStartIdx >= 0 && ci >= 0 && ci < gearStartIdx) {
+        blocked.push('เซ็ตอุปกรณ์ (รออาชีพ ' + (p.gearPlan.startClass || '') + ')');
+        gearBlocked = true;
+      } else if (typeof window.getGearPlanStatus === 'function') {
+        const gs = window.getGearPlanStatus();
+        if (gs && gs.step) {
+          const stp = gs.step;
+          const desc = stp.kind === 'refine'
+            ? ('ตีบวก ' + stp.itemName + ' +' + stp.toLevel)
+            : stp.kind === 'card'
+              ? ('ใส่การ์ด ' + stp.cardName + ' ใน ' + stp.itemName)
+              : ('สวม ' + stp.itemName + (stp.options ? ' [' + stp.options + ']' : ''));
+          blocked.push('เซ็ตอุปกรณ์ (' + (gs.index + 1) + '/' + gs.total + '): ' + desc);
+          gearBlocked = true;
+        } else {
+          let sk = null;
+          try { sk = JSON.parse(localStorage.getItem('pelican_gear_skip_' + nm + '_' + (p.id || p.name || 'plan')) || 'null'); } catch (e) {}
+          if (sk) {
+            const wi = gearSteps.findIndex(x => x && sk[x.id] && sk[x.id].until && sk[x.id].until > Date.now());
+            if (wi >= 0) {
+              const wx = gearSteps[wi];
+              blocked.push('เซ็ตอุปกรณ์ (' + (wi + 1) + '/' + gearSteps.length + '): ' + (wx.itemName || '') + ' (รอลองใหม่)');
+              gearBlocked = true;
+            }
+          }
+        }
+      } else {
+        blocked.push('เซ็ตอุปกรณ์ (' + gearSteps.length + ' รายการ)');
+        gearBlocked = true;
+      }
+    }
     if (stateDirty && st) {
       try { localStorage.setItem('pelican_plan_state_' + nm + '_' + (p.id || p.name || 'plan'), JSON.stringify(st)); } catch (e) {}
     }
-    return { id: String(p.id || p.name || 'plan'), name: p.name || null, blocked };
+    return { id: String(p.id || p.name || 'plan'), name: p.name || null, blocked, gearBlocked };
   })();
   return {
     ok: true, name, zeny, level: base,
@@ -281,11 +316,24 @@ function createPremiumService(opts) {
     save();
   }
 
-  // Plan gate with latch: once every trigger of plan X passed, X stays open (zeny triggers flip back after buying)
+  // Non-zeny blockers (Set Gear not completed, Base/Job level not reached, pending trigger actions) must NEVER be
+  // bypassed by a latched gatePlan — only pure zeny triggers ('เงิน ... z') stay latched after buying Token lowers zeny.
+  function hasNonZenyBlock(plan) {
+    if (!plan) return false;
+    if (plan.gearBlocked) return true;
+    const blocked = Array.isArray(plan.blocked) ? plan.blocked : [];
+    return blocked.some(b => !/^เงิน\s[\d,]+\s*z$/.test(String(b || '').trim()));
+  }
+
+  // Plan gate with latch: once every trigger AND Set Gear of plan X passed, X stays open (zeny triggers flip back after buying)
   function gateOpen(id, snap) {
     if (!snap || !snap.ok) return false;
     const c = cl(id);
     if (!snap.plan) return true;
+    if (hasNonZenyBlock(snap.plan)) {
+      if (c.gatePlan && c.gatePlan === snap.plan.id) { c.gatePlan = null; save(); }
+      return false;
+    }
     if (c.gatePlan && c.gatePlan === snap.plan.id) return true;
     if (!snap.plan.blocked || !snap.plan.blocked.length) { c.gatePlan = snap.plan.id; save(); return true; }
     return false;
@@ -353,7 +401,7 @@ function createPremiumService(opts) {
           tokens: ex ? ex.tokens : null, premiumUntil: ex ? toMs(ex.premiumUntil) || null : null,
           target: d && d.target != null ? d.target : null, cost: d && d.plan ? d.plan.tokens : null,
           status: d ? d.action : (c.enabled ? 'pending' : 'off'), statusText: d ? d.text : (c.enabled ? 'รอรอบตรวจถัดไป' : 'ปิดอยู่'),
-          planName: s && s.plan ? s.plan.name : null, planBlocked: s && s.plan && !(c.gatePlan && c.gatePlan === s.plan.id) ? s.plan.blocked : [],
+          planName: s && s.plan ? s.plan.name : null, planBlocked: s && s.plan && !(c.gatePlan && c.gatePlan === s.plan.id && !hasNonZenyBlock(s.plan)) ? s.plan.blocked : [],
           lastError: R.lastError || null, checkedAt: R.at || null, history: (c.history || []).slice(0, 5)
         };
       })
@@ -394,6 +442,8 @@ function createPremiumService(opts) {
     if (timer) return;
     timer = setInterval(() => tick().catch(e => log('tick failed', e.message)), T.tickMs);
     if (timer.unref) timer.unref();
+    const initTimer = setTimeout(() => { if (timer) tick().catch(e => log('tick failed', e.message)); }, 3000);
+    if (initTimer.unref) initTimer.unref();
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "d0672a40e69ac5d7a8ee08474b7bb16f2f3ac4f6",
+  "sourceCommit": "6e4375ea06150ea4f1ec5280cc6aa1149e1196b6",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -104,7 +104,7 @@
     },
     {
       "path": "manager/premium_api.js",
-      "sha256": "c3a541b368d81385190e9d7dfd75c82fa0e596bc9b5dcf3d86c920496a5a5c72"
+      "sha256": "2478f7ae0c4dfa0c4c6d53719cd548c807485908d79f7fc4eb0e5c6c83757450"
     },
     {
       "path": "manager/guild_api.js",
@@ -112,11 +112,11 @@
     },
     {
       "path": "manager/proxy_register.js",
-      "sha256": "f8f3b31749de1dfb7897e9968eda3d79a7fca53fe17042ec5e17c1c4fe806f65"
+      "sha256": "9f0598ae1866a74c8910d060211cae3f1eb997d59df8530efcc54101e13b359c"
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "23ee8a69d95e93761f675acf3a489c3bd1df890cb28f37c97ef6033a45ddfa75"
+      "sha256": "30316d7dfd3c4178fd871374bcdfa4c53dff564d17ce7b3f0681ce8a819b5f5c"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -156,7 +156,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "13a4afc155ee952b65cfa059fa6cc738d0797cf6409317405090a21cac24962f"
+      "sha256": "5f7bf3993c9ac0ed55e1e753d63a8216266fb77ec1c21cbf0ad4a976916a4bdc"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -232,7 +232,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "ed90c7b0c800b69a58cd7f99bcdb0e7eb0ae22ec584dfb07eb29c7a1b93c83bc"
+      "sha256": "34dbabec017abfd45fd394cd721270493464508464e58143df69b7ff650249d3"
     },
     {
       "path": "manager/test_isolation.js",

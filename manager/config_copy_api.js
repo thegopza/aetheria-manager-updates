@@ -21,8 +21,16 @@ const IMPORT_JS = config => `(() => {
   try {
     if (window.__autoMarketSellConfig) localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig));
     if (window.__marketFilterConfig) localStorage.setItem('pelican_market_filter_cfg', JSON.stringify(window.__marketFilterConfig));
+    if (window.__planScriptEnabled && window.__currentScriptPlan && typeof window.planMapForNow === 'function') {
+      localStorage.removeItem('pelican_plan_manual_map');
+      const planMap = window.planMapForNow();
+      if (planMap && !/เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน/.test(window.__targetFarmMap || '')) {
+        if (typeof window.setTargetFarmMap === 'function') window.setTargetFarmMap(planMap, Boolean(window.__isBotRunning));
+        else window.__targetFarmMap = planMap;
+      }
+    }
   } catch (e) {}
-  return r || { success: true };
+  return Object.assign({}, r || { success: true }, { effectiveTargetMap: window.__targetFarmMap || null });
 })()`;
 
 function readBody(req) {
@@ -73,7 +81,9 @@ async function handleConfigCopyRoute(req, res, pathname, ctx) {
     results.push({ id, name: target.name, success: ok, error: ok ? null : (r && r.result && r.result.error) || (r && r.error) || 'จอนี้ออฟไลน์หรือไม่ตอบสนอง' });
     if (ok) {
       // Keep the Manager's own record in step (card map label, whitelist fallback)
-      if (config.targetMap) target.targetMap = config.targetMap;
+      const effMap = r && r.result && r.result.effectiveTargetMap;
+      if (effMap && !/เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน/.test(effMap)) target.targetMap = effMap;
+      else if (config.targetMap) target.targetMap = config.targetMap;
       if (config.sellConfig && typeof config.sellConfig.whitelist === 'string') {
         target.whitelist = config.sellConfig.whitelist;
         target.sellConfig = Object.assign({}, target.sellConfig || {}, { whitelist: config.sellConfig.whitelist });

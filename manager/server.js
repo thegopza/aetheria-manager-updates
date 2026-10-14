@@ -5128,14 +5128,30 @@ public class PmFocus {
           if (profile.debugPort) {
             const codeToRun = `(() => {
               if (typeof window.importAllBotSettings === 'function') {
-                return window.importAllBotSettings(${JSON.stringify(presetConfig)});
+                const res = window.importAllBotSettings(${JSON.stringify(presetConfig)});
+                try {
+                  if (window.__planScriptEnabled && window.__currentScriptPlan && typeof window.planMapForNow === 'function') {
+                    localStorage.removeItem('pelican_plan_manual_map');
+                    const planMap = window.planMapForNow();
+                    if (planMap && !/เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน/.test(window.__targetFarmMap || '')) {
+                      if (typeof window.setTargetFarmMap === 'function') window.setTargetFarmMap(planMap, Boolean(window.__isBotRunning));
+                      else window.__targetFarmMap = planMap;
+                    }
+                  }
+                } catch (e) {}
+                return Object.assign({}, res, { effectiveTargetMap: window.__targetFarmMap || null });
               } else {
                 return { success: false, error: 'importAllBotSettings not ready' };
               }
             })()`;
 
             const r = await evalProfilePort(profile.debugPort, codeToRun, 8000);
-            if (r && r.success && r.result && r.result.success) appliedProfiles.push(profile.name || profile.id);
+            if (r && r.success && r.result && r.result.success) {
+              if (r.result.effectiveTargetMap && !/เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน/.test(r.result.effectiveTargetMap)) {
+                profile.targetMap = r.result.effectiveTargetMap;
+              }
+              appliedProfiles.push(profile.name || profile.id);
+            }
             else failedProfiles.push(`${profile.name || profile.id} (${(r && r.result && r.result.error) || (r && r.error) || 'จอออฟไลน์'})`);
           } else {
             failedProfiles.push(`${profile.name || profile.id} (จอออฟไลน์)`);

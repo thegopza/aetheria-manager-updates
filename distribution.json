@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "6e4375ea06150ea4f1ec5280cc6aa1149e1196b6",
+  "sourceCommit": "ceafe679f2f380a0766ee858cdd31047a9251580",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -20,7 +20,7 @@
     },
     {
       "path": "manager/config_copy_api.js",
-      "sha256": "ebcde532a02fe560ba12a750de6f1ecce231ec1cfb20f8b630e4c2c3f969fa09"
+      "sha256": "8971efee4d387e83475a2304e750c443caec648c22606884fac7e8c633283af9"
     },
     {
       "path": "manager/coordinated_coordinator.js",
@@ -128,7 +128,7 @@
     },
     {
       "path": "manager/public/builder_module.js",
-      "sha256": "3832f2310dce46dc416a52efdffe8a6a2e45d44b75e8366a9676118a5b5111ba"
+      "sha256": "6b1fac2bbbf4367cdd4206061e2993186c0f822398c3370852955748dc0f48f8"
     },
     {
       "path": "manager/public/config_copy.js",
@@ -136,7 +136,7 @@
     },
     {
       "path": "manager/public/game-classes.json",
-      "sha256": "f8696735926d1c7cb460c67159f5bd09130221a9d2a566c22a81b7edaaaa5969"
+      "sha256": "10cfc93b9b6dd98aa95546adf228effd726e25752cbf593ea0a3520a9bc1a789"
     },
     {
       "path": "manager/public/gear_builder.js",
@@ -156,7 +156,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "5f7bf3993c9ac0ed55e1e753d63a8216266fb77ec1c21cbf0ad4a976916a4bdc"
+      "sha256": "54b3857e08c2d7f7f50e55fc435ebdf4d41c09667f6c967e7d9363fac044c645"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -232,7 +232,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "34dbabec017abfd45fd394cd721270493464508464e58143df69b7ff650249d3"
+      "sha256": "eeb45bb445c4d98c112a03209beeabe715459227a0ead186d46228c85bee72b7"
     },
     {
       "path": "manager/test_isolation.js",

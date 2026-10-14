@@ -835,6 +835,407 @@ function evalProfilePort(port, code, timeoutMs = 8000) {
   });
 }
 
+const profileClientActionQueues = new Map();
+function enqueueProfileClientAction(profileId, taskFn) {
+  const key = String(profileId || '');
+  const prev = profileClientActionQueues.get(key) || Promise.resolve();
+  const next = prev.catch(() => {}).then(() => taskFn());
+  profileClientActionQueues.set(key, next.finally(() => {
+    if (profileClientActionQueues.get(key) === next) {
+      profileClientActionQueues.delete(key);
+    }
+  }));
+  return next;
+}
+
+function buildClientActionEvalCode(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  if (payload.type === 'set-farm-map') {
+    return `(() => {
+      const map = ${JSON.stringify(payload.map)};
+      if (typeof window.clearSafeMap === 'function') window.clearSafeMap('เลือกแมพจาก Manager');
+      window.__targetFarmMap = map;
+      try { localStorage.setItem('pelican_farm_map', map); } catch(e){}
+      const mapSelect = document.getElementById('p-target-map-select');
+      if (mapSelect) mapSelect.value = map;
+      if (typeof window.rememberFarmMap === 'function') window.rememberFarmMap(map);
+      if (window.__planScriptEnabled && typeof window.setPlanManualMap === 'function') window.setPlanManualMap(map);
+      if (typeof window.setTargetFarmMap === 'function') window.setTargetFarmMap(map);
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'toggle-auto-loop') {
+    return `(() => {
+      const en = ${Boolean(payload.enabled)};
+      window.__autoLoopEnabled = en;
+      try { localStorage.setItem('pelican_auto_loop', String(en)); } catch(e){}
+      const loopCb = document.getElementById('p-auto-loop');
+      if (loopCb) loopCb.checked = en;
+      if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true, autoLoopEnabled: en };
+    })()`;
+  } else if (payload.type === 'toggle-plan-script') {
+    return `(() => {
+      const en = ${Boolean(payload.enabled)};
+      window.__planScriptEnabled = en;
+      try { localStorage.setItem('pelican_plan_script_enabled', String(en)); } catch(e){}
+      const planCb = document.getElementById('p-plan-script-enabled');
+      if (planCb) planCb.checked = en;
+      if (en) {
+        if (typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings();
+        if (typeof window.autoConfigureCombat === 'function') window.autoConfigureCombat();
+      }
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true, planScriptEnabled: en };
+    })()`;
+  } else if (payload.type === 'update-travel') {
+    return `(() => {
+      if (!window.__travelConfig) window.__travelConfig = {};
+      const minZ = Math.max(0, parseInt(${JSON.stringify(payload.minZenyForWarp)}, 10) || 0);
+      window.__travelConfig.minZenyForWarp = minZ;
+      try { localStorage.setItem('pelican_travel_cfg', JSON.stringify(window.__travelConfig)); } catch(e){}
+      if (typeof window.saveTravelConfig === 'function') window.saveTravelConfig();
+      const inp = document.getElementById('p-warp-min-zeny');
+      if (inp) inp.value = String(minZ);
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true, minZenyForWarp: minZ };
+    })()`;
+  } else if (payload.type === 'toggle-unexpected-town-guard') {
+    return `(() => {
+      const en = ${Boolean(payload.enabled)};
+      window.__unexpectedTownGuardEnabled = en;
+      try { localStorage.setItem('pelican_unexpected_town_guard', String(en)); } catch(e){}
+      const cb = document.getElementById('p-unexpected-town-guard');
+      if (cb) cb.checked = en;
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true, enabled: en };
+    })()`;
+  } else if (payload.type === 'skip-unexpected-wait') {
+    return `(() => {
+      if (typeof window.skipUnexpectedTownWait === 'function') window.skipUnexpectedTownWait();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'update-humanize') {
+    return `(() => {
+      if (!window.__humanizeConfig) window.__humanizeConfig = {};
+      const patch = ${JSON.stringify(payload.config || {})};
+      Object.assign(window.__humanizeConfig, patch);
+      if (patch.chance !== undefined) window.__humanizeConfig.chancePercent = Number(patch.chance);
+      if (patch.chancePercent !== undefined) window.__humanizeConfig.chance = Number(patch.chancePercent);
+      if (patch.buyBlacksmith !== undefined) window.__humanizeConfig.visitBlacksmith = !!patch.buyBlacksmith;
+      if (patch.visitBlacksmith !== undefined) window.__humanizeConfig.buyBlacksmith = !!patch.visitBlacksmith;
+      if (patch.buySundries !== undefined) window.__humanizeConfig.visitSundries = !!patch.buySundries;
+      if (patch.visitSundries !== undefined) window.__humanizeConfig.buySundries = !!patch.visitSundries;
+      if (patch.storeDeposit !== undefined) window.__humanizeConfig.openStorage = !!patch.storeDeposit;
+      if (patch.openStorage !== undefined) window.__humanizeConfig.storeDeposit = !!patch.openStorage;
+      try {
+        localStorage.setItem('pelican_humanize_cfg', JSON.stringify(window.__humanizeConfig));
+        localStorage.setItem('pelican_humanize_config', JSON.stringify(window.__humanizeConfig));
+      } catch(e){}
+      const c = window.__humanizeConfig;
+      const setCb = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.checked = !!v; };
+      if (patch.enabled !== undefined) setCb('p-humanize-enabled', c.enabled);
+      if (patch.buyBlacksmith !== undefined || patch.visitBlacksmith !== undefined) setCb('p-humanize-blacksmith', c.buyBlacksmith ?? c.visitBlacksmith);
+      if (patch.buySundries !== undefined || patch.visitSundries !== undefined) setCb('p-humanize-sundries', c.buySundries ?? c.visitSundries);
+      if (patch.randomWalk !== undefined) setCb('p-humanize-walk', c.randomWalk);
+      if (patch.storeDeposit !== undefined || patch.openStorage !== undefined) setCb('p-humanize-storage', c.storeDeposit ?? c.openStorage);
+      const chEl = document.getElementById('p-humanize-chance');
+      if (chEl && (patch.chance !== undefined || patch.chancePercent !== undefined)) chEl.value = String(c.chance ?? c.chancePercent);
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'test-humanize') {
+    return `(() => {
+      window.__isManualTestingHumanize = true;
+      if (typeof window.runHumanizeRoutine === 'function') window.runHumanizeRoutine(() => {});
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'toggle-ultra-low-spec') {
+    return `(() => {
+      const en = ${Boolean(payload.enabled)};
+      window.__ultraLowSpecEnabled = en;
+      try { localStorage.setItem('pelican_ultra_low_spec', en ? 'true' : 'false'); } catch(e){}
+      if (typeof window.setUltraLowSpecMode === 'function') window.setUltraLowSpecMode(en);
+      const cb = document.getElementById('p-ultra-low-spec');
+      if (cb) cb.checked = en;
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true, ultraLowSpecEnabled: en };
+    })()`;
+  } else if (payload.type === 'update-auto-config') {
+    return `(() => {
+      const cfg = ${JSON.stringify(payload.config || {})};
+      if (cfg.autoConfigCharEnabled !== undefined) {
+        window.__autoConfigCharEnabled = !!cfg.autoConfigCharEnabled;
+        try { localStorage.setItem('pelican_auto_config_char_enabled', String(!!cfg.autoConfigCharEnabled)); } catch(e){}
+        const el = document.getElementById('p-auto-config-char');
+        if (el) el.checked = !!cfg.autoConfigCharEnabled;
+        if (cfg.autoConfigCharEnabled && typeof window.autoConfigureCombat === 'function') window.autoConfigureCombat(true);
+      }
+      if (cfg.autoMuteDisplayEnabled !== undefined) {
+        window.__autoMuteDisplayEnabled = !!cfg.autoMuteDisplayEnabled;
+        try { localStorage.setItem('pelican_auto_mute_display_enabled', String(!!cfg.autoMuteDisplayEnabled)); } catch(e){}
+        const el = document.getElementById('p-auto-mute-display');
+        if (el) el.checked = !!cfg.autoMuteDisplayEnabled;
+        if (cfg.autoMuteDisplayEnabled && typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings(true);
+      }
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'apply-autoconfig-now') {
+    return `(async () => {
+      if (typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings(true);
+      let ok = false;
+      if (typeof window.autoConfigureCombat === 'function') ok = await window.autoConfigureCombat(true);
+      return { success: true, applied: ok };
+    })()`;
+  } else if (payload.type === 'walk-to-map') {
+    return `(() => {
+      const select = document.getElementById('p-target-map-select');
+      const targetMap = (select ? select.value : '') || window.__targetFarmMap;
+      if (typeof window.walkToTargetMap === 'function') window.walkToTargetMap(targetMap, true);
+      else if (typeof window.startWalkToTargetMap === 'function') window.startWalkToTargetMap();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'open-world-map') {
+    return `(() => {
+      if (typeof window.openWorldMap === 'function') window.openWorldMap();
+      else if (typeof window.toggleWorldMapModal === 'function') window.toggleWorldMapModal();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'update-archer') {
+    const cfg = payload.config || {};
+    return `(() => {
+      if (!window.__archerConfig) window.__archerConfig = {};
+      const patch = ${JSON.stringify(cfg)};
+      Object.assign(window.__archerConfig, patch);
+      try { localStorage.setItem('pelican_archer_cfg', JSON.stringify(window.__archerConfig)); } catch(e){}
+      const reqEl = document.getElementById('p-archer-req');
+      if (reqEl && patch.requireArrow !== undefined) reqEl.checked = !!window.__archerConfig.requireArrow;
+      const autoEqEl = document.getElementById('p-archer-auto-equip');
+      if (autoEqEl && patch.autoEquipArrow !== undefined) autoEqEl.checked = !!window.__archerConfig.autoEquipArrow;
+      const typeEl = document.getElementById('p-archer-type');
+      if (typeEl && patch.arrowType !== undefined) typeEl.value = String(window.__archerConfig.arrowType);
+      const qtyEl = document.getElementById('p-archer-qty');
+      if (qtyEl && patch.arrowBuyQty !== undefined) qtyEl.value = String(window.__archerConfig.arrowBuyQty);
+      const threshEl = document.getElementById('p-archer-threshold');
+      if (threshEl && patch.ammoThreshold !== undefined) threshEl.value = String(window.__archerConfig.ammoThreshold);
+      const bwingEl = document.getElementById('p-archer-bwing');
+      if (bwingEl && patch.useBwing !== undefined) bwingEl.checked = !!window.__archerConfig.useBwing;
+      const bwingQtyEl = document.getElementById('p-archer-bwing-qty');
+      if (bwingQtyEl && patch.bwingBuyQty !== undefined) bwingQtyEl.value = String(window.__archerConfig.bwingBuyQty);
+      if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
+      if (typeof updateAmmoHUD === 'function') updateAmmoHUD();
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'sync-ammo') {
+    return `(() => {
+      if (typeof window.syncAmmoFromDOM === 'function') window.syncAmmoFromDOM();
+      if (typeof window.updateAmmoHUD === 'function') window.updateAmmoHUD();
+      return { ammo: window.__currentAmmo };
+    })()`;
+  } else if (payload.type === 'zero-ammo') {
+    return `(() => {
+      window.__currentAmmo = 0;
+      try { localStorage.setItem('pelican_current_ammo', '0'); } catch(e){}
+      if (typeof window.updateAmmoHUD === 'function') window.updateAmmoHUD();
+      return { ammo: 0 };
+    })()`;
+  } else if (payload.type === 'update-buff-potions') {
+    const cfg = payload.config || {};
+    return `(() => {
+      if (!window.__buffPotionConfig) window.__buffPotionConfig = {};
+      const patch = ${JSON.stringify(cfg)};
+      for (const k of Object.keys(patch)) {
+        if (patch[k] && typeof patch[k] === 'object') {
+          window.__buffPotionConfig[k] = Object.assign({}, window.__buffPotionConfig[k] || {}, patch[k]);
+          const pCfg = window.__buffPotionConfig[k];
+          const enEl = document.getElementById('p-potion-enable-' + k);
+          if (enEl && pCfg.enabled !== undefined) enEl.checked = !!pCfg.enabled;
+          const qtyEl = document.getElementById('p-potion-qty-' + k);
+          if (qtyEl && pCfg.targetQty !== undefined) qtyEl.value = String(pCfg.targetQty);
+        }
+      }
+      try { localStorage.setItem('pelican_buff_potions_cfg', JSON.stringify(window.__buffPotionConfig)); } catch(e){}
+      if (typeof window.saveBuffPotionConfig === 'function') window.saveBuffPotionConfig();
+      if (typeof window.syncBuffPotionsToGame === 'function') window.syncBuffPotionsToGame();
+      if (typeof window.updatePotionHUD === 'function') window.updatePotionHUD();
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'sync-buff-potions') {
+    return `(() => {
+      if (typeof window.syncBuffPotionsToGame === 'function') window.syncBuffPotionsToGame(true);
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'buy-buff-potions') {
+    return `(() => {
+      if (typeof window.manualRestockBuffPotions === 'function') window.manualRestockBuffPotions();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'update-sell') {
+    const cfg = payload.config || {};
+    return `(() => {
+      if (!window.__sellConfig) window.__sellConfig = {};
+      const patch = ${JSON.stringify(cfg)};
+      const sfPatch = (patch.statsFilterPatch && typeof patch.statsFilterPatch === 'object') ? patch.statsFilterPatch : null;
+      if (sfPatch) {
+        if (!window.__sellConfig.statsFilter || typeof window.__sellConfig.statsFilter !== 'object') {
+          window.__sellConfig.statsFilter = {};
+        }
+        Object.assign(window.__sellConfig.statsFilter, sfPatch);
+        delete patch.statsFilterPatch;
+      }
+      Object.assign(window.__sellConfig, patch);
+      if (patch.weaponRarity !== undefined) {
+        window.__sellConfig.sellWeapons = window.__sellConfig.weaponRarity !== 'none';
+      }
+      if (patch.armorRarity !== undefined) {
+        window.__sellConfig.sellArmors = window.__sellConfig.armorRarity !== 'none';
+      }
+      try { localStorage.setItem('pelican_sell_cfg', JSON.stringify(window.__sellConfig)); } catch(e){}
+      if (typeof window.refreshStoreHud === 'function') window.refreshStoreHud();
+      const trashEl = document.getElementById('p-sell-enabled') || document.getElementById('p-sell-trash');
+      if (trashEl && patch.enabled !== undefined) trashEl.checked = !!window.__sellConfig.enabled;
+      const wChkEl = document.getElementById('p-weight-check-enabled');
+      if (wChkEl && patch.weightCheckEnabled !== undefined) wChkEl.checked = !!window.__sellConfig.weightCheckEnabled;
+      const weightEl = document.getElementById('p-weight-threshold') || document.getElementById('p-sell-weight');
+      if (weightEl && patch.weightThreshold !== undefined) weightEl.value = String(window.__sellConfig.weightThreshold);
+      const weapEl = document.getElementById('p-sell-rarity-weap') || document.getElementById('p-sell-weap');
+      if (weapEl && patch.weaponRarity !== undefined) weapEl.value = String(window.__sellConfig.weaponRarity);
+      const armorEl = document.getElementById('p-sell-rarity-armor') || document.getElementById('p-sell-armor');
+      if (armorEl && patch.armorRarity !== undefined) armorEl.value = String(window.__sellConfig.armorRarity);
+      const accEl = document.getElementById('p-sell-rarity-acc');
+      if (accEl && patch.accRarity !== undefined) accEl.value = String(window.__sellConfig.accRarity);
+      const matEl = document.getElementById('p-sell-rarity-mat');
+      if (matEl && (patch.sellMaterials !== undefined || patch.materialMode !== undefined)) {
+        matEl.value = !window.__sellConfig.sellMaterials ? 'none' : (window.__sellConfig.materialMode === 'common' ? 'common' : 'all');
+      }
+      const oreEl = document.getElementById('p-sell-refine-ores');
+      if (oreEl && patch.sellRefineOres !== undefined) {
+        oreEl.value = window.__sellConfig.sellRefineOres ? 'unlisted' : 'keep';
+      }
+      const refEl = document.getElementById('p-sell-keep-refined');
+      if (refEl && patch.keepRefined !== undefined) refEl.checked = !!window.__sellConfig.keepRefined;
+      const specEl = document.getElementById('p-sell-keep-special');
+      if (specEl && patch.keepSpecial !== undefined) specEl.checked = !!window.__sellConfig.keepSpecial;
+      const sockEl = document.getElementById('p-sell-keep-sockets');
+      if (sockEl && patch.keepSockets !== undefined) sockEl.checked = !!window.__sellConfig.keepSockets;
+      [
+        ['p-store-enabled', 'storeEnabled'],
+        ['p-store-weapon', 'storeWeapon'],
+        ['p-store-armor', 'storeArmor'],
+        ['p-store-acc', 'storeAcc'],
+        ['p-store-refine', 'storeRefine'],
+        ['p-store-skip-locked', 'storeSkipLocked'],
+        ['p-store-refined', 'storeRefined'],
+        ['p-store-special', 'storeSpecial'],
+        ['p-store-sockets', 'storeSockets'],
+        ['p-store-cards', 'storeCards'],
+        ['p-store-whitelist', 'storeWhitelist']
+      ].forEach(([elId, key]) => {
+        if (patch[key] !== undefined) {
+          const el = document.getElementById(elId);
+          if (el) el.checked = !!window.__sellConfig[key];
+        }
+      });
+      const wlEl = document.getElementById('p-sell-whitelist');
+      if (wlEl && patch.whitelist !== undefined) wlEl.value = String(window.__sellConfig.whitelist);
+      if (sfPatch) {
+        const sf = window.__sellConfig.statsFilter || {};
+        const setSfCb = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.checked = !!v; };
+        if (sfPatch.enabled !== undefined) setSfCb('p-statfilter-toggle', sf.enabled);
+        if (sfPatch.filterWeapons !== undefined) setSfCb('p-statfilter-weap', sf.filterWeapons);
+        if (sfPatch.filterArmors !== undefined) setSfCb('p-statfilter-armor', sf.filterArmors);
+        if (sfPatch.filterAccessories !== undefined) setSfCb('p-statfilter-acc', sf.filterAccessories);
+        if (sfPatch.protectGems !== undefined) setSfCb('p-statfilter-protect-gems', sf.protectGems);
+        if (sfPatch.minOptions !== undefined) {
+          const minEl = document.getElementById('p-statfilter-min-opts');
+          if (minEl) minEl.value = String(sf.minOptions || 2);
+        }
+      }
+      if (typeof window.renderSellStatsFilterUI === 'function') window.renderSellStatsFilterUI();
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'sort-inventory') {
+    return `if (typeof window.refreshInventoryAndWeight === 'function') window.refreshInventoryAndWeight(null, true);`;
+  } else if (payload.type === 'test-sell') {
+    return `if (typeof window.executeSellTrashAtNpc === 'function') window.executeSellTrashAtNpc(true);`;
+  } else if (payload.type === 'update-auth') {
+    const cfg = payload.config || {};
+    return `(() => {
+      if (!window.__authConfig) window.__authConfig = {};
+      const patch = ${JSON.stringify(cfg)};
+      Object.assign(window.__authConfig, patch);
+      try { localStorage.setItem('pelican_auth_cfg', JSON.stringify(window.__authConfig)); } catch(e){}
+      const authEn = document.getElementById('p-auth-enabled');
+      if (authEn && patch.enabled !== undefined) authEn.checked = !!window.__authConfig.enabled;
+      const authUs = document.getElementById('p-auth-user');
+      if (authUs && patch.username !== undefined) authUs.value = String(window.__authConfig.username);
+      const authPs = document.getElementById('p-auth-pass');
+      if (authPs && patch.password !== undefined) authPs.value = String(window.__authConfig.password);
+      const authCh = document.getElementById('p-auth-char');
+      if (authCh && patch.charName !== undefined) authCh.value = String(window.__authConfig.charName || '');
+      const authRes = document.getElementById('p-auth-resume');
+      if (authRes && patch.autoResumeBot !== undefined) authRes.checked = !!window.__authConfig.autoResumeBot;
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'update-autosell') {
+    return `(() => {
+      if (!window.__autoMarketSellConfig) window.__autoMarketSellConfig = { enabled: false, rules: [] };
+      const patch = ${JSON.stringify(payload.config || {})};
+      Object.assign(window.__autoMarketSellConfig, patch);
+      try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch(e){}
+      const en = !!window.__autoMarketSellConfig.enabled;
+      const t1 = document.getElementById('p-autosell-toggle');
+      if (t1) t1.checked = en;
+      const t2 = document.getElementById('p-autosell-toggle-hud');
+      if (t2) t2.checked = en;
+      const badge = document.getElementById('p-subtab-autosell-count');
+      if (badge && Array.isArray(window.__autoMarketSellConfig.rules)) badge.innerText = String(window.__autoMarketSellConfig.rules.length);
+      if (typeof window.renderAutoSellHudRulesHtml === 'function') {
+        const hudContainer = document.getElementById('p-autosell-hud-rules-container');
+        if (hudContainer) hudContainer.innerHTML = window.renderAutoSellHudRulesHtml();
+      }
+      if (typeof window.renderAutoSellRulesRows === 'function') {
+        const tbody = document.getElementById('p-autosell-rules-tbody');
+        if (tbody) tbody.innerHTML = window.renderAutoSellRulesRows();
+      }
+      if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'add-autosell-rule') {
+    return `if (typeof window.addAutoMarketSellRule === 'function') window.addAutoMarketSellRule(${JSON.stringify(payload.itemName || '')});`;
+  } else if (payload.type === 'remove-autosell-rule') {
+    return `if (typeof window.removeAutoMarketSellRule === 'function') window.removeAutoMarketSellRule(${JSON.stringify(payload.ruleId)});`;
+  } else if (payload.type === 'trigger-autosell-now') {
+    return `if (typeof window.runAutoMarketSellCycle === 'function') window.runAutoMarketSellCycle(true);`;
+  } else if (payload.type === 'market-search') {
+    return `(() => {
+      const kw = ${JSON.stringify(payload.keyword || '')};
+      const input = document.getElementById('p-mk-keyword');
+      if (input) input.value = kw;
+      if (kw && typeof window.searchMarketByKeyword === 'function') {
+        window.searchMarketByKeyword(kw);
+      } else if (typeof window.startMarketSearch === 'function') {
+        window.startMarketSearch();
+      }
+      return { success: true };
+    })()`;
+  } else if (payload.type === 'export-config') {
+    return `(typeof window.exportAllBotSettings === 'function' ? window.exportAllBotSettings() : null)`;
+  } else if (payload.type === 'import-config') {
+    return `(typeof window.importAllBotSettings === 'function' ? window.importAllBotSettings(${JSON.stringify(payload.configJson)}) : { success: false, error: 'import function not available' })`;
+  } else if (payload.type === 'eval' && payload.code) {
+    return payload.code;
+  }
+  return '';
+}
+
 // ==========================================
 // CENTRALIZED ZENY CONSOLIDATION WORKFLOW
 // ==========================================
@@ -3577,10 +3978,14 @@ public class PmFocus {
         humanizeConfig: {
           enabled: humanize.enabled !== false,
           chance: Number(humanize.chance ?? humanize.chancePercent ?? 70),
+          chancePercent: Number(humanize.chancePercent ?? humanize.chance ?? 70),
           buyBlacksmith: (humanize.buyBlacksmith ?? humanize.visitBlacksmith) !== false,
+          visitBlacksmith: (humanize.visitBlacksmith ?? humanize.buyBlacksmith) !== false,
           buySundries: (humanize.buySundries ?? humanize.visitSundries) !== false,
+          visitSundries: (humanize.visitSundries ?? humanize.buySundries) !== false,
           randomWalk: humanize.randomWalk !== false,
-          storeDeposit: (humanize.storeDeposit ?? humanize.openStorage) !== false
+          storeDeposit: (humanize.storeDeposit ?? humanize.openStorage) !== false,
+          openStorage: (humanize.openStorage ?? humanize.storeDeposit) !== false
         },
         archerConfig: archer,
         bwingCount: bagCount(90311),
@@ -3722,338 +4127,51 @@ public class PmFocus {
     return;
   }
 
-  // POST /api/profiles/:id/client-action (Proxy config changes & actions from Web HUD)
+  // POST /api/profiles/:id/client-action (Proxy config changes & actions from Web HUD / Central Menu)
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/client-action$/)) {
-    const id = pathname.split("/")[3];
+    const id = decodeURIComponent(pathname.split("/")[3]);
     const profiles = loadProfiles();
-    const profile = profiles.find(p => p.id === id);
 
-    if (!profile || !profile.debugPort) return sendJSON({ success: false, error: "Profile offline" }, 400);
+    if (id !== "__central__") {
+      const profile = profiles.find(p => p.id === id);
+      if (!profile || !profile.debugPort) return sendJSON({ success: false, error: "Profile offline" }, 400);
+    }
 
     let body = "";
     req.on("data", chunk => body += chunk);
-    req.on("end", () => {
+    req.on("end", async () => {
       try {
-        const payload = JSON.parse(body);
-        let codeToRun = "";
-        if (payload.type === 'set-farm-map') {
-          codeToRun = `(() => {
-            const map = ${JSON.stringify(payload.map)};
-            if (typeof window.clearSafeMap === 'function') window.clearSafeMap('เลือกแมพจาก Manager');
-            window.__targetFarmMap = map;
-            try { localStorage.setItem('pelican_farm_map', map); } catch(e){}
-            const mapSelect = document.getElementById('p-target-map-select');
-            if (mapSelect) mapSelect.value = map;
-            if (typeof window.rememberFarmMap === 'function') window.rememberFarmMap(map);
-            if (window.__planScriptEnabled && typeof window.setPlanManualMap === 'function') window.setPlanManualMap(map);
-            if (typeof window.setTargetFarmMap === 'function') window.setTargetFarmMap(map);
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'toggle-auto-loop') {
-          codeToRun = `(() => {
-            const en = ${Boolean(payload.enabled)};
-            window.__autoLoopEnabled = en;
-            try { localStorage.setItem('pelican_auto_loop', String(en)); } catch(e){}
-            const loopCb = document.getElementById('p-auto-loop');
-            if (loopCb) loopCb.checked = en;
-            if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
-            return { success: true, autoLoopEnabled: en };
-          })()`;
-        } else if (payload.type === 'toggle-plan-script') {
-          codeToRun = `(() => {
-            const en = ${Boolean(payload.enabled)};
-            window.__planScriptEnabled = en;
-            try { localStorage.setItem('pelican_plan_script_enabled', String(en)); } catch(e){}
-            const planCb = document.getElementById('p-plan-script-enabled');
-            if (planCb) planCb.checked = en;
-            if (en) {
-              if (typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings();
-              if (typeof window.autoConfigureCombat === 'function') window.autoConfigureCombat();
-            }
-            return { success: true, planScriptEnabled: en };
-          })()`;
-        } else if (payload.type === 'update-travel') {
-          codeToRun = `(() => {
-            if (!window.__travelConfig) window.__travelConfig = {};
-            const minZ = Math.max(0, parseInt(${JSON.stringify(payload.minZenyForWarp)}, 10) || 0);
-            window.__travelConfig.minZenyForWarp = minZ;
-            try { localStorage.setItem('pelican_travel_cfg', JSON.stringify(window.__travelConfig)); } catch(e){}
-            if (typeof window.saveTravelConfig === 'function') window.saveTravelConfig();
-            const inp = document.getElementById('p-warp-min-zeny');
-            if (inp) inp.value = String(minZ);
-            return { success: true, minZenyForWarp: minZ };
-          })()`;
-        } else if (payload.type === 'toggle-unexpected-town-guard') {
-          codeToRun = `(() => {
-            const en = ${Boolean(payload.enabled)};
-            window.__unexpectedTownGuardEnabled = en;
-            try { localStorage.setItem('pelican_unexpected_town_guard', String(en)); } catch(e){}
-            const cb = document.getElementById('p-unexpected-town-guard');
-            if (cb) cb.checked = en;
-            return { success: true, enabled: en };
-          })()`;
-        } else if (payload.type === 'skip-unexpected-wait') {
-          codeToRun = `(() => {
-            if (typeof window.skipUnexpectedTownWait === 'function') window.skipUnexpectedTownWait();
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'update-humanize') {
-          codeToRun = `(() => {
-            if (!window.__humanizeConfig) window.__humanizeConfig = {};
-            const patch = ${JSON.stringify(payload.config || {})};
-            Object.assign(window.__humanizeConfig, patch);
-            if (patch.chance !== undefined) window.__humanizeConfig.chancePercent = Number(patch.chance);
-            if (patch.chancePercent !== undefined) window.__humanizeConfig.chance = Number(patch.chancePercent);
-            if (patch.buyBlacksmith !== undefined) window.__humanizeConfig.visitBlacksmith = !!patch.buyBlacksmith;
-            if (patch.visitBlacksmith !== undefined) window.__humanizeConfig.buyBlacksmith = !!patch.visitBlacksmith;
-            if (patch.buySundries !== undefined) window.__humanizeConfig.visitSundries = !!patch.buySundries;
-            if (patch.visitSundries !== undefined) window.__humanizeConfig.buySundries = !!patch.visitSundries;
-            if (patch.storeDeposit !== undefined) window.__humanizeConfig.openStorage = !!patch.storeDeposit;
-            if (patch.openStorage !== undefined) window.__humanizeConfig.storeDeposit = !!patch.openStorage;
-            try {
-              localStorage.setItem('pelican_humanize_cfg', JSON.stringify(window.__humanizeConfig));
-              localStorage.setItem('pelican_humanize_config', JSON.stringify(window.__humanizeConfig));
-            } catch(e){}
-            const c = window.__humanizeConfig;
-            const setCb = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.checked = !!v; };
-            if (patch.enabled !== undefined) setCb('p-humanize-enabled', c.enabled);
-            if (patch.buyBlacksmith !== undefined || patch.visitBlacksmith !== undefined) setCb('p-humanize-blacksmith', c.buyBlacksmith ?? c.visitBlacksmith);
-            if (patch.buySundries !== undefined || patch.visitSundries !== undefined) setCb('p-humanize-sundries', c.buySundries ?? c.visitSundries);
-            if (patch.randomWalk !== undefined) setCb('p-humanize-walk', c.randomWalk);
-            if (patch.storeDeposit !== undefined || patch.openStorage !== undefined) setCb('p-humanize-storage', c.storeDeposit ?? c.openStorage);
-            const chEl = document.getElementById('p-humanize-chance');
-            if (chEl && (patch.chance !== undefined || patch.chancePercent !== undefined)) chEl.value = String(c.chance ?? c.chancePercent);
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'test-humanize') {
-          codeToRun = `(() => {
-            window.__isManualTestingHumanize = true;
-            if (typeof window.runHumanizeRoutine === 'function') window.runHumanizeRoutine(() => {});
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'toggle-ultra-low-spec') {
-          codeToRun = `(() => {
-            const en = ${Boolean(payload.enabled)};
-            window.__ultraLowSpecEnabled = en;
-            try { localStorage.setItem('pelican_ultra_low_spec', en ? 'true' : 'false'); } catch(e){}
-            if (typeof window.setUltraLowSpecMode === 'function') window.setUltraLowSpecMode(en);
-            const cb = document.getElementById('p-ultra-low-spec');
-            if (cb) cb.checked = en;
-            return { success: true, ultraLowSpecEnabled: en };
-          })()`;
-        } else if (payload.type === 'update-auto-config') {
-          codeToRun = `(() => {
-            const cfg = ${JSON.stringify(payload.config || {})};
-            if (cfg.autoConfigCharEnabled !== undefined) {
-              window.__autoConfigCharEnabled = !!cfg.autoConfigCharEnabled;
-              try { localStorage.setItem('pelican_auto_config_char_enabled', String(!!cfg.autoConfigCharEnabled)); } catch(e){}
-              const el = document.getElementById('p-auto-config-char');
-              if (el) el.checked = !!cfg.autoConfigCharEnabled;
-              if (cfg.autoConfigCharEnabled && typeof window.autoConfigureCombat === 'function') window.autoConfigureCombat(true);
-            }
-            if (cfg.autoMuteDisplayEnabled !== undefined) {
-              window.__autoMuteDisplayEnabled = !!cfg.autoMuteDisplayEnabled;
-              try { localStorage.setItem('pelican_auto_mute_display_enabled', String(!!cfg.autoMuteDisplayEnabled)); } catch(e){}
-              const el = document.getElementById('p-auto-mute-display');
-              if (el) el.checked = !!cfg.autoMuteDisplayEnabled;
-              if (cfg.autoMuteDisplayEnabled && typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings(true);
-            }
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'apply-autoconfig-now') {
-          codeToRun = `(async () => {
-            if (typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings(true);
-            let ok = false;
-            if (typeof window.autoConfigureCombat === 'function') ok = await window.autoConfigureCombat(true);
-            return { success: true, applied: ok };
-          })()`;
-        } else if (payload.type === 'walk-to-map') {
-          codeToRun = `(() => {
-            const select = document.getElementById('p-target-map-select');
-            const targetMap = (select ? select.value : '') || window.__targetFarmMap;
-            if (typeof window.walkToTargetMap === 'function') window.walkToTargetMap(targetMap, true);
-            else if (typeof window.startWalkToTargetMap === 'function') window.startWalkToTargetMap();
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'open-world-map') {
-          codeToRun = `(() => {
-            if (typeof window.openWorldMap === 'function') window.openWorldMap();
-            else if (typeof window.toggleWorldMapModal === 'function') window.toggleWorldMapModal();
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'update-archer') {
-          const cfg = payload.config || {};
-          codeToRun = `(() => {
-            if (!window.__archerConfig) window.__archerConfig = {};
-            const patch = ${JSON.stringify(cfg)};
-            Object.assign(window.__archerConfig, patch);
-            try { localStorage.setItem('pelican_archer_cfg', JSON.stringify(window.__archerConfig)); } catch(e){}
-            const reqEl = document.getElementById('p-archer-req');
-            if (reqEl && patch.requireArrow !== undefined) reqEl.checked = !!window.__archerConfig.requireArrow;
-            const typeEl = document.getElementById('p-archer-type');
-            if (typeEl && patch.arrowType !== undefined) typeEl.value = String(window.__archerConfig.arrowType);
-            const qtyEl = document.getElementById('p-archer-qty');
-            if (qtyEl && patch.arrowBuyQty !== undefined) qtyEl.value = String(window.__archerConfig.arrowBuyQty);
-            const threshEl = document.getElementById('p-archer-threshold');
-            if (threshEl && patch.ammoThreshold !== undefined) threshEl.value = String(window.__archerConfig.ammoThreshold);
-            const bwingEl = document.getElementById('p-archer-bwing');
-            if (bwingEl && patch.useBwing !== undefined) bwingEl.checked = !!window.__archerConfig.useBwing;
-            const bwingQtyEl = document.getElementById('p-archer-bwing-qty');
-            if (bwingQtyEl && patch.bwingBuyQty !== undefined) bwingQtyEl.value = String(window.__archerConfig.bwingBuyQty);
-            if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
-            if (typeof updateAmmoHUD === 'function') updateAmmoHUD();
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'sync-ammo') {
-          codeToRun = `(() => {
-            if (typeof window.syncAmmoFromDOM === 'function') window.syncAmmoFromDOM();
-            if (typeof window.updateAmmoHUD === 'function') window.updateAmmoHUD();
-            return { ammo: window.__currentAmmo };
-          })()`;
-        } else if (payload.type === 'zero-ammo') {
-          codeToRun = `(() => {
-            window.__currentAmmo = 0;
-            try { localStorage.setItem('pelican_current_ammo', '0'); } catch(e){}
-            if (typeof window.updateAmmoHUD === 'function') window.updateAmmoHUD();
-            return { ammo: 0 };
-          })()`;
-        } else if (payload.type === 'update-buff-potions') {
-          const cfg = payload.config || {};
-          codeToRun = `(() => {
-            if (!window.__buffPotionConfig) window.__buffPotionConfig = {};
-            const patch = ${JSON.stringify(cfg)};
-            for (const k of Object.keys(patch)) {
-              if (patch[k] && typeof patch[k] === 'object') {
-                window.__buffPotionConfig[k] = Object.assign({}, window.__buffPotionConfig[k] || {}, patch[k]);
-              }
-            }
-            if (typeof window.saveBuffPotionConfig === 'function') window.saveBuffPotionConfig();
-            if (typeof window.syncBuffPotionsToGame === 'function') window.syncBuffPotionsToGame();
-            if (typeof window.updatePotionHUD === 'function') window.updatePotionHUD();
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'sync-buff-potions') {
-          codeToRun = `(() => {
-            if (typeof window.syncBuffPotionsToGame === 'function') window.syncBuffPotionsToGame(true);
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'buy-buff-potions') {
-          codeToRun = `(() => {
-            if (typeof window.manualRestockBuffPotions === 'function') window.manualRestockBuffPotions();
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'update-sell') {
-          const cfg = payload.config || {};
-          codeToRun = `(() => {
-            if (!window.__sellConfig) window.__sellConfig = {};
-            const patch = ${JSON.stringify(cfg)};
-            if (patch.statsFilterPatch && typeof patch.statsFilterPatch === 'object') {
-              if (!window.__sellConfig.statsFilter || typeof window.__sellConfig.statsFilter !== 'object') {
-                window.__sellConfig.statsFilter = {};
-              }
-              Object.assign(window.__sellConfig.statsFilter, patch.statsFilterPatch);
-              delete patch.statsFilterPatch;
-            }
-            Object.assign(window.__sellConfig, patch);
-            if (patch.weaponRarity !== undefined) {
-              window.__sellConfig.sellWeapons = window.__sellConfig.weaponRarity !== 'none';
-            }
-            if (patch.armorRarity !== undefined) {
-              window.__sellConfig.sellArmors = window.__sellConfig.armorRarity !== 'none';
-            }
-            try { localStorage.setItem('pelican_sell_cfg', JSON.stringify(window.__sellConfig)); } catch(e){}
-            if (typeof window.refreshStoreHud === 'function') window.refreshStoreHud();
-            const trashEl = document.getElementById('p-sell-enabled') || document.getElementById('p-sell-trash');
-            if (trashEl && patch.enabled !== undefined) trashEl.checked = !!window.__sellConfig.enabled;
-            const wChkEl = document.getElementById('p-weight-check-enabled');
-            if (wChkEl && patch.weightCheckEnabled !== undefined) wChkEl.checked = !!window.__sellConfig.weightCheckEnabled;
-            const weightEl = document.getElementById('p-weight-threshold') || document.getElementById('p-sell-weight');
-            if (weightEl && patch.weightThreshold !== undefined) weightEl.value = String(window.__sellConfig.weightThreshold);
-            const weapEl = document.getElementById('p-sell-rarity-weap') || document.getElementById('p-sell-weap');
-            if (weapEl && patch.weaponRarity !== undefined) weapEl.value = String(window.__sellConfig.weaponRarity);
-            const armorEl = document.getElementById('p-sell-rarity-armor') || document.getElementById('p-sell-armor');
-            if (armorEl && patch.armorRarity !== undefined) armorEl.value = String(window.__sellConfig.armorRarity);
-            const accEl = document.getElementById('p-sell-rarity-acc');
-            if (accEl && patch.accRarity !== undefined) accEl.value = String(window.__sellConfig.accRarity);
-            const refEl = document.getElementById('p-sell-keep-refined');
-            if (refEl && patch.keepRefined !== undefined) refEl.checked = !!window.__sellConfig.keepRefined;
-            const specEl = document.getElementById('p-sell-keep-special');
-            if (specEl && patch.keepSpecial !== undefined) specEl.checked = !!window.__sellConfig.keepSpecial;
-            const sockEl = document.getElementById('p-sell-keep-sockets');
-            if (sockEl && patch.keepSockets !== undefined) sockEl.checked = !!window.__sellConfig.keepSockets;
-            const storeEnEl = document.getElementById('p-store-enabled');
-            if (storeEnEl && patch.storeEnabled !== undefined) storeEnEl.checked = !!window.__sellConfig.storeEnabled;
-            const storeRefEl = document.getElementById('p-store-refined');
-            if (storeRefEl && patch.storeRefined !== undefined) storeRefEl.checked = !!window.__sellConfig.storeRefined;
-            const storeSpecEl = document.getElementById('p-store-special');
-            if (storeSpecEl && patch.storeSpecial !== undefined) storeSpecEl.checked = !!window.__sellConfig.storeSpecial;
-            const storeSockEl = document.getElementById('p-store-sockets');
-            if (storeSockEl && patch.storeSockets !== undefined) storeSockEl.checked = !!window.__sellConfig.storeSockets;
-            const storeCardsEl = document.getElementById('p-store-cards');
-            if (storeCardsEl && patch.storeCards !== undefined) storeCardsEl.checked = !!window.__sellConfig.storeCards;
-            const storeWlEl = document.getElementById('p-store-whitelist');
-            if (storeWlEl && patch.storeWhitelist !== undefined) storeWlEl.checked = !!window.__sellConfig.storeWhitelist;
-            const wlEl = document.getElementById('p-sell-whitelist');
-            if (wlEl && patch.whitelist !== undefined) wlEl.value = String(window.__sellConfig.whitelist);
-            if (typeof window.renderSellStatsFilterUI === 'function') window.renderSellStatsFilterUI();
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'sort-inventory') {
-          codeToRun = `if (typeof window.refreshInventoryAndWeight === 'function') window.refreshInventoryAndWeight(null, true);`;
-        } else if (payload.type === 'test-sell') {
-          codeToRun = `if (typeof window.executeSellTrashAtNpc === 'function') window.executeSellTrashAtNpc(true);`;
-        } else if (payload.type === 'update-auth') {
-          const cfg = payload.config || {};
-          codeToRun = `(() => {
-            if (!window.__authConfig) window.__authConfig = {};
-            const patch = ${JSON.stringify(cfg)};
-            Object.assign(window.__authConfig, patch);
-            try { localStorage.setItem('pelican_auth_cfg', JSON.stringify(window.__authConfig)); } catch(e){}
-            const authEn = document.getElementById('p-auth-enabled');
-            if (authEn && patch.enabled !== undefined) authEn.checked = !!window.__authConfig.enabled;
-            const authUs = document.getElementById('p-auth-user');
-            if (authUs && patch.username !== undefined) authUs.value = String(window.__authConfig.username);
-            const authPs = document.getElementById('p-auth-pass');
-            if (authPs && patch.password !== undefined) authPs.value = String(window.__authConfig.password);
-            const authCh = document.getElementById('p-auth-char');
-            if (authCh && patch.charName !== undefined) authCh.value = String(window.__authConfig.charName || '');
-            const authRes = document.getElementById('p-auth-resume');
-            if (authRes && patch.autoResumeBot !== undefined) authRes.checked = !!window.__authConfig.autoResumeBot;
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'update-autosell') {
-          codeToRun = `Object.assign(window.__autoMarketSellConfig, ${JSON.stringify(payload.config)}); try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch(e){} if (typeof updateMasterBotUI === 'function') updateMasterBotUI();`;
-        } else if (payload.type === 'add-autosell-rule') {
-          codeToRun = `if (typeof window.addAutoMarketSellRule === 'function') window.addAutoMarketSellRule(${JSON.stringify(payload.itemName || '')});`;
-        } else if (payload.type === 'remove-autosell-rule') {
-          codeToRun = `if (typeof window.removeAutoMarketSellRule === 'function') window.removeAutoMarketSellRule(${JSON.stringify(payload.ruleId)});`;
-        } else if (payload.type === 'trigger-autosell-now') {
-          codeToRun = `if (typeof window.runAutoMarketSellCycle === 'function') window.runAutoMarketSellCycle(true);`;
-        } else if (payload.type === 'market-search') {
-          codeToRun = `(() => {
-            const kw = ${JSON.stringify(payload.keyword || '')};
-            const input = document.getElementById('p-mk-keyword');
-            if (input) input.value = kw;
-            if (kw && typeof window.searchMarketByKeyword === 'function') {
-              window.searchMarketByKeyword(kw);
-            } else if (typeof window.startMarketSearch === 'function') {
-              window.startMarketSearch();
-            }
-            return { success: true };
-          })()`;
-        } else if (payload.type === 'export-config') {
-          codeToRun = `(typeof window.exportAllBotSettings === 'function' ? window.exportAllBotSettings() : null)`;
-        } else if (payload.type === 'import-config') {
-          codeToRun = `(typeof window.importAllBotSettings === 'function' ? window.importAllBotSettings(${JSON.stringify(payload.configJson)}) : { success: false, error: 'import function not available' })`;
-        } else if (payload.type === 'eval' && payload.code) {
-          codeToRun = payload.code;
+        const payload = JSON.parse(body || "{}");
+        const codeToRun = buildClientActionEvalCode(payload);
+
+        if (id === "__central__") {
+          const targetSet = Array.isArray(payload.targetProfileIds) && payload.targetProfileIds.length > 0
+            ? new Set(payload.targetProfileIds.map(String))
+            : null;
+          const targets = profiles.filter(p => p.debugPort && (!targetSet || targetSet.has(String(p.id))));
+          if (targets.length === 0) {
+            return sendJSON({ success: false, error: "ไม่มีจอเกมที่กำลังออนไลน์", updatedCount: 0, totalOnline: 0 }, 400);
+          }
+          const results = await Promise.allSettled(targets.map(p =>
+            enqueueProfileClientAction(p.id, () => evalProfilePort(p.debugPort, codeToRun, 15000))
+          ));
+          const okCount = results.filter(r =>
+            r.status === "fulfilled" && r.value && !(r.value.success === false && !("result" in r.value))
+          ).length;
+          return sendJSON({
+            success: okCount > 0,
+            updatedCount: okCount,
+            totalOnline: targets.length
+          });
         }
 
+        const profile = profiles.find(p => p.id === id);
+        if (!profile || !profile.debugPort) return sendJSON({ success: false, error: "Profile offline" }, 400);
+
         // POST: configs (import-config, whitelists, rules) are far too long for a URL once Thai text is encoded
-        evalProfilePort(profile.debugPort, codeToRun, 15000).then(r => {
-          if (r && r.success === false && !('result' in r)) return sendJSON({ success: false, error: r.error || 'สั่งงานจอเกมไม่สำเร็จ' }, 502);
-          sendJSON({ success: true, result: r });
-        });
+        const r = await enqueueProfileClientAction(profile.id, () => evalProfilePort(profile.debugPort, codeToRun, 15000));
+        if (r && r.success === false && !('result' in r)) return sendJSON({ success: false, error: r.error || 'สั่งงานจอเกมไม่สำเร็จ' }, 502);
+        sendJSON({ success: true, result: r });
       } catch (err) {
         sendJSON({ success: false, error: err.message }, 400);
       }

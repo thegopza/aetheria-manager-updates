@@ -4532,6 +4532,11 @@ async function openWebBotHUD(profileId) {
       sendWebHudAction(profileId, { type: 'eval', code: `(() => {
         window.__marketFilterConfig = Object.assign(window.__marketFilterConfig || {}, ${JSON.stringify(mk)});
         try { localStorage.setItem('pelican_market_filter_cfg', JSON.stringify(window.__marketFilterConfig)); } catch (e) {}
+        const domEl = document.querySelector(${JSON.stringify(sel)});
+        if (domEl) {
+          if (${JSON.stringify(kind === 'bool')}) domEl.checked = ${JSON.stringify(Boolean(val))};
+          else domEl.value = ${JSON.stringify(String(val ?? ''))};
+        }
         if (typeof window.applyMarketFilters === 'function') { try { window.applyMarketFilters(); } catch (e) {} }
         return { success: true };
       })()` });
@@ -4908,13 +4913,14 @@ function populateWebHudData(profileId, data) {
   };
   syncCb('#p-humanize-enabled', humanize.enabled);
   const humChance = hud.querySelector('#p-humanize-chance');
-  if (humChance && humanize.chancePercent !== undefined && document.activeElement !== humChance) {
-    humChance.value = humanize.chancePercent;
+  const humChanceVal = humanize.chancePercent !== undefined ? humanize.chancePercent : humanize.chance;
+  if (humChance && humChanceVal !== undefined && document.activeElement !== humChance) {
+    humChance.value = humChanceVal;
   }
-  syncCb('#p-humanize-blacksmith', humanize.visitBlacksmith);
-  syncCb('#p-humanize-sundries', humanize.visitSundries);
+  syncCb('#p-humanize-blacksmith', humanize.visitBlacksmith !== undefined ? humanize.visitBlacksmith : humanize.buyBlacksmith);
+  syncCb('#p-humanize-sundries', humanize.visitSundries !== undefined ? humanize.visitSundries : humanize.buySundries);
   syncCb('#p-humanize-walk', humanize.randomWalk);
-  syncCb('#p-humanize-storage', humanize.openStorage);
+  syncCb('#p-humanize-storage', humanize.openStorage !== undefined ? humanize.openStorage : humanize.storeDeposit);
 
   // Archer
   const archer = data.archerConfig || {};
@@ -5031,6 +5037,29 @@ function populateWebHudData(profileId, data) {
     }
   }
 
+  // Market Sniper Filter sync
+  const mk = data.marketFilterConfig || {};
+  [
+    ['#p-mk-search-query', mk.q, 'text'],
+    ['#p-mk-cat-select', mk.category, 'text'],
+    ['#p-mk-kind-select', mk.kind, 'text'],
+    ['#p-mk-min-refine', mk.minRefine, 'int'],
+    ['#p-mk-max-price', mk.maxPrice, 'int'],
+    ['#p-mk-stat1-type', mk.statType1, 'text'],
+    ['#p-mk-stat1-min', mk.statMinVal1, 'int'],
+    ['#p-mk-stat2-type', mk.statType2, 'text'],
+    ['#p-mk-stat2-min', mk.statMinVal2, 'int'],
+    ['#p-mk-stat-mode', mk.statMatchMode, 'text'],
+    ['#p-mk-sniper-alert', mk.sniperAlert, 'bool'],
+    ['#p-mk-auto-buy', mk.autoBuy, 'bool']
+  ].forEach(([sel, val, kind]) => {
+    if (val === undefined) return;
+    const el = hud.querySelector(sel);
+    if (!el || document.activeElement === el) return;
+    if (kind === 'bool') el.checked = !!val;
+    else el.value = String(val ?? '');
+  });
+
   // Shop & System Tab
   const shop = data.shopConfig || {};
   syncCb('#p-shop-enabled', shop.enabled);
@@ -5067,14 +5096,29 @@ async function sendWebHudAction(profileId, payload) {
         showToast('⚠️ ไม่มีจอเกมที่กำลังออนไลน์ให้สั่งการ', 'warning');
         return { success: false, error: 'ไม่มีจอเกมที่กำลังออนไลน์' };
       }
+      const centralPayload = Object.assign({}, payload, { targetProfileIds: online.map(p => p.id) });
+      const resp = await fetch(API_BASE + '/api/profiles/__central__/client-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(centralPayload)
+      });
+      const j = await resp.json().catch(() => ({}));
+      if (resp.ok && typeof j.updatedCount === 'number') {
+        const okCount = j.updatedCount;
+        const total = j.totalOnline || online.length;
+        showToast(`🎛️ เมนูส่วนกลาง: อัปเดตไปยัง ${okCount}/${total} จอเรียบร้อย`, okCount > 0 ? 'success' : 'error');
+        setTimeout(() => { updateActiveWebHuds(); }, 250);
+        return { success: okCount > 0, updatedCount: okCount, totalOnline: total };
+      }
+      // Fallback if server was not restarted yet
       const results = await Promise.allSettled(online.map(async (p) => {
-        const resp = await fetch(API_BASE + '/api/profiles/' + p.id + '/client-action', {
+        const r = await fetch(API_BASE + '/api/profiles/' + p.id + '/client-action', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        const j = await resp.json().catch(() => ({}));
-        return Boolean(resp.ok && j.success !== false);
+        const rj = await r.json().catch(() => ({}));
+        return Boolean(r.ok && rj.success !== false);
       }));
       const okCount = results.filter(r => r.status === 'fulfilled' && r.value).length;
       showToast(`🎛️ เมนูส่วนกลาง: อัปเดตไปยัง ${okCount}/${online.length} จอเรียบร้อย`, okCount > 0 ? 'success' : 'error');

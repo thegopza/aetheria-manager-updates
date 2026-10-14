@@ -102,7 +102,7 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
     ready: null,           // { sha, at } — raw CDN confirmed serving this version
     phase: 'idle',         // idle | waiting-cdn | settling | updating
     settleUntil: null,
-    clients: {}            // profileId -> { name, state, note, at }
+    clients: {}            // profileId -> { id, name, state, note, at }
   };
   let busyCycle = false;
   // Only a refresh and its recovery block Manager restart. Waiting clients/CDN do not.
@@ -117,7 +117,7 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
   };
   const setClient = (p, state, note, version) => {
     const prev = status.clients[p.id];
-    status.clients[p.id] = { name: p.name, state, note: note || '', at: Date.now(), version: version || (prev && prev.version) || null };
+    status.clients[p.id] = { id: p.id, name: p.name, state, note: note || '', at: Date.now(), version: version || (prev && prev.version) || null };
   };
 
   async function probe(p) {
@@ -360,6 +360,62 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
     if (pathname === '/api/bot-update/check' && req.method === 'POST') {
       manualAt = Date.now();
       retryFailed();
+      sendJSON({ success: true });
+      return true;
+    }
+    if (pathname === '/api/bot-update/reload-client' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      await new Promise(r => req.on('end', r));
+      try {
+        const payload = JSON.parse(body || '{}');
+        const profileId = String(payload.profileId || '');
+        const p = loadProfiles().find(x => x && x.id === profileId && x.debugPort);
+        if (!p) {
+          sendJSON({ success: false, error: 'ไม่พบโปรไฟล์หรือจอไม่ได้เปิดอยู่' }, 404);
+          return true;
+        }
+        delete failedTargets[p.id];
+        persist();
+        (async () => {
+          try {
+            if (!status.latest) await checkGitHub();
+            const info = (await probe(p)) || { loadedAt: 0, running: true, inGame: true, busy: [] };
+            const target = currentTarget() || { key: 'manual', sha: status.latest?.sha || '', version: status.latest?.version || null, managed: Boolean(status.latest?.managed), threshold: null };
+            await reloadClient(p, info, target);
+          } catch (_) {}
+        })();
+        sendJSON({ success: true });
+      } catch (e) {
+        sendJSON({ success: false, error: e.message }, 400);
+      }
+      return true;
+    }
+    if (pathname === '/api/bot-update/force-all' && req.method === 'POST') {
+      manualAt = Date.now();
+      for (const id of Object.keys(failedTargets)) delete failedTargets[id];
+      persist();
+      (async () => {
+        try {
+          await checkGitHub();
+          await waitForRaw();
+          const target = currentTarget();
+          const profiles = loadProfiles().filter(p => p && p.debugPort);
+          for (const p of profiles) {
+            const info = await probe(p);
+            if (!info) continue;
+            if (target && isCurrentFor(target, info)) {
+              setClient(p, 'up-to-date', 'ใช้เวอร์ชันล่าสุดอยู่แล้ว', info.version);
+              continue;
+            }
+            status.phase = 'updating';
+            await reloadClient(p, info, target || { key: 'manual', sha: '', version: null, managed: false, threshold: null });
+          }
+          status.phase = 'idle';
+        } catch (_) {
+          status.phase = 'idle';
+        }
+      })();
       sendJSON({ success: true });
       return true;
     }

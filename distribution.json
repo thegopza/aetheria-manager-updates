@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "d2598c8d91bf4f9ee14b26c15418ea1f3f9a5738",
+  "sourceCommit": "b9a0e96fe32ed8ca3c5efce98bfcd69b4238ee33",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -8,7 +8,7 @@
     },
     {
       "path": "manager/bot_auto_update.js",
-      "sha256": "cbb1c2f82b657ce3aceb409acdbd090f8994a034550e9eaa2e7a732ff7daa1e5"
+      "sha256": "2ad2a6ef89391240891ba872bab5d5698878663d4329a64999b91ab618e44937"
     },
     {
       "path": "manager/browser_mode.js",
@@ -120,11 +120,11 @@
     },
     {
       "path": "manager/public/bot_update.css",
-      "sha256": "faf990c9b4e7d6d721cee04a44fc2d9b10231a32b35ad5b03e19ccb8f77fd466"
+      "sha256": "3a96a3eefd0e65b1f12811521e28711dd803de80ff14e2f47bd09dcbb2b121df"
     },
     {
       "path": "manager/public/bot_update.js",
-      "sha256": "8f5245f2bf7f4ac9185444239652bc5ddd5d7dd88d4a74228f5636d80a1077c5"
+      "sha256": "c3745560439e1ceddc8f394ad515f70a1c41453189ca1c08f01257c3161bed42"
     },
     {
       "path": "manager/public/builder_module.js",
@@ -156,7 +156,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "41518e17cdfb16e58fab947415692a995822178fe006abc0dfde33bc870991a0"
+      "sha256": "728eeb6e59291112cc7cd7e4980c18e47ee82c0551876fcfb4f02fada82a6d42"
     },
     {
       "path": "manager/public/inventory_market.css",

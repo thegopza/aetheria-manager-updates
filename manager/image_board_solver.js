@@ -394,6 +394,50 @@
       }
     }
 
+    // Prune scribble lines by computing core mask (pixels with >=6 neighbors in 3x3 or >=14 in 5x5)
+    const coreMask = new Uint8Array(w * h);
+    for (let ly = 2; ly < h - 2; ly++) {
+      for (let lx = 2; lx < w - 2; lx++) {
+        const p = ly * w + lx;
+        if (!finalMask[p]) continue;
+        let nb3 = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            if (finalMask[(ly + dy) * w + (lx + dx)]) nb3++;
+          }
+        }
+        let nb5 = 0;
+        for (let dy = -2; dy <= 2; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            if (finalMask[(ly + dy) * w + (lx + dx)]) nb5++;
+          }
+        }
+        if (nb3 >= 6 || nb5 >= 14) coreMask[p] = 1;
+      }
+    }
+    const corePts = [];
+    for (let ly = 2; ly < h - 2; ly++) {
+      for (let lx = 2; lx < w - 2; lx++) {
+        const p = ly * w + lx;
+        if (!finalMask[p]) continue;
+        let nearCore = false;
+        for (let dy = -2; dy <= 2 && !nearCore; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            if (coreMask[(ly + dy) * w + (lx + dx)]) { nearCore = true; break; }
+          }
+        }
+        if (nearCore) corePts.push([lx, ly]);
+      }
+    }
+    if (corePts.length >= 80) {
+      finalMask.fill(0);
+      validPts.length = 0;
+      for (const pt of corePts) {
+        finalMask[pt[1] * w + pt[0]] = 1;
+        validPts.push(pt);
+      }
+    }
+
     let cx = 0, cy = 0, lumSum = 0, lumSqSum = 0, satSum = 0;
     let sumR = 0, sumG = 0, sumB = 0;
     for (const [px, py] of validPts) {
@@ -538,9 +582,12 @@
       : Math.abs(Math.log(scaleRatio / 0.94)) * 0.35;
     const areaRatio = slot.area / (top.area * 0.85);
     const areaPenalty = Math.abs(Math.log(Math.max(0.25, Math.min(4.0, areaRatio)))) * 0.16;
-    const lumStatPenalty = (Math.abs(top.meanLum - slot.meanLum) / 130 + Math.abs(top.stdLum - slot.stdLum) / 85 + Math.abs(top.meanSat - slot.meanSat) / 55) * 0.45;
+    const lumStatPenalty = (Math.abs(top.meanLum - slot.meanLum) / 110 + Math.abs(top.stdLum - slot.stdLum) / 85 + Math.abs(top.meanSat - slot.meanSat) / 48) * 0.50;
     const rgbDiff = (Math.abs(top.meanR - slot.meanR) + Math.abs(top.meanG - slot.meanG) + Math.abs(top.meanB - slot.meanB));
-    const rgbPenalty = rgbDiff > 180 ? ((rgbDiff - 180) / 300) * 0.35 : 0;
+    const topRG = top.meanR - top.meanG, slotRG = slot.meanR - slot.meanG;
+    const topGB = top.meanG - top.meanB, slotGB = slot.meanG - slot.meanB;
+    const chromaDiff = Math.abs(topRG - slotRG) + Math.abs(topGB - slotGB);
+    const rgbPenalty = (rgbDiff / 220) * 0.38 + (chromaDiff / 90) * 0.42;
 
     const totalScore = bestPolarDist + elongDiff + fillDiff + scalePenalty + areaPenalty + lumStatPenalty + rgbPenalty;
     return { totalScore, bestPolarDist, elongDiff, fillDiff, scalePenalty, areaPenalty, lumStatPenalty, rgbPenalty };

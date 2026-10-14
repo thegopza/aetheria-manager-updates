@@ -37,6 +37,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     townWebhookUrl: '',
     botToken: Buffer.from('TVRVMU9Ea3dPREl6TVRRM09UTXpNamc0TkEuR2FQbUc3LldDR0ZkUTN1NzN4QnlGX0cyeTdYbGhndUxqcnp5QVJ2dF9BTXM0', 'base64').toString('utf8'),
     channelId: '1558894629728817222',
+    wrongChannelId: '1559706567560007730',
     autoBringToFront: true,
     soundAlert: true,
     autoAnswer: true,
@@ -54,6 +55,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           townWebhookUrl: (typeof s.townWebhookUrl === 'string' && s.townWebhookUrl.trim()) ? s.townWebhookUrl.trim() : (DEFAULT_DISCORD_SETTINGS.townWebhookUrl || ''),
           botToken: (typeof s.botToken === 'string' && s.botToken.trim()) ? s.botToken.trim() : DEFAULT_DISCORD_SETTINGS.botToken,
           channelId: (typeof s.channelId === 'string' && s.channelId.trim()) ? s.channelId.trim() : DEFAULT_DISCORD_SETTINGS.channelId,
+          wrongChannelId: (typeof s.wrongChannelId === 'string' && s.wrongChannelId.trim()) ? s.wrongChannelId.trim() : DEFAULT_DISCORD_SETTINGS.wrongChannelId,
           autoBringToFront: s.autoBringToFront !== false,
           soundAlert: s.soundAlert !== false,
           autoAnswer: s.autoAnswer !== false,
@@ -75,6 +77,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         ...current,
         ...settings,
         townWebhookUrl: settings.townWebhookUrl !== undefined ? String(settings.townWebhookUrl || '').trim() : current.townWebhookUrl,
+        wrongChannelId: (typeof settings.wrongChannelId === 'string' && settings.wrongChannelId.trim()) ? settings.wrongChannelId.trim() : (current.wrongChannelId || DEFAULT_DISCORD_SETTINGS.wrongChannelId),
         autoAnswer: settings.autoAnswer !== false,
         answerDelayMs: Math.max(800, Math.min(10000, parseInt(settings.answerDelayMs, 10) || 1800))
       };
@@ -91,6 +94,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
   // Active checks tracker: profileId -> { checkId, prompt, notifiedAt, messageId, options }
   const activeChecks = new Map();
   const recentNonces = new Map();
+  const reportedWrongAttempts = new Map();
   const requestStateFile = path.join(dataDir, 'aetheria_request_state.json');
   function questionFingerprint(check) {
     return crypto.createHash('sha256').update(JSON.stringify([
@@ -190,7 +194,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
   }
 
   // Answer human check in the game window (supports both .human-check-pick buttons and .human-check-board coordinate boards)
-  async function answerCheckInGame(profileId, pickIndex, matchedName = '', expectedCheck = null) {
+  async function answerCheckInGame(profileId, pickIndex, matchedName = '', expectedCheck = null, options = {}) {
     if (!Number.isInteger(pickIndex) || pickIndex < 0 || pickIndex > 5 || typeof profileId !== 'string') {
       return { success: false, error: 'ตัวเลือกหรือโปรไฟล์ไม่ถูกต้อง' };
     }
@@ -201,6 +205,8 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     }
 
     const cleanName = String(matchedName || '');
+    const isManual = Boolean(options && options.manual);
+    const answeredBy = (options && typeof options.answeredBy === 'string' && options.answeredBy.trim()) ? options.answeredBy.trim() : null;
     const evalCode = `(() => {
       let clickAttempted = false;
       try {
@@ -209,7 +215,8 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           const last = window.__lastHumanCheckSolved;
           if (last && Date.now() - (last.timestamp || 0) < 120000) {
             const slotLabel = Number.isInteger(last.slot) ? ('ช่องที่ ' + last.slot) : (Number.isInteger(last.pickIndex) && last.pickIndex >= 0 ? ('ข้อที่ ' + (last.pickIndex + 1)) : '');
-            return { success: false, alreadySolved: true, error: 'บอทตอบคำถามนี้ให้อัตโนมัติไปแล้ว' + (slotLabel ? (' (' + slotLabel + ')') : '') + ' หน้าต่างเช็คผู้เล่นจึงปิดไปแล้ว' };
+            const byWho = last.manual && last.answeredBy ? ('ผู้เล่น ' + last.answeredBy) : 'บอท';
+            return { success: false, alreadySolved: true, error: byWho + 'ตอบคำถามนี้ไปแล้ว' + (slotLabel ? (' (' + slotLabel + ')') : '') + ' หน้าต่างเช็คผู้เล่นจึงปิดไปแล้ว' };
           }
           return { success: false, error: 'ไม่พบหน้าต่างเช็คผู้เล่น (อาจปิดหรือตอบไปแล้ว)' };
         }
@@ -230,11 +237,16 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           targetBtn.click();
           window.__lastHumanCheckSolved = {
             pickIndex: ${Number(pickIndex)},
+            slot: ${Number(pickIndex) + 1},
             matchedName: ${JSON.stringify(cleanName)},
+            manual: ${JSON.stringify(isManual)},
+            answeredBy: ${JSON.stringify(answeredBy)},
+            source: ${JSON.stringify(isManual ? 'discord-manual' : 'manager-auto')},
             timestamp: Date.now()
           };
           if (window.showHudToast) {
-            window.showHudToast(${JSON.stringify('🤖 ตอบเช็คผู้เล่น: ' + (cleanName || ('ข้อ ' + (pickIndex + 1))))}, 'success', 5000);
+            const toastPrefix = ${JSON.stringify(isManual ? `👤 ตอบผ่าน Discord${answeredBy ? ' (' + answeredBy + ')' : ''}: ` : '🤖 ตอบเช็คผู้เล่น: ')};
+            window.showHudToast(toastPrefix + ${JSON.stringify(cleanName || ('ข้อ ' + (pickIndex + 1)))}, 'success', 5000);
           }
           return { success: true, picked: ${pickIndex} };
         }
@@ -306,12 +318,14 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           }
 
           clickAttempted = true;
+          let roomSent = false;
           try {
             const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
               || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
               || window.__colyseusRoom || window.__gameRoom || null;
             if (room && typeof room.send === 'function' && packet && packet.id != null) {
               room.send('human_check_answer', { id: packet.id, x: targetX, y: targetY });
+              roomSent = true;
             }
           } catch (_) {}
 
@@ -321,7 +335,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
               const rect = targetEl.getBoundingClientRect();
               const clientX = rect.left + (targetX / bw) * (rect.width || bw);
               const clientY = rect.top + (targetY / bh) * (rect.height || bh);
-              const opts = { bubbles: true, cancelable: true, view: window, clientX, clientY };
+              const opts = { bubbles: !roomSent, cancelable: true, view: window, clientX, clientY };
               if (typeof PointerEvent !== 'undefined') targetEl.dispatchEvent(new PointerEvent('pointerdown', opts));
               if (typeof MouseEvent !== 'undefined') {
                 targetEl.dispatchEvent(new MouseEvent('mousedown', opts));
@@ -333,13 +347,18 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
 
           window.__lastHumanCheckSolved = {
             pickIndex: slotIdx,
+            slot: slotIdx + 1,
             x: targetX,
             y: targetY,
             matchedName: ${JSON.stringify(cleanName)} || ('ตัวเลือกที่ ' + (slotIdx + 1)),
+            manual: ${JSON.stringify(isManual)},
+            answeredBy: ${JSON.stringify(answeredBy)},
+            source: ${JSON.stringify(isManual ? 'discord-manual' : 'manager-auto')},
             timestamp: Date.now()
           };
           if (window.showHudToast) {
-            window.showHudToast('🤖 ตอบเช็คผู้เล่น: ตัวเลือกที่ ' + (slotIdx + 1) + ' (' + targetX + ', ' + targetY + ')', 'success', 5000);
+            const toastPrefix = ${JSON.stringify(isManual ? `👤 ตอบผ่าน Discord${answeredBy ? ' (' + answeredBy + ')' : ''}: ` : '🤖 ตอบเช็คผู้เล่น: ')};
+            window.showHudToast(toastPrefix + 'ตัวเลือกที่ ' + (slotIdx + 1) + ' (' + targetX + ', ' + targetY + ')', 'success', 5000);
           }
           return { success: true, picked: slotIdx, x: targetX, y: targetY };
         }
@@ -354,7 +373,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       const res = await evalProfilePort(profile.debugPort, evalCode, 6000);
       if (res?.result?.success) {
         if (typeof onCaptchaSolved === 'function') {
-          try { onCaptchaSolved(profileId, { pickIndex, matchedName }); } catch (e) {}
+          try { onCaptchaSolved(profileId, { pickIndex, matchedName, manual: isManual, answeredBy }); } catch (e) {}
         }
       }
       return res?.result || { success: false, uncertain: true, error: 'ไม่ได้รับการตอบรับจากจอเกม' };
@@ -478,6 +497,189 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     }
   }
 
+  // Verify in-game whether a Human Check closed (correct) or stayed open (wrong) after answering
+  async function verifyHumanCheckAnswerInGame(profileId, waitMs = 850) {
+    const profiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+    const profile = profiles.find(p => p && p.id === profileId);
+    if (!profile || !profile.debugPort || typeof evalProfilePort !== 'function') {
+      return null;
+    }
+    if (waitMs > 0) {
+      await new Promise(r => setTimeout(r, waitMs));
+    }
+    try {
+      const probe = await evalProfilePort(profile.debugPort, `(() => {
+        const hc = document.querySelector('.human-check');
+        if (!hc) return { stillOpen: false, solved: window.__lastHumanCheckSolved || null };
+        const metaEl = hc.querySelector('.human-check-meta');
+        const metaText = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
+        const triesMatch = metaText.match(/ตอบผิดได้อีก\\s*(\\d+)/);
+        const triesLeft = triesMatch ? Number(triesMatch[1]) : null;
+        let imageDataUrl = null;
+        const boardImg = hc.querySelector('.human-check-board img');
+        if (boardImg && boardImg.complete && boardImg.naturalWidth > 0 && typeof document?.createElement === 'function') {
+          try {
+            const bw = 480, bh = 330, stripH = 38;
+            const bCanvas = document.createElement('canvas');
+            bCanvas.width = bw;
+            bCanvas.height = bh + stripH;
+            const bCtx = bCanvas.getContext('2d');
+            if (bCtx) {
+              bCtx.fillStyle = '#0f172a';
+              bCtx.fillRect(0, 0, bw, bh + stripH);
+              bCtx.drawImage(boardImg, 0, 0, bw, bh);
+              const colCenters = [68, 181, 300, 416];
+              const lastSlot = window.__lastHumanCheckSolved?.slot || null;
+              for (let i = 0; i < 4; i++) {
+                const cx = colCenters[i];
+                const bx = cx - 44, by = bh + 5;
+                bCtx.fillStyle = (lastSlot === i + 1) ? '#991b1b' : '#1e293b';
+                bCtx.strokeStyle = (lastSlot === i + 1) ? '#ef4444' : '#38bdf8';
+                bCtx.lineWidth = 1.5;
+                bCtx.beginPath();
+                if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
+                bCtx.fill();
+                bCtx.stroke();
+                bCtx.fillStyle = '#f8fafc';
+                bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
+                bCtx.textAlign = 'center';
+                bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+              }
+              imageDataUrl = bCanvas.toDataURL('image/png');
+            }
+          } catch (_) {}
+        }
+        return { stillOpen: true, metaText, triesLeft, imageDataUrl, solved: window.__lastHumanCheckSolved || null };
+      })()`, 3000);
+      return probe && probe.result ? probe.result : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Send wrong-answer confirmation & board image to dedicated wrong-answer channel (1559706567560007730)
+  async function notifyHumanCheckWrongAttempt({ profile, attempt }) {
+    if (!profile || !attempt) return;
+    const cfg = loadSettings();
+    if (!cfg.enabled || !cfg.botToken) return;
+    const wrongChannelId = cfg.wrongChannelId || DEFAULT_DISCORD_SETTINGS.wrongChannelId || '1559706567560007730';
+    if (!wrongChannelId) return;
+
+    const now = Date.now();
+    for (const [k, t] of reportedWrongAttempts.entries()) {
+      if (now - t > 180000) reportedWrongAttempts.delete(k);
+    }
+    const slotNum = Number.isInteger(attempt.slot) && attempt.slot >= 1
+      ? attempt.slot
+      : (Number.isInteger(attempt.pickedSlot) && attempt.pickedSlot >= 1
+        ? attempt.pickedSlot
+        : (Number.isInteger(attempt.pickIndex) && attempt.pickIndex >= 0 ? attempt.pickIndex + 1 : 1));
+    const dedupKey = `${profile.id}:${attempt.checkId || ''}:${slotNum}:${attempt.triesLeftAfter ?? attempt.triesLeft ?? ''}`;
+    if (reportedWrongAttempts.has(dedupKey)) return;
+    reportedWrongAttempts.set(dedupKey, now);
+
+    const nick = resolveDeviceNickname();
+    const charName = profile.liveState?.charName || profile.lastCharName || profile.name;
+    const promptText = attempt.prompt || '(กดรูปด้านล่างที่เหมือนกับรูปในกรอบ)';
+    const byWho = attempt.manual && attempt.answeredBy
+      ? `👤 ผู้เล่นกดตอบผ่าน Discord (**${attempt.answeredBy}**)`
+      : `🤖 บอทตอบอัตโนมัติ (Auto-Solver)`;
+    const triesText = attempt.metaText
+      || (attempt.triesLeftAfter != null ? `ตอบผิดได้อีก ${attempt.triesLeftAfter} ครั้ง` : 'หน้าต่างเช็คผู้เล่นยังไม่ปิด (กำลังลองตัวเลือกถัดไป)');
+
+    let fileAttachment = null;
+    if (attempt.imageDataUrl && typeof attempt.imageDataUrl === 'string' && attempt.imageDataUrl.startsWith('data:image/')) {
+      try {
+        const base64Str = attempt.imageDataUrl.replace(/^data:image\/[a-zA-Z]+;base64,/, '');
+        const buf = Buffer.from(base64Str, 'base64');
+        if (buf.length > 200) {
+          fileAttachment = {
+            buffer: buf,
+            filename: 'human_check.png',
+            contentType: 'image/png'
+          };
+        }
+      } catch (_) {}
+    }
+
+    let tracked = activeChecks.get(profile.id);
+    if (!tracked) {
+      const nonce = crypto.randomBytes(12).toString('hex');
+      tracked = {
+        profileId: profile.id,
+        checkId: attempt.checkId ?? null,
+        fingerprint: '',
+        nonce,
+        requestId: null,
+        prompt: promptText,
+        notifiedAt: now,
+        options: [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }]
+      };
+      activeChecks.set(profile.id, tracked);
+      recentNonces.set(nonce, tracked);
+    }
+
+    const embed = {
+      title: `❌ [ยืนยันผล: ตอบผิด!] เลือกตัวเลือกที่ ${slotNum} ไม่ถูกต้อง`,
+      description:
+        `💻 **เครื่อง:** \`${nick}\`\n` +
+        `🎮 **จอเกม:** **${charName}** (\`${profile.name}\`)\n` +
+        `🙋 **ผู้ตอบ:** ${byWho}\n\n` +
+        `### ❓ โจทย์คำถาม:\n> **${promptText}**\n\n` +
+        `❌ **ผลการตรวจสอบ (Confirm):** เลือก **ตัวเลือกที่ ${slotNum}** ${attempt.x != null ? `(พิกัด ${attempt.x}, ${attempt.y})` : ''} แล้ว **ตอบผิด!**\n` +
+        `⏱️ **สถานะคงเหลือ:** **${triesText}**\n\n` +
+        `👉 **ช่วยกดตอบใหม่ได้ทันที:** กดปุ่มตัวเลือกที่ถูกต้องด้านล่าง`,
+      color: 0xEF4444,
+      fields: [],
+      footer: { text: `Aetheria Online · เครื่อง: ${nick} · จอ ${charName} (${profile.name})` },
+      timestamp: new Date().toISOString()
+    };
+
+    if (fileAttachment) {
+      embed.image = { url: 'attachment://human_check.png' };
+    }
+
+    const buttons = [];
+    for (let i = 0; i < 4; i++) {
+      buttons.push({
+        type: 2,
+        style: (i + 1 === slotNum) ? 4 : 1,
+        label: (i + 1 === slotNum) ? `ตัวเลือกที่ ${i + 1} (ผิด)` : `ตัวเลือกที่ ${i + 1}`,
+        custom_id: `hc:${profile.id}:${i}:${tracked.nonce}`
+      });
+    }
+    const components = [
+      { type: 1, components: buttons },
+      {
+        type: 1,
+        components: [
+          {
+            type: 2,
+            style: 2,
+            label: '🖥️ ดึงจอเกมขึ้นหน้าสุด',
+            custom_id: `hc:${profile.id}:focus:${tracked.nonce}`
+          }
+        ]
+      }
+    ];
+
+    const res = await discordRequest(
+      `/channels/${wrongChannelId}/messages`,
+      'POST',
+      {
+        content: `❌ **[ยืนยันผล: ตอบผิด! · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) — ${attempt.manual && attempt.answeredBy ? `ผู้ตอบ **${attempt.answeredBy}**` : 'บอท'} เลือก **ตัวเลือกที่ ${slotNum}** แล้ว **ตอบผิด!** (${triesText})`,
+        embeds: [embed],
+        components
+      },
+      cfg.botToken,
+      fileAttachment
+    );
+    if (res && res.success && res.data?.id && tracked) {
+      tracked.wrongMessageId = res.data.id;
+      if (!tracked.messageId) tracked.messageId = res.data.id;
+    }
+  }
+
   // Handle Button Interaction
   async function handleInteraction(interaction, token) {
     // Only handle Component Interactions (Type 3: Message Component / Button)
@@ -485,22 +687,22 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
 
     const customId = interaction.data?.custom_id || '';
     const cfg = loadSettings();
-    if (!cfg.enabled || !cfg.channelId || interaction.channel_id !== cfg.channelId) return;
+    const allowedChannels = new Set([cfg.channelId, cfg.wrongChannelId].filter(Boolean));
+    if (!cfg.enabled || !allowedChannels.has(interaction.channel_id)) return;
 
     const interactionId = interaction.id;
     const interactionToken = interaction.token;
 
     // Helper: Acknowledge & update interaction
-    const respondInteraction = async (content, updateMessage = false) => {
+    const respondInteraction = async (content, { updateMessage = false, ephemeral = true } = {}) => {
       // Type 4: ChannelMessageWithSource, Type 7: UpdateMessage
       const type = updateMessage ? 7 : 4;
+      const data = { content };
+      if (ephemeral) data.flags = 64; // 64 = ephemeral (visible only to clicker)
       await discordRequest(
         `https://discord.com/api/v10/interactions/${interactionId}/${interactionToken}/callback`,
         'POST',
-        {
-          type,
-          data: { content, flags: 64 } // 64 = ephemeral (visible only to clicker)
-        }
+        { type, data }
       );
     };
 
@@ -514,19 +716,24 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     if (parts.length !== 4 || parts[0] !== 'hc') return;
     const [, profileId, action, nonce] = parts;
 
+    const profiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+    const profileObj = profiles.find(p => p && p.id === profileId) || null;
+    const charName = profileObj ? (profileObj.liveState?.charName || profileObj.lastCharName || profileObj.name) : profileId;
+    const screenLabel = profileObj ? `**${charName}** (${profileObj.name})` : `[${profileId}]`;
+
     const active = activeChecks.get(profileId) || recentNonces.get(nonce);
     const ownsProfile = Boolean(
       recentNonces.has(nonce) ||
       activeChecks.has(profileId) ||
-      (typeof loadProfiles === 'function' && (loadProfiles() || []).some(p => p && p.id === profileId))
+      profileObj
     );
     if (!ownsProfile) return;
 
     if (!active || Date.now() - active.notifiedAt > 300000) {
-      await respondInteraction(`ℹ️ [${nick}] คำถามของจอ [${profileId}] ถูกตอบไปแล้วหรือหมดเวลาแล้วครับ`);
+      await respondInteraction(`ℹ️ [${nick}] คำถามของจอ ${screenLabel} ถูกตอบไปแล้วหรือหมดเวลาแล้วครับ`);
       return;
     }
-    if (active.nonce && active.nonce !== nonce && active.messageId && interaction.message?.id && active.messageId !== interaction.message.id) {
+    if (active.nonce && active.nonce !== nonce && active.messageId && interaction.message?.id && active.messageId !== interaction.message.id && active.wrongMessageId !== interaction.message.id) {
       await respondInteraction(`ℹ️ [${nick}] ปุ่มนี้เป็นของคำถามรอบก่อนหน้า กรุณากดปุ่มจากข้อความแจ้งเตือนล่าสุดครับ`);
       return;
     }
@@ -535,7 +742,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       if (typeof focusProfileWindow === 'function') {
         focusProfileWindow(profileId);
       }
-      await respondInteraction(`🖥️ [${nick}] ดึงหน้าต่างจอเกม [${profileId}] ขึ้นมาหน้าสุดเรียบร้อยแล้ว!`);
+      await respondInteraction(`🖥️ [${nick}] ดึงหน้าต่างจอเกม ${screenLabel} ขึ้นมาหน้าสุดเรียบร้อยแล้ว!`);
       return;
     }
 
@@ -546,12 +753,58 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     }
 
     const helperName = interaction.member?.nick || interaction.member?.user?.global_name || interaction.member?.user?.username || interaction.user?.username || 'ผู้ช่วยในห้อง';
-    // Answer in game
-    const result = await answerCheckInGame(profileId, pickIndex, '', { id: active.checkId, prompt: active.prompt });
+    active.solvedManually = true;
+    active.solvedBy = helperName;
+
+    // Answer in game with manual attribution so notifyHumanCheck never mistakes this for an Auto-Solver answer
+    const result = await answerCheckInGame(
+      profileId,
+      pickIndex,
+      '',
+      { id: active.checkId, prompt: active.prompt },
+      { manual: true, answeredBy: helperName }
+    );
     if (result.success) {
-      await respondInteraction(`✅ [${nick}] **ตอบตัวเลือกที่ ${pickIndex + 1}** ให้จอ [${profileId}] เรียบร้อยแล้ว! (โดย ${helperName})`);
+      const verify = await verifyHumanCheckAnswerInGame(profileId, 850);
+      if (verify && !verify.stillOpen) {
+        activeChecks.delete(profileId);
+        await respondInteraction(
+          `✅ **[${nick} · ผู้ตอบ: ${helperName}]** กดเลือก **ตัวเลือกที่ ${pickIndex + 1}** ให้จอ ${screenLabel} — **ยืนยันผล (Confirm): ตอบถูก!** 🎉 (หน้าต่างเช็คผู้เล่นปิดลงเรียบร้อยแล้ว)`,
+          { ephemeral: false }
+        );
+      } else if (verify && verify.stillOpen) {
+        const metaNote = verify.metaText ? ` (${verify.metaText})` : '';
+        await respondInteraction(
+          `❌ **[${nick} · ผู้ตอบ: ${helperName}]** กดเลือก **ตัวเลือกที่ ${pickIndex + 1}** ให้จอ ${screenLabel} — **ยืนยันผล (Confirm): ตอบผิด!** ⚠️${metaNote} กรุณาเลือกคำตอบใหม่อีกครั้ง`,
+          { ephemeral: false }
+        );
+        if (profileObj) {
+          await notifyHumanCheckWrongAttempt({
+            profile: profileObj,
+            attempt: {
+              timestamp: Date.now(),
+              checkId: active.checkId,
+              prompt: active.prompt,
+              pickIndex,
+              slot: pickIndex + 1,
+              x: result.x ?? null,
+              y: result.y ?? null,
+              manual: true,
+              answeredBy: helperName,
+              triesLeftAfter: verify.triesLeft,
+              metaText: verify.metaText,
+              imageDataUrl: verify.imageDataUrl
+            }
+          });
+        }
+      } else {
+        await respondInteraction(
+          `✅ **[${nick} · ผู้ตอบ: ${helperName}]** กดเลือก **ตัวเลือกที่ ${pickIndex + 1}** ให้จอ ${screenLabel} เรียบร้อยแล้ว!`,
+          { ephemeral: false }
+        );
+      }
     } else {
-      await respondInteraction(`⚠️ [${nick}] สั่งตอบไม่สำเร็จ: ${result.error || 'ไม่ทราบสาเหตุ'}`);
+      await respondInteraction(`⚠️ [${nick}] สั่งตอบให้จอ ${screenLabel} ไม่สำเร็จ: ${result.error || 'ไม่ทราบสาเหตุ'}`);
     }
   }
 
@@ -560,7 +813,8 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     if (msg.author?.bot) return;
 
     const cfg = loadSettings();
-    if (!cfg.enabled || !cfg.channelId || msg.channel_id !== cfg.channelId) return;
+    const allowedChannels = new Set([cfg.channelId, cfg.wrongChannelId].filter(Boolean));
+    if (!cfg.enabled || !allowedChannels.has(msg.channel_id)) return;
 
     const text = (msg.content || '').trim();
 
@@ -723,7 +977,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     const refId = msg.message_reference?.message_id;
     if (refId) {
       for (const [pId, info] of activeChecks.entries()) {
-        if (info.messageId === refId && Date.now() - info.notifiedAt <= 300000 && info.notifiedAt > newestTime) {
+        if ((info.messageId === refId || info.wrongMessageId === refId) && Date.now() - info.notifiedAt <= 300000 && info.notifiedAt > newestTime) {
           newestTime = info.notifiedAt;
           targetProfileId = pId;
         }
@@ -746,10 +1000,55 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     const nick = resolveDeviceNickname();
     const helperName = msg.member?.nick || msg.author?.global_name || msg.author?.username || 'ผู้ช่วยในห้อง';
     const active = activeChecks.get(targetProfileId);
-    const result = await answerCheckInGame(targetProfileId, pickIndex, '', { id: active.checkId, prompt: active.prompt });
-    const replyText = result.success
-      ? `✅ [${nick} · ตอบผ่านแชทโดย ${helperName}] เลือกตัวเลือกที่ **${pickNum}** ให้จอ **${targetProfileId}** เรียบร้อยแล้ว!`
-      : `⚠️ [${nick} · ตอบผ่านแชท] สั่งตอบไม่สำเร็จ: ${result.error}`;
+    const profiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+    const profileObj = profiles.find(p => p && p.id === targetProfileId) || null;
+    const charName = profileObj ? (profileObj.liveState?.charName || profileObj.lastCharName || profileObj.name) : targetProfileId;
+    const screenLabel = profileObj ? `**${charName}** (${profileObj.name})` : `**${targetProfileId}**`;
+
+    active.solvedManually = true;
+    active.solvedBy = helperName;
+
+    const result = await answerCheckInGame(
+      targetProfileId,
+      pickIndex,
+      '',
+      { id: active.checkId, prompt: active.prompt },
+      { manual: true, answeredBy: helperName }
+    );
+    let replyText = '';
+    if (result.success) {
+      const verify = await verifyHumanCheckAnswerInGame(targetProfileId, 850);
+      if (verify && !verify.stillOpen) {
+        activeChecks.delete(targetProfileId);
+        replyText = `✅ **[${nick} · ผู้ตอบ: ${helperName}]** เลือก **ตัวเลือกที่ ${pickNum}** ให้จอ ${screenLabel} — **ยืนยันผล (Confirm): ตอบถูก!** 🎉`;
+      } else if (verify && verify.stillOpen) {
+        const metaNote = verify.metaText ? ` (${verify.metaText})` : '';
+        replyText = `❌ **[${nick} · ผู้ตอบ: ${helperName}]** เลือก **ตัวเลือกที่ ${pickNum}** ให้จอ ${screenLabel} — **ยืนยันผล (Confirm): ตอบผิด!** ⚠️${metaNote}`;
+        if (profileObj) {
+          await notifyHumanCheckWrongAttempt({
+            profile: profileObj,
+            attempt: {
+              timestamp: Date.now(),
+              checkId: active.checkId,
+              prompt: active.prompt,
+              pickIndex,
+              slot: pickNum,
+              x: result.x ?? null,
+              y: result.y ?? null,
+              manual: true,
+              answeredBy: helperName,
+              triesLeftAfter: verify.triesLeft,
+              metaText: verify.metaText,
+              imageDataUrl: verify.imageDataUrl
+            }
+          });
+        }
+      } else {
+        replyText = `✅ **[${nick} · ผู้ตอบ: ${helperName}]** เลือก **ตัวเลือกที่ ${pickNum}** ให้จอ ${screenLabel} เรียบร้อยแล้ว!`;
+      }
+    } else {
+      replyText = `⚠️ [${nick} · ผู้ตอบ: ${helperName}] สั่งตอบให้จอ ${screenLabel} ไม่สำเร็จ: ${result.error}`;
+    }
 
     await discordRequest(
       `/channels/${msg.channel_id}/messages`,
@@ -857,14 +1156,17 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       let ansRes = { success: false, error: 'ไม่สามารถยืนยันสิทธิ์ตอบอัตโนมัติได้' };
 
       if (check.embeddedSolver) {
+        let lastWrongAttempt = null;
         for (let pollIdx = 0; pollIdx < 3; pollIdx++) {
           await new Promise(r => setTimeout(r, pollIdx === 0 ? 700 : 2100));
+          if (trackedCheck.solvedManually) return;
           if (activeChecks.get(profileId) !== trackedCheck) {
             // If server.js live-state polling already cleared activeChecks because .human-check closed, try reading __lastHumanCheckSolved once to send the green alert
             if (profile.debugPort && typeof evalProfilePort === 'function') {
               try {
                 const probe = await evalProfilePort(profile.debugPort, `(() => ({ stillOpen: !!document.querySelector('.human-check'), solved: window.__lastHumanCheckSolved || null }))()`);
                 const st = probe && probe.result ? probe.result : null;
+                if (st?.solved?.manual || trackedCheck.solvedManually) return;
                 if (st && !st.stillOpen && st.solved && (Date.now() - (st.solved.timestamp || 0) < 30000)) {
                   const s = st.solved;
                   const pickIdx = Number.isInteger(s.pickIndex) && s.pickIndex >= 0 ? s.pickIndex : (Number.isInteger(s.slot) && s.slot >= 1 ? s.slot - 1 : 0);
@@ -885,8 +1187,14 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           }
           if (profile.debugPort && typeof evalProfilePort === 'function') {
             try {
-              const probe = await evalProfilePort(profile.debugPort, `(() => ({ stillOpen: !!document.querySelector('.human-check'), solved: window.__lastHumanCheckSolved || null }))()`);
+              const probe = await evalProfilePort(profile.debugPort, `(() => {
+                const hc = document.querySelector('.human-check');
+                const metaEl = hc ? hc.querySelector('.human-check-meta') : null;
+                const metaText = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
+                return { stillOpen: !!hc, metaText, solved: window.__lastHumanCheckSolved || null };
+              })()`);
               const st = probe && probe.result ? probe.result : null;
+              if (st?.solved?.manual || trackedCheck.solvedManually) return;
               if (st && !st.stillOpen) {
                 const s = st.solved || {};
                 const pickIdx = Number.isInteger(s.pickIndex) && s.pickIndex >= 0 ? s.pickIndex : (Number.isInteger(s.slot) && s.slot >= 1 ? s.slot - 1 : 0);
@@ -900,13 +1208,28 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 };
                 ansRes = { success: true, picked: pickIdx };
                 break;
+              } else if (st && st.stillOpen && st.solved && !st.solved.manual && (Date.now() - (st.solved.timestamp || 0) >= 850)) {
+                lastWrongAttempt = {
+                  ...st.solved,
+                  checkId: check.id ?? st.solved.checkId ?? null,
+                  prompt: check.prompt || st.solved.prompt || '',
+                  metaText: st.metaText || check.meta || '',
+                  imageDataUrl: check.imageDataUrl || null
+                };
+                await notifyHumanCheckWrongAttempt({ profile, attempt: lastWrongAttempt });
               }
             } catch (e) {}
           }
         }
         if (!ansRes.success) {
-          manualReason = 'รอผู้เล่นช่วยตรวจสอบคำตอบ';
-          pointMessage = '⚠️ ระบบพยายามตอบอัตโนมัติแล้วแต่หน้าต่างเช็คผู้เล่นยังไม่ปิด กรุณาเลือกตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+          if (lastWrongAttempt) {
+            const wrongSlot = lastWrongAttempt.slot || ((lastWrongAttempt.pickIndex ?? 0) + 1);
+            manualReason = `ตอบผิด (เลือกข้อ ${wrongSlot})`;
+            pointMessage = `❌ **ยืนยันผล (Confirm):** ระบบเลือก **ตัวเลือกที่ ${wrongSlot}** แล้ว **ตอบผิด!** (แจ้งเตือนไปที่ห้องตอบผิดแล้ว) — กรุณาเลือกตอบด้วยตนเองผ่านปุ่มด้านล่าง`;
+          } else {
+            manualReason = 'รอผู้เล่นช่วยตรวจสอบคำตอบ';
+            pointMessage = '⚠️ ระบบพยายามตอบอัตโนมัติแล้วแต่หน้าต่างเช็คผู้เล่นยังไม่ปิด กรุณาเลือกตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+          }
         }
       } else {
         try {
@@ -948,6 +1271,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       }
 
       if (ansRes && ansRes.success) {
+        if (trackedCheck.solvedManually) return;
         console.log(`[Discord Bot] ✅ Auto-answer succeeded for [${profile.name}]! Picked #${solution.pickIndex + 1} (${solution.matchedName})`);
 
         // Send Success Notification to Discord
@@ -963,8 +1287,8 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           : '\n🪙 **ไม่มีค่าต่อคำตอบ:** ไม่หักส่วนบุญ สำหรับ Humancheck';
 
         const embed = {
-          title: `🤖 [Auto Human Check] ตรวจพบและตอบเช็คผู้เล่นสำเร็จ!`,
-          description: `💻 **เครื่อง:** \`${nick}\`\n🎮 **จอเกม:** \`${profile.name}\` (ตัวละคร: **${charName}**)\n\n### ❓ โจทย์คำถาม:\n> **${promptText}**\n\n🎯 **ระบบจับคู่อัตโนมัติ:**\n✅ เลือกตัวเลือกที่ **${solution.pickIndex + 1}**: **${solution.matchedName}** (${solution.source === 'local-catalog' ? 'แคตตาล็อกในเครื่อง' : 'บริการส่วนกลาง'})\n⏱️ หน่วงเวลาตอบ: **${delayMs} ms** (เลียนแบบผู้เล่น)${pointDeductText}`,
+          title: `🤖 [Auto Human Check] ตรวจพบและตอบเช็คผู้เล่นสำเร็จ! (✅ ยืนยันผล: ตอบถูก!)`,
+          description: `💻 **เครื่อง:** \`${nick}\`\n🎮 **จอเกม:** \`${profile.name}\` (ตัวละคร: **${charName}**)\n\n### ❓ โจทย์คำถาม:\n> **${promptText}**\n\n🎯 **ระบบจับคู่อัตโนมัติ (ผู้ตอบ: บอท Auto-Solver):**\n✅ เลือกตัวเลือกที่ **${solution.pickIndex + 1}**: **${solution.matchedName}** (${solution.source === 'local-catalog' ? 'แคตตาล็อกในเครื่อง' : 'บริการส่วนกลาง'})\n🎉 **ยืนยันผล (Confirm):** **ตอบถูก!** (หน้าต่างเช็คผู้เล่นปิดลงเรียบร้อยแล้ว)\n⏱️ หน่วงเวลาตอบ: **${delayMs} ms** (เลียนแบบผู้เล่น)${pointDeductText}`,
           color: 0x10B981, // Emerald Green
           fields: [
             {
@@ -984,7 +1308,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         let sent = false;
         if (cfg.botToken && cfg.channelId) {
           const res = await discordRequest(`/channels/${cfg.channelId}/messages`, 'POST', {
-            content: `🤖 **[Auto-Solver · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) มีโจทย์เช็คผู้เล่น -> บอทจับคู่และตอบ **"${solution.matchedName}"** ให้อัตโนมัติเรียบร้อยแล้ว!`,
+            content: `🤖 **[Auto-Solver · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) มีโจทย์เช็คผู้เล่น -> บอทเลือก **"${solution.matchedName}"** — ✅ **ยืนยันผล: ตอบถูก!**`,
             embeds: [embed]
           }, cfg.botToken, fileAttachment);
           if (res && res.success) sent = true;
@@ -993,7 +1317,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           await discordRequest(cfg.webhookUrl, 'POST', {
             username: `PmheeAether (${nick})`,
             avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/manager/public/icon.png',
-            content: `🤖 **[Auto-Solver · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) ตอบเช็คผู้เล่นอัตโนมัติสำเร็จ!`,
+            content: `🤖 **[Auto-Solver · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) ตอบเช็คผู้เล่นอัตโนมัติสำเร็จ (✅ ยืนยันผล: ตอบถูก!)`,
             embeds: [embed]
           }, null, fileAttachment);
         }
@@ -1007,7 +1331,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       }
     }
 
-    if (activeChecks.get(profileId) !== trackedCheck) return;
+    if (activeChecks.get(profileId) !== trackedCheck || trackedCheck.solvedManually) return;
 
     // Fallback or Manual Mode: Send Urgent Alert with Interactive Buttons & Real Item Names & Card Image
     if (cfg.autoBringToFront && typeof focusProfileWindow === 'function') {
@@ -1301,6 +1625,8 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     loadSettings,
     saveSettings,
     notifyHumanCheck,
+    notifyHumanCheckWrongAttempt,
+    verifyHumanCheckAnswerInGame,
     notifyHumanCheckEmergency,
     notifyUnexpectedTown,
     clearHumanCheck,

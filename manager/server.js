@@ -519,6 +519,9 @@ const LIVE_STATE_EVAL = `(() => {
     } else {
       s.humanCheck = null;
     }
+    s.humanCheckWrongAttempts = (Array.isArray(window.__pmWrongHumanCheckQueue) && window.__pmWrongHumanCheckQueue.length)
+      ? window.__pmWrongHumanCheckQueue.splice(0, 10)
+      : null;
   } catch (e) {}
   try {
     if (window.__unexpectedTownWaiting) {
@@ -1194,7 +1197,7 @@ const botAutoUpdater = createBotAutoUpdater({
   loadProfiles,
   evalProfilePort,
   getGameDir: () => installer.getEffectiveGamePath(),
-  getManagedRelease:(force)=>force&&scriptCoordinator.refreshRelease?scriptCoordinator.refreshRelease():scriptCoordinator.release?.(),
+  getManagedRelease:()=>scriptCoordinator.refreshRelease?scriptCoordinator.refreshRelease():scriptCoordinator.release?.(),
   dataDir: path.join(__dirname, "data")
 });
 // Auto-login / auto-register: game clients get their profile's ID + password (manager/auth_sync.js)
@@ -1351,6 +1354,11 @@ setInterval(async () => {
       if (!p.debugPort) continue;
       const state = await queryClientState(p.debugPort);
       await embeddedHumanCheckBridge.collect(p,state);
+      if (state && Array.isArray(state.humanCheckWrongAttempts) && typeof discordService.notifyHumanCheckWrongAttempt === 'function') {
+        for (const attempt of state.humanCheckWrongAttempts) {
+          discordService.notifyHumanCheckWrongAttempt({ profile: p, attempt });
+        }
+      }
       if (state && state.humanCheck && state.humanCheck.active) {
         if (state.humanCheck.isUpdatedFormat) {
           console.warn(`[EMERGENCY STOP] ตรวจพบ Human Check รูปแบบใหม่บนจอ ${p.name || p.id} — ปิดทุกจออัตโนมัติทันที!`);

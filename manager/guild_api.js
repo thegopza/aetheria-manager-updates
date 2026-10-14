@@ -101,10 +101,11 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
     } catch (e) {}
 
     let newMemberCooldownNote = null;
+    let newMemberUnlockAt = 0;
     try {
       const chatArr = getters.chat ? getters.chat() : null;
       if (Array.isArray(chatArr) && chatArr.length > 0) {
-        const recent = chatArr.slice(-30);
+        const recent = chatArr.slice(-100);
         for (let i = recent.length - 1; i >= 0; i--) {
           const entry = recent[i];
           const txt = String((entry && (entry.text || entry.message || entry.content)) || entry || '');
@@ -115,10 +116,28 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
           }
         }
       }
+      if (g && Array.isArray(g.members) && Array.isArray(g.log)) {
+        const myMem = g.members.find(m => m && String(m.name || '').trim().toLowerCase() === String(charName || '').trim().toLowerCase());
+        if (myMem && myMem.role !== 'master') {
+          const joinTarget = String(charName || '').trim().toLowerCase() + ' เข้าร่วมกิลด์';
+          const joinLog = g.log.find(l => l && String(l.text || '').trim().toLowerCase() === joinTarget && Number(l.at) > 0);
+          if (joinLog) {
+            const unlockAt = Number(joinLog.at) + 24 * 3600 * 1000;
+            const remMs = unlockAt - Date.now();
+            if (remMs > 0) {
+              newMemberUnlockAt = unlockAt;
+              const hrs = Math.floor(remMs / 3600000);
+              const mins = Math.max(1, Math.ceil((remMs % 3600000) / 60000));
+              newMemberCooldownNote = 'รอครบ 24 ชม. (อีก ' + (hrs > 0 ? (hrs + ' ชม. ') : '') + mins + ' นาที)';
+            }
+          }
+        }
+      }
     } catch (e) {}
 
     let invRaw = null;
     try { invRaw = getters.inventory ? getters.inventory() : null; } catch (e) {}
+    if (!invRaw && window.__latestInventory) invRaw = window.__latestInventory;
     const bag = Array.isArray(invRaw) ? invRaw : (invRaw && Array.isArray(invRaw.items) ? invRaw.items : []);
 
     // Count bag items by itemId (matching the game's guild material counter)
@@ -219,7 +238,8 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
       inGameGuild,
       pendingGuildInvite,
       donatableTiers,
-      newMemberCooldownNote
+      newMemberCooldownNote,
+      newMemberUnlockAt
     };
   } catch (e) {
     return { inWorld: false, error: e.message };
@@ -337,9 +357,15 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       if (pr && pr.inWorld) {
         if (pr.newMemberCooldownNote) {
           donateBackoffNote[id] = pr.newMemberCooldownNote;
-          if (!donateBackoffUntil[id] || donateBackoffUntil[id] < Date.now()) {
-            donateBackoffUntil[id] = Date.now() + 15 * 60 * 1000;
+          const targetUntil = pr.newMemberUnlockAt && pr.newMemberUnlockAt > Date.now()
+            ? Math.min(pr.newMemberUnlockAt, Date.now() + 15 * 60 * 1000)
+            : (Date.now() + 15 * 60 * 1000);
+          if (!donateBackoffUntil[id] || donateBackoffUntil[id] < Date.now() || donateBackoffUntil[id] > targetUntil) {
+            donateBackoffUntil[id] = targetUntil;
           }
+        } else if (pr.newMemberUnlockAt === 0 && donateBackoffUntil[id] && donateBackoffUntil[id] <= Date.now()) {
+          delete donateBackoffUntil[id];
+          delete donateBackoffNote[id];
         }
         liveStatus[id] = {
           ...(liveStatus[id] || {}),
@@ -353,7 +379,8 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
           inGameGuild: pr.inGameGuild,
           donatedToday: !!(pr.inGameGuild && pr.inGameGuild.donatedToday),
           myPoints: pr.inGameGuild ? pr.inGameGuild.myPoints : 0,
-          donatableTiers: pr.donatableTiers || []
+          donatableTiers: pr.donatableTiers || [],
+          cooldownNote: pr.newMemberCooldownNote || (donateBackoffUntil[id] > Date.now() ? donateBackoffNote[id] : null) || null
         };
       } else {
         liveStatus[id] = { ...(liveStatus[id] || {}), online: false };
@@ -411,8 +438,8 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     return changed;
   }
 
-  async function tryAutoDonateForProfile(g, profileId, profile, probe) {
-    if (state.autoDonate === false || g.autoDonate === false) return false;
+  async function tryAutoDonateForProfile(g, profileId, profile, probe, force = false) {
+    if (!force && (state.autoDonate === false || g.autoDonate === false)) return false;
     if (!profile || !profile.debugPort || !probe || !probe.inWorld) return false;
     const ig = probe.inGameGuild;
     if (!ig || !ig.id) return false;
@@ -426,13 +453,15 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       }
       return false;
     }
-    if (probe.newMemberCooldownNote) {
-      donateBackoffUntil[profileId] = Date.now() + 15 * 60 * 1000;
+    if (!force && probe.newMemberCooldownNote) {
+      donateBackoffUntil[profileId] = probe.newMemberUnlockAt && probe.newMemberUnlockAt > Date.now()
+        ? Math.min(probe.newMemberUnlockAt, Date.now() + 15 * 60 * 1000)
+        : (Date.now() + 15 * 60 * 1000);
       donateBackoffNote[profileId] = probe.newMemberCooldownNote;
       setActionNote(profileId, probe.newMemberCooldownNote);
       return false;
     }
-    if (donateBackoffUntil[profileId] && donateBackoffUntil[profileId] > Date.now()) {
+    if (!force && donateBackoffUntil[profileId] && donateBackoffUntil[profileId] > Date.now()) {
       setActionNote(profileId, donateBackoffNote[profileId] || 'รอครบ 24 ชม. จึงบริจาคได้');
       return false;
     }
@@ -451,7 +480,8 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         inGameGuild: after.inGameGuild,
         donatedToday: !!(after.inGameGuild && after.inGameGuild.donatedToday),
         myPoints: after.inGameGuild ? after.inGameGuild.myPoints : 0,
-        donatableTiers: after.donatableTiers || []
+        donatableTiers: after.donatableTiers || [],
+        cooldownNote: after.newMemberCooldownNote || null
       };
       if (after.inGameGuild && after.inGameGuild.donatedToday) {
         delete donateBackoffUntil[profileId];
@@ -463,7 +493,9 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         return true;
       }
       const note = after.newMemberCooldownNote || 'รอครบ 24 ชม. จึงบริจาคได้';
-      donateBackoffUntil[profileId] = Date.now() + 15 * 60 * 1000;
+      donateBackoffUntil[profileId] = after.newMemberUnlockAt && after.newMemberUnlockAt > Date.now()
+        ? Math.min(after.newMemberUnlockAt, Date.now() + 15 * 60 * 1000)
+        : (Date.now() + 15 * 60 * 1000);
       donateBackoffNote[profileId] = note;
       setActionNote(profileId, note);
       return false;
@@ -744,6 +776,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         myPoints: ig ? ig.myPoints : 0,
         canDonateCount: Array.isArray(ls.donatableTiers) ? ls.donatableTiers.length : 0,
         donatableTiers: ls.donatableTiers || [],
+        cooldownNote: ls.cooldownNote || (donateBackoffUntil[String(id)] > Date.now() ? donateBackoffNote[String(id)] : null) || null,
         lastAction: ls.lastAction || null,
         lastActionAt: ls.lastActionAt || null
       };
@@ -969,16 +1002,29 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       const { byId, results: probes } = await probeAllConfigured();
       const allIds = [g.leaderId, ...g.memberIds];
       let donatedNow = 0;
+      let cooldownCount = 0;
+      let missingItemsCount = 0;
+      let alreadyDonatedCount = 0;
       for (const pid of allIds) {
         const p = byId.get(pid);
         const pr = probes.get(pid);
         if (p && pr && pr.inWorld) {
-          const ok = await tryAutoDonateForProfile(g, pid, p, pr);
+          if (pr.inGameGuild && pr.inGameGuild.donatedToday) {
+            alreadyDonatedCount++;
+            continue;
+          }
+          const tiers = Array.isArray(pr.donatableTiers) ? pr.donatableTiers : [];
+          if (tiers.length === 0) {
+            missingItemsCount++;
+            continue;
+          }
+          const ok = await tryAutoDonateForProfile(g, pid, p, pr, true);
           if (ok) donatedNow++;
+          else cooldownCount++;
         }
       }
       await probeAllConfigured().catch(() => {});
-      return sendJSON({ success: true, donatedNow, ...buildPublicView() }), true;
+      return sendJSON({ success: true, donatedNow, cooldownCount, missingItemsCount, alreadyDonatedCount, ...buildPublicView() }), true;
     }
 
     // POST /api/guilds/:id/members — manually add a member

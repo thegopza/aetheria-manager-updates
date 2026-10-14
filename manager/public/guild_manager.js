@@ -164,6 +164,10 @@
     if (m.donatedToday) {
       return `<span class="gd-donate-badge is-done" title="ตัวละครนี้บริจาคไอเทมรายวันวันนี้เรียบร้อยแล้ว">🎁 บริจาครายวันแล้ว</span>`;
     }
+    const isCooldown24h = Boolean(m.cooldownNote || (m.lastAction && m.lastAction.includes('รอครบ 24')));
+    if (m.canDonateCount > 0 && isCooldown24h) {
+      return `<span class="gd-donate-badge is-waiting" title="มีไอเทมครบในกระเป๋าแล้ว แต่เซิร์ฟเวอร์เกมกำหนดให้สมาชิกใหม่ต้องอยู่กิลด์ครบ 24 ชม. ก่อนบริจาค (ระบบจะบริจาคให้อัตโนมัติทันทีที่ครบ 24 ชม.)">🔒 รอครบ 24 ชม. (ของครบ)</span>`;
+    }
     if (m.canDonateCount > 0) {
       return `<span class="gd-donate-badge is-ready" title="มีไอเทมพร้อมบริจาครายวันในกระเป๋า ระบบกำลังส่งบริจาค">📦 พร้อมบริจาค (${m.canDonateCount})</span>`;
     }
@@ -346,9 +350,23 @@
             await api('POST', `/api/guilds/${encodeURIComponent(guildId)}/auto-fill`);
             if (typeof showToast === 'function') showToast('🤖 ดึงตัวละครที่ว่างเข้ากิลด์เรียบร้อย');
           } else if (act === 'trigger-donate') {
-            const res = await api('POST', `/api/guilds/${encodeURIComponent(guildId)}/donate`);
-            if (typeof showToast === 'function') {
-              showToast(res.donatedNow > 0 ? `🎁 สั่งบริจาครายวันเพิ่ม ${res.donatedNow} จอเรียบร้อย` : 'ℹ️ ไม่มีจอที่บริจาคเพิ่มได้ในขณะนี้ (บริจาคแล้ว หรือยังไม่มีของครบ)');
+            el.disabled = true;
+            const origText = el.textContent;
+            el.textContent = '⏳ กำลังเช็ก...';
+            try {
+              const res = await api('POST', `/api/guilds/${encodeURIComponent(guildId)}/donate`);
+              if (typeof showToast === 'function') {
+                if (res.donatedNow > 0) {
+                  showToast(`🎁 สั่งบริจาครายวันเพิ่ม ${res.donatedNow} จอเรียบร้อย`);
+                } else if (res.cooldownCount > 0) {
+                  showToast(`🔒 เซิร์ฟเวอร์เกมล็อก "สมาชิกใหม่ต้องอยู่กิลด์ครบ 24 ชม." (${res.cooldownCount} จอมีของครบแล้ว ระบบจะบริจาคให้อัตโนมัติทันทีที่ครบ 24 ชม.)`);
+                } else {
+                  showToast('ℹ️ ไม่มีจอที่บริจาคเพิ่มได้ในขณะนี้ (บริจาคแล้ว หรือยังไม่มีของครบ)');
+                }
+              }
+            } finally {
+              el.disabled = false;
+              el.textContent = origText;
             }
           }
         } catch (err) {

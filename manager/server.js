@@ -1984,6 +1984,61 @@ const humanCheckFirstSeenByProfile = new Map();
 const prisonAlertedByProfile = new Map();
 let humanCheckMonitorInFlight = false;
 
+function isJailMapName(mapStr) {
+  if (typeof mapStr !== 'string') return false;
+  const s = mapStr.trim();
+  if (!s || s === '--') return false;
+  return /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(s);
+}
+
+const jailStoppingInFlight = new Set();
+async function recordProfileJailedAndStop(profile, state) {
+  if (!profile || !profile.id) return;
+  const pid = String(profile.id);
+  const now = Date.now();
+  const mapName = (state && typeof state.map === 'string' && state.map.trim()) ? state.map.trim() : 'คุก';
+  try {
+    const fresh = loadProfiles();
+    const target = fresh.find(f => String(f.id) === pid);
+    if (target) {
+      target.isJailed = true;
+      target.jailedAt = target.jailedAt || now;
+      target.jailedMap = mapName;
+      if (state && state.charName) target.lastCharName = state.charName;
+      if (state && state.charClass) target.lastCharClass = state.charClass;
+      saveProfiles(fresh);
+    }
+  } catch (_) {}
+
+  if (!jailStoppingInFlight.has(pid)) {
+    jailStoppingInFlight.add(pid);
+    try {
+      console.warn(`[JAIL AUTO-STOP] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — ปิดจออัตโนมัติทันที!`);
+      await stopSingleProfile(pid);
+    } catch (_) {} finally {
+      setTimeout(() => jailStoppingInFlight.delete(pid), 4000);
+    }
+  }
+}
+
+function clearProfileJailStatus(profileId) {
+  const pid = String(profileId || '');
+  const fresh = loadProfiles();
+  let changed = false;
+  for (const p of fresh) {
+    if (!profileId || String(p.id) === pid) {
+      if (p.isJailed || p.jailedAt || p.jailedMap) {
+        delete p.isJailed;
+        delete p.jailedAt;
+        delete p.jailedMap;
+        changed = true;
+      }
+    }
+  }
+  if (changed) saveProfiles(fresh);
+  return changed;
+}
+
 // Background monitor for Human Check (alerts Discord + OS beep even if Manager UI is closed/idle)
 setInterval(async () => {
   if (humanCheckMonitorInFlight) return;
@@ -2029,14 +2084,16 @@ setInterval(async () => {
             humanCheckFirstSeenByProfile.delete(p.id);
             discordService.clearHumanCheck(p.id);
           }
-          if (state && typeof state.map === 'string' && state.map.includes('คุก')) {
+          if (state && isJailMapName(state.map)) {
             const lastPrisonBeep = prisonAlertedByProfile.get(p.id) || 0;
             if (Date.now() - lastPrisonBeep > 60000) {
               prisonAlertedByProfile.set(p.id, Date.now());
               shouldBeepUrgent = true;
             }
-          } else if (state && typeof state.map === 'string' && state.map) {
+            await recordProfileJailedAndStop(p, state);
+          } else if (state && typeof state.map === 'string' && state.map.trim() && state.map.trim() !== '--') {
             prisonAlertedByProfile.delete(p.id);
+            if (p.isJailed) clearProfileJailStatus(p.id);
           }
           if (state && state.unexpectedTown && state.unexpectedTown.active) {
             discordService.notifyUnexpectedTown({ profile: p, unexpectedTown: state.unexpectedTown });
@@ -2481,6 +2538,21 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
+        if (alive && liveState && !liveState.error && liveState.map) {
+          if (isJailMapName(liveState.map)) {
+            recordProfileJailedAndStop(p, liveState).catch(() => {});
+            p.isJailed = true;
+            p.jailedAt = p.jailedAt || Date.now();
+            p.jailedMap = liveState.map;
+            alive = false;
+          } else if (p.isJailed) {
+            clearProfileJailStatus(p.id);
+            p.isJailed = false;
+            p.jailedAt = null;
+            p.jailedMap = null;
+          }
+        }
+
         if (!alive && proc) {
           delete runningProcesses[p.id];
         }
@@ -2564,6 +2636,29 @@ const server = http.createServer(async (req, res) => {
       allWindowsHidden,
       captchaStats: getCaptchaStats()
     });
+  }
+
+  // POST /api/profiles/:id/clear-jail
+  if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/clear-jail$/)) {
+    const id = pathname.split("/")[3];
+    const cleared = clearProfileJailStatus(id);
+    return sendJSON({ success: true, cleared });
+  }
+
+  // POST /api/jail/clear-all
+  if (req.method === "POST" && pathname === "/api/jail/clear-all") {
+    const fresh = loadProfiles();
+    let clearedCount = 0;
+    fresh.forEach(p => {
+      if (p.isJailed) {
+        p.isJailed = false;
+        p.jailedAt = null;
+        p.jailedMap = null;
+        clearedCount++;
+      }
+    });
+    if (clearedCount > 0) saveProfiles(fresh);
+    return sendJSON({ success: true, clearedCount });
   }
 
   // POST /api/profiles/:id/reset-zeny-rate

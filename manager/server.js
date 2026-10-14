@@ -3176,13 +3176,15 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && pathname === "/api/toggle-all-windows") {
     allWindowsHidden = !allWindowsHidden;
     const profiles = loadProfiles();
-    for (const p of profiles) {
+    await Promise.all(profiles.map(async p => {
       windowStates[p.id] = { isHidden: allWindowsHidden, zeroRender: allWindowsHidden };
       if (p.debugPort) {
-        http.get(`http://127.0.0.1:${p.debugPort}/api/window?action=${allWindowsHidden ? 'zero-render-on' : 'zero-render-off'}`, () => {}).on('error', () => {});
-        evalProfilePort(p.debugPort, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(${allWindowsHidden}) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${allWindowsHidden}))`, 3000);
+        if (!allWindowsHidden) {
+          http.get(`http://127.0.0.1:${p.debugPort}/api/window?action=show`, () => {}).on('error', () => {});
+        }
+        await evalProfilePort(p.debugPort, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(${allWindowsHidden}) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${allWindowsHidden}))`, 3000).catch(() => {});
       }
-    }
+    }));
     return sendJSON({ success: true, allWindowsHidden, zeroRender: allWindowsHidden });
   }
 
@@ -3234,7 +3236,7 @@ const server = http.createServer(async (req, res) => {
       runPowerShell(`Add-Type 'using System; using System.Runtime.InteropServices; public class PmShow { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }'
         Get-Process -Id ${proc.pid} -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { [PmShow]::ShowWindow($_.MainWindowHandle, 9) }`);
     }
-    evalProfilePort(port, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`, 3000);
+    await evalProfilePort(port, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`, 3000).catch(() => {});
     // Electron loader: restore + always-on-top for a moment + focus. Browser mode: restore + activate tab.
     await new Promise(resolve => {
       http.get(`http://127.0.0.1:${port}/api/window?action=top`, { timeout: 5000 }, r => { r.resume(); r.on("end", resolve); })
@@ -3295,8 +3297,10 @@ public class PmFocus {
     const isHidden = windowStates[id].isHidden;
 
     if (profile.debugPort) {
-      http.get(`http://127.0.0.1:${profile.debugPort}/api/window?action=${isHidden ? 'zero-render-on' : 'zero-render-off'}`, () => {}).on('error', () => {});
-      evalProfilePort(profile.debugPort, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(${isHidden}) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${isHidden}))`, 3000);
+      if (!isHidden) {
+        http.get(`http://127.0.0.1:${profile.debugPort}/api/window?action=show`, () => {}).on('error', () => {});
+      }
+      await evalProfilePort(profile.debugPort, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(${isHidden}) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${isHidden}))`, 3000).catch(() => {});
     }
 
     return sendJSON({ success: true, isHidden, zeroRender: isHidden });

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "5c797bb32643df94b78691477d150a08c28408a2",
+  "sourceCommit": "bddcba74320cbadcf010f83bc31e646bcc0e5dfd",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -232,7 +232,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "677564ce8ce20fe14c3dc3ce430602ee460b5f1992e594c7de255a24cdd5d7d6"
+      "sha256": "3f94ebb9ef0d2f786fce46493da5031baf0a6a934d712311ab77709a13d193ac"
     },
     {
       "path": "manager/test_isolation.js",

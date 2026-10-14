@@ -2566,7 +2566,9 @@ const server = http.createServer(async (req, res) => {
         const hasPremium = (alive && liveState && !liveState.error) ? liveHasPremium : Boolean(effectivePremiumUntil && effectivePremiumUntil > Date.now());
 
         if (alive && liveState && typeof liveState.zeroRender === 'boolean') {
-          windowStates[p.id] = { isHidden: liveState.zeroRender, zeroRender: liveState.zeroRender };
+          if (!windowStates[p.id] || (Date.now() - (windowStates[p.id].updatedAt || 0) > 4000)) {
+            windowStates[p.id] = { isHidden: liveState.zeroRender, zeroRender: liveState.zeroRender, updatedAt: windowStates[p.id]?.updatedAt || 0 };
+          }
         }
 
         return {
@@ -3177,7 +3179,7 @@ const server = http.createServer(async (req, res) => {
     allWindowsHidden = !allWindowsHidden;
     const profiles = loadProfiles();
     await Promise.all(profiles.map(async p => {
-      windowStates[p.id] = { isHidden: allWindowsHidden, zeroRender: allWindowsHidden };
+      windowStates[p.id] = { isHidden: allWindowsHidden, zeroRender: allWindowsHidden, updatedAt: Date.now() };
       if (p.debugPort) {
         if (!allWindowsHidden) {
           http.get(`http://127.0.0.1:${p.debugPort}/api/window?action=show`, () => {}).on('error', () => {});
@@ -3231,7 +3233,7 @@ const server = http.createServer(async (req, res) => {
     const port = profile.debugPort;
 
     const proc = runningProcesses[id];
-    windowStates[id] = { isHidden: false, zeroRender: false };
+    windowStates[id] = { isHidden: false, zeroRender: false, updatedAt: Date.now() };
     if (proc && proc.pid) {
       runPowerShell(`Add-Type 'using System; using System.Runtime.InteropServices; public class PmShow { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }'
         Get-Process -Id ${proc.pid} -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { [PmShow]::ShowWindow($_.MainWindowHandle, 9) }`);
@@ -3294,6 +3296,7 @@ public class PmFocus {
     if (!windowStates[id]) windowStates[id] = { isHidden: false, zeroRender: false };
     windowStates[id].isHidden = !windowStates[id].isHidden;
     windowStates[id].zeroRender = windowStates[id].isHidden;
+    windowStates[id].updatedAt = Date.now();
     const isHidden = windowStates[id].isHidden;
 
     if (profile.debugPort) {

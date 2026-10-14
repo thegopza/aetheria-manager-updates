@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "4e3de6017c25052c8d7ad8a8132059c57f50978e",
+  "sourceCommit": "3844e003d6d80cf8130ed7e581ba6edc0539fc89",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -32,7 +32,7 @@
     },
     {
       "path": "manager/discord_bot.js",
-      "sha256": "ec4496e040e497e1b60e4664229bb9e2ca512542483aabcab3321a15f6648618"
+      "sha256": "25d1c9e064aca2157d796c50452a11cea68fb100be66173deb44bba973341032"
     },
     {
       "path": "manager/embedded_human_check_bridge.js",
@@ -112,7 +112,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "36d014daf35b4318c1586d0a892f4626956f7d068d7a183530da0656ea37b13e"
+      "sha256": "c15bbb26ae8bc142ad544fd2b83e1a1af4251647955539ca722f8c7164f9cbc4"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -144,7 +144,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "0df34720240f6b91afcffc5d06a7bbe5139f06d8c3144a60f00a853fa4039c7e"
+      "sha256": "7632d2a950ff5ed2e12a2d99a75931f1e53c057b80f2fb772a48fb34ca6b8f51"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -188,7 +188,7 @@
     },
     {
       "path": "manager/public/style.css",
-      "sha256": "2666fddf1e365c191efb3861e4c260524cb2158d1e38f1d28ce27fcb995db956"
+      "sha256": "2fc7f9fa2610c5ec885f7afcbf5cf8aeefa069be822c4f9eacc50b2f1d0f18ed"
     },
     {
       "path": "manager/script_bootstrap.js",
@@ -212,7 +212,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "40a909419e7a7e5083a7cb923a024c5181c8c6fb8947ddba7dbdae098cee6a56"
+      "sha256": "55422cad4db6dbf0716d90ee8f6b3adf5567ad98f12ddff50282f8f519de4468"
     },
     {
       "path": "manager/test_isolation.js",

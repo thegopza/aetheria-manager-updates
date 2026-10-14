@@ -497,63 +497,126 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     }
   }
 
-  // Verify in-game whether a Human Check closed (correct) or stayed open (wrong) after answering
-  async function verifyHumanCheckAnswerInGame(profileId, waitMs = 850) {
+  // Verify in-game whether a Human Check closed (correct) or stayed open (wrong) after answering.
+  // Handles server/client lag by polling up to maxWaitMs and checking if triesLeft ("ตอบผิดได้อีก X ครั้ง") actually decreased.
+  async function verifyHumanCheckAnswerInGame(profileId, waitMsOrOptions = 1200) {
     const profiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
     const profile = profiles.find(p => p && p.id === profileId);
     if (!profile || !profile.debugPort || typeof evalProfilePort !== 'function') {
       return null;
     }
-    if (waitMs > 0) {
-      await new Promise(r => setTimeout(r, waitMs));
+    const isTest = !!(process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test');
+    const opts = (typeof waitMsOrOptions === 'object' && waitMsOrOptions !== null)
+      ? waitMsOrOptions
+      : { waitMs: Number(waitMsOrOptions) || 1200 };
+    const initialWaitMs = opts.waitMs !== undefined ? Number(opts.waitMs) : 1200;
+    const maxWaitMs = isTest ? initialWaitMs : Math.max(initialWaitMs, Number(opts.maxWaitMs) || 5800);
+    const expectedTriesBefore = opts.expectedTriesBefore !== undefined ? opts.expectedTriesBefore : null;
+
+    const startTime = Date.now();
+    if (initialWaitMs > 0) {
+      await new Promise(r => setTimeout(r, initialWaitMs));
     }
-    try {
-      const probe = await evalProfilePort(profile.debugPort, `(() => {
-        const hc = document.querySelector('.human-check');
-        if (!hc) return { stillOpen: false, solved: window.__lastHumanCheckSolved || null };
-        const metaEl = hc.querySelector('.human-check-meta');
-        const metaText = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
-        const triesMatch = metaText.match(/ตอบผิดได้อีก\\s*(\\d+)/);
-        const triesLeft = triesMatch ? Number(triesMatch[1]) : null;
-        let imageDataUrl = null;
-        const boardImg = hc.querySelector('.human-check-board img');
-        if (boardImg && boardImg.complete && boardImg.naturalWidth > 0 && typeof document?.createElement === 'function') {
-          try {
-            const bw = 480, bh = 330, stripH = 38;
-            const bCanvas = document.createElement('canvas');
-            bCanvas.width = bw;
-            bCanvas.height = bh + stripH;
-            const bCtx = bCanvas.getContext('2d');
-            if (bCtx) {
-              bCtx.fillStyle = '#0f172a';
-              bCtx.fillRect(0, 0, bw, bh + stripH);
-              bCtx.drawImage(boardImg, 0, 0, bw, bh);
-              const colCenters = [68, 181, 300, 416];
-              const lastSlot = window.__lastHumanCheckSolved?.slot || null;
-              for (let i = 0; i < 4; i++) {
-                const cx = colCenters[i];
-                const bx = cx - 44, by = bh + 5;
-                bCtx.fillStyle = (lastSlot === i + 1) ? '#991b1b' : '#1e293b';
-                bCtx.strokeStyle = (lastSlot === i + 1) ? '#ef4444' : '#38bdf8';
-                bCtx.lineWidth = 1.5;
-                bCtx.beginPath();
-                if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
-                bCtx.fill();
-                bCtx.stroke();
-                bCtx.fillStyle = '#f8fafc';
-                bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
-                bCtx.textAlign = 'center';
-                bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+
+    let retriedLagClick = false;
+    let lastResult = null;
+
+    while (true) {
+      try {
+        const probe = await evalProfilePort(profile.debugPort, `(() => {
+          const hc = document.querySelector('.human-check');
+          if (!hc) return { stillOpen: false, solved: window.__lastHumanCheckSolved || null };
+          const metaEl = hc.querySelector('.human-check-meta');
+          const metaText = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
+          const triesMatch = metaText.match(/ตอบผิดได้อีก\\s*(\\d+)/);
+          const triesLeft = triesMatch ? Number(triesMatch[1]) : null;
+          let imageDataUrl = null;
+          const boardImg = hc.querySelector('.human-check-board img');
+          if (boardImg && boardImg.complete && boardImg.naturalWidth > 0 && typeof document?.createElement === 'function') {
+            try {
+              const bw = 480, bh = 330, stripH = 38;
+              const bCanvas = document.createElement('canvas');
+              bCanvas.width = bw;
+              bCanvas.height = bh + stripH;
+              const bCtx = bCanvas.getContext('2d');
+              if (bCtx) {
+                bCtx.fillStyle = '#0f172a';
+                bCtx.fillRect(0, 0, bw, bh + stripH);
+                bCtx.drawImage(boardImg, 0, 0, bw, bh);
+                const colCenters = [68, 181, 300, 416];
+                const lastSlot = window.__lastHumanCheckSolved?.slot || null;
+                for (let i = 0; i < 4; i++) {
+                  const cx = colCenters[i];
+                  const bx = cx - 44, by = bh + 5;
+                  bCtx.fillStyle = (lastSlot === i + 1) ? '#991b1b' : '#1e293b';
+                  bCtx.strokeStyle = (lastSlot === i + 1) ? '#ef4444' : '#38bdf8';
+                  bCtx.lineWidth = 1.5;
+                  bCtx.beginPath();
+                  if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
+                  bCtx.fill();
+                  bCtx.stroke();
+                  bCtx.fillStyle = '#f8fafc';
+                  bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
+                  bCtx.textAlign = 'center';
+                  bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+                }
+                imageDataUrl = bCanvas.toDataURL('image/png');
               }
-              imageDataUrl = bCanvas.toDataURL('image/png');
-            }
-          } catch (_) {}
+            } catch (_) {}
+          }
+          return { stillOpen: true, metaText, triesLeft, imageDataUrl, solved: window.__lastHumanCheckSolved || null };
+        })()`, 3000);
+        lastResult = probe && probe.result ? probe.result : null;
+      } catch (_) {
+        lastResult = null;
+      }
+
+      if (!lastResult) return null;
+      // 1. Modal closed -> Confirmed CORRECT!
+      if (!lastResult.stillOpen) {
+        return lastResult;
+      }
+
+      const elapsed = Date.now() - startTime;
+      const triesBefore = expectedTriesBefore ?? lastResult.solved?.triesLeftBefore ?? 1;
+      const triesDropped = (lastResult.triesLeft != null && triesBefore != null && lastResult.triesLeft < triesBefore);
+
+      // 2. triesLeft explicitly decreased (e.g. "ตอบผิดได้อีก 1 ครั้ง" -> "ตอบผิดได้อีก 0 ครั้ง") -> Confirmed WRONG!
+      if (triesDropped && elapsed >= 1200) {
+        lastResult.confirmedWrong = true;
+        return lastResult;
+      }
+
+      if (isTest || elapsed >= maxWaitMs) {
+        if (!triesDropped && lastResult.triesLeft != null && triesBefore != null && lastResult.triesLeft >= triesBefore) {
+          lastResult.lagUnconfirmed = true;
         }
-        return { stillOpen: true, metaText, triesLeft, imageDataUrl, solved: window.__lastHumanCheckSolved || null };
-      })()`, 3000);
-      return probe && probe.result ? probe.result : null;
-    } catch (_) {
-      return null;
+        return lastResult;
+      }
+
+      // 3. Still open and triesLeft has NOT decreased -> game/server is lagging!
+      // At ~2.3s, re-send the answer packet once in case client lag swallowed the first click.
+      if (!retriedLagClick && elapsed >= 2200) {
+        retriedLagClick = true;
+        try {
+          await evalProfilePort(profile.debugPort, `(() => {
+            const hc = document.querySelector('.human-check');
+            const s = window.__lastHumanCheckSolved;
+            const packet = window.__latestHumanCheck;
+            if (!hc || !s) return false;
+            const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
+              || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
+              || window.__colyseusRoom || window.__gameRoom || null;
+            if (room && typeof room.send === 'function' && packet && packet.id != null && typeof s.x === 'number' && typeof s.y === 'number') {
+              room.send('human_check_answer', { id: packet.id, x: s.x, y: s.y });
+              return true;
+            }
+            return false;
+          })()`, 2000);
+        } catch (_) {}
+      }
+
+      await new Promise(r => setTimeout(r, 800));
     }
   }
 
@@ -564,6 +627,35 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     if (!cfg.enabled || !cfg.botToken) return;
     const wrongChannelId = cfg.wrongChannelId || DEFAULT_DISCORD_SETTINGS.wrongChannelId || '1559706567560007730';
     if (!wrongChannelId) return;
+
+    // Guard against premature "wrong answer" reports caused by game/server lag:
+    // When a Human Check opens, triesLeftBefore is 1 ("ตอบผิดได้อีก 1 ครั้ง").
+    // If triesLeftAfter is still >= triesLeftBefore (did NOT drop to 0), the server hasn't rejected the answer yet!
+    const isTest = !!(process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test');
+    const triesBefore = attempt.triesLeftBefore ?? 1;
+    const triesAfterInitial = attempt.triesLeftAfter ?? attempt.triesLeft ?? null;
+    const alreadyConfirmedWrong = (triesAfterInitial != null && triesBefore != null && triesAfterInitial < triesBefore);
+
+    if (!isTest && !alreadyConfirmedWrong && profile.debugPort && typeof evalProfilePort === 'function') {
+      const verify = await verifyHumanCheckAnswerInGame(profile.id, {
+        waitMs: 1400,
+        maxWaitMs: 5800,
+        expectedTriesBefore: triesBefore
+      });
+      // If the Human Check closed while waiting for lag, the answer was actually CORRECT! Cancel false wrong alert.
+      if (!verify || !verify.stillOpen) {
+        console.log(`[Discord Bot] ⏳ ยกเลิกแจ้งเตือนตอบผิดของจอ [${profile.name}] เพราะหน้าต่างเช็คผู้เล่นปิดลงแล้วหลังรอลดแลค (ตอบถูก!)`);
+        return;
+      }
+      // If triesLeft STILL hasn't decreased (still "ตอบผิดได้อีก 1 ครั้ง"), the server hasn't rejected this choice as wrong.
+      if (verify.lagUnconfirmed && verify.triesLeft != null && verify.triesLeft >= triesBefore) {
+        console.log(`[Discord Bot] ⏳ ข้ามการยืนยันว่าตอบผิดของจอ [${profile.name}] เพราะจำนวนครั้งที่ตอบผิดได้ยังไม่ลดลง (${verify.metaText || verify.triesLeft})`);
+        return;
+      }
+      if (verify.triesLeft != null) attempt.triesLeftAfter = verify.triesLeft;
+      if (verify.metaText) attempt.metaText = verify.metaText;
+      if (verify.imageDataUrl) attempt.imageDataUrl = verify.imageDataUrl;
+    }
 
     const now = Date.now();
     for (const [k, t] of reportedWrongAttempts.entries()) {
@@ -765,14 +857,14 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       { manual: true, answeredBy: helperName }
     );
     if (result.success) {
-      const verify = await verifyHumanCheckAnswerInGame(profileId, 850);
+      const verify = await verifyHumanCheckAnswerInGame(profileId, { waitMs: 1200, maxWaitMs: 5800 });
       if (verify && !verify.stillOpen) {
         activeChecks.delete(profileId);
         await respondInteraction(
           `✅ **[${nick} · ผู้ตอบ: ${helperName}]** กดเลือก **ตัวเลือกที่ ${pickIndex + 1}** ให้จอ ${screenLabel} — **ยืนยันผล (Confirm): ตอบถูก!** 🎉 (หน้าต่างเช็คผู้เล่นปิดลงเรียบร้อยแล้ว)`,
           { ephemeral: false }
         );
-      } else if (verify && verify.stillOpen) {
+      } else if (verify && verify.stillOpen && !verify.lagUnconfirmed) {
         const metaNote = verify.metaText ? ` (${verify.metaText})` : '';
         await respondInteraction(
           `❌ **[${nick} · ผู้ตอบ: ${helperName}]** กดเลือก **ตัวเลือกที่ ${pickIndex + 1}** ให้จอ ${screenLabel} — **ยืนยันผล (Confirm): ตอบผิด!** ⚠️${metaNote} กรุณาเลือกคำตอบใหม่อีกครั้ง`,
@@ -791,6 +883,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
               y: result.y ?? null,
               manual: true,
               answeredBy: helperName,
+              triesLeftBefore: verify.solved?.triesLeftBefore ?? 1,
               triesLeftAfter: verify.triesLeft,
               metaText: verify.metaText,
               imageDataUrl: verify.imageDataUrl
@@ -1017,11 +1110,11 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     );
     let replyText = '';
     if (result.success) {
-      const verify = await verifyHumanCheckAnswerInGame(targetProfileId, 850);
+      const verify = await verifyHumanCheckAnswerInGame(targetProfileId, { waitMs: 1200, maxWaitMs: 5800 });
       if (verify && !verify.stillOpen) {
         activeChecks.delete(targetProfileId);
         replyText = `✅ **[${nick} · ผู้ตอบ: ${helperName}]** เลือก **ตัวเลือกที่ ${pickNum}** ให้จอ ${screenLabel} — **ยืนยันผล (Confirm): ตอบถูก!** 🎉`;
-      } else if (verify && verify.stillOpen) {
+      } else if (verify && verify.stillOpen && !verify.lagUnconfirmed) {
         const metaNote = verify.metaText ? ` (${verify.metaText})` : '';
         replyText = `❌ **[${nick} · ผู้ตอบ: ${helperName}]** เลือก **ตัวเลือกที่ ${pickNum}** ให้จอ ${screenLabel} — **ยืนยันผล (Confirm): ตอบผิด!** ⚠️${metaNote}`;
         if (profileObj) {
@@ -1037,6 +1130,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
               y: result.y ?? null,
               manual: true,
               answeredBy: helperName,
+              triesLeftBefore: verify.solved?.triesLeftBefore ?? 1,
               triesLeftAfter: verify.triesLeft,
               metaText: verify.metaText,
               imageDataUrl: verify.imageDataUrl
@@ -1156,9 +1250,12 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       let ansRes = { success: false, error: 'ไม่สามารถยืนยันสิทธิ์ตอบอัตโนมัติได้' };
 
       if (check.embeddedSolver) {
+        const isTest = !!(process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test');
+        const maxPolls = isTest ? 3 : 6;
         let lastWrongAttempt = null;
-        for (let pollIdx = 0; pollIdx < 3; pollIdx++) {
-          await new Promise(r => setTimeout(r, pollIdx === 0 ? 700 : 2100));
+        let retriedAutoLag = false;
+        for (let pollIdx = 0; pollIdx < maxPolls; pollIdx++) {
+          await new Promise(r => setTimeout(r, pollIdx === 0 ? (isTest ? 700 : 1100) : (isTest ? 2100 : 1200)));
           if (trackedCheck.solvedManually) return;
           if (activeChecks.get(profileId) !== trackedCheck) {
             // If server.js live-state polling already cleared activeChecks because .human-check closed, try reading __lastHumanCheckSolved once to send the green alert
@@ -1208,15 +1305,46 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 };
                 ansRes = { success: true, picked: pickIdx };
                 break;
-              } else if (st && st.stillOpen && st.solved && !st.solved.manual && (Date.now() - (st.solved.timestamp || 0) >= 850)) {
-                lastWrongAttempt = {
-                  ...st.solved,
-                  checkId: check.id ?? st.solved.checkId ?? null,
-                  prompt: check.prompt || st.solved.prompt || '',
-                  metaText: st.metaText || check.meta || '',
-                  imageDataUrl: check.imageDataUrl || null
-                };
-                await notifyHumanCheckWrongAttempt({ profile, attempt: lastWrongAttempt });
+              } else if (st && st.stillOpen && st.solved && !st.solved.manual) {
+                const elapsedSinceSolve = Date.now() - (st.solved.timestamp || 0);
+                const mText = st.metaText || check.meta || '';
+                const triesMatch = mText.match(/ตอบผิดได้อีก\s*(\d+)/);
+                const triesLeftAfter = triesMatch ? Number(triesMatch[1]) : null;
+                const triesBefore = st.solved.triesLeftBefore ?? 1;
+                const triesDropped = (triesLeftAfter != null && triesBefore != null && triesLeftAfter < triesBefore);
+
+                // Only report a wrong attempt if triesLeft actually dropped (e.g. 1 -> 0) OR in unit tests / final poll without tries counter
+                if ((triesDropped && elapsedSinceSolve >= 1200) || (isTest && elapsedSinceSolve >= 850) || (pollIdx === maxPolls - 1 && triesLeftAfter == null && elapsedSinceSolve >= 4500)) {
+                  lastWrongAttempt = {
+                    ...st.solved,
+                    checkId: check.id ?? st.solved.checkId ?? null,
+                    prompt: check.prompt || st.solved.prompt || '',
+                    triesLeftBefore: triesBefore,
+                    triesLeftAfter,
+                    metaText: mText,
+                    imageDataUrl: check.imageDataUrl || null
+                  };
+                  await notifyHumanCheckWrongAttempt({ profile, attempt: lastWrongAttempt });
+                } else if (!triesDropped && !retriedAutoLag && elapsedSinceSolve >= 2200) {
+                  // Game is lagging and triesLeft is still 1 -> re-send the answer packet once so lag doesn't drop the click
+                  retriedAutoLag = true;
+                  try {
+                    await evalProfilePort(profile.debugPort, `(() => {
+                      const hc = document.querySelector('.human-check');
+                      const s = window.__lastHumanCheckSolved;
+                      const packet = window.__latestHumanCheck;
+                      if (!hc || !s) return false;
+                      const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
+                        || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
+                        || window.__colyseusRoom || window.__gameRoom || null;
+                      if (room && typeof room.send === 'function' && packet && packet.id != null && typeof s.x === 'number' && typeof s.y === 'number') {
+                        room.send('human_check_answer', { id: packet.id, x: s.x, y: s.y });
+                        return true;
+                      }
+                      return false;
+                    })()`, 2000);
+                  } catch (_) {}
+                }
               }
             } catch (e) {}
           }

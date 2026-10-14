@@ -137,6 +137,7 @@ function openWebConfigModal(profileId, mode, preloadedJson = '') {
 
 ﻿const API_BASE = "";
 let currentProfiles = [];
+let currentBandwidthSummary = null;
 let allWindowsHidden = false;
 
 // DOM Elements
@@ -191,6 +192,7 @@ async function fetchProfiles() {
     const data = await res.json();
     if (data.success) {
       currentProfiles = data.profiles;
+      currentBandwidthSummary = data.bandwidthSummary || null;
       allWindowsHidden = !!data.allWindowsHidden;
       
       const lblHideAll = document.getElementById("lbl-toggle-all-windows");
@@ -1204,6 +1206,103 @@ function resetZenyRate(profileId, event) {
   }
 }
 
+function formatBytes(bytes, decimals = 1) {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return '0 B';
+  if (n < 1024) return `${Math.round(n)} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(decimals)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(decimals)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatBytesShort(bytes) {
+  const n = Number(bytes) || 0;
+  if (n <= 0) return '0B';
+  if (n < 1024) return `${Math.round(n)}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)}K`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)}M`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)}G`;
+}
+
+const clientBwFallback = {};
+function getProfileBandwidth(p) {
+  if (p.bandwidth && typeof p.bandwidth.todayBytes === 'number') {
+    return p.bandwidth;
+  }
+  const lbw = p.liveState && p.liveState.bandwidth;
+  if (lbw && typeof lbw.totalBytes === 'number') {
+    const now = Date.now();
+    let tr = clientBwFallback[p.id];
+    if (!tr || tr.sessionId !== lbw.sessionId) {
+      tr = clientBwFallback[p.id] = {
+        sessionId: lbw.sessionId,
+        startTime: now,
+        startBytes: lbw.totalBytes
+      };
+    }
+    const elapsedSec = Math.max(1, (now - tr.startTime) / 1000);
+    const delta = Math.max(0, lbw.totalBytes - tr.startBytes);
+    const bps = elapsedSec >= 2 ? Math.round(delta / elapsedSec) : 0;
+    const bytesPerHour = bps * 3600;
+    return {
+      todayBytes: lbw.totalBytes,
+      todayRxBytes: lbw.rxBytes || 0,
+      todayTxBytes: lbw.txBytes || 0,
+      bps,
+      bytesPerHour,
+      estDayBytes: bytesPerHour * 24
+    };
+  }
+  return {
+    todayBytes: 0,
+    todayRxBytes: 0,
+    todayTxBytes: 0,
+    bps: 0,
+    bytesPerHour: 0,
+    estDayBytes: 0
+  };
+}
+
+function getAllBandwidthSummary() {
+  if (currentBandwidthSummary && typeof currentBandwidthSummary.todayBytes === 'number') {
+    return currentBandwidthSummary;
+  }
+  return currentProfiles.reduce((acc, p) => {
+    const b = getProfileBandwidth(p);
+    acc.todayBytes += (b.todayBytes || 0);
+    acc.todayRxBytes += (b.todayRxBytes || 0);
+    acc.todayTxBytes += (b.todayTxBytes || 0);
+    acc.totalBps += (b.bps || 0);
+    acc.totalBytesPerHour += (b.bytesPerHour || 0);
+    acc.totalEstDayBytes += (b.estDayBytes || 0);
+    return acc;
+  }, { todayBytes: 0, todayRxBytes: 0, todayTxBytes: 0, totalBps: 0, totalBytesPerHour: 0, totalEstDayBytes: 0 });
+}
+
+function resetProfileBandwidth(profileId, event) {
+  if (event) event.stopPropagation();
+  delete clientBwFallback[profileId];
+  const p = currentProfiles.find(x => x.id === profileId);
+  if (p && p.bandwidth) {
+    p.bandwidth = {
+      ...p.bandwidth,
+      todayBytes: 0,
+      todayRxBytes: 0,
+      todayTxBytes: 0,
+      bps: 0,
+      bytesPerHour: 0,
+      estDayBytes: 0
+    };
+  }
+  fetch(`${API_BASE}/api/profiles/${profileId}/reset-bandwidth`, { method: 'POST' })
+    .then(() => fetchProfiles())
+    .catch(() => {});
+  renderProfiles();
+  if (typeof showToast === 'function') {
+    showToast('🔄 รีเซ็ตสถิติการใช้เน็ต (Bandwidth) ของจอนี้แล้ว', 'info');
+  }
+}
+
 function buildProfileCard(p) {
   const isOnline = p.isRunning;
   const isWindowHidden = Boolean(p.windowState?.isHidden);
@@ -1233,6 +1332,8 @@ function buildProfileCard(p) {
   const weightPct = state?.weight ? parseFloat(String(state.weight).replace(/[^\d.]/g, '')) : NaN;
   const weightTone = weightPct >= 80 ? 'bad' : weightPct >= 60 ? 'warn' : 'ok';
   const zenyRate = getProfileZenyRate(p);
+  const bw = getProfileBandwidth(p);
+  const allBw = getAllBandwidthSummary();
 
   // HP & SP
   const hpCur = state?.hp;
@@ -1312,6 +1413,28 @@ function buildProfileCard(p) {
               </button>
               <div class="card-menu-dropdown" onclick="event.stopPropagation()">
                 <div class="card-menu-header">⚙️ จัดการจอ: ${escapeHTML(p.name)}</div>
+                <div class="card-menu-bw-box">
+                  <div class="cm-bw-head">
+                    <span>🌐 Bandwidth วันนี้ (จอนี้)</span>
+                    <button type="button" class="cm-bw-reset-btn" onclick="resetProfileBandwidth('${p.id}', event)" title="รีเซ็ตสถิติการใช้เน็ตของจอนี้">🔄 รีเซ็ต</button>
+                  </div>
+                  <div class="cm-bw-grid">
+                    <div class="cm-bw-item">
+                      <span class="cm-bw-lbl">ใช้จริงวันนี้</span>
+                      <span class="cm-bw-val">${formatBytes(bw.todayBytes)}</span>
+                      <span class="cm-bw-sub">↓${formatBytesShort(bw.todayRxBytes)} · ↑${formatBytesShort(bw.todayTxBytes)}</span>
+                    </div>
+                    <div class="cm-bw-item">
+                      <span class="cm-bw-lbl">คาดการณ์ 24 ชม.</span>
+                      <span class="cm-bw-val est">${bw.estDayBytes > 0 ? `~${formatBytes(bw.estDayBytes)}` : '--'}</span>
+                      <span class="cm-bw-sub">${isOnline ? `${formatBytesShort(bw.bps)}/s` : 'ออฟไลน์'} · ~${formatBytesShort(bw.bytesPerHour)}/ชม.</span>
+                    </div>
+                  </div>
+                  <div class="cm-bw-total-row" title="ปริมาณการใช้เน็ตรวมทุกจอวันนี้และคาดการณ์ 24 ชม. สำหรับคำนวณแพ็กเกจ Proxy / VPN">
+                    <span>🌍 รวมทุกจอ: <b>${formatBytes(allBw.todayBytes)}</b></span>
+                    <span>(~<b>${formatBytes(allBw.totalEstDayBytes)}</b>/วัน)</span>
+                  </div>
+                </div>
                 ${isOnline ? `
                 <button type="button" class="card-menu-item" onclick="closeCardMenu(); focusClientWindow('${p.id}', this)">
                   <span class="cm-icon">🔝</span>
@@ -1441,6 +1564,29 @@ function buildProfileCard(p) {
           <div class="gp-rate-cell">
             <span class="gp-rate-lbl">📈 GP/H</span>
             <span class="gp-rate-val gp-h">${isOnline ? `${zenyRate.gph.toLocaleString()} <small>z/h</small>` : '--'}</span>
+          </div>
+        </div>
+        <div class="bw-rate-row" onclick="resetProfileBandwidth('${p.id}', event)" title="ปริมาณการใช้เน็ตของจอนี้วันนี้ (↓${formatBytes(bw.todayRxBytes)} / ↑${formatBytes(bw.todayTxBytes)}) · ความเร็ว ${formatBytes(bw.bps, 1)}/s (~${formatBytes(bw.bytesPerHour)}/ชม.) · รวมทุกจอวันนี้ ${formatBytes(allBw.todayBytes)} (คาดการณ์รวม ~${formatBytes(allBw.totalEstDayBytes)}/วัน) — คลิกเพื่อรีเซ็ตสถิติของจอนี้">
+          <div class="bw-rate-cell">
+            <div class="bw-cell-top">
+              <span class="bw-rate-lbl">🌐 วันนี้</span>
+              <span class="bw-rate-val bw-today">${(bw.todayBytes > 0 || isOnline) ? formatBytes(bw.todayBytes) : '--'}</span>
+            </div>
+            <div class="bw-cell-sub">
+              <span>↓${formatBytesShort(bw.todayRxBytes)}</span>
+              <span>↑${formatBytesShort(bw.todayTxBytes)}</span>
+            </div>
+          </div>
+          <div class="bw-rate-sep"></div>
+          <div class="bw-rate-cell">
+            <div class="bw-cell-top">
+              <span class="bw-rate-lbl">📊 ต่อวัน</span>
+              <span class="bw-rate-val bw-est">${(bw.estDayBytes > 0 || isOnline) ? `~${formatBytes(bw.estDayBytes)}<small>/d</small>` : '--'}</span>
+            </div>
+            <div class="bw-cell-sub">
+              <span>${isOnline && bw.bps > 0 ? `${formatBytes(bw.bps, 1)}/s` : 'ออฟไลน์'}</span>
+              <span>${bw.bytesPerHour > 0 ? `~${formatBytesShort(bw.bytesPerHour)}/ชม.` : '24h'}</span>
+            </div>
           </div>
         </div>
       </div>

@@ -1214,7 +1214,7 @@ body {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  width: 235px;
+  width: 274px;
   background: rgba(10, 16, 32, 0.98);
   backdrop-filter: blur(14px);
   border: 1px solid rgba(56, 189, 248, 0.35);
@@ -1244,6 +1244,95 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.card-menu-bw-box {
+  margin: 3px 4px 4px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(8, 47, 73, 0.42));
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.cm-bw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  font-weight: 700;
+  color: #7dd3fc;
+}
+.cm-bw-reset-btn {
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #bae6fd;
+  border-radius: 5px;
+  padding: 1px 6px;
+  font-size: 9.5px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.cm-bw-reset-btn:hover {
+  background: rgba(56, 189, 248, 0.28);
+  color: #fff;
+}
+.cm-bw-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+}
+.cm-bw-item {
+  background: rgba(2, 6, 23, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 6px;
+  padding: 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+.cm-bw-lbl {
+  font-size: 9px;
+  font-weight: 700;
+  color: #94a3b8;
+}
+.cm-bw-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  color: #38bdf8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-bw-val.est {
+  color: #c084fc;
+}
+.cm-bw-sub {
+  font-family: var(--font-mono);
+  font-size: 8.8px;
+  color: #cbd5e1;
+  opacity: 0.85;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cm-bw-total-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.2);
+  font-size: 9.5px;
+  color: #cbd5e1;
+}
+.cm-bw-total-row b {
+  font-family: var(--font-mono);
+  color: #34d399;
 }
 
 .card-menu-item {
@@ -1520,6 +1609,72 @@ body {
 .gp-rate-val.gp-h,
 .gp-rate-val.gph { color: #4ade80; text-shadow: 0 0 10px rgba(74, 222, 128, 0.28); }
 .gp-rate-val small { font-size: 9.5px; font-weight: 600; opacity: 0.85; }
+
+/* ---------- Bandwidth Monitor Bar (Card Body) ---------- */
+.bw-rate-row {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  background: linear-gradient(90deg, rgba(14, 116, 144, 0.16), rgba(109, 40, 217, 0.14));
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: background 0.18s ease;
+}
+.bw-rate-row:hover {
+  background: linear-gradient(90deg, rgba(14, 116, 144, 0.28), rgba(109, 40, 217, 0.25));
+}
+.bw-rate-cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+.bw-rate-cell:first-child { padding-right: 8px; }
+.bw-rate-cell:last-child { padding-left: 8px; }
+.bw-cell-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+.bw-cell-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 8.8px;
+  font-weight: 600;
+  color: #94a3b8;
+  opacity: 0.88;
+  line-height: 1.1;
+}
+.bw-rate-sep {
+  width: 1px;
+  height: 24px;
+  background: rgba(148, 163, 184, 0.22);
+}
+.bw-rate-lbl {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 800;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+.bw-rate-val {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.bw-rate-val.bw-today { color: #38bdf8; text-shadow: 0 0 10px rgba(56, 189, 248, 0.25); }
+.bw-rate-val.bw-est { color: #c084fc; text-shadow: 0 0 10px rgba(192, 132, 252, 0.25); }
+.bw-rate-val small { font-size: 9px; font-weight: 600; opacity: 0.85; }
 
 .mini-track {
   height: 3px;

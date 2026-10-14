@@ -518,10 +518,69 @@ const LIVE_STATE_EVAL = `(() => {
       };
     } else {
       s.humanCheck = null;
+      if (window.__lastHumanCheckSolved && Date.now() - (window.__lastHumanCheckSolved.timestamp || 0) < 30000) {
+        window.__lastHumanCheckSolved.verified = 'correct';
+        window.__lastHumanCheckSolved.isCorrect = true;
+      }
     }
-    s.humanCheckWrongAttempts = (Array.isArray(window.__pmWrongHumanCheckQueue) && window.__pmWrongHumanCheckQueue.length)
-      ? window.__pmWrongHumanCheckQueue.splice(0, 10)
-      : null;
+    if (hc && window.__lastHumanCheckSolved) {
+      const sLast = window.__lastHumanCheckSolved;
+      const elapsedS = Date.now() - (sLast.timestamp || 0);
+      const curMetaS = (hc.querySelector('.human-check-meta')?.innerText || '').trim();
+      const curTriesMatchS = curMetaS.match(/ตอบผิดได้อีก\s*(\d+)/);
+      const curTriesS = curTriesMatchS ? Number(curTriesMatchS[1]) : null;
+      const triesBeforeS = sLast.triesLeftBefore ?? 1;
+      if (curTriesS != null && curTriesS >= triesBeforeS && elapsedS < 5800) {
+        if (sLast.verified === 'wrong') {
+          sLast.verified = null;
+          delete sLast.isCorrect;
+        }
+        if (!sLast.retriedLagSend && elapsedS >= 2200) {
+          sLast.retriedLagSend = true;
+          try {
+            const pkt = window.__latestHumanCheck;
+            const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
+              || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
+              || window.__colyseusRoom || window.__gameRoom || null;
+            if (room && typeof room.send === 'function' && pkt && pkt.id != null && typeof sLast.x === 'number' && typeof sLast.y === 'number') {
+              room.send('human_check_answer', { id: pkt.id, x: sLast.x, y: sLast.y });
+            }
+          } catch (e) {}
+        }
+      }
+    }
+    if (Array.isArray(window.__pmWrongHumanCheckQueue) && window.__pmWrongHumanCheckQueue.length) {
+      const confirmedWrong = [];
+      const stillPending = [];
+      const curMeta = hc ? ((hc.querySelector('.human-check-meta')?.innerText || '').trim()) : '';
+      const curTriesMatch = curMeta.match(/ตอบผิดได้อีก\s*(\d+)/);
+      const curTriesLeft = curTriesMatch ? Number(curTriesMatch[1]) : null;
+      for (const att of window.__pmWrongHumanCheckQueue) {
+        if (!att) continue;
+        if (!hc) {
+          if (window.__lastHumanCheckSolved && window.__lastHumanCheckSolved.timestamp === att.timestamp) {
+            window.__lastHumanCheckSolved.verified = 'correct';
+            window.__lastHumanCheckSolved.isCorrect = true;
+          }
+          continue;
+        }
+        const elapsed = Date.now() - (att.timestamp || 0);
+        const triesBefore = att.triesLeftBefore ?? 1;
+        const triesNow = curTriesLeft ?? att.triesLeftAfter ?? null;
+        const triesDropped = (triesNow != null && triesBefore != null && triesNow < triesBefore);
+        if (triesDropped && elapsed >= 1200) {
+          att.triesLeftAfter = triesNow;
+          if (curMeta) att.metaText = curMeta;
+          confirmedWrong.push(att);
+        } else if (elapsed < 5800) {
+          stillPending.push(att);
+        }
+      }
+      window.__pmWrongHumanCheckQueue = stillPending;
+      s.humanCheckWrongAttempts = confirmedWrong.length ? confirmedWrong : null;
+    } else {
+      s.humanCheckWrongAttempts = null;
+    }
   } catch (e) {}
   try {
     if (window.__unexpectedTownWaiting) {
@@ -533,6 +592,9 @@ const LIVE_STATE_EVAL = `(() => {
     } else {
       s.unexpectedTown = null;
     }
+  } catch (e) {}
+  try {
+    s.bandwidth = (typeof window.__pmGetBandwidth === 'function') ? window.__pmGetBandwidth() : null;
   } catch (e) {}
   return s;
 })()`;
@@ -1231,6 +1293,431 @@ function updateZenyRateTracker(profileId, liveState) {
   };
 }
 
+// ==========================================
+// PER-PROFILE & DAILY BANDWIDTH MONITOR (WebSocket + HTTP)
+// ==========================================
+const BANDWIDTH_STATS_FILE = path.join(__dirname, "data", "bandwidth_stats.json");
+const bandwidthRateTrackers = {};
+const bwProbeInstallCooldown = {};
+let bandwidthStatsDirty = false;
+let bandwidthStatsCache = null;
+
+const BANDWIDTH_PROBE_INSTALL_JS = `(() => {
+  if (typeof window.__pmGetBandwidth === 'function' && window.__pmBwState) {
+    return window.__pmGetBandwidth();
+  }
+  const sessionId = Math.round((typeof performance !== 'undefined' && performance.timeOrigin) ? performance.timeOrigin : Date.now());
+  const st = window.__pmBwState = window.__pmBwState || {
+    sessionId,
+    startedAt: Date.now(),
+    wsRxBytes: 0,
+    wsTxBytes: 0,
+    wsRxPackets: 0,
+    wsTxPackets: 0,
+    httpRxBytes: 0,
+    httpTxBytes: 0,
+    httpRequests: 0,
+    navCounted: false
+  };
+
+  function byteLen(data) {
+    if (!data) return 0;
+    if (typeof data.byteLength === 'number') return data.byteLength;
+    if (data.buffer && typeof data.buffer.byteLength === 'number') return data.buffer.byteLength;
+    if (typeof Blob !== 'undefined' && data instanceof Blob) return data.size || 0;
+    if (typeof data === 'string') return data.length;
+    return 0;
+  }
+
+  function consumeResourceEntries(entries) {
+    if (!entries || !entries.length) return;
+    for (let i = 0; i < entries.length; i++) {
+      const r = entries[i];
+      if (!r) continue;
+      const name = String(r.name || '');
+      if (name.includes('127.0.0.1') || name.includes('localhost')) continue;
+      const transfer = Number(r.transferSize) || 0;
+      const encoded = Number(r.encodedBodySize) || 0;
+      if (transfer > 0) {
+        st.httpRxBytes += transfer;
+        st.httpTxBytes += 160;
+        st.httpRequests += 1;
+      } else if (encoded > 0 && (r.initiatorType === 'fetch' || r.initiatorType === 'xmlhttprequest')) {
+        st.httpRxBytes += encoded + 120;
+        st.httpTxBytes += 160;
+        st.httpRequests += 1;
+      }
+    }
+  }
+
+  try {
+    if (!st.navCounted && typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function') {
+      st.navCounted = true;
+      consumeResourceEntries(performance.getEntriesByType('navigation'));
+      consumeResourceEntries(performance.getEntriesByType('resource'));
+      if (typeof performance.clearResourceTimings === 'function') {
+        performance.clearResourceTimings();
+      }
+    }
+  } catch (e) {}
+
+  try {
+    if (typeof PerformanceObserver === 'function' && !st.observer) {
+      const obs = new PerformanceObserver((list) => {
+        try {
+          consumeResourceEntries(list.getEntries());
+          if (typeof performance.clearResourceTimings === 'function') {
+            performance.clearResourceTimings();
+          }
+        } catch (e) {}
+      });
+      obs.observe({ type: 'resource', buffered: false });
+      st.observer = obs;
+    }
+  } catch (e) {}
+
+  function hookSocket(ws) {
+    if (!ws || ws.__pmBwHooked) return;
+    const url = String(ws.url || '');
+    if (url.includes('127.0.0.1') || url.includes('localhost')) return;
+    ws.__pmBwHooked = true;
+    try {
+      ws.addEventListener('message', (ev) => {
+        const len = byteLen(ev && ev.data);
+        if (len > 0) {
+          st.wsRxBytes += len + 28;
+          st.wsRxPackets += 1;
+        }
+      });
+    } catch (e) {}
+    try {
+      const prevSend = ws.send;
+      if (typeof prevSend === 'function') {
+        ws.send = function(data) {
+          try {
+            const len = byteLen(data);
+            if (len > 0) {
+              st.wsTxBytes += len + 32;
+              st.wsTxPackets += 1;
+            }
+          } catch (e) {}
+          return prevSend.apply(this, arguments);
+        };
+      }
+    } catch (e) {}
+  }
+
+  window.__pmHookSocketBandwidth = hookSocket;
+  if (window.__gameSocket) hookSocket(window.__gameSocket);
+
+  try {
+    const wsProto = window.WebSocket && window.WebSocket.prototype;
+    if (wsProto && !wsProto.__pmBwProtoHooked) {
+      wsProto.__pmBwProtoHooked = true;
+      const prevAdd = wsProto.addEventListener;
+      if (typeof prevAdd === 'function') {
+        wsProto.addEventListener = function(type, listener, options) {
+          if (type === 'message' && !this.__pmBwHooked) {
+            hookSocket(this);
+          }
+          return prevAdd.apply(this, arguments);
+        };
+      }
+    }
+  } catch (e) {}
+
+  if (!st.watchTimer) {
+    st.watchTimer = setInterval(() => {
+      if (window.__gameSocket && !window.__gameSocket.__pmBwHooked) {
+        hookSocket(window.__gameSocket);
+      }
+    }, 1000);
+  }
+
+  window.__pmGetBandwidth = function() {
+    if (window.__gameSocket && !window.__gameSocket.__pmBwHooked) {
+      hookSocket(window.__gameSocket);
+    }
+    const rxBytes = st.wsRxBytes + st.httpRxBytes;
+    const txBytes = st.wsTxBytes + st.httpTxBytes;
+    return {
+      sessionId: st.sessionId,
+      rxBytes,
+      txBytes,
+      totalBytes: rxBytes + txBytes,
+      wsRxBytes: st.wsRxBytes,
+      wsTxBytes: st.wsTxBytes,
+      httpRxBytes: st.httpRxBytes,
+      httpTxBytes: st.httpTxBytes,
+      wsRxPackets: st.wsRxPackets,
+      wsTxPackets: st.wsTxPackets,
+      httpRequests: st.httpRequests
+    };
+  };
+
+  return window.__pmGetBandwidth();
+})()`;
+
+function loadBandwidthStats() {
+  if (bandwidthStatsCache) return bandwidthStatsCache;
+  try {
+    if (fs.existsSync(BANDWIDTH_STATS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(BANDWIDTH_STATS_FILE, "utf8"));
+      if (parsed && typeof parsed === "object") {
+        bandwidthStatsCache = {
+          updatedAt: parsed.updatedAt || Date.now(),
+          lastSession: (parsed.lastSession && typeof parsed.lastSession === "object") ? parsed.lastSession : {},
+          daily: (parsed.daily && typeof parsed.daily === "object") ? parsed.daily : {}
+        };
+        return bandwidthStatsCache;
+      }
+    }
+  } catch (e) {}
+  bandwidthStatsCache = { updatedAt: Date.now(), lastSession: {}, daily: {} };
+  return bandwidthStatsCache;
+}
+
+function saveBandwidthStatsNow() {
+  if (!bandwidthStatsCache) return;
+  try {
+    fs.mkdirSync(path.dirname(BANDWIDTH_STATS_FILE), { recursive: true });
+    const keys = Object.keys(bandwidthStatsCache.daily || {}).sort();
+    while (keys.length > 30) {
+      const oldKey = keys.shift();
+      delete bandwidthStatsCache.daily[oldKey];
+    }
+    bandwidthStatsCache.updatedAt = Date.now();
+    const tmpFile = BANDWIDTH_STATS_FILE + ".tmp";
+    fs.writeFileSync(tmpFile, JSON.stringify(bandwidthStatsCache, null, 2), "utf8");
+    fs.renameSync(tmpFile, BANDWIDTH_STATS_FILE);
+    bandwidthStatsDirty = false;
+  } catch (e) {}
+}
+
+setInterval(() => {
+  if (bandwidthStatsDirty) saveBandwidthStatsNow();
+}, 10000);
+process.on("exit", () => {
+  if (bandwidthStatsDirty) saveBandwidthStatsNow();
+});
+
+async function updateBandwidthTracker(profileId, liveState, debugPort) {
+  const store = loadBandwidthStats();
+  const now = Date.now();
+  const todayKey = getThaiDateKey(now);
+  if (!store.daily[todayKey]) {
+    store.daily[todayKey] = {
+      date: todayKey,
+      rxBytes: 0,
+      txBytes: 0,
+      totalBytes: 0,
+      wsRxBytes: 0,
+      wsTxBytes: 0,
+      httpRxBytes: 0,
+      httpTxBytes: 0,
+      byProfile: {}
+    };
+  }
+  const dayBucket = store.daily[todayKey];
+  if (!dayBucket.byProfile[profileId]) {
+    dayBucket.byProfile[profileId] = {
+      rxBytes: 0,
+      txBytes: 0,
+      totalBytes: 0,
+      wsRxBytes: 0,
+      wsTxBytes: 0,
+      httpRxBytes: 0,
+      httpTxBytes: 0,
+      activeSec: 0,
+      updatedAt: now
+    };
+  }
+  const profDaily = dayBucket.byProfile[profileId];
+
+  if (liveState && !liveState.error && !liveState.bandwidth && debugPort) {
+    const lastTry = bwProbeInstallCooldown[debugPort] || 0;
+    if (now - lastTry > 5000) {
+      bwProbeInstallCooldown[debugPort] = now;
+      try {
+        const res = await evalProfilePort(debugPort, BANDWIDTH_PROBE_INSTALL_JS, 1500);
+        if (res && res.success && res.result && typeof res.result.totalBytes === "number") {
+          liveState.bandwidth = res.result;
+        }
+      } catch (e) {}
+    }
+  }
+
+  const isOnline = Boolean(liveState && !liveState.error);
+  const bw = (isOnline && liveState.bandwidth && typeof liveState.bandwidth.totalBytes === "number") ? liveState.bandwidth : null;
+
+  if (bw) {
+    const prevSess = store.lastSession[profileId];
+    const sameSession = Boolean(
+      prevSess &&
+      prevSess.sessionId === bw.sessionId &&
+      bw.rxBytes >= (prevSess.rxBytes || 0) &&
+      bw.txBytes >= (prevSess.txBytes || 0)
+    );
+
+    const deltaRx = sameSession ? Math.max(0, bw.rxBytes - (prevSess.rxBytes || 0)) : Math.max(0, bw.rxBytes || 0);
+    const deltaTx = sameSession ? Math.max(0, bw.txBytes - (prevSess.txBytes || 0)) : Math.max(0, bw.txBytes || 0);
+    const deltaWsRx = sameSession ? Math.max(0, (bw.wsRxBytes || 0) - (prevSess.wsRxBytes || 0)) : Math.max(0, bw.wsRxBytes || 0);
+    const deltaWsTx = sameSession ? Math.max(0, (bw.wsTxBytes || 0) - (prevSess.wsTxBytes || 0)) : Math.max(0, bw.wsTxBytes || 0);
+    const deltaHttpRx = sameSession ? Math.max(0, (bw.httpRxBytes || 0) - (prevSess.httpRxBytes || 0)) : Math.max(0, bw.httpRxBytes || 0);
+    const deltaHttpTx = sameSession ? Math.max(0, (bw.httpTxBytes || 0) - (prevSess.httpTxBytes || 0)) : Math.max(0, bw.httpTxBytes || 0);
+    const deltaTotal = deltaRx + deltaTx;
+
+    store.lastSession[profileId] = {
+      sessionId: bw.sessionId,
+      rxBytes: bw.rxBytes || 0,
+      txBytes: bw.txBytes || 0,
+      wsRxBytes: bw.wsRxBytes || 0,
+      wsTxBytes: bw.wsTxBytes || 0,
+      httpRxBytes: bw.httpRxBytes || 0,
+      httpTxBytes: bw.httpTxBytes || 0,
+      updatedAt: now
+    };
+
+    if (deltaTotal > 0) {
+      profDaily.rxBytes = (profDaily.rxBytes || 0) + deltaRx;
+      profDaily.txBytes = (profDaily.txBytes || 0) + deltaTx;
+      profDaily.totalBytes = (profDaily.rxBytes || 0) + (profDaily.txBytes || 0);
+      profDaily.wsRxBytes = (profDaily.wsRxBytes || 0) + deltaWsRx;
+      profDaily.wsTxBytes = (profDaily.wsTxBytes || 0) + deltaWsTx;
+      profDaily.httpRxBytes = (profDaily.httpRxBytes || 0) + deltaHttpRx;
+      profDaily.httpTxBytes = (profDaily.httpTxBytes || 0) + deltaHttpTx;
+      profDaily.updatedAt = now;
+
+      dayBucket.rxBytes = (dayBucket.rxBytes || 0) + deltaRx;
+      dayBucket.txBytes = (dayBucket.txBytes || 0) + deltaTx;
+      dayBucket.totalBytes = (dayBucket.rxBytes || 0) + (dayBucket.txBytes || 0);
+      dayBucket.wsRxBytes = (dayBucket.wsRxBytes || 0) + deltaWsRx;
+      dayBucket.wsTxBytes = (dayBucket.wsTxBytes || 0) + deltaWsTx;
+      dayBucket.httpRxBytes = (dayBucket.httpRxBytes || 0) + deltaHttpRx;
+      dayBucket.httpTxBytes = (dayBucket.httpTxBytes || 0) + deltaHttpTx;
+      bandwidthStatsDirty = true;
+    }
+
+    let rt = bandwidthRateTrackers[profileId];
+    if (!rt || rt.sessionId !== bw.sessionId) {
+      rt = bandwidthRateTrackers[profileId] = {
+        sessionId: bw.sessionId,
+        startTime: now,
+        lastTime: now,
+        samples: []
+      };
+    } else {
+      const dtMs = now - rt.lastTime;
+      rt.lastTime = now;
+      if (dtMs > 0 && dtMs <= 30000) {
+        profDaily.activeSec = (profDaily.activeSec || 0) + (dtMs / 1000);
+        bandwidthStatsDirty = true;
+      }
+      if (deltaTotal > 0) {
+        rt.samples.push({ t: now, bytes: deltaTotal, rx: deltaRx, tx: deltaTx });
+      }
+    }
+  }
+
+  let bps = 0;
+  let rxBps = 0;
+  let txBps = 0;
+  const rt = bandwidthRateTrackers[profileId];
+  if (isOnline && rt && Array.isArray(rt.samples)) {
+    const windowMs = 10 * 60 * 1000;
+    const cutoff = now - windowMs;
+    if (rt.samples.length > 0 && rt.samples[0].t < cutoff) {
+      rt.samples = rt.samples.filter(s => s.t >= cutoff);
+    }
+    const windowStart = Math.max(rt.startTime, cutoff);
+    const elapsedSec = Math.max(0, (now - windowStart) / 1000);
+    if (elapsedSec >= 1.5 && rt.samples.length > 0) {
+      const sumBytes = rt.samples.reduce((acc, s) => acc + s.bytes, 0);
+      const sumRx = rt.samples.reduce((acc, s) => acc + s.rx, 0);
+      const sumTx = rt.samples.reduce((acc, s) => acc + s.tx, 0);
+      bps = Math.round(sumBytes / elapsedSec);
+      rxBps = Math.round(sumRx / elapsedSec);
+      txBps = Math.round(sumTx / elapsedSec);
+    }
+  }
+
+  const bytesPerHour = bps > 0
+    ? bps * 3600
+    : ((profDaily.activeSec >= 30 && profDaily.totalBytes > 0)
+        ? Math.round((profDaily.totalBytes / profDaily.activeSec) * 3600)
+        : 0);
+  const estDayBytes = bytesPerHour * 24;
+
+  return {
+    date: todayKey,
+    todayBytes: profDaily.totalBytes || 0,
+    todayRxBytes: profDaily.rxBytes || 0,
+    todayTxBytes: profDaily.txBytes || 0,
+    todayWsBytes: (profDaily.wsRxBytes || 0) + (profDaily.wsTxBytes || 0),
+    todayHttpBytes: (profDaily.httpRxBytes || 0) + (profDaily.httpTxBytes || 0),
+    activeSec: Math.round(profDaily.activeSec || 0),
+    bps,
+    rxBps,
+    txBps,
+    bytesPerHour,
+    estDayBytes
+  };
+}
+
+function resetBandwidthTracker(profileId) {
+  const store = loadBandwidthStats();
+  const now = Date.now();
+  const todayKey = getThaiDateKey(now);
+  const dayBucket = store.daily[todayKey];
+  if (profileId === "all") {
+    store.daily[todayKey] = {
+      date: todayKey,
+      rxBytes: 0,
+      txBytes: 0,
+      totalBytes: 0,
+      wsRxBytes: 0,
+      wsTxBytes: 0,
+      httpRxBytes: 0,
+      httpTxBytes: 0,
+      byProfile: {}
+    };
+    for (const k of Object.keys(bandwidthRateTrackers)) {
+      bandwidthRateTrackers[k].startTime = now;
+      bandwidthRateTrackers[k].lastTime = now;
+      bandwidthRateTrackers[k].samples = [];
+    }
+  } else {
+    if (dayBucket && dayBucket.byProfile && dayBucket.byProfile[profileId]) {
+      const p = dayBucket.byProfile[profileId];
+      dayBucket.rxBytes = Math.max(0, (dayBucket.rxBytes || 0) - (p.rxBytes || 0));
+      dayBucket.txBytes = Math.max(0, (dayBucket.txBytes || 0) - (p.txBytes || 0));
+      dayBucket.totalBytes = dayBucket.rxBytes + dayBucket.txBytes;
+      dayBucket.wsRxBytes = Math.max(0, (dayBucket.wsRxBytes || 0) - (p.wsRxBytes || 0));
+      dayBucket.wsTxBytes = Math.max(0, (dayBucket.wsTxBytes || 0) - (p.wsTxBytes || 0));
+      dayBucket.httpRxBytes = Math.max(0, (dayBucket.httpRxBytes || 0) - (p.httpRxBytes || 0));
+      dayBucket.httpTxBytes = Math.max(0, (dayBucket.httpTxBytes || 0) - (p.httpTxBytes || 0));
+      dayBucket.byProfile[profileId] = {
+        rxBytes: 0,
+        txBytes: 0,
+        totalBytes: 0,
+        wsRxBytes: 0,
+        wsTxBytes: 0,
+        httpRxBytes: 0,
+        httpTxBytes: 0,
+        activeSec: 0,
+        updatedAt: now
+      };
+    }
+    if (bandwidthRateTrackers[profileId]) {
+      bandwidthRateTrackers[profileId].startTime = now;
+      bandwidthRateTrackers[profileId].lastTime = now;
+      bandwidthRateTrackers[profileId].samples = [];
+    }
+  }
+  bandwidthStatsDirty = true;
+  saveBandwidthStatsNow();
+}
+
 const planSync = createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort });
 // Observation only by default. Pilot keys/profile IDs require a separately reviewed activation.
 const scriptRollout = loadScriptRollout({dataDir:path.join(__dirname,'data'),serviceOrigin:humanCheckSolver.serviceOrigin});
@@ -1863,6 +2350,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         const zenyRate = updateZenyRateTracker(p.id, alive ? liveState : null);
+        const bandwidth = await updateBandwidthTracker(p.id, alive ? liveState : null, p.debugPort);
 
         return {
           ...p,
@@ -1872,6 +2360,7 @@ const server = http.createServer(async (req, res) => {
           uptime: alive ? (proc ? Math.round((Date.now() - proc.startTime) / 1000) : 0) : 0,
           liveState,
           zenyRate,
+          bandwidth,
           windowState: windowStates[p.id] || { isHidden: false }
         };
       })
@@ -1898,13 +2387,46 @@ const server = http.createServer(async (req, res) => {
       saveProfiles(fresh);
     }
 
-    return sendJSON({ success: true, profiles: enriched, gameExe: getGameExe(), allWindowsHidden, captchaStats: getCaptchaStats() });
+    const bandwidthSummary = enriched.reduce((acc, p) => {
+      const bw = p.bandwidth || {};
+      acc.todayBytes += (bw.todayBytes || 0);
+      acc.todayRxBytes += (bw.todayRxBytes || 0);
+      acc.todayTxBytes += (bw.todayTxBytes || 0);
+      acc.totalBps += (bw.bps || 0);
+      acc.totalBytesPerHour += (bw.bytesPerHour || 0);
+      acc.totalEstDayBytes += (bw.estDayBytes || 0);
+      return acc;
+    }, {
+      date: getThaiDateKey(),
+      todayBytes: 0,
+      todayRxBytes: 0,
+      todayTxBytes: 0,
+      totalBps: 0,
+      totalBytesPerHour: 0,
+      totalEstDayBytes: 0
+    });
+
+    return sendJSON({
+      success: true,
+      profiles: enriched,
+      bandwidthSummary,
+      gameExe: getGameExe(),
+      allWindowsHidden,
+      captchaStats: getCaptchaStats()
+    });
   }
 
   // POST /api/profiles/:id/reset-zeny-rate
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/reset-zeny-rate$/)) {
     const id = pathname.split("/")[3];
     delete zenyRateTrackers[id];
+    return sendJSON({ success: true });
+  }
+
+  // POST /api/profiles/:id/reset-bandwidth
+  if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/reset-bandwidth$/)) {
+    const id = pathname.split("/")[3];
+    resetBandwidthTracker(id);
     return sendJSON({ success: true });
   }
 

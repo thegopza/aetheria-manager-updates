@@ -19,50 +19,104 @@ function normName(s) {
 // Reads character, guild state, pending guild invite, and checks which daily material tiers can be donated.
 const PROBE_GUILD_CLIENT_JS = `(() => {
   try {
-    let s = (typeof getReactStore === 'function') ? getReactStore() : null;
-    if (!s) {
-      const root = document.getElementById('root');
-      const container = root && Object.keys(root).find(k => k.startsWith('__reactContainer'));
-      if (container) {
-        const q = [root[container]];
-        const seen = new Set();
-        while (q.length) {
-          const n = q.shift();
-          if (!n || seen.has(n)) continue;
-          seen.add(n);
-          const st = n.memoizedState;
-          if (st && typeof st === 'object') {
-            let cur = st;
-            while (cur) {
-              const v = cur.memoizedState;
-              if (v && typeof v === 'object' && ('character' in v) && ('guild' in v)) { s = v; break; }
-              cur = cur.next;
+    const findGetters = () => {
+      const out = {};
+      try {
+        const rootEl = document.getElementById('root') || document.body.firstElementChild;
+        const key = rootEl && Object.keys(rootEl).find(k => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'));
+        if (!key) return out;
+        let start = rootEl[key];
+        if (start && start.stateNode && start.stateNode.current) start = start.stateNode.current;
+        const stack = [start];
+        let n = 0;
+        while (stack.length && n++ < 100000 && !(out.character && out.inventory && out.guild && out.invite)) {
+          const f = stack.pop();
+          if (!f) continue;
+          let h = f.memoizedState, g = 0;
+          while (h && typeof h === 'object' && g++ < 80) {
+            const q = h.queue;
+            if (q && typeof q.getSnapshot === 'function') {
+              const src = String(q.getSnapshot).replace(/\\s+/g, '');
+              if (!out.character && /^\\(\\)=>[A-Za-z_$][\\w$]*\\.character$/.test(src)) out.character = q.getSnapshot;
+              if (!out.inventory && /^\\(\\)=>[A-Za-z_$][\\w$]*\\.inventory$/.test(src)) out.inventory = q.getSnapshot;
+              if (!out.guild && /^\\(\\)=>[A-Za-z_$][\\w$]*\\.guild$/.test(src)) out.guild = q.getSnapshot;
+              if (!out.invite && /^\\(\\)=>[A-Za-z_$][\\w$]*\\.invite$/.test(src)) out.invite = q.getSnapshot;
             }
+            h = h.next;
           }
-          if (s) break;
-          if (n.child) q.push(n.child);
-          if (n.sibling) q.push(n.sibling);
+          if (f.sibling) stack.push(f.sibling);
+          if (f.child) stack.push(f.child);
         }
-      }
+      } catch (e) {}
+      return out;
+    };
+
+    let getters = window.__pmGuildGetters;
+    if (!getters || !getters.character || !getters.inventory || !getters.guild || !getters.invite) {
+      getters = findGetters();
+      window.__pmGuildGetters = getters;
     }
-    const room = (typeof getGameRoom === 'function') ? getGameRoom() : window.__gameRoom;
-    const roomOpen = !!(room && room.connection && room.connection.isOpen);
-    const ch = s && s.character;
-    if (!ch || !ch.name) {
+
+    const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+    if (room && !room.__pmGuildHook && typeof room.onMessage === 'function') {
+      room.__pmGuildHook = true;
+      try {
+        room.onMessage('guild', d => { window.__pmGuildData = d; });
+        room.onMessage('invite', d => { window.__pmInviteData = d && d.ttlMs ? { ...d, expiresAt: Date.now() + d.ttlMs } : d; });
+      } catch (e) {}
+    }
+
+    const roomOpen = !!(room && room.state && (!room.connection || room.connection.isOpen !== false));
+    let me = null;
+    try { me = room && room.state && room.state.players && room.state.players.get(room.sessionId); } catch (e) {}
+    let live = null;
+    try { live = typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null; } catch (e) {}
+    let ch = null;
+    try { ch = getters.character ? getters.character() : null; } catch (e) {}
+
+    const charName = (me && me.name) || (ch && ch.name) || (live && live.charName) || (typeof window.getCharacterName === 'function' ? window.getCharacterName() : '') || '';
+    if (!charName || !roomOpen) {
       return { inWorld: false, roomOpen };
     }
-    const g = s.guild;
-    const inv = s.invite;
-    const bag = Array.isArray(s.inventory) ? s.inventory : [];
 
-    // Count unequipped, unrefined bag items by itemId
+    let g = null;
+    try { g = getters.guild ? getters.guild() : null; } catch (e) {}
+    if (!g && window.__pmGuildData) g = window.__pmGuildData;
+
+    let inv = null;
+    try { inv = getters.invite ? getters.invite() : null; } catch (e) {}
+    if (!inv && window.__pmInviteData) inv = window.__pmInviteData;
+    try {
+      if (!inv && typeof document.querySelector === 'function') {
+        const toast = document.querySelector('.invite-toast');
+        if (toast) {
+          const txt = (toast.innerText || toast.textContent || '').trim();
+          if (txt.includes('กิลด์')) {
+            const m = txt.match(/^(\\S+)\\s+เชิญคุณเข้ากิลด์(?:\\s+(.+))?/m);
+            inv = { kind: 'guild', from: m ? m[1] : '', label: m && m[2] ? m[2].trim() : txt };
+          }
+        }
+      }
+    } catch (e) {}
+
+    let invRaw = null;
+    try { invRaw = getters.inventory ? getters.inventory() : null; } catch (e) {}
+    const bag = Array.isArray(invRaw) ? invRaw : (invRaw && Array.isArray(invRaw.items) ? invRaw.items : []);
+
+    // Count bag items by itemId (matching the game's guild material counter)
     const bagCounts = {};
     for (const it of bag) {
       if (!it || it.equipped || Number(it.refine || 0) > 0) continue;
       const id = Number(it.itemId);
       if (!id) continue;
-      bagCounts[id] = (bagCounts[id] || 0) + Number(it.qty || it.count || 0);
+      bagCounts[id] = (bagCounts[id] || 0) + Number(it.qty ?? it.count ?? 1);
     }
+
+    const level = Number((ch && (ch.baseLevel || ch.level)) || (me && me.level) || (live && live.baseLv) || 1);
+    const jobLevel = Number((ch && ch.jobLevel) || (me && me.jobLevel) || (live && live.jobLv) || 1);
+    const className = (ch && (ch.classTh || ch.className || ch.classId)) || (me && me.classId) || (live && live.classId) || '';
+    const zeny = Number((ch && ch.zeny != null) ? ch.zeny : ((live && live.zeny != null) ? live.zeny : (me && me.zeny))) || 0;
+    const mapName = (room && room.state && (room.state.displayName || room.state.mapId)) || (live && live.currentMap) || '';
 
     let inGameGuild = null;
     const donatableTiers = [];
@@ -70,11 +124,10 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
 
     if (g && g.id) {
       const mats = Array.isArray(g.materials) ? g.materials : [];
-      const lv = Number(ch.level || 1);
       for (const m of mats) {
         if (!m || !Array.isArray(m.items) || m.items.length === 0) continue;
         const minLv = Number(m.minLevel || 1);
-        const lvOk = lv >= minLv;
+        const lvOk = level >= minLv;
         let itemsOk = true;
         const itemDetails = m.items.map(req => {
           const itemId = Number(req.itemId);
@@ -128,7 +181,7 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
     }
 
     let pendingGuildInvite = null;
-    if (inv && inv.kind === 'guild') {
+    if (inv && inv.kind === 'guild' && (!inv.expiresAt || inv.expiresAt > Date.now())) {
       pendingGuildInvite = {
         from: inv.from || '',
         label: inv.label || '',
@@ -139,12 +192,12 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
     return {
       inWorld: true,
       roomOpen,
-      charName: ch.name,
-      level: Number(ch.level || 1),
-      jobLevel: Number(ch.jobLevel || 1),
-      className: ch.classTh || ch.className || ch.classId || '',
-      zeny: Number(ch.zeny || 0),
-      mapName: (s.map && (s.map.name || s.map.id)) || ch.mapName || ch.mapId || '',
+      charName,
+      level,
+      jobLevel,
+      className,
+      zeny,
+      mapName,
       inGameGuild,
       pendingGuildInvite,
       donatableTiers
@@ -155,9 +208,33 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
 })()`;
 
 function sendGuildActionJs(payloadObj) {
+  if (payloadObj && payloadObj.action === 'accept') {
+    return `(() => {
+      try {
+        if (typeof document.querySelector === 'function') {
+          const toast = document.querySelector('.invite-toast');
+          if (toast && (toast.innerText || toast.textContent || '').includes('กิลด์')) {
+            const btn = toast.querySelector('.invite-actions button.primary') || toast.querySelector('button.primary');
+            if (btn && typeof btn.click === 'function') {
+              btn.click();
+              window.__pmInviteData = null;
+              return { ok: true, via: 'toast' };
+            }
+          }
+        }
+      } catch (e) {}
+      const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+      if (!room || !room.state) {
+        return { ok: false, error: 'no-room' };
+      }
+      window.__pmInviteData = null;
+      room.send('guild', { action: 'accept' });
+      return { ok: true, via: 'room' };
+    })()`;
+  }
   return `(() => {
-    const room = (typeof getGameRoom === 'function') ? getGameRoom() : window.__gameRoom;
-    if (!room || !room.connection || !room.connection.isOpen) {
+    const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+    if (!room || !room.state) {
       return { ok: false, error: 'no-room' };
     }
     room.send('guild', ${JSON.stringify(payloadObj)});
@@ -403,8 +480,12 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     }
 
     const inGameMemberNames = new Set((igGuild.members || []).map(m => normName(m.name)));
+    let currentMemberCount = (igGuild.members || []).length || 1;
+    const maxMembers = igGuild.maxMembers || 20;
+    const toInvite = [];
+    let anyChanged = false;
 
-    // 4. Sync each member (invite -> accept -> auto daily donate)
+    // 4. Sync each member (existing / pending invite / queue for invite)
     for (const memId of g.memberIds) {
       const memProfile = byId.get(memId);
       let memProbe = probes.get(memId);
@@ -420,7 +501,8 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
 
       if (memInSameGuild) {
         const donated = await tryAutoDonateForProfile(g, memId, memProfile, memProbe);
-        if (!donated) {
+        if (donated) anyChanged = true;
+        else {
           const isDonated = !!(memProbe.inGameGuild && memProbe.inGameGuild.donatedToday);
           setActionNote(memId, isDonated ? 'บริจาครายวันแล้ว' : 'อยู่ในกิลด์แล้ว');
         }
@@ -436,7 +518,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         }
         setActionNote(memId, `ออกจากกิลด์เดิม (${memProbe.inGameGuild.name})`);
         await evalProfilePort(memProfile.debugPort, sendGuildActionJs({ action: 'leave' }), 3000);
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 400));
       }
 
       // Check if member already has a pending guild invite from this guild/leader
@@ -449,35 +531,92 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       if (inviteMatches) {
         await evalProfilePort(memProfile.debugPort, sendGuildActionJs({ action: 'accept' }), 3000);
         setActionNote(memId, 'กดรับคำเชิญเข้ากิลด์');
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setTimeout(r, 450));
         memProbe = await probeClient(memProfile.debugPort);
-        probes.set(memId, memProbe);
-        if (memProbe && memProbe.inGameGuild) {
-          await tryAutoDonateForProfile(g, memId, memProfile, memProbe);
+        if (memProbe && memProbe.inWorld) {
+          probes.set(memId, memProbe);
+          liveStatus[memId] = {
+            ...(liveStatus[memId] || {}),
+            online: true,
+            charName: memProbe.charName,
+            inGameGuild: memProbe.inGameGuild,
+            donatedToday: !!(memProbe.inGameGuild && memProbe.inGameGuild.donatedToday),
+            myPoints: memProbe.inGameGuild ? memProbe.inGameGuild.myPoints : 0,
+            donatableTiers: memProbe.donatableTiers || []
+          };
+          if (memProbe.inGameGuild) {
+            currentMemberCount++;
+            anyChanged = true;
+            await tryAutoDonateForProfile(g, memId, memProfile, memProbe);
+          }
         }
         continue;
       }
 
-      // Otherwise, leader invites member by character name, then member accepts
-      if ((igGuild.members || []).length >= (igGuild.maxMembers || 20)) {
-        setActionNote(memId, `กิลด์เต็ม (${igGuild.maxMembers || 20} คน)`);
+      if (currentMemberCount + toInvite.length >= maxMembers) {
+        setActionNote(memId, `กิลด์เต็ม (${maxMembers} คน)`);
         continue;
       }
 
-      setActionNote(memId, `เชิญ ${memProbe.charName} เข้ากิลด์`);
-      await evalProfilePort(leaderProfile.debugPort, sendGuildActionJs({ action: 'invite', name: memProbe.charName }), 3000);
-      await new Promise(r => setTimeout(r, 650));
+      if (toInvite.length < 6) {
+        toInvite.push({ memId, memProfile, memProbe });
+      } else {
+        setActionNote(memId, 'รอคิวเชิญเข้ากิลด์...');
+      }
+    }
 
-      const afterInviteProbe = await probeClient(memProfile.debugPort);
-      if (afterInviteProbe && afterInviteProbe.pendingGuildInvite) {
-        await evalProfilePort(memProfile.debugPort, sendGuildActionJs({ action: 'accept' }), 3000);
-        setActionNote(memId, 'รับคำเชิญเข้ากิลด์แล้ว');
-        await new Promise(r => setTimeout(r, 500));
-        const joinedProbe = await probeClient(memProfile.debugPort);
-        if (joinedProbe && joinedProbe.inGameGuild) {
-          probes.set(memId, joinedProbe);
-          await tryAutoDonateForProfile(g, memId, memProfile, joinedProbe);
-        }
+    // 5. Batch invite + parallel accept for queued members (up to 6 per cycle)
+    if (toInvite.length > 0) {
+      for (const item of toInvite) {
+        setActionNote(item.memId, `เชิญ ${item.memProbe.charName} เข้ากิลด์`);
+        await evalProfilePort(leaderProfile.debugPort, sendGuildActionJs({ action: 'invite', name: item.memProbe.charName }), 3000);
+        await new Promise(r => setTimeout(r, 120));
+      }
+      await new Promise(r => setTimeout(r, 750));
+      await Promise.all(toInvite.map(async ({ memId, memProfile }) => {
+        try {
+          await evalProfilePort(memProfile.debugPort, sendGuildActionJs({ action: 'accept' }), 3000);
+          setActionNote(memId, 'รับคำเชิญเข้ากิลด์แล้ว');
+          await new Promise(r => setTimeout(r, 500));
+          const joinedProbe = await probeClient(memProfile.debugPort);
+          if (joinedProbe && joinedProbe.inWorld) {
+            probes.set(memId, joinedProbe);
+            liveStatus[memId] = {
+              ...(liveStatus[memId] || {}),
+              online: true,
+              charName: joinedProbe.charName,
+              inGameGuild: joinedProbe.inGameGuild,
+              donatedToday: !!(joinedProbe.inGameGuild && joinedProbe.inGameGuild.donatedToday),
+              myPoints: joinedProbe.inGameGuild ? joinedProbe.inGameGuild.myPoints : 0,
+              donatableTiers: joinedProbe.donatableTiers || []
+            };
+            if (joinedProbe.inGameGuild) {
+              anyChanged = true;
+              const donated = await tryAutoDonateForProfile(g, memId, memProfile, joinedProbe);
+              if (!donated) {
+                setActionNote(memId, joinedProbe.inGameGuild.donatedToday ? 'บริจาครายวันแล้ว' : 'อยู่ในกิลด์แล้ว');
+              }
+            }
+          }
+        } catch (_) {}
+      }));
+    }
+
+    // 6. Refresh leader probe if guild membership or donations changed
+    if (anyChanged || leaderDonated) {
+      const freshLeader = await probeClient(leaderProfile.debugPort);
+      if (freshLeader && freshLeader.inWorld) {
+        probes.set(g.leaderId, freshLeader);
+        liveStatus[g.leaderId] = {
+          ...(liveStatus[g.leaderId] || {}),
+          online: true,
+          charName: freshLeader.charName,
+          zeny: freshLeader.zeny,
+          inGameGuild: freshLeader.inGameGuild,
+          donatedToday: !!(freshLeader.inGameGuild && freshLeader.inGameGuild.donatedToday),
+          myPoints: freshLeader.inGameGuild ? freshLeader.inGameGuild.myPoints : 0,
+          donatableTiers: freshLeader.donatableTiers || []
+        };
       }
     }
   }

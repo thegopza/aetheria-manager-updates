@@ -139,8 +139,10 @@ const ACTIONS = {
     const before = await fetchEx();
     if (!before) return { success: false, error: 'อ่านตลาด Token ไม่ได้' };
     if ((Number(before.tokens) || 0) >= ${Number(tokensBelow)}) return { success: false, error: 'Token พอแล้ว', tokens: before.tokens };
+    try { if (typeof window.getLiveCharacterData === 'function') window.getLiveCharacterData(true); } catch (e) {}
     room.send('exchange', { type: 'now', side: 'bid', qty: ${Number(qty)}, maxZeny: ${Number(maxZeny)} });
     await new Promise(r => setTimeout(r, 2000));
+    try { if (typeof window.getLiveCharacterData === 'function') window.getLiveCharacterData(true); } catch (e) {}
     const after = await fetchEx();
     const b = Number(before.tokens) || 0, a = after ? Number(after.tokens) || 0 : null;
     return { success: a != null && a > b, before: b, after: a, error: a == null ? 'ไม่ได้คำตอบจากตลาด' : (a > b ? null : 'ซื้อไม่ได้ (ไม่มีคนขายในราคานี้ หรือเงินไม่พอ)') };

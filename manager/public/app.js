@@ -1163,6 +1163,8 @@ function getProfileZenyRate(p) {
   if (isOnline && state && typeof state.zeny === 'number') {
     const now = Date.now();
     const z = state.zeny;
+    const gross = (typeof state.grossZenyGained === 'number' && Number.isFinite(state.grossZenyGained)) ? state.grossZenyGained : null;
+    const isConsolReceiver = Boolean(state.consolidationReceiverMode);
     const charName = state.charName || '';
     let tr = clientZenyTrackers[p.id];
     if (!tr || (charName && tr.charName && tr.charName !== charName)) {
@@ -1171,17 +1173,34 @@ function getProfileZenyRate(p) {
         startTime: now,
         lastTime: now,
         lastZeny: z,
+        lastGrossGained: gross,
         totalGained: 0,
         samples: []
       };
     } else {
       if (charName && !tr.charName) tr.charName = charName;
-      const delta = z - tr.lastZeny;
+      let gainDelta = 0;
+      if (gross !== null) {
+        if (typeof tr.lastGrossGained === 'number' && gross >= tr.lastGrossGained) {
+          gainDelta = gross - tr.lastGrossGained;
+        } else if (typeof tr.lastGrossGained === 'number' && gross > 0 && gross < tr.lastGrossGained) {
+          gainDelta = gross;
+        } else if (tr.lastGrossGained == null && typeof tr.lastZeny === 'number') {
+          const rawDelta = z - tr.lastZeny;
+          if (rawDelta > 0 && !isConsolReceiver) gainDelta = rawDelta;
+        }
+        tr.lastGrossGained = gross;
+      } else {
+        const delta = z - tr.lastZeny;
+        if (delta > 0 && !isConsolReceiver) {
+          gainDelta = delta;
+        }
+      }
       tr.lastZeny = z;
       tr.lastTime = now;
-      if (delta > 0) {
-        tr.totalGained += delta;
-        tr.samples.push({ t: now, gain: delta });
+      if (gainDelta > 0 && !isConsolReceiver) {
+        tr.totalGained += gainDelta;
+        tr.samples.push({ t: now, gain: gainDelta });
       }
     }
     const cutoff = now - 60 * 60 * 1000;
@@ -1609,7 +1628,7 @@ function buildProfileCard(p) {
           <span class="stat-lbl">Zeny</span>
           <span class="stat-val mono text-gold">${curZeny}</span>
         </div>` : ''}
-        <div class="gp-rate-row" onclick="resetZenyRate('${p.id}', event)" title="รายได้เฉลี่ยต่อนาที (GP/M) และต่อชั่วโมง (GP/H)${zenyRate.totalGained > 0 ? ` · สะสมรอบนี้ +${zenyRate.totalGained.toLocaleString()} z` : ''} — คลิกเพื่อรีเซ็ตการนับใหม่">
+        <div class="gp-rate-row" onclick="resetZenyRate('${p.id}', event)" title="รายได้เฉลี่ยต่อนาที (GP/M) และต่อชั่วโมง (GP/H) [คิดเฉพาะรายได้อย่างเดียว ไม่หักค่าซื้อของ/Token]${zenyRate.totalGained > 0 ? ` · สะสมรอบนี้ +${zenyRate.totalGained.toLocaleString()} z` : ''} — คลิกเพื่อรีเซ็ตการนับใหม่">
           <div class="gp-rate-cell">
             <span class="gp-rate-lbl">⚡ GP/M</span>
             <span class="gp-rate-val gp-m">${isOnline ? `${zenyRate.gpm.toLocaleString()} <small>z/m</small>` : '--'}</span>
@@ -2099,7 +2118,7 @@ async function fetchProxyRegisterSettings() {
     const settings=hcRes?.success?hcRes.settings:null,quota=proxyQuotaFromSettings(settings);
     const balEl=document.getElementById('proxy-modal-balance-display'),quotaEl=document.getElementById('proxy-modal-quota-calc');
     if(balEl)balEl.textContent=quota===null?'—':(settings.balanceUnits/100).toLocaleString('th-TH',{minimumFractionDigits:1,maximumFractionDigits:2})+' ส่วนบุญ';
-    if(quotaEl)quotaEl.textContent=quota===null?'—':quota.toLocaleString();
+    if(quotaEl)quotaEl.textContent=quota===null?'—':(quota>0?quota.toLocaleString():'คิดตามรอบบิล (0.1/ไอดี)');
   } catch (_) {}
 }
 

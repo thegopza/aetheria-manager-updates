@@ -632,6 +632,125 @@ const LIVE_STATE_EVAL = `(() => {
   try {
     s.zeroRender = Boolean(window.__pmZeroRender);
   } catch (e) {}
+  try {
+    if (typeof window.recordGrossZeny !== 'function') {
+      window.recordGrossZeny = function(newZeny) {
+        if (typeof newZeny !== 'number' || !Number.isFinite(newZeny) || newZeny < 0) return;
+        const charKey = String((window.__latestCharacterData && window.__latestCharacterData.name) || window.__charName || '').trim();
+        if (charKey && window.__grossZenyCharName && window.__grossZenyCharName !== charKey) {
+          window.__lastGrossBaseZeny = newZeny;
+          window.__grossZenyGained = 0;
+          window.__grossZenyInitAt = Date.now();
+        }
+        if (charKey) window.__grossZenyCharName = charKey;
+        if (typeof window.__grossZenyGained !== 'number' || !Number.isFinite(window.__grossZenyGained)) {
+          window.__grossZenyGained = 0;
+        }
+        if (typeof window.__lastGrossBaseZeny !== 'number' || !Number.isFinite(window.__lastGrossBaseZeny)) {
+          window.__lastGrossBaseZeny = newZeny;
+          window.__grossZenyInitAt = Date.now();
+          return;
+        }
+        if (window.__lastGrossBaseZeny === 0 && newZeny > 0 && (Date.now() - (window.__grossZenyInitAt || 0) < 8000)) {
+          window.__lastGrossBaseZeny = newZeny;
+          return;
+        }
+        const delta = newZeny - window.__lastGrossBaseZeny;
+        if (delta > 0 && !window.__consolidationReceiverMode && !window.__isConsolidating) {
+          window.__grossZenyGained += delta;
+        }
+        window.__lastGrossBaseZeny = newZeny;
+      };
+    }
+    if (typeof window.__pmForceSyncCharZeny !== 'function') {
+      window.__pmForceSyncCharZeny = function() {
+        try {
+          const root = document.querySelector('#root');
+          const key = root ? Object.keys(root).find(k => k.startsWith('__reactContainer') || k.startsWith('__reactFiber')) : null;
+          let fiber = (root && key) ? root[key] : null;
+          let charData = null, visited = 0;
+          function walk(n, depth) {
+            if (!n || depth > 40 || charData || ++visited > 350) return;
+            if (n.memoizedProps) {
+              if (n.memoizedProps.character && n.memoizedProps.character.stats) charData = n.memoizedProps.character;
+              else if (n.memoizedProps.stats && n.memoizedProps.skills) charData = n.memoizedProps;
+            }
+            if (!charData && n.memoizedState) {
+              let st = n.memoizedState, steps = 0;
+              while (st && ++steps < 25) {
+                const ms = st.memoizedState;
+                if (ms && typeof ms === 'object') {
+                  if (ms.character && ms.character.stats) { charData = ms.character; break; }
+                  if (ms.stats && ms.skills) { charData = ms; break; }
+                }
+                st = st.next;
+              }
+            }
+            if (n.child) walk(n.child, depth + 1);
+            if (n.sibling) walk(n.sibling, depth + 1);
+          }
+          if (fiber) walk(fiber, 0);
+          if (charData && typeof charData.zeny === 'number') {
+            window.__latestCharacterData = charData;
+            window.__currentZeny = charData.zeny;
+            if (typeof window.recordGrossZeny === 'function') window.recordGrossZeny(charData.zeny);
+          }
+        } catch (_) {}
+      };
+    }
+    if (!window.__grossZenyNative && !window.__pmGrossZenyHooked && typeof window.applyLiveCharacterPacket === 'function') {
+      window.__pmGrossZenyHooked = true;
+      const origApplyChar = window.applyLiveCharacterPacket;
+      window.applyLiveCharacterPacket = function(charDec) {
+        try {
+          if (charDec && typeof charDec.zeny === 'number' && typeof window.recordGrossZeny === 'function') {
+            window.recordGrossZeny(charDec.zeny);
+          }
+        } catch (_) {}
+        return origApplyChar.apply(this, arguments);
+      };
+    }
+    if (!window.__pmGrossClickHooked && typeof document !== 'undefined') {
+      window.__pmGrossClickHooked = true;
+      document.addEventListener('click', (ev) => {
+        try {
+          const el = ev.target && ev.target.closest ? ev.target.closest('button, div, span') : null;
+          if (!el || (el.closest && el.closest('#pelican-hud'))) return;
+          const txt = (el.innerText || '').trim();
+          if (txt.includes('ยืนยันขาย') || txt === 'ซื้อ' || txt === 'ขาย' || txt.includes('รับเงิน') || txt.includes('รับทั้งหมด')) {
+            if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny();
+            setTimeout(() => { try { if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny(); } catch (_) {} }, 220);
+            setTimeout(() => { try { if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny(); } catch (_) {} }, 480);
+            setTimeout(() => { try { if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny(); } catch (_) {} }, 680);
+          }
+        } catch (_) {}
+      }, true);
+    }
+    const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null) || window.__gameRoom || null;
+    if (room && typeof room.send === 'function' && !room.__pmGrossSendHooked) {
+      room.__pmGrossSendHooked = true;
+      const origRoomSend = room.send;
+      room.send = function(type) {
+        try {
+          const cmd = String(type || '');
+          if (/shop_buy|shop_sell|market_buy|market_claim|market_collect|exchange|refine|warp|npc_option|trade/i.test(cmd)) {
+            if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny();
+            setTimeout(() => { try { if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny(); } catch (_) {} }, 250);
+            setTimeout(() => { try { if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny(); } catch (_) {} }, 600);
+          }
+        } catch (_) {}
+        return origRoomSend.apply(this, arguments);
+      };
+    }
+    if (window.__isShopping && typeof window.__pmForceSyncCharZeny === 'function') {
+      window.__pmForceSyncCharZeny();
+      if (typeof window.__currentZeny === 'number') s.zeny = window.__currentZeny;
+    } else if (typeof s.zeny === 'number' && typeof window.recordGrossZeny === 'function') {
+      window.recordGrossZeny(s.zeny);
+    }
+    s.grossZenyGained = (typeof window.__grossZenyGained === 'number' && Number.isFinite(window.__grossZenyGained)) ? window.__grossZenyGained : null;
+    s.consolidationReceiverMode = Boolean(window.__consolidationReceiverMode || window.__isConsolidating);
+  } catch (e) {}
   return s;
 })()`;
 
@@ -1764,19 +1883,78 @@ function runPowerShell(script) {
   });
 }
 
-// Per-profile Zeny farming rate tracker (GP/M & GP/H)
+// Per-profile Zeny farming rate tracker (GP/M & GP/H — Gross income only, never deducting purchases/Tokens)
+const ZENY_RATE_STATE_FILE = path.join(__dirname, "data", "zeny_rate_state.json");
 const zenyRateTrackers = {};
+let zenyRateStateDirty = false;
+let lastProfilesZenyPollAt = 0;
+
+function loadZenyRateState() {
+  try {
+    if (fs.existsSync(ZENY_RATE_STATE_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(ZENY_RATE_STATE_FILE, "utf8"));
+      if (parsed && parsed.trackers && typeof parsed.trackers === "object") {
+        const now = Date.now();
+        const cutoff = now - 60 * 60 * 1000;
+        for (const [pid, tr] of Object.entries(parsed.trackers)) {
+          if (!tr || typeof tr !== "object") continue;
+          if (now - (Number(tr.lastTime) || 0) > 6 * 60 * 60 * 1000) continue;
+          const samples = Array.isArray(tr.samples)
+            ? tr.samples.filter(s => s && typeof s.t === "number" && typeof s.gain === "number" && s.gain > 0 && s.t >= cutoff)
+            : [];
+          zenyRateTrackers[pid] = {
+            charName: String(tr.charName || ""),
+            startTime: Number(tr.startTime) || now,
+            lastTime: Number(tr.lastTime) || now,
+            lastZeny: typeof tr.lastZeny === "number" ? tr.lastZeny : null,
+            lastGrossGained: typeof tr.lastGrossGained === "number" ? tr.lastGrossGained : null,
+            totalGained: Math.max(0, Number(tr.totalGained) || 0),
+            samples
+          };
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+function saveZenyRateStateNow() {
+  try {
+    fs.mkdirSync(path.dirname(ZENY_RATE_STATE_FILE), { recursive: true });
+    const tmpFile = ZENY_RATE_STATE_FILE + ".tmp";
+    fs.writeFileSync(tmpFile, JSON.stringify({ updatedAt: Date.now(), trackers: zenyRateTrackers }, null, 2), "utf8");
+    fs.renameSync(tmpFile, ZENY_RATE_STATE_FILE);
+    zenyRateStateDirty = false;
+  } catch (e) {}
+}
+
+loadZenyRateState();
+setInterval(() => {
+  if (zenyRateStateDirty) saveZenyRateStateNow();
+}, 10000);
+process.on("exit", () => {
+  if (zenyRateStateDirty) saveZenyRateStateNow();
+});
+
 function updateZenyRateTracker(profileId, liveState) {
+  const now = Date.now();
+  const windowMs = 60 * 60 * 1000; // 60-minute rolling window
+  const cutoff = now - windowMs;
   if (!liveState || liveState.error || typeof liveState.zeny !== 'number') {
     const existing = zenyRateTrackers[profileId];
     if (!existing) return { gpm: 0, gph: 0, totalGained: 0, elapsedSec: 0 };
-    const elapsedMs = Math.max(0, (existing.lastTime || Date.now()) - existing.startTime);
+    if (Array.isArray(existing.samples) && existing.samples.length > 0 && existing.samples[0].t < cutoff) {
+      existing.samples = existing.samples.filter(s => s.t >= cutoff);
+    }
+    const windowStart = Math.max(existing.startTime || now, cutoff);
+    const elapsedMs = Math.max(0, (existing.lastTime || now) - windowStart);
     const effectiveMin = Math.max(elapsedMs / 60000, 0.25);
-    const gpm = (elapsedMs >= 3000 && existing.totalGained > 0) ? Math.round(existing.totalGained / effectiveMin) : 0;
-    return { gpm, gph: gpm * 60, totalGained: existing.totalGained, elapsedSec: Math.round(elapsedMs / 1000) };
+    const windowGain = Array.isArray(existing.samples) ? existing.samples.reduce((sum, s) => sum + s.gain, 0) : 0;
+    const gpm = (elapsedMs >= 3000 && windowGain > 0) ? Math.round(windowGain / effectiveMin) : 0;
+    return { gpm, gph: gpm * 60, totalGained: existing.totalGained || 0, elapsedSec: Math.round(Math.max(0, (existing.lastTime || now) - existing.startTime) / 1000) };
   }
-  const now = Date.now();
   const z = liveState.zeny;
+  const gross = (typeof liveState.grossZenyGained === 'number' && Number.isFinite(liveState.grossZenyGained)) ? liveState.grossZenyGained : null;
+  const isConsolReceiver = Boolean(liveState.consolidationReceiverMode);
   const charName = liveState.charName || '';
   let tr = zenyRateTrackers[profileId];
   if (!tr || (charName && tr.charName && tr.charName !== charName)) {
@@ -1785,21 +1963,49 @@ function updateZenyRateTracker(profileId, liveState) {
       startTime: now,
       lastTime: now,
       lastZeny: z,
+      lastGrossGained: gross,
       totalGained: 0,
       samples: []
     };
+    zenyRateStateDirty = true;
   } else {
-    if (charName && !tr.charName) tr.charName = charName;
-    const delta = z - tr.lastZeny;
-    tr.lastZeny = z;
+    if (charName && !tr.charName) {
+      tr.charName = charName;
+      zenyRateStateDirty = true;
+    }
+    let gainDelta = 0;
+    if (gross !== null) {
+      if (typeof tr.lastGrossGained === 'number' && gross >= tr.lastGrossGained) {
+        gainDelta = gross - tr.lastGrossGained;
+      } else if (typeof tr.lastGrossGained === 'number' && gross > 0 && gross < tr.lastGrossGained) {
+        // Client page reloaded and already accumulated new gross Zeny since reload
+        gainDelta = gross;
+      } else if (tr.lastGrossGained == null && typeof tr.lastZeny === 'number') {
+        // First time attaching gross tracker to an already-tracked profile
+        const rawDelta = z - tr.lastZeny;
+        if (rawDelta > 0 && !isConsolReceiver) gainDelta = rawDelta;
+      }
+      if (tr.lastGrossGained !== gross) {
+        tr.lastGrossGained = gross;
+        zenyRateStateDirty = true;
+      }
+    } else if (typeof tr.lastZeny === 'number') {
+      const rawDelta = z - tr.lastZeny;
+      if (rawDelta > 0 && !isConsolReceiver) {
+        gainDelta = rawDelta;
+      }
+    }
+    if (tr.lastZeny !== z) {
+      tr.lastZeny = z;
+      zenyRateStateDirty = true;
+    }
     tr.lastTime = now;
-    if (delta > 0) {
-      tr.totalGained += delta;
-      tr.samples.push({ t: now, gain: delta });
+    if (gainDelta > 0 && !isConsolReceiver) {
+      tr.totalGained += gainDelta;
+      tr.samples.push({ t: now, gain: gainDelta });
+      zenyRateStateDirty = true;
     }
   }
-  const windowMs = 60 * 60 * 1000; // 60-minute rolling window
-  const cutoff = now - windowMs;
   if (tr.samples.length > 0 && tr.samples[0].t < cutoff) {
     tr.samples = tr.samples.filter(s => s.t >= cutoff);
   }
@@ -1818,6 +2024,29 @@ function updateZenyRateTracker(profileId, liveState) {
     elapsedSec: Math.round((now - tr.startTime) / 1000)
   };
 }
+
+let zenyBgPollInFlight = false;
+setInterval(async () => {
+  if (zenyBgPollInFlight) return;
+  if (Date.now() - lastProfilesZenyPollAt < 4500) return;
+  zenyBgPollInFlight = true;
+  try {
+    const profiles = loadProfiles();
+    await Promise.all(profiles.map(async (p) => {
+      if (!p || !p.debugPort) return;
+      const proc = runningProcesses[p.id];
+      const hasKnownProc = proc && isProcessAlive(proc.pid);
+      const hasTracker = Boolean(zenyRateTrackers[p.id]);
+      if (!hasKnownProc && !hasTracker && !browserMode.isOpen(p.id)) return;
+      const liveState = await queryClientState(p.debugPort);
+      if (liveState && !liveState.error && typeof liveState.zeny === "number") {
+        updateZenyRateTracker(p.id, liveState);
+      }
+    }));
+  } catch (e) {} finally {
+    zenyBgPollInFlight = false;
+  }
+}, 4000);
 
 // ==========================================
 // PER-PROFILE & DAILY BANDWIDTH MONITOR (WebSocket + HTTP)
@@ -3022,7 +3251,11 @@ const server = http.createServer(async (req, res) => {
         const data = JSON.parse(body || "{}");
         const current = proxyRegister.loadSettings();
         const nextState = typeof data.enabled === "boolean" ? data.enabled : !current.enabled;
-        const updated = proxyRegister.saveSettings({ enabled: nextState });
+        const patch = { enabled: nextState };
+        if (nextState && !current.configured && current.mode !== "owner-broker") {
+          patch.mode = "owner-broker";
+        }
+        const updated = proxyRegister.saveSettings(patch);
         if (updated.enabled) {
           authSync.resetProxyFallback?.();
           setImmediate(() => authSync.tick().catch(() => {}));
@@ -3046,6 +3279,7 @@ const server = http.createServer(async (req, res) => {
 
   // 1. GET /api/profiles
   if (req.method === "GET" && pathname === "/api/profiles") {
+    lastProfilesZenyPollAt = Date.now();
     const profiles = loadProfiles();
     const enriched = await Promise.all(
       profiles.map(async (p) => {
@@ -3201,6 +3435,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/reset-zeny-rate$/)) {
     const id = pathname.split("/")[3];
     delete zenyRateTrackers[id];
+    zenyRateStateDirty = true;
+    saveZenyRateStateNow();
     return sendJSON({ success: true });
   }
 

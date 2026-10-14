@@ -17,7 +17,7 @@ const path = require('path');
 const REPO = 'thegopza/aetheria-pelican-bot';
 const { getMainHeadSha } = require('./github_check');
 const RAW_BOT_URL = `https://raw.githubusercontent.com/${REPO}/main/bot.js`;
-const POLL_MS = 5 * 60 * 1000;
+const POLL_MS = 2 * 60 * 1000;
 const TICK_MS = 15 * 1000;
 const RAW_WAIT_LIMIT_MS = 20 * 60 * 1000;
 const RESUME_GRACE_MS = 45 * 1000;
@@ -80,7 +80,7 @@ function getBuffer(url) {
 const gitBlobSha = buf => crypto.createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataDir, getManagedRelease, sleep = ms => new Promise(r => setTimeout(r, ms)), clock = () => Date.now(), clientBackTimeoutMs = CLIENT_BACK_TIMEOUT_MS }) {
+function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataDir, getManagedRelease, getCachedManagedRelease, sleep = ms => new Promise(r => setTimeout(r, ms)), clock = () => Date.now(), clientBackTimeoutMs = CLIENT_BACK_TIMEOUT_MS }) {
   const stateFile = path.join(dataDir, 'bot_update_state.json');
   let saved = { enabled: true };
   try { saved = Object.assign(saved, JSON.parse(fs.readFileSync(stateFile, 'utf8'))); } catch (e) {}
@@ -277,6 +277,17 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
     if (busyCycle) return;
     busyCycle = true;
     try {
+      if (getCachedManagedRelease) {
+        try {
+          const cached = getCachedManagedRelease();
+          if (cached && /^\d+\.\d+\.\d+$/.test(cached.version || '') && /^[a-f0-9]{64}$/.test(cached.hash || '') && status.latest?.sha !== cached.hash) {
+            status.latest = { sha: cached.hash, blobSha: cached.hash, version: cached.version,
+              message: 'PmheeAether payload v' + cached.version, date: Date.now(), managed: true };
+            status.ready = { sha: cached.hash, at: Date.now(), observedLive: true };
+            status.lastError = null;
+          }
+        } catch (_) {}
+      }
       if (!status.ready) return;
       const settleUntil = status.latest ? status.latest.date + SETTLE_MS : 0;
       if (!status.latest?.managed && Date.now() < settleUntil && Date.now() - manualAt > SETTLE_MS) {
@@ -334,9 +345,9 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
   }
 
   function start() {
-    // First check after a minute so a freshly started Manager doesn't reload clients immediately.
-    setTimeout(() => { checkNow(); setInterval(() => checkGitHub().then(waitForRaw), POLL_MS); }, 60 * 1000);
-    setInterval(() => { if (status.ready) return updateCycle(); }, TICK_MS);
+    // First check after 10s so Manager quickly detects latest payload without blocking initial startup.
+    setTimeout(() => { checkNow(); setInterval(() => checkGitHub().then(waitForRaw), POLL_MS); }, 10 * 1000);
+    setInterval(() => { return updateCycle(); }, TICK_MS);
   }
 
   async function handleRoute(req, res, pathname, sendJSON) {

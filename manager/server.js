@@ -2266,6 +2266,7 @@ const botAutoUpdater = createBotAutoUpdater({
   evalProfilePort,
   getGameDir: () => installer.getEffectiveGamePath(),
   getManagedRelease:()=>scriptCoordinator.refreshRelease?scriptCoordinator.refreshRelease():scriptCoordinator.release?.(),
+  getCachedManagedRelease:()=>scriptCoordinator.release?.(),
   dataDir: path.join(__dirname, "data")
 });
 // Auto-login / auto-register: game clients get their profile's ID + password (manager/auth_sync.js)
@@ -2605,6 +2606,8 @@ async function pollCentralCommands() {
           } else {
             await stopSingleProfile(cmd.target);
           }
+        } else if (cmd.action === 'update_bot' || cmd.action === 'refresh_payload') {
+          botAutoUpdater.retryFailed().catch(() => {});
         }
         ackIds.push(cmd.id);
       }

@@ -110,6 +110,8 @@ function createCoordinatedScriptCoordinator({
     lastKnownAccountId = currentAccountId;
   }
 
+  let latestServerReleaseHash = null;
+
   async function checkServerEndpoint() {
     if (stopped) return;
     if (process.env.PMHEE_SCRIPT_LEGACY_MODE === '1') return;
@@ -122,6 +124,9 @@ function createCoordinatedScriptCoordinator({
       // maintenance ยังไม่ activate
       if (res?.success === true && res?.maintenance !== true && res?.schemaVersion === 'owner-v1') {
         detectedMode = 'offline';
+        if (typeof res.releaseHash === 'string' && /^[a-f0-9]{64}$/.test(res.releaseHash)) {
+          latestServerReleaseHash = res.releaseHash;
+        }
         const accountId = getEffectiveAccountId();
         if (accountId && service?.serviceOrigin) {
           saveActivationRecord({
@@ -150,6 +155,9 @@ function createCoordinatedScriptCoordinator({
       syncWalletBinding(current);
 
       if (current === 'offline') {
+        if (latestServerReleaseHash && offlineCoordinator?.release?.()?.hash !== latestServerReleaseHash) {
+          try { await offlineCoordinator?.refreshRelease?.(); } catch (_) {}
+        }
         return await offlineCoordinator?.cycle?.();
       } else {
         return await legacyCoordinator?.cycle?.();
@@ -180,6 +188,9 @@ function createCoordinatedScriptCoordinator({
       return current === 'offline' ? offlineCoordinator?.release?.() : undefined;
     },
     async refreshRelease() {
+      if (determineMode() !== 'offline') {
+        await checkServerEndpoint();
+      }
       const current = determineMode();
       if (current === 'offline') {
         if (offlineCoordinator?.refreshRelease) return await offlineCoordinator.refreshRelease();

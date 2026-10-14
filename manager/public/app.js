@@ -2597,39 +2597,15 @@ document.getElementById("btn-add-profile").onclick = () => {
 // ==========================================
 // MAIN SECTION TABS (Game Clients / Zeny Consolidation)
 // ==========================================
-function switchMainTab(tab) {
-  document.querySelectorAll(".tab-btn[data-tab]").forEach(btn => {
-    btn.classList.toggle("active", btn.dataset.tab === tab);
-  });
-  document.querySelectorAll(".tab-pane[data-pane]").forEach(pane => {
-    pane.classList.toggle("active", pane.dataset.pane === tab);
-  });
-  document.querySelectorAll("[data-tab-only]").forEach(el => {
-    el.style.display = el.dataset.tabOnly === tab ? "" : "none";
-  });
-  if (tab === "zeny" && typeof updateZenyConsolidationView === 'function') {
-    updateZenyConsolidationView();
-  }
-  try { localStorage.setItem("manager.activeTab", tab); } catch (e) {}
-}
-
-document.querySelectorAll(".tab-btn[data-tab]").forEach(btn => {
-  btn.onclick = () => switchMainTab(btn.dataset.tab);
-});
-
-(() => {
-  let saved = null;
-  try { saved = localStorage.getItem("manager.activeTab"); } catch (e) {}
-  if (saved && document.querySelector(`.tab-pane[data-pane="${saved}"]`)) switchMainTab(saved);
-})();
-
 // ==========================================
 // ZENY CONSOLIDATION WORKFLOW (UI CONTROLLER)
 // ==========================================
 let selectedReceiverProfileId = null;
 let selectedSenderIds = new Set();
+let unselectedSenderIds = new Set();
 let consolidationPollTimer = null;
 let isConsolidationRunning = false;
+let lastConsolidationState = null;
 
 // "เหลือเงินติดตัวจอที่โอน": each sender keeps this much zeny (server: keepZeny). Remembered in this browser.
 function getConsolidationKeepZeny() {
@@ -2707,6 +2683,10 @@ function updateZenyConsolidationView() {
     }
 
     let pendingTransferSum = 0;
+    let eligibleCount = 0;
+    let checkedEligibleCount = 0;
+    const completedSet = new Set((lastConsolidationState && Array.isArray(lastConsolidationState.completedSenders)) ? lastConsolidationState.completedSenders : []);
+    const activeSenderName = (lastConsolidationState && lastConsolidationState.running) ? lastConsolidationState.currentSender : null;
 
     tbody.innerHTML = currentProfiles.map(p => {
       const isReceiver = Boolean(selectedReceiverProfileId && p.id === selectedReceiverProfileId);
@@ -2726,11 +2706,13 @@ function updateZenyConsolidationView() {
         selectedSenderIds.delete(p.id);
         isChecked = false;
       } else {
-        if (!selectedSenderIds.has(p.id) && selectedSenderIds.size === 0) {
+        eligibleCount++;
+        if (!selectedSenderIds.has(p.id) && !unselectedSenderIds.has(p.id)) {
           selectedSenderIds.add(p.id);
         }
         isChecked = selectedSenderIds.has(p.id);
         if (isChecked) {
+          checkedEligibleCount++;
           pendingTransferSum += Math.max(0, zeny - getConsolidationKeepZeny());
         }
       }
@@ -2743,7 +2725,15 @@ function updateZenyConsolidationView() {
       } else if (!isOnline) {
         statusBadge = `<span class="zeny-badge-status offline">⚪ ออฟไลน์</span>`;
       } else if (isConsolidationRunning) {
-        statusBadge = `<span class="zeny-badge-status transferring">⏳ กำลังทำงาน...</span>`;
+        if (completedSet.has(p.id)) {
+          statusBadge = `<span class="zeny-badge-status done">✅ โอนสำเร็จแล้ว</span>`;
+        } else if (activeSenderName && activeSenderName === p.name) {
+          statusBadge = `<span class="zeny-badge-status transferring">🔄 กำลังโอนเงิน...</span>`;
+        } else if (isChecked) {
+          statusBadge = `<span class="zeny-badge-status transferring">⏳ รอคิวโอนเงิน...</span>`;
+        } else {
+          statusBadge = `<span class="zeny-badge-status ready">🟢 พร้อมโอนเงิน (👑 Premium)</span>`;
+        }
       } else {
         statusBadge = `<span class="zeny-badge-status ready">🟢 พร้อมโอนเงิน (👑 Premium)</span>`;
       }
@@ -2779,6 +2769,11 @@ function updateZenyConsolidationView() {
       `;
     }).join("");
 
+    const selectAllCb = document.getElementById("zeny-select-all-checkbox");
+    if (selectAllCb && eligibleCount > 0) {
+      selectAllCb.checked = (checkedEligibleCount === eligibleCount);
+    }
+
     const pendingEl = document.getElementById("zeny-pending-transfer-val");
     if (pendingEl) pendingEl.innerText = `${pendingTransferSum.toLocaleString()} z`;
   }
@@ -2795,12 +2790,19 @@ function switchMainTab(tabName) {
     const only = el.getAttribute("data-tab-only");
     el.style.display = (only === tabName) ? "" : "none";
   });
+  try { localStorage.setItem("manager.activeTab", tabName); } catch (e) {}
 
   if (tabName === "zeny") {
     updateZenyConsolidationView();
     pollConsolidationStatus();
   }
 }
+
+(() => {
+  let saved = null;
+  try { saved = localStorage.getItem("manager.activeTab"); } catch (e) {}
+  if (saved && document.querySelector(`.tab-pane[data-pane="${saved}"]`)) switchMainTab(saved);
+})();
 
 function initZenyConsolidationEvents() {
   // Main Tab Navigation Listeners
@@ -2833,8 +2835,13 @@ function initZenyConsolidationEvents() {
       const checked = e.target.checked;
       currentProfiles.forEach(p => {
         if (p.id !== selectedReceiverProfileId && p.isRunning && isProfilePremium(p)) {
-          if (checked) selectedSenderIds.add(p.id);
-          else selectedSenderIds.delete(p.id);
+          if (checked) {
+            selectedSenderIds.add(p.id);
+            unselectedSenderIds.delete(p.id);
+          } else {
+            selectedSenderIds.delete(p.id);
+            unselectedSenderIds.add(p.id);
+          }
         } else {
           selectedSenderIds.delete(p.id);
         }
@@ -2856,8 +2863,13 @@ function initZenyConsolidationEvents() {
           showToast("⚠️ เลือกได้เฉพาะตัวละครที่มีสถานะ 👑 Premium เท่านั้น", "warning");
           return;
         }
-        if (cb.checked) selectedSenderIds.add(pid);
-        else selectedSenderIds.delete(pid);
+        if (cb.checked) {
+          selectedSenderIds.add(pid);
+          unselectedSenderIds.delete(pid);
+        } else {
+          selectedSenderIds.delete(pid);
+          unselectedSenderIds.add(pid);
+        }
         updateZenyConsolidationView();
       }
     };
@@ -2921,6 +2933,15 @@ function initZenyConsolidationEvents() {
 
       try {
         btnStartConsolidation.disabled = true;
+        btnStartConsolidation.innerHTML = `<span class="icon">⏳</span> กำลังเริ่มรวมเงิน...`;
+        if (progressSection) {
+          progressSection.style.display = "block";
+          try { progressSection.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) {}
+        }
+        const logsBox = document.getElementById("zeny-logs-box");
+        if (logsBox) {
+          logsBox.innerHTML = `<div class="zeny-log-entry info"><span class="log-time">${new Date().toLocaleTimeString('th-TH')}</span> ⏳ กำลังตรวจสอบสถานะ Premium และเริ่มระบบรวมเงิน (${senderList.length} จอ)...</div>`;
+        }
         const res = await fetch(`${API_BASE}/api/consolidation/start`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2942,7 +2963,9 @@ function initZenyConsolidationEvents() {
           if (progressSection) progressSection.style.display = "block";
           btnStartConsolidation.style.display = "none";
           if (btnStopConsolidation) btnStopConsolidation.style.display = "inline-flex";
+          showToast(`🚀 เริ่มรวมเงินจาก ${senderList.length} จอ เข้า [${recName}] แล้ว`, "info");
           startConsolidationPolling();
+          updateZenyConsolidationView();
         } else {
           alert(data.error || "ไม่สามารถเริ่มการรวมเงินได้");
         }
@@ -2950,6 +2973,7 @@ function initZenyConsolidationEvents() {
         alert("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์: " + err.message);
       } finally {
         btnStartConsolidation.disabled = false;
+        btnStartConsolidation.innerHTML = `<span class="icon">🚀</span> เริ่มต้นรวมเงิน`;
       }
     };
   }
@@ -2981,6 +3005,7 @@ async function pollConsolidationStatus() {
     const res = await fetch(`${API_BASE}/api/consolidation/status`);
     const state = await res.json();
     if (!state.success) return;
+    lastConsolidationState = state;
 
     const progressSection = document.getElementById("zeny-progress-section");
     if (state.status === 'running' || state.logs.length > 0) {
@@ -3013,18 +3038,28 @@ async function pollConsolidationStatus() {
       logsBox.scrollTop = logsBox.scrollHeight;
     }
 
-    if (!state.running) {
+    const btnStart = document.getElementById("btn-start-consolidation");
+    const btnStop = document.getElementById("btn-stop-consolidation");
+    if (state.running) {
+      isConsolidationRunning = true;
+      if (btnStart) btnStart.style.display = "none";
+      if (btnStop) btnStop.style.display = "inline-flex";
+      if (!consolidationPollTimer) {
+        consolidationPollTimer = setInterval(pollConsolidationStatus, 900);
+      }
+      updateZenyConsolidationView();
+    } else {
+      const wasRunning = isConsolidationRunning;
       isConsolidationRunning = false;
-      const btnStart = document.getElementById("btn-start-consolidation");
-      const btnStop = document.getElementById("btn-stop-consolidation");
       if (btnStart) btnStart.style.display = "inline-flex";
       if (btnStop) btnStop.style.display = "none";
+      if (wasRunning) updateZenyConsolidationView();
       if (state.status === "completed") {
         if (consolidationPollTimer) {
           clearInterval(consolidationPollTimer);
           consolidationPollTimer = null;
         }
-        showToast("🎉 รวมเงินเสร็จสิ้นสมบูรณ์!", "success");
+        if (wasRunning) showToast("🎉 รวมเงินเสร็จสิ้นสมบูรณ์!", "success");
         fetchProfiles();
       } else if (state.status === "stopped" || state.status === "error") {
         if (consolidationPollTimer) {

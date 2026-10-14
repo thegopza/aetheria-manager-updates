@@ -901,14 +901,16 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     consolidationState.step = 'รองานสำคัญของแต่ละจอให้เสร็จก่อน (ขายของ / ตีบวก / ซื้อของ...)';
     const BUSY_JS = `(() => {
       window.__consolidationPending = true;
+      const curMap = (typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '') || '';
+      const inTown = /เมืองหลวง|โซลเฮเวน|คาราวาน/.test(curMap);
       const b = [];
-      if (window.__isShopping) b.push('ขาย/ซื้อของกับ NPC');
-      if (window.__isStoring) b.push('ฝากของเข้าคลัง');
-      if (window.__isGearRefining) b.push('ตีบวก (เซ็ตอุปกรณ์)');
+      if (inTown && window.__isShopping) b.push('ขาย/ซื้อของกับ NPC');
+      if (inTown && window.__isStoring) b.push('ฝากของเข้าคลัง');
+      if (inTown && window.__isGearRefining) b.push('ตีบวก (เซ็ตอุปกรณ์)');
       if (window.__planMarketBuyInFlight) b.push('ซื้อของในตลาดตามแผน');
-      if (window.__isChangingJob) b.push('เปลี่ยนอาชีพ');
+      if (inTown && window.__isChangingJob) b.push('เปลี่ยนอาชีพ');
       if (window.__isWeightScrollBusy) b.push('ซื้อ/ใช้ Weight Limit Scroll');
-      if (window.__isManualSelling || window.__isAutoSellingNow) b.push('ลงขายของ');
+      if (window.__isManualSelling) b.push('ลงขายของ');
       return b;
     })()`;
     const busyOf = async p => { const r = await evalProfilePort(p.debugPort, BUSY_JS, 5000); return (r && r.success && Array.isArray(r.result)) ? r.result : []; };
@@ -916,7 +918,13 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     await Promise.all([receiverProfile, ...senderProfiles].map(async p => {
       let busy = await busyOf(p);
       if (busy.length) addConsolidationLog(`⏳ ${p.name}: รอ "${busy.join(', ')}" ให้เสร็จก่อน (ไม่ตัดงานกลางคัน)...`, 'info');
-      for (let i = 0; i < 90 && busy.length && !consolidationAborted; i++) { await new Promise(r => setTimeout(r, 2000)); busy = await busyOf(p); }
+      for (let i = 0; i < 30 && busy.length && !consolidationAborted; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        busy = await busyOf(p);
+        if (busy.length && (i + 1) % 5 === 0) {
+          consolidationState.step = `รอ ${p.name} ทำ "${busy.join(', ')}" ให้เสร็จ (${(i + 1) * 2}/60 วิ)...`;
+        }
+      }
       if (busy.length) stillBusy.set(p.id, busy);
     }));
     const clearPending = p => evalProfilePort(p.debugPort, `(() => { window.__consolidationPending = false; return true; })()`, 4000);
@@ -926,10 +934,10 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     }
     if (stillBusy.has(receiverProfile.id)) {
       await Promise.all([receiverProfile, ...senderProfiles].map(clearPending));
-      throw new Error(`ตัวรับเงิน (${receiverProfile.name}) ยังทำ "${stillBusy.get(receiverProfile.id).join(', ')}" ไม่เสร็จใน 3 นาที — ลองรวมเงินใหม่อีกครั้งภายหลัง`);
+      throw new Error(`ตัวรับเงิน (${receiverProfile.name}) ยังทำ "${stillBusy.get(receiverProfile.id).join(', ')}" ไม่เสร็จใน 60 วินาที — ลองรวมเงินใหม่อีกครั้งภายหลัง`);
     }
     for (const s of senderProfiles.filter(x => stillBusy.has(x.id))) {
-      addConsolidationLog(`⏭️ ${s.name}: ยังทำ "${stillBusy.get(s.id).join(', ')}" ไม่เสร็จใน 3 นาที -> ข้ามจอนี้ในรอบนี้ (ไม่ตัดงานกลางคัน)`, 'warning');
+      addConsolidationLog(`⏭️ ${s.name}: ยังทำ "${stillBusy.get(s.id).join(', ')}" ไม่เสร็จใน 60 วินาที -> ข้ามจอนี้ในรอบนี้ (ไม่ตัดงานกลางคัน)`, 'warning');
       await clearPending(s);
     }
     for (let i = senderProfiles.length - 1; i >= 0; i--) if (stillBusy.has(senderProfiles[i].id)) senderProfiles.splice(i, 1);
@@ -957,6 +965,8 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         if (typeof window.stopArrivalWatcher === 'function') window.stopArrivalWatcher();
         if (typeof window.clearAllBotTimers === 'function') window.clearAllBotTimers();
         if (typeof window.deactivateInGameAuto === 'function') window.deactivateInGameAuto();
+        if (typeof window.closeShopUI === 'function') window.closeShopUI();
+        if (typeof window.sendNpcClose === 'function') window.sendNpcClose();
         try { localStorage.setItem('pelican_bot_running', 'false'); } catch(e){}
         try { localStorage.setItem('pelican_auto_loop', 'false'); } catch(e){}
         const loopCheckbox = document.getElementById('p-auto-loop');
@@ -999,6 +1009,11 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     await new Promise(r => setTimeout(r, 6000));
 
     // The receiver must be in the capital before it changes channel (no Butterfly Wing: it walks home first)
+    const recvInCapCheck = await evalProfilePort(receiverProfile.debugPort, `window.isInCapital ? window.isInCapital() : true`, 4000);
+    if (recvInCapCheck && recvInCapCheck.result === false) {
+      addConsolidationLog(`🗺️ ตัวรับเงิน (${receiverProfile.name}) ยังไม่ถึงเมืองหลวง — กำลังรอให้เดินถึงเมืองหลวง...`, 'info');
+      consolidationState.step = `รอตัวรับเงิน (${receiverProfile.name}) เดินทางถึงเมืองหลวง...`;
+    }
     const recvHome = await evalProfilePort(receiverProfile.debugPort, `window.ensureInCapital ? window.ensureInCapital(280000) : { success: true }`, 290000);
     if (!(recvHome && recvHome.result && recvHome.result.success)) {
       throw new Error(`ตัวรับเงิน (${receiverProfile.name}) ไปไม่ถึงเมืองหลวง: ${(recvHome && recvHome.result && recvHome.result.error) || 'ไม่ทราบสาเหตุ'}`);
@@ -1086,6 +1101,10 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     // into the receiver's channel (waits for cooldown / a free slot) and up to the receiver
     const prepareSender = async (s) => {
       // no Butterfly Wing: it is walking home — wait for the capital before changing channel / trading
+      const sInCap = await evalProfilePort(s.debugPort, `window.isInCapital ? window.isInCapital() : true`, 4000);
+      if (sInCap && sInCap.result === false) {
+        addConsolidationLog(`🗺️ จอ ${s.name} ยังไม่ถึงเมืองหลวง (กำลังเดินกลับเมืองหลวง)...`, 'info');
+      }
       const home = await evalProfilePort(s.debugPort, `window.ensureInCapital ? window.ensureInCapital(280000) : { success: true }`, 290000);
       if (!(home && home.result && home.result.success)) return { ok: false, homeChannel: null, error: `ยังไม่ถึงเมืองหลวง: ${(home && home.result && home.result.error) || 'ไม่ทราบสาเหตุ'}` };
       const fromCh = await evalProfilePort(s.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 5000);
@@ -1094,9 +1113,46 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       const mv = await evalProfilePort(s.debugPort, `window.moveToChannel ? window.moveToChannel(${targetChannel}, 120000) : (window.switchChannel ? window.switchChannel(${targetChannel}) : null)`, 125000);
       const there = mv && mv.result && mv.result.success;
       if (!there) return { ok: false, homeChannel, error: `ย้ายไป CH ${targetChannel} ไม่ได้: ${(mv && mv.result && mv.result.error) || (mv && mv.error) || 'ไม่ทราบสาเหตุ'}` };
-      await new Promise(r => setTimeout(r, 2500));
-      addConsolidationLog(`🚶 จอ ${s.name} เดินไปหาตัวรับเงิน (${receiverCharName})...`, 'info');
-      const walk = await evalProfilePort(s.debugPort, `window.walkToPlayer ? window.walkToPlayer(${JSON.stringify(receiverCharName)}, 45000) : { success: true, skipped: true }`, 50000);
+      await new Promise(r => setTimeout(r, 2000));
+      const rPosRes = await evalProfilePort(receiverProfile.debugPort, `(() => {
+        const r = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
+        const me = r && r.state && r.state.players && r.state.players.get ? r.state.players.get(r.sessionId) : null;
+        return me && Number.isFinite(me.x) && Number.isFinite(me.y) ? { x: Math.round(me.x), y: Math.round(me.y) } : { x: 1664, y: 1968 };
+      })()`, 4000);
+      const recvPos = (rPosRes && rPosRes.result && Number.isFinite(rPosRes.result.x)) ? rPosRes.result : { x: 1664, y: 1968 };
+      addConsolidationLog(`🚶 จอ ${s.name} เดินไปหาตัวรับเงิน (${receiverCharName} @ ${recvPos.x},${recvPos.y})...`, 'info');
+      const walk = await evalProfilePort(s.debugPort, `(async () => {
+        if (typeof window.closeShopUI === 'function') window.closeShopUI();
+        if (typeof window.sendNpcClose === 'function') window.sendNpcClose();
+        const want = ${JSON.stringify(receiverCharName)}.trim().toLowerCase();
+        const hintX = ${recvPos.x}, hintY = ${recvPos.y}, nearPx = 96, maxMs = 45000;
+        const start = Date.now();
+        let lastSend = 0, seen = false;
+        while (Date.now() - start < maxMs) {
+          const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
+          const players = room && room.state && room.state.players;
+          const me = players && players.get ? players.get(room.sessionId) : null;
+          let target = null;
+          if (players && players.forEach) players.forEach(p => { if (!target && p && String(p.name || '').trim().toLowerCase() === want) target = p; });
+          if (me && target) {
+            seen = true;
+            const dist = Math.hypot((me.x || 0) - (target.x || 0), (me.y || 0) - (target.y || 0));
+            if (dist <= nearPx) return { success: true, distance: Math.round(dist) };
+            if (Date.now() - lastSend > 2200) {
+              lastSend = Date.now();
+              room.send('move_to', { x: target.x, y: target.y });
+            }
+          } else if (me && Number.isFinite(hintX) && Number.isFinite(hintY)) {
+            const distHint = Math.hypot((me.x || 0) - hintX, (me.y || 0) - hintY);
+            if (distHint > nearPx && Date.now() - lastSend > 2200) {
+              lastSend = Date.now();
+              room.send('move_to', { x: hintX, y: hintY });
+            }
+          }
+          await new Promise(r => setTimeout(r, 450));
+        }
+        return { success: false, error: seen ? 'เดินไปไม่ถึงตัวรับเงิน' : 'ไม่เห็นตัวรับเงินในแมพ/channel นี้' };
+      })()`, 50000);
       if (!(walk && walk.result && walk.result.success)) addConsolidationLog(`⚠️ จอ ${s.name}: ${(walk && walk.result && walk.result.error) || 'เดินไปหาตัวรับเงินไม่สำเร็จ'} — ลองขอเทรดเลย`, 'warning');
       return { ok: true, homeChannel };
     };
@@ -3969,16 +4025,15 @@ public class PmFocus {
           return { ok: Number(p.lastPremiumUntil || 0) > Date.now(), name: p.lastCharName || p.name };
         };
 
-        const recCheck = await checkProfilePremium(receiverId);
+        const [recCheck, senderChecks] = await Promise.all([
+          checkProfilePremium(receiverId),
+          Promise.all(senderIds.map(async sid => ({ sid, ...(await checkProfilePremium(sid)) })))
+        ]);
         if (!recCheck.ok) {
           return sendJSON({ success: false, error: `ตัวรับเงิน (${recCheck.name}) ไม่มีสถานะ 👑 Premium — ระบบเทรดรวมเงินเลือกได้เฉพาะตัวละครที่มี Premium เท่านั้น` }, 400);
         }
 
-        const validSenders = [];
-        for (const sid of senderIds) {
-          const sc = await checkProfilePremium(sid);
-          if (sc.ok) validSenders.push(sid);
-        }
+        const validSenders = senderChecks.filter(sc => sc.ok).map(sc => sc.sid);
         if (validSenders.length === 0) {
           return sendJSON({ success: false, error: "จอผู้โอนที่เลือกไม่มีสถานะ 👑 Premium (การเทรดโอนเงินใช้ได้เฉพาะตัวที่มี Premium เท่านั้น)" }, 400);
         }

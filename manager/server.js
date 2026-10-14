@@ -601,9 +601,19 @@ const LIVE_STATE_EVAL = `(() => {
 
 function queryClientState(port) {
   return new Promise((resolve) => {
-    // 1. Try rich state via /api/eval if bot script has __getClientLiveState
-    const evalUrl = `http://127.0.0.1:${port}/api/eval?code=` + encodeURIComponent(LIVE_STATE_EVAL);
-    const req = http.get(evalUrl, { timeout: 800 }, (res) => {
+    // 1. Try rich state via POST /api/eval (avoids HTTP URL/header overflow on large LIVE_STATE_EVAL)
+    const payload = JSON.stringify({ code: LIVE_STATE_EVAL });
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: port,
+      path: '/api/eval',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload)
+      },
+      timeout: 1200
+    }, (res) => {
       let data = "";
       res.setEncoding('utf8');
       res.on("data", chunk => data += chunk);
@@ -622,6 +632,8 @@ function queryClientState(port) {
       req.destroy();
       queryStandardState(port).then(resolve);
     });
+    req.write(payload);
+    req.end();
   });
 }
 

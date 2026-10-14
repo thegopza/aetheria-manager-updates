@@ -2565,6 +2565,10 @@ const server = http.createServer(async (req, res) => {
         const effectivePremiumUntil = livePremiumUntil || (Number(p.lastPremiumUntil) > Date.now() ? Number(p.lastPremiumUntil) : null);
         const hasPremium = (alive && liveState && !liveState.error) ? liveHasPremium : Boolean(effectivePremiumUntil && effectivePremiumUntil > Date.now());
 
+        if (alive && liveState && typeof liveState.zeroRender === 'boolean') {
+          windowStates[p.id] = { isHidden: liveState.zeroRender, zeroRender: liveState.zeroRender };
+        }
+
         return {
           ...p,
           hasLoginPassword: !!credentials.getPassword(p.id),
@@ -2576,7 +2580,7 @@ const server = http.createServer(async (req, res) => {
           premiumUntil: effectivePremiumUntil,
           zenyRate,
           bandwidth,
-          windowState: windowStates[p.id] || { isHidden: false }
+          windowState: windowStates[p.id] || { isHidden: false, zeroRender: false }
         };
       })
     );
@@ -3168,33 +3172,18 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /api/toggle-all-windows (Hide/Show All Game Windows Headless)
+  // POST /api/toggle-all-windows (Toggle Smart Zero-Render Mode across all game windows)
   if (req.method === "POST" && pathname === "/api/toggle-all-windows") {
     allWindowsHidden = !allWindowsHidden;
     const profiles = loadProfiles();
     for (const p of profiles) {
-      windowStates[p.id] = { isHidden: allWindowsHidden };
+      windowStates[p.id] = { isHidden: allWindowsHidden, zeroRender: allWindowsHidden };
       if (p.debugPort) {
-        http.get(`http://127.0.0.1:${p.debugPort}/api/window?action=${allWindowsHidden ? 'hide' : 'show'}`, () => {}).on('error', () => {});
-        evalProfilePort(p.debugPort, `typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${allWindowsHidden})`, 3000);
+        http.get(`http://127.0.0.1:${p.debugPort}/api/window?action=${allWindowsHidden ? 'zero-render-on' : 'zero-render-off'}`, () => {}).on('error', () => {});
+        evalProfilePort(p.debugPort, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(${allWindowsHidden}) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${allWindowsHidden}))`, 3000);
       }
     }
-    const cmd = allWindowsHidden ? 0 : 9;
-    const psScript = `
-      Add-Type @"
-        using System;
-        using System.Runtime.InteropServices;
-        public class WinPosHideAll {
-          [DllImport("user32.dll")]
-          public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-        }
-"@
-      Get-Process -Name "Aetheria Online" -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object {
-        [WinPosHideAll]::ShowWindow($_.MainWindowHandle, ${cmd})
-      }
-    `;
-    runPowerShell(psScript);
-    return sendJSON({ success: true, allWindowsHidden });
+    return sendJSON({ success: true, allWindowsHidden, zeroRender: allWindowsHidden });
   }
 
   // POST /api/weight-check?apply=0|1&target=7000 — max weight of every online client that runs a plan.
@@ -3231,7 +3220,7 @@ const server = http.createServer(async (req, res) => {
     return sendJSON({ success: true, target, apply, results });
   }
 
-  // POST /api/profiles/:id/focus-window — bring this game window to the front (shows it first if hidden)
+  // POST /api/profiles/:id/focus-window — bring this game window to the front (wakes graphics if in Zero-Render)
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/focus-window$/)) {
     const id = pathname.split("/")[3];
     const profile = loadProfiles().find(p => p.id === id);
@@ -3240,14 +3229,12 @@ const server = http.createServer(async (req, res) => {
     const port = profile.debugPort;
 
     const proc = runningProcesses[id];
-    if (windowStates[id] && windowStates[id].isHidden) {
-      windowStates[id].isHidden = false;
-      if (proc && proc.pid) {
-        runPowerShell(`Add-Type 'using System; using System.Runtime.InteropServices; public class PmShow { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }'
-          Get-Process -Id ${proc.pid} -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { [PmShow]::ShowWindow($_.MainWindowHandle, 9) }`);
-      }
+    windowStates[id] = { isHidden: false, zeroRender: false };
+    if (proc && proc.pid) {
+      runPowerShell(`Add-Type 'using System; using System.Runtime.InteropServices; public class PmShow { [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int c); }'
+        Get-Process -Id ${proc.pid} -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { [PmShow]::ShowWindow($_.MainWindowHandle, 9) }`);
     }
-    evalProfilePort(port, `typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false)`, 3000);
+    evalProfilePort(port, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`, 3000);
     // Electron loader: restore + always-on-top for a moment + focus. Browser mode: restore + activate tab.
     await new Promise(resolve => {
       http.get(`http://127.0.0.1:${port}/api/window?action=top`, { timeout: 5000 }, r => { r.resume(); r.on("end", resolve); })
@@ -3295,42 +3282,24 @@ public class PmFocus {
     return sendJSON({ success: true });
   }
 
-  // POST /api/profiles/:id/toggle-window (Hide/Show single game window)
+  // POST /api/profiles/:id/toggle-window (Toggle Smart Zero-Render Mode for single game window)
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/toggle-window$/)) {
     const id = pathname.split("/")[3];
     const profiles = loadProfiles();
     const profile = profiles.find(p => p.id === id);
     if (!profile) return sendJSON({ success: false, error: "Profile not found" }, 404);
 
-    if (!windowStates[id]) windowStates[id] = { isHidden: false };
+    if (!windowStates[id]) windowStates[id] = { isHidden: false, zeroRender: false };
     windowStates[id].isHidden = !windowStates[id].isHidden;
+    windowStates[id].zeroRender = windowStates[id].isHidden;
     const isHidden = windowStates[id].isHidden;
 
     if (profile.debugPort) {
-      http.get(`http://127.0.0.1:${profile.debugPort}/api/window?action=${isHidden ? 'hide' : 'show'}`, () => {}).on('error', () => {});
-      evalProfilePort(profile.debugPort, `typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${isHidden})`, 3000);
+      http.get(`http://127.0.0.1:${profile.debugPort}/api/window?action=${isHidden ? 'zero-render-on' : 'zero-render-off'}`, () => {}).on('error', () => {});
+      evalProfilePort(profile.debugPort, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(${isHidden}) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(${isHidden}))`, 3000);
     }
 
-    const proc = runningProcesses[id];
-    if (proc && proc.pid) {
-      const cmd = isHidden ? 0 : 9;
-      const psScript = `
-        Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          public class WinPosSingle {
-            [DllImport("user32.dll")]
-            public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-          }
-"@
-        Get-Process -Id ${proc.pid} -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object {
-          [WinPosSingle]::ShowWindow($_.MainWindowHandle, ${cmd})
-        }
-      `;
-      runPowerShell(psScript);
-    }
-
-    return sendJSON({ success: true, isHidden });
+    return sendJSON({ success: true, isHidden, zeroRender: isHidden });
   }
 
   // POST /api/profiles/:id/toggle-bot (Start / Stop Bot loop on specific card)

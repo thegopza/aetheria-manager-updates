@@ -309,13 +309,15 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   async function windowAction(c, action, q) {
     const { windowId } = await send('Browser.getWindowForTarget', { targetId: c.targetId });
     const set = bounds => send('Browser.setWindowBounds', { windowId, bounds });
-    if (action === 'hide' || action === 'minimize') {
-      await set({ windowState: 'minimized' });
-      await evaluate(c, `typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(true)`).catch(() => {});
-    } else if (action === 'show' || action === 'restore' || action === 'top' || action === 'focus') {
-      await set({ windowState: 'normal' });
+    if (action === 'hide' || action === 'zero-render-on') {
+      await set({ windowState: 'normal' }).catch(() => {});
+      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(true) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(true))`).catch(() => {});
+    } else if (action === 'minimize') {
+      await set({ windowState: 'minimized' }).catch(() => {});
+    } else if (action === 'show' || action === 'restore' || action === 'top' || action === 'focus' || action === 'zero-render-off') {
+      await set({ windowState: 'normal' }).catch(() => {});
       if (action === 'top' || action === 'focus') await send('Target.activateTarget', { targetId: c.targetId });
-      await evaluate(c, `typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false)`).catch(() => {});
+      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`).catch(() => {});
     } else if (action === 'set-bounds') {
       await set({ windowState: 'normal' });
       await set({ left: Number(q.get('x')) || 0, top: Number(q.get('y')) || 0, width: Number(q.get('w')) || 640, height: Number(q.get('h')) || 520 });

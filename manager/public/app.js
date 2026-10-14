@@ -197,7 +197,7 @@ async function fetchProfiles() {
       
       const lblHideAll = document.getElementById("lbl-toggle-all-windows");
       if (lblHideAll) {
-        lblHideAll.innerText = allWindowsHidden ? "แสดงทุกจอ" : "ซ่อนทุกจอ (Headless)";
+        lblHideAll.innerText = allWindowsHidden ? "แสดงกราฟิกทุกจอ" : "พักกราฟิกทุกจอ (Zero-Render)";
       }
 
       renderProfiles();
@@ -1335,8 +1335,8 @@ function isProfilePremium(p) {
 
 function buildProfileCard(p) {
   const isOnline = p.isRunning;
-  const isWindowHidden = Boolean(p.windowState?.isHidden);
   const state = isOnline ? p.liveState : null;
+  const isWindowHidden = Boolean(state && typeof state.zeroRender === 'boolean' ? state.zeroRender : p.windowState?.isHidden);
   const isBotRunning = Boolean(state && state.isBotRunning);
   const isMenuOpen = openCardMenuProfileId === p.id;
   const hasPremium = isProfilePremium(p);
@@ -1491,8 +1491,8 @@ function buildProfileCard(p) {
                   <span>ดึงจอขึ้นบนสุด (Popup)</span>
                 </button>
                 <button type="button" class="card-menu-item" onclick="closeCardMenu(); toggleClientWindow('${p.id}')">
-                  <span class="cm-icon">👁️</span>
-                  <span>${isWindowHidden ? 'เลิกซ่อนหน้าต่างเกม' : 'ซ่อนหน้าต่างเกม (Headless)'}</span>
+                  <span class="cm-icon">⚡</span>
+                  <span>${isWindowHidden ? 'แสดงภาพกราฟิกปกติ' : 'พักการ์ดจอ (Zero-Render)'}</span>
                 </button>
                 <button type="button" class="card-menu-item cm-warn" onclick="closeCardMenu(); stopClient('${p.id}')">
                   <span class="cm-icon">⏹️</span>
@@ -1524,7 +1524,7 @@ function buildProfileCard(p) {
               </div>
             </div>
           </div>
-          ${isOnline ? `<span class="chip ${isWindowHidden ? 'chip-warn' : 'chip-ok'}" title="สถานะหน้าต่างเกม">${isWindowHidden ? '🙈 ซ่อนอยู่' : '🖥️ แสดงอยู่'}</span>` : ''}
+          ${isOnline ? `<span class="chip ${isWindowHidden ? 'chip-warn' : 'chip-ok'}" style="cursor:pointer;" onclick="toggleClientWindow('${p.id}')" title="คลิกเพื่อเปิด/ปิดโหมดพักการ์ดจอ (Zero-Render — บอททำงานปกติ 100%)">${isWindowHidden ? '⚡ Zero-Render' : '🖥️ แสดงภาพ'}</span>` : ''}
         </div>
       </div>
 
@@ -1826,7 +1826,7 @@ if (btnToggleAllWindows) {
       if (data.success) {
         allWindowsHidden = !!data.allWindowsHidden;
         const lbl = document.getElementById("lbl-toggle-all-windows");
-        if (lbl) lbl.innerText = allWindowsHidden ? "แสดงทุกจอ" : "ซ่อนทุกจอ (Headless)";
+        if (lbl) lbl.innerText = allWindowsHidden ? "แสดงกราฟิกทุกจอ" : "พักกราฟิกทุกจอ (Zero-Render)";
         fetchProfiles();
       }
     } catch(e) {

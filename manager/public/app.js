@@ -1110,11 +1110,106 @@ function getActivityTone(text) {
   return 'farm';
 }
 
+// State for top-right card dropdown menu & client-side Zeny rate fallback
+let openCardMenuProfileId = null;
+const clientZenyTrackers = {};
+
+function toggleCardMenu(profileId, event) {
+  if (event) event.stopPropagation();
+  openCardMenuProfileId = (openCardMenuProfileId === profileId) ? null : profileId;
+  renderProfiles();
+}
+
+function closeCardMenu() {
+  if (openCardMenuProfileId !== null) {
+    openCardMenuProfileId = null;
+    renderProfiles();
+  }
+}
+
+document.addEventListener('click', (e) => {
+  if (openCardMenuProfileId && !e.target.closest('.card-top-menu')) {
+    closeCardMenu();
+  }
+});
+
+function getProfileZenyRate(p) {
+  const isOnline = p.isRunning;
+  const state = isOnline ? p.liveState : null;
+  if (isOnline && state && typeof state.zeny === 'number') {
+    const now = Date.now();
+    const z = state.zeny;
+    const charName = state.charName || '';
+    let tr = clientZenyTrackers[p.id];
+    if (!tr || (charName && tr.charName && tr.charName !== charName)) {
+      tr = clientZenyTrackers[p.id] = {
+        charName,
+        startTime: now,
+        lastTime: now,
+        lastZeny: z,
+        totalGained: 0,
+        samples: []
+      };
+    } else {
+      if (charName && !tr.charName) tr.charName = charName;
+      const delta = z - tr.lastZeny;
+      tr.lastZeny = z;
+      tr.lastTime = now;
+      if (delta > 0) {
+        tr.totalGained += delta;
+        tr.samples.push({ t: now, gain: delta });
+      }
+    }
+    const cutoff = now - 60 * 60 * 1000;
+    if (tr.samples.length > 0 && tr.samples[0].t < cutoff) {
+      tr.samples = tr.samples.filter(s => s.t >= cutoff);
+    }
+    const windowStart = Math.max(tr.startTime, cutoff);
+    const elapsedMs = Math.max(0, now - windowStart);
+    const windowGain = tr.samples.reduce((sum, s) => sum + s.gain, 0);
+    let clientGpm = 0;
+    if (elapsedMs >= 3000 && windowGain > 0) {
+      const effectiveMin = Math.max(elapsedMs / 60000, 0.25);
+      clientGpm = Math.round(windowGain / effectiveMin);
+    }
+    const srvGpm = (p.zenyRate && typeof p.zenyRate.gpm === 'number') ? p.zenyRate.gpm : 0;
+    const gpm = srvGpm > 0 ? srvGpm : clientGpm;
+    return {
+      gpm,
+      gph: (p.zenyRate && p.zenyRate.gph > 0) ? p.zenyRate.gph : (gpm * 60),
+      totalGained: Math.max((p.zenyRate && p.zenyRate.totalGained) || 0, tr.totalGained || 0)
+    };
+  }
+  if (p.zenyRate && typeof p.zenyRate.gpm === 'number') {
+    return {
+      gpm: p.zenyRate.gpm,
+      gph: p.zenyRate.gph || (p.zenyRate.gpm * 60),
+      totalGained: p.zenyRate.totalGained || 0
+    };
+  }
+  return { gpm: 0, gph: 0, totalGained: 0 };
+}
+
+function resetZenyRate(profileId, event) {
+  if (event) event.stopPropagation();
+  delete clientZenyTrackers[profileId];
+  const p = currentProfiles.find(x => x.id === profileId);
+  if (p && p.zenyRate) {
+    p.zenyRate = { gpm: 0, gph: 0, totalGained: 0, elapsedSec: 0 };
+  }
+  fetch(`${API_BASE}/api/profiles/${profileId}/reset-zeny-rate`, { method: 'POST' }).catch(() => {});
+  renderProfiles();
+  if (typeof showToast === 'function') {
+    showToast('🔄 รีเซ็ตค่าเฉลี่ย GP/M · GP/H ของจอนี้แล้ว', 'info');
+  }
+}
+
 function buildProfileCard(p) {
   const isOnline = p.isRunning;
   const isWindowHidden = Boolean(p.windowState?.isHidden);
   const state = isOnline ? p.liveState : null;
   const isBotRunning = Boolean(state && state.isBotRunning);
+  const isMenuOpen = openCardMenuProfileId === p.id;
 
   const charName = state?.charName || p.lastCharName || null;
   const curClass = state?.charClass || p.lastCharClass || p.charClass || 'Archer';
@@ -1137,6 +1232,7 @@ function buildProfileCard(p) {
   const curZeny = (state && typeof state.zeny === 'number') ? state.zeny.toLocaleString() : '--';
   const weightPct = state?.weight ? parseFloat(String(state.weight).replace(/[^\d.]/g, '')) : NaN;
   const weightTone = weightPct >= 80 ? 'bad' : weightPct >= 60 ? 'warn' : 'ok';
+  const zenyRate = getProfileZenyRate(p);
 
   // HP & SP
   const hpCur = state?.hp;
@@ -1180,19 +1276,10 @@ function buildProfileCard(p) {
           <span class="gauge-val">${val}</span>
         </div>`;
 
-  const iconBtn = (cls, onclick, title, icon) =>
-    `<button class="btn btn-sm btn-icon ${cls}" onclick="${onclick}" title="${title}"><span>${icon}</span></button>`;
-
-  const utilityIcons = `
-          ${iconBtn('icon-amber', `openCardWhitelistModal('${p.id}')`, '🛡️ จัดการ Whitelist (รายการห้ามขาย) ของจอนี้', '🛡️')}
-          ${iconBtn('icon-purple', `openSaveClientPresetModal('${p.id}')`, '💾 บันทึกการตั้งค่าจอนี้เข้า Save List ส่วนกลาง', '💾')}
-          ${iconBtn('', `openEditModal('${p.id}')`, 'แก้ไขการตั้งค่าโปรไฟล์', '⚙️')}
-          ${!p.isMain ? iconBtn('icon-red', `deleteProfile('${p.id}')`, 'ลบโปรไฟล์', '🗑️') : ''}`;
-
   return `
-    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${isBotRunning ? 'is-farming' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
+    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${isBotRunning ? 'is-farming' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
       <div class="card-hero">
-        ${portraitSrc ? `<div class="card-hero-bg" style="background-image: url('${portraitSrc}');"></div>` : ''}
+        ${portraitSrc ? `<div class="card-hero-bg-wrap"><div class="card-hero-bg" style="background-image: url('${portraitSrc}');"></div></div>` : ''}
         <div class="avatar ${portraitSrc ? '' : 'no-img'}" onclick="openCharacterModal('${p.id}')" title="คลิกเพื่อดูหน้าต่างตัวละคร สวมใส่/ถอดอุปกรณ์ และดูสถานะ (Equipment & Stats)">
           <span class="avatar-fallback">${initial}</span>
           ${portraitSrc ? `<img src="${portraitSrc}" alt="${escapeHTML(curClass)}" draggable="false" onerror="onPortraitError(this)">` : ''}
@@ -1217,7 +1304,53 @@ function buildProfileCard(p) {
           </div>
         </div>
         <div class="card-meta">
-          <span class="chip chip-port" title="Debug Port">:${p.debugPort || 49876}</span>
+          <div class="card-meta-top">
+            <span class="chip chip-port" title="Debug Port">:${p.debugPort || 49876}</span>
+            <div class="card-top-menu ${isMenuOpen ? 'is-open' : ''}">
+              <button type="button" class="btn-card-menu ${isMenuOpen ? 'active' : ''}" onclick="toggleCardMenu('${p.id}', event)" title="เมนูจัดการโปรไฟล์และการตั้งค่า">
+                <span class="card-menu-bars">☰</span>
+              </button>
+              <div class="card-menu-dropdown" onclick="event.stopPropagation()">
+                <div class="card-menu-header">⚙️ จัดการจอ: ${escapeHTML(p.name)}</div>
+                ${isOnline ? `
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); focusClientWindow('${p.id}', this)">
+                  <span class="cm-icon">🔝</span>
+                  <span>ดึงจอขึ้นบนสุด (Popup)</span>
+                </button>
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); toggleClientWindow('${p.id}')">
+                  <span class="cm-icon">👁️</span>
+                  <span>${isWindowHidden ? 'เลิกซ่อนหน้าต่างเกม' : 'ซ่อนหน้าต่างเกม (Headless)'}</span>
+                </button>
+                <button type="button" class="card-menu-item cm-warn" onclick="closeCardMenu(); stopClient('${p.id}')">
+                  <span class="cm-icon">⏹️</span>
+                  <span>ปิดจอเกมนี้</span>
+                </button>
+                <div class="card-menu-divider"></div>` : ''}
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); openScriptPlanModal('${p.id}')">
+                  <span class="cm-icon">📜</span>
+                  <span>ตั้งค่าแผนการเล่น (Plan)</span>
+                </button>
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); openCardWhitelistModal('${p.id}')">
+                  <span class="cm-icon">🛡️</span>
+                  <span>จัดการ Whitelist (ห้ามขาย)</span>
+                </button>
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); openSaveClientPresetModal('${p.id}')">
+                  <span class="cm-icon">💾</span>
+                  <span>บันทึกเข้า Save List (Preset)</span>
+                </button>
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); openEditModal('${p.id}')">
+                  <span class="cm-icon">⚙️</span>
+                  <span>แก้ไขการตั้งค่าโปรไฟล์</span>
+                </button>
+                ${!p.isMain ? `
+                <div class="card-menu-divider"></div>
+                <button type="button" class="card-menu-item cm-danger" onclick="closeCardMenu(); deleteProfile('${p.id}')">
+                  <span class="cm-icon">🗑️</span>
+                  <span>ลบโปรไฟล์</span>
+                </button>` : ''}
+              </div>
+            </div>
+          </div>
           ${isOnline ? `<span class="chip ${isWindowHidden ? 'chip-warn' : 'chip-ok'}" title="สถานะหน้าต่างเกม">${isWindowHidden ? '🙈 ซ่อนอยู่' : '🖥️ แสดงอยู่'}</span>` : ''}
         </div>
       </div>
@@ -1299,50 +1432,37 @@ function buildProfileCard(p) {
           <span class="stat-lbl">Zeny</span>
           <span class="stat-val mono text-gold">${curZeny}</span>
         </div>` : ''}
+        <div class="gp-rate-row" onclick="resetZenyRate('${p.id}', event)" title="รายได้เฉลี่ยต่อนาที (GP/M) และต่อชั่วโมง (GP/H)${zenyRate.totalGained > 0 ? ` · สะสมรอบนี้ +${zenyRate.totalGained.toLocaleString()} z` : ''} — คลิกเพื่อรีเซ็ตการนับใหม่">
+          <div class="gp-rate-cell">
+            <span class="gp-rate-lbl">⚡ GP/M</span>
+            <span class="gp-rate-val gp-m">${isOnline ? `${zenyRate.gpm.toLocaleString()} <small>z/m</small>` : '--'}</span>
+          </div>
+          <div class="gp-rate-sep"></div>
+          <div class="gp-rate-cell">
+            <span class="gp-rate-lbl">📈 GP/H</span>
+            <span class="gp-rate-val gp-h">${isOnline ? `${zenyRate.gph.toLocaleString()} <small>z/h</small>` : '--'}</span>
+          </div>
+        </div>
       </div>
 
       ${p.notes ? `<div class="card-notes" title="${escapeHTML(p.notes)}">📝 ${escapeHTML(p.notes)}</div>` : ''}
 
       <div class="card-footer-controls">
-        ${isOnline ? `
         <div class="card-action-row main-actions">
-          ${isBotRunning ? `
+          ${isOnline ? (isBotRunning ? `
           <button class="btn btn-sm btn-bot-toggle is-stop" onclick="toggleBotExecution('${p.id}', false, this)" title="หยุดการทำงานของบอท (เกมยังเปิดอยู่)">
             <span>⏸️</span> หยุดบอท
           </button>` : `
           <button class="btn btn-sm btn-bot-toggle is-start" onclick="toggleBotExecution('${p.id}', true, this)" title="เริ่มการทำงานของบอททันที">
             <span>▶️</span> เริ่มบอท
+          </button>`) : `
+          <button class="btn btn-sm btn-launch" onclick="launchClient('${p.id}')" title="เปิดหน้าต่างเกมสำหรับโปรไฟล์นี้">
+            <span>▶️</span> เปิดจอเกม
           </button>`}
           <button class="btn btn-sm btn-bot-menu" onclick="openWebBotHUD('${p.id}')" title="เปิดหน้าต่างเมนูบอท (หน้าตาเหมือนในเกม) สำหรับ Session นี้">
             <span>🎮</span> เมนูบอท
           </button>
         </div>
-        <div class="card-action-row sub-actions">
-          <button class="btn btn-sm btn-ghost ghost-cyan" onclick="focusClientWindow('${p.id}', this)" title="ดึงหน้าต่างเกมของจอนี้ขึ้นมาไว้บนสุด (ถ้าซ่อนอยู่จะแสดงให้ด้วย)">
-            <span>🔝</span> Popup
-          </button>
-          <button class="btn btn-sm btn-ghost" onclick="toggleClientWindow('${p.id}')" title="${isWindowHidden ? 'แสดงหน้าต่างเกมบนจอ' : 'ซ่อนหน้าต่างเกม (ทำงานแบบ Headless)'}">
-            <span>👁️</span> ${isWindowHidden ? 'เลิกซ่อน' : 'ซ่อน'}
-          </button>
-          <button class="btn btn-sm btn-ghost ghost-red" onclick="stopClient('${p.id}')" title="ปิดหน้าต่างและโปรเซสเกมนี้">
-            <span>⏹️</span> ปิดจอ
-          </button>
-          <button class="btn btn-sm btn-ghost ghost-indigo" onclick="openScriptPlanModal('${p.id}')" title="ตั้งค่าแผนการเล่น (Script Plan)">
-            <span>📜</span> Plan
-          </button>
-          <div class="icon-group">${utilityIcons}</div>
-        </div>` : `
-        <div class="card-action-row main-actions single">
-          <button class="btn btn-sm btn-launch" onclick="launchClient('${p.id}')">
-            <span>▶️</span> เปิดจอเกม
-          </button>
-        </div>
-        <div class="card-action-row sub-actions">
-          <button class="btn btn-sm btn-ghost ghost-indigo" onclick="openScriptPlanModal('${p.id}')" title="ตั้งค่าแผนการเล่น (Script Plan)">
-            <span>📜</span> Plan
-          </button>
-          <div class="icon-group">${utilityIcons}</div>
-        </div>`}
       </div>
     </article>`;
 }
@@ -2697,6 +2817,10 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
   const autosell = clientData?.autoMarketSellConfig || {};
   const marketFilter = clientData?.marketFilterConfig || {};
   const shop = clientData?.shopConfig || {};
+  const travel = clientData?.travelConfig || {};
+  const humanize = clientData?.humanizeConfig || {};
+  const potionCounts = clientData?.potionCounts || {};
+  const planName = clientData?.currentPlanName || '(ยังไม่เลือกแผน)';
 
   return `
 <div class="p-header" id="pelican-drag-handle">
@@ -2713,7 +2837,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                 <div class="p-header-badges">
                     <span id="p-quick-zeny" style="font-size: 10px; background: rgba(250, 204, 21, 0.2); border: 1px solid rgba(250, 204, 21, 0.4); color: #facc15; padding: 1px 7px; border-radius: 10px; font-weight: bold;" title="เงินในตัว (Zeny)">💰 ${typeof clientData?.state?.zeny === 'number' ? clientData.state.zeny.toLocaleString() + ' z' : '-- z'}</span>
                     <span id="p-quick-ammo" style="font-size: 10px; background: rgba(34, 197, 94, 0.2); border: 1px solid rgba(34, 197, 94, 0.4); color: #22c55e; padding: 1px 7px; border-radius: 10px; font-weight: bold;">🏹 ${clientData?.currentAmmo ?? 0}</span>
-                    <span id="p-quick-weight" style="font-size: 10px; background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; padding: 1px 7px; border-radius: 10px; font-weight: bold; cursor: pointer;" title="คลิกเพื่อจัดเรียงกระเป๋าและอัปเดตน้ำหนัก">⚖️ --%</span>
+                    <span id="p-quick-weight" style="font-size: 10px; background: rgba(56, 189, 248, 0.2); border: 1px solid rgba(56, 189, 248, 0.4); color: #38bdf8; padding: 1px 7px; border-radius: 10px; font-weight: bold; cursor: pointer;" title="คลิกเพื่อจัดเรียงกระเป๋าและอัปเดตน้ำหนัก">⚖️ ${escapeHTML(clientData?.state?.weight || '--%')}</span>
                     <button type="button" class="p-copy-cfg-btn" onclick="openConfigCopyDialog('${profileId}')" title="คัดลอกการตั้งค่าบอททั้งหมดของจอนี้ไปจออื่น (ยกเว้น ID / รหัสผ่าน / ชื่อตัวละคร)">📋 คัดลอกไปจออื่น</button>
                 </div>
             </div>
@@ -2733,7 +2857,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                     <button class="p-tab-btn active" data-tab="farm">🚀 ฟาร์ม</button>
                     <button class="p-tab-btn" data-tab="ammo">🏹 ธนู</button>
                     <button class="p-tab-btn" data-tab="potion">🧪 ยาบัพ</button>
-                    <button class="p-tab-btn" data-tab="sell">💰 ขาย</button>
+                    <button class="p-tab-btn" data-tab="sell">💰 ขายของ</button>
                     <button class="p-tab-btn" data-tab="market">🛒 ตลาด</button>
                     <button class="p-tab-btn" data-tab="system">⚙️ ตั้งค่า</button>
                 </div>
@@ -2742,13 +2866,20 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                 <div class="p-tab-pane active" id="p-tab-farm">
                     <button class="p-btn" id="p-btn-toggle-bot" style="font-size: 12.5px; padding: 8px 10px; font-weight: bold; border-radius: 6px; transition: all 0.2s ease;">▶️ START BOT (เริ่มทำงาน)</button>
 
-                    <label class="p-check-box" style="color: #4ade80;">
-                        <input type="checkbox" id="p-auto-loop" ${clientData?.autoLoopEnabled ? "checked" : ""}>
-                        <b>เปิดลูป 24 ชม. (ตาย -> ชุบ -> กลับแมพ)</b>
-                    </label>
+                    <div class="p-card">
+                        <div class="p-card-title" style="font-size: 10.5px; font-weight: bold; color: #e2e8f0; margin-bottom: 4px;">⚙️ โหมดการทำงาน</div>
+                        <label class="p-check-box" style="color: #4ade80;">
+                            <input type="checkbox" id="p-auto-loop" ${clientData?.autoLoopEnabled ? "checked" : ""}>
+                            <span><b>ลูป 24 ชม.</b> <small style="color:#94a3b8;">(ตาย → ชุบ → กลับแมพฟาร์มอัตโนมัติ)</small></span>
+                        </label>
+                        <label class="p-check-box" style="color: #c084fc; margin-top: 3px;">
+                            <input type="checkbox" id="p-plan-script-enabled" ${clientData?.planScriptEnabled ? "checked" : ""}>
+                            <span><b>📜 Plan Script</b> <small style="color:#94a3b8;">แผน: <span id="p-plan-name-display" style="color: #38bdf8; font-weight: bold;">${escapeHTML(planName)}</span></small></span>
+                        </label>
+                    </div>
 
-                    <div>
-                        <span style="font-size: 10px; color: #94a3b8; display: block; margin-bottom: 2px;">แมพฟาร์มเป้าหมาย:</span>
+                    <div class="p-card">
+                        <div class="p-card-title" style="font-size: 10.5px; font-weight: bold; color: #e2e8f0; margin-bottom: 4px;">🗺️ แมพฟาร์มเป้าหมาย</div>
                         <select id="p-target-map-select" class="p-select">
                             <optgroup label="🏰 เขตเมือง & พื้นที่ปลอดภัย">
                                 <option value="เมืองหลวงโซลเฮเวน">เมืองหลวงโซลเฮเวน (ปลอดภัย)</option>
@@ -2786,11 +2917,62 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                                 <option value="แกนลาวา">แกนลาวา (Lv. 135-150)</option>
                             </optgroup>
                         </select>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 5px;">
+                            <button class="p-btn p-btn-loop" id="p-btn-walk-map">🚀 เดินกลับแมพ</button>
+                            <button class="p-btn p-btn-map" id="p-btn-open-map">🗺️ แผนที่โลก</button>
+                        </div>
+                        <div class="p-row" title="ถ้าเงินต่ำกว่าจำนวนนี้ บอทจะไม่จ่ายค่าวาร์ปที่ NPC Alice แต่จะเปิดแผนที่โลกแล้วเดินไปเอง (0 = ปิด)" style="margin-top: 6px; gap: 6px;">
+                            <span style="font-size: 10px; color: #e2e8f0;">💸 เงินต่ำกว่า</span>
+                            <input type="number" id="p-warp-min-zeny" min="0" step="1000" value="${Number(travel.minZenyForWarp) || 0}" style="width: 84px; background: #0f172a; border: 1px solid #38bdf8; color: #fff; text-align: center; border-radius: 4px; font-size: 10.5px; padding: 2px;">
+                            <span style="font-size: 10px; color: #e2e8f0;">z ไม่วาร์ป เดินแทน</span>
+                        </div>
+                        <div style="font-size: 9px; color: #94a3b8; margin-top: 2px;">0 = วาร์ปตามปกติ · ถ้าเดินไปจากจุดนั้นไม่ได้ จะยังวาร์ปให้</div>
                     </div>
 
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
-                        <button class="p-btn p-btn-loop" id="p-btn-walk-map">🚀 เดินกลับแมพ</button>
-                        <button class="p-btn p-btn-map" id="p-btn-open-map">🗺️ เปิดแผนที่โลก</button>
+                    <!-- CARD: SECURITY & HUMANIZE -->
+                    <div class="p-card" style="border-color: rgba(56, 189, 248, 0.35); background: rgba(15, 23, 42, 0.65);">
+                        <div style="font-size: 10.5px; font-weight: bold; color: #38bdf8; margin-bottom: 4px;">🛡️ ความปลอดภัย & พฤติกรรมเสมือนคน (Humanize)</div>
+                        <label class="p-check-box" style="color: #38bdf8;">
+                            <input type="checkbox" id="p-unexpected-town-guard" ${clientData?.unexpectedTownGuardEnabled !== false ? 'checked' : ''}>
+                            <span><b>ตรวจจับกลับเมืองผิดปกติ</b> <small style="color:#94a3b8; display:block;">ไม่ตาย ไม่กดวิง แต่ตกค้างในเมือง → สุ่มพักรอ 5-15 นาที</small></span>
+                        </label>
+                        <div id="p-unexpected-town-box" style="display: ${clientData?.unexpectedTownWaiting ? 'block' : 'none'}; margin-top: 6px; padding: 6px 8px; background: rgba(239, 68, 68, 0.15); border: 1px dashed #ef4444; border-radius: 6px;">
+                            <div style="font-size: 11px; color: #fca5a5; display: flex; justify-content: space-between; align-items: center;">
+                                <span>⏳ พักรอนิรภัย: <b id="p-unexpected-countdown" style="color: #fef08a;">${escapeHTML(clientData?.unexpectedTownCountdown || '--:--')}</b></span>
+                                <button id="p-btn-skip-unexpected-wait" style="background: #ef4444; color: #fff; border: none; border-radius: 4px; font-size: 10px; font-weight: bold; cursor: pointer; padding: 2px 7px;">⏩ ข้ามเวลารอ</button>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.08);">
+                            <label class="p-check-box" style="color: #a78bfa;">
+                                <input type="checkbox" id="p-humanize-enabled" ${humanize.enabled !== false ? 'checked' : ''}>
+                                <span><b>🎭 จำลองพฤติกรรมคน (Humanize)</b> <small style="color:#94a3b8; display:block;">สุ่มทำกิจกรรมตอนกลับเมือง ก่อนกลับไปฟาร์ม</small></span>
+                            </label>
+                            <div class="p-row" style="margin-top: 5px; gap: 6px;">
+                                <span style="font-size: 10px; color: #cbd5e1;">🎲 โอกาสทำ:</span>
+                                <input type="number" id="p-humanize-chance" min="10" max="100" step="5" value="${Number(humanize.chance) || 70}" style="width: 55px; background: #0f172a; border: 1px solid #a78bfa; color: #fff; text-align: center; border-radius: 4px; font-size: 10.5px; padding: 2px;">
+                                <span style="font-size: 10px; color: #cbd5e1;">%</span>
+                                <button id="p-btn-test-humanize" style="margin-left: auto; background: #6366f1; color: #fff; border: none; border-radius: 4px; font-size: 9px; cursor: pointer; padding: 2px 6px;">🧪 ทดสอบ</button>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 6px;">
+                                <label class="p-check-box" style="margin: 0; font-size: 9.5px; color: #cbd5e1;">
+                                    <input type="checkbox" id="p-humanize-blacksmith" ${humanize.buyBlacksmith !== false ? 'checked' : ''}>
+                                    <span>⚒️ ซื้อหินแล้วขาย</span>
+                                </label>
+                                <label class="p-check-box" style="margin: 0; font-size: 9.5px; color: #cbd5e1;">
+                                    <input type="checkbox" id="p-humanize-sundries" ${humanize.buySundries !== false ? 'checked' : ''}>
+                                    <span>🧪 ซื้อยาแล้วขาย</span>
+                                </label>
+                                <label class="p-check-box" style="margin: 0; font-size: 9.5px; color: #cbd5e1;">
+                                    <input type="checkbox" id="p-humanize-walk" ${humanize.randomWalk !== false ? 'checked' : ''}>
+                                    <span>🚶 เดินสำรวจลาน</span>
+                                </label>
+                                <label class="p-check-box" style="margin: 0; font-size: 9.5px; color: #cbd5e1;">
+                                    <input type="checkbox" id="p-humanize-storage" ${humanize.storeDeposit !== false ? 'checked' : ''}>
+                                    <span>📦 เก็บ Whitelist</span>
+                                </label>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -2843,7 +3025,10 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                         </label>
                         <div class="p-row" style="margin-top: 3px;">
                             <span>ซื้อ Bwing ติดตัว (ใบ):</span>
-                            <input type="number" id="p-archer-bwing-qty" value="${archer.bwingBuyQty || 2}" style="width: 55px; background: #0f172a; border: 1px solid #38bdf8; color: #fff; text-align: center; border-radius: 4px; font-size: 11px; padding: 2px;">
+                            <input type="number" id="p-archer-bwing-qty" value="${archer.bwingBuyQty || 5}" style="width: 55px; background: #0f172a; border: 1px solid #38bdf8; color: #fff; text-align: center; border-radius: 4px; font-size: 11px; padding: 2px;">
+                        </div>
+                        <div style="font-size: 9.5px; color: #94a3b8; margin-top: 3px;">
+                            มีในกระเป๋า: <b id="p-bwing-count" style="color: #38bdf8;">${clientData?.bwingCount ?? 0}</b> ใบ (ซื้อเติมส่วนต่างให้ครบ)
                         </div>
                     </div>
 
@@ -2869,7 +3054,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                     <div class="p-card" style="border-color: rgba(245, 158, 11, 0.3); background: rgba(245, 158, 11, 0.06); padding: 8px;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                             <span style="font-weight: bold; color: #fbbf24; font-size: 11px;">🧪 ตั้งค่ายาบัพ (Buff Potions)</span>
-                            <button class="p-btn-sync-potion-game" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; border: 1px solid #34d399; border-radius: 4px; font-size: 9.5px; cursor: pointer; padding: 2px 7px; font-weight: bold;">🔄 ซิงก์เข้าเกม</button>
+                            <button class="p-btn-sync-potion-game" id="p-btn-sync-potion-game" style="background: linear-gradient(135deg, #10b981, #059669); color: #fff; border: 1px solid #34d399; border-radius: 4px; font-size: 9.5px; cursor: pointer; padding: 2px 7px; font-weight: bold;">🔄 ซิงก์เข้าเกม</button>
                         </div>
                         <div style="font-size: 9.5px; color: #94a3b8; line-height: 1.3;">
                             ติ๊กถูกเพื่อเปิดใช้ในระบบต่อสู้อัตโนมัติ และกำหนดจำนวนพกติดตัวเพื่อซื้อเติมเมื่อเข้าเมือง
@@ -2883,18 +3068,21 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                             <div style="flex: 1;">
                                 <div style="display: flex; justify-content: space-between; align-items: center;">
                                     <span style="font-weight: bold; color: #facc15; font-size: 11px;">Concentration Potion</span>
-                                    <span style="font-size: 9px; color: #94a3b8;">Lv.1+</span>
+                                    <span style="font-size: 9px; color: #94a3b8;">Lv.1+ (ASPD +)</span>
                                 </div>
-                                <span style="font-size: 9px; color: #64748b;">ID: 90306</span>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+                                    <span style="font-size: 9.5px; color: #94a3b8;">มีในกระเป๋า: <b id="p-potion-count-90306" style="color: #22c55e;">${potionCounts[90306] ?? 0}</b> ขวด</span>
+                                    <span style="font-size: 9px; color: #64748b;">ID: 90306</span>
+                                </div>
                             </div>
                         </div>
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 4px; border-top: 1px dashed rgba(255,255,255,0.08);">
                             <label class="p-check-box" style="color: #cbd5e1; margin: 0; font-size: 10px;">
                                 <input type="checkbox" id="p-potion-enable-90306" ${clientData?.buffPotionConfig?.[90306]?.enabled ? 'checked' : ''}>
-                                <b>เปิดใช้ & ซื้อเติม</b>
+                                <b>เปิดใช้ต่อสู้อัตโนมัติ & ซื้อเติม</b>
                             </label>
                             <div style="display: flex; align-items: center; gap: 4px;">
-                                <span style="font-size: 9.5px; color: #94a3b8;">พก:</span>
+                                <span style="font-size: 9.5px; color: #94a3b8;">พกติดตัว:</span>
                                 <input type="number" id="p-potion-qty-90306" min="0" max="999" value="${clientData?.buffPotionConfig?.[90306]?.targetQty ?? 10}" style="width: 48px; background: #0f172a; border: 1px solid #eab308; color: #fff; text-align: center; border-radius: 4px; font-size: 11px; padding: 2px;">
                             </div>
                         </div>
@@ -2907,18 +3095,21 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                             <div style="flex: 1;">
                                 <div style="display: flex; justify-content: space-between; align-items: center;">
                                     <span style="font-weight: bold; color: #fb923c; font-size: 11px;">Awakening Potion</span>
-                                    <span style="font-size: 9px; color: #94a3b8;">Lv.40+</span>
+                                    <span style="font-size: 9px; color: #94a3b8;">Lv.40+ (ASPD ++)</span>
                                 </div>
-                                <span style="font-size: 9px; color: #64748b;">ID: 90307</span>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+                                    <span style="font-size: 9.5px; color: #94a3b8;">มีในกระเป๋า: <b id="p-potion-count-90307" style="color: #22c55e;">${potionCounts[90307] ?? 0}</b> ขวด</span>
+                                    <span style="font-size: 9px; color: #64748b;">ID: 90307</span>
+                                </div>
                             </div>
                         </div>
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 4px; border-top: 1px dashed rgba(255,255,255,0.08);">
                             <label class="p-check-box" style="color: #cbd5e1; margin: 0; font-size: 10px;">
                                 <input type="checkbox" id="p-potion-enable-90307" ${clientData?.buffPotionConfig?.[90307]?.enabled ? 'checked' : ''}>
-                                <b>เปิดใช้ & ซื้อเติม</b>
+                                <b>เปิดใช้ต่อสู้อัตโนมัติ & ซื้อเติม</b>
                             </label>
                             <div style="display: flex; align-items: center; gap: 4px;">
-                                <span style="font-size: 9.5px; color: #94a3b8;">พก:</span>
+                                <span style="font-size: 9.5px; color: #94a3b8;">พกติดตัว:</span>
                                 <input type="number" id="p-potion-qty-90307" min="0" max="999" value="${clientData?.buffPotionConfig?.[90307]?.targetQty ?? 10}" style="width: 48px; background: #0f172a; border: 1px solid #f97316; color: #fff; text-align: center; border-radius: 4px; font-size: 11px; padding: 2px;">
                             </div>
                         </div>
@@ -2931,29 +3122,36 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                             <div style="flex: 1;">
                                 <div style="display: flex; justify-content: space-between; align-items: center;">
                                     <span style="font-weight: bold; color: #f87171; font-size: 11px;">Berserk Potion</span>
-                                    <span style="font-size: 9px; color: #94a3b8;">Lv.85+</span>
+                                    <span style="font-size: 9px; color: #94a3b8;">Lv.85+ (ASPD +++)</span>
                                 </div>
-                                <span style="font-size: 9px; color: #64748b;">ID: 90308</span>
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 2px;">
+                                    <span style="font-size: 9.5px; color: #94a3b8;">มีในกระเป๋า: <b id="p-potion-count-90308" style="color: #22c55e;">${potionCounts[90308] ?? 0}</b> ขวด</span>
+                                    <span style="font-size: 9px; color: #64748b;">ID: 90308</span>
+                                </div>
                             </div>
                         </div>
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 6px; padding-top: 4px; border-top: 1px dashed rgba(255,255,255,0.08);">
                             <label class="p-check-box" style="color: #cbd5e1; margin: 0; font-size: 10px;">
                                 <input type="checkbox" id="p-potion-enable-90308" ${clientData?.buffPotionConfig?.[90308]?.enabled ? 'checked' : ''}>
-                                <b>เปิดใช้ & ซื้อเติม</b>
+                                <b>เปิดใช้ต่อสู้อัตโนมัติ & ซื้อเติม</b>
                             </label>
                             <div style="display: flex; align-items: center; gap: 4px;">
-                                <span style="font-size: 9.5px; color: #94a3b8;">พก:</span>
+                                <span style="font-size: 9.5px; color: #94a3b8;">พกติดตัว:</span>
                                 <input type="number" id="p-potion-qty-90308" min="0" max="999" value="${clientData?.buffPotionConfig?.[90308]?.targetQty ?? 10}" style="width: 48px; background: #0f172a; border: 1px solid #ef4444; color: #fff; text-align: center; border-radius: 4px; font-size: 11px; padding: 2px;">
                             </div>
                         </div>
                     </div>
 
                     <div style="display: flex; gap: 4px; margin-top: 4px;">
-                        <button class="p-btn p-btn-buy-potion-now" style="background: linear-gradient(135deg, #0284c7, #0369a1); color: #fff; font-size: 10px; padding: 5px; font-weight: bold; border-radius: 4px; border: 1px solid #38bdf8; width: 100%; cursor: pointer;">🛒 ซื้อเติมยาบัพทันที (เมื่ออยู่ในร้านค้า)</button>
+                        <button class="p-btn p-btn-buy-potion-now" id="p-btn-buy-potion-now" style="background: linear-gradient(135deg, #0284c7, #0369a1); color: #fff; font-size: 10px; padding: 5px; font-weight: bold; border-radius: 4px; border: 1px solid #38bdf8; width: 100%; cursor: pointer;">🛒 ทดสอบซื้อเติมยาบัพทันที (เมื่ออยู่ในร้านค้า)</button>
+                    </div>
+
+                    <div style="font-size: 9px; color: #64748b; line-height: 1.3; margin-top: 2px; text-align: center;">
+                        💡 ทุกครั้งที่ตัวละครกลับมาซื้อลูกธนูในเมือง บอทจะตรวจนับยาในกระเป๋าและซื้อเติมส่วนต่างให้อัตโนมัติ
                     </div>
                 </div>
 
-                <!-- TAB 3: AUTO-SELL & WHITELIST -->
+                <!-- TAB 4: AUTO-SELL & WHITELIST -->
                 <div class="p-tab-pane" id="p-tab-sell">
                     <!-- Weight Check Card -->
                     <div class="p-card" style="border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.05); margin-bottom: 6px;">
@@ -2969,7 +3167,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                             </div>
                         </div>
                         <div id="p-weight-hud-display" style="font-size: 9.5px; color: #94a3b8; margin-top: 3px; display: flex; justify-content: space-between; align-items: center;">
-                            <span>น้ำหนัก: <span id="p-cur-weight-val" style="color: #00ffcc; font-weight: bold;">-- / --</span></span>
+                            <span>น้ำหนัก: <span id="p-cur-weight-val" style="color: #00ffcc; font-weight: bold;">${escapeHTML(clientData?.state?.weight || '-- / --')}</span></span>
                             <button id="p-btn-refresh-weight" style="background: #0284c7; color: white; border: none; padding: 2px 7px; border-radius: 4px; font-size: 9px; cursor: pointer; font-weight: bold; transition: all 0.2s ease;">🔄 จัดเรียง & อัปเดต</button>
                         </div>
                     </div>
@@ -2980,7 +3178,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                             <div style="font-size: 10px; font-weight: bold; color: #c084fc;">🏷️ ต้องการตั้งขายที่ตลาดกลาง (Market)?</div>
                             <div style="font-size: 8.5px; color: #94a3b8;">แท็บนี้สำหรับขายขยะ NPC</div>
                         </div>
-                        <button onclick="window.switchHudTabToMarketAutoSell();" style="background: linear-gradient(135deg, #7c3aed, #9333ea); color: #fff; border: 1px solid #c084fc; padding: 3px 8px; border-radius: 4px; font-size: 9.5px; font-weight: bold; cursor: pointer; white-space: nowrap;">
+                        <button type="button" id="p-btn-goto-market-autosell" style="background: linear-gradient(135deg, #7c3aed, #9333ea); color: #fff; border: 1px solid #c084fc; padding: 3px 8px; border-radius: 4px; font-size: 9.5px; font-weight: bold; cursor: pointer; white-space: nowrap;">
                             ไปที่ Auto Sell ตลาด ➔
                         </button>
                     </div>
@@ -3382,6 +3580,31 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                         <button class="p-btn" id="p-btn-test-shop" style="background: #f59e0b; color: #000; font-weight: bold; margin-top: 4px;">🛍️ ทดสอบ Routine ร้านค้า (Shop Routine)</button>
                     </div>
 
+                    <div class="p-card" style="border-color: rgba(34, 197, 94, 0.45); background: rgba(34, 197, 94, 0.06);">
+                        <div style="font-size: 10.5px; font-weight: bold; color: #4ade80; margin-bottom: 4px;">⚡ ประหยัดทรัพยากรขั้นสุด (Ultra-Low Spec)</div>
+                        <label class="p-check-box" style="color: #86efac;">
+                            <input type="checkbox" id="p-ultra-low-spec" ${clientData?.ultraLowSpecEnabled !== false ? "checked" : ""}>
+                            <span><b>เปิดโหมดประหยัด GPU / RAM ขั้นสุด</b></span>
+                        </label>
+                        <div style="font-size: 9px; color: #94a3b8; margin-top: 3px; line-height: 1.35;">
+                            • ตัดเอฟเฟกต์สกิล, พาร์ติเคิล, เงา, สไปรต์มอนสเตอร์/พื้นหลังแมพ และตัวเลขดาเมจลอย<br>
+                            • ปิดแอนิเมชัน CSS ทั้งหน้าเกม (ลดภาระ GPU Compositor)<br>
+                            • <b>ไม่ล็อก FPS และไม่พับจอ</b> (ป้องกันการ์ดจอไดรเวอร์ค้าง/หลุดฟาร์ม)
+                        </div>
+                    </div>
+
+                    <div class="p-card" style="border-color: rgba(250, 204, 21, 0.35); background: rgba(250, 204, 21, 0.05);">
+                        <div style="font-size: 10.5px; font-weight: bold; color: #facc15; margin-bottom: 4px;">🎮 ตั้งค่าอัตโนมัติใน Plan Script (Auto-Battle & Display)</div>
+                        <label class="p-check-box" style="color: #fde047;">
+                            <input type="checkbox" id="p-auto-config-char" ${clientData?.autoConfigCharEnabled !== false ? "checked" : ""}>
+                            <span>ตั้งระยะล่า <b>ทั้งแมพ</b> + ติ๊ก Auto สกิล (เฉพาะตอนเปิด Plan Script)</span>
+                        </label>
+                        <label class="p-check-box" style="color: #fde047; margin-top: 4px;">
+                            <input type="checkbox" id="p-auto-mute-display" ${clientData?.autoMuteDisplayEnabled !== false ? "checked" : ""}>
+                            <span>ปิดประกาศบนจอ & ปิดหน้าต่างข่าวสาร (เฉพาะตอนเปิด Plan Script)</span>
+                        </label>
+                        <button class="p-btn" id="p-btn-apply-autoconfig" style="background: linear-gradient(135deg, #ca8a04, #eab308); color: #000; font-size: 10px; font-weight: bold; padding: 5px; margin-top: 6px;">⚡ สั่งตั้งค่าระยะล่า + สกิล + ปิดประกาศเดี๋ยวนี้</button>
+                    </div>
                     
                     <div class="p-card" style="border-color: rgba(168, 85, 247, 0.35); background: rgba(168, 85, 247, 0.05);">
                         <span style="font-size: 10.5px; font-weight: bold; color: #c084fc;">💾 สำรอง & ถ่ายโอนการตั้งค่า (Settings & Config)</span>
@@ -3407,6 +3630,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                             <button class="p-btn" id="p-btn-dump-market" style="background: #ec4899; color: #fff; font-weight: bold; padding: 4px; font-size: 10px;">🛒 Dump ตลาดกลาง</button>
                             <button class="p-btn" id="p-btn-dump-weight" style="background: #f59e0b; color: #000; font-weight: bold; padding: 4px; font-size: 10px;">⚖️ Dump น้ำหนัก DOM & กระเป๋า</button>
                         </div>
+                        <button class="p-btn" id="p-btn-dump-npc" style="background: #8b5cf6; color: #fff; font-weight: bold; padding: 5px; font-size: 10.5px; margin-top: 3px;">👥 Dump NPC (รายชื่อ, Key & พิกัดทั้งหมด)</button>
                     </div>
 
                     <button class="p-btn p-btn-copy-out" id="p-btn-copy-out" style="margin-top: 2px;">📋 คัดลอก Packet ขาออก (Hex เต็ม)</button>
@@ -3534,6 +3758,16 @@ async function openWebBotHUD(profileId) {
     };
   }
 
+  // Shortcut button from Sell tab -> Market AutoSell subtab
+  const gotoMarketAutoSellBtn = hudEl.querySelector('#p-btn-goto-market-autosell');
+  if (gotoMarketAutoSellBtn) {
+    gotoMarketAutoSellBtn.onclick = () => {
+      const marketTabBtn = hudEl.querySelector('.p-tab-btn[data-tab="market"]');
+      if (marketTabBtn) marketTabBtn.click();
+      if (btnAuto) btnAuto.click();
+    };
+  }
+
   // Password toggle
   const passToggle = hudEl.querySelector('#p-auth-toggle-pass');
   const passInp = hudEl.querySelector('#p-auth-pass');
@@ -3562,6 +3796,13 @@ async function openWebBotHUD(profileId) {
     };
   }
 
+  const planScriptCb = hudEl.querySelector('#p-plan-script-enabled');
+  if (planScriptCb) {
+    planScriptCb.onchange = (e) => {
+      sendWebHudAction(profileId, { type: 'toggle-plan-script', enabled: e.target.checked });
+    };
+  }
+
   const mapSelect = hudEl.querySelector('#p-target-map-select');
   if (mapSelect) {
     mapSelect.onchange = (e) => {
@@ -3577,6 +3818,53 @@ async function openWebBotHUD(profileId) {
   const openMapBtn = hudEl.querySelector('#p-btn-open-map');
   if (openMapBtn) {
     openMapBtn.onclick = () => sendWebHudAction(profileId, { type: 'open-world-map' });
+  }
+
+  const warpMinZenyInp = hudEl.querySelector('#p-warp-min-zeny');
+  if (warpMinZenyInp) {
+    warpMinZenyInp.onchange = (e) => {
+      const minZ = Math.max(0, parseInt(e.target.value, 10) || 0);
+      sendWebHudAction(profileId, { type: 'update-travel', config: { minZenyForWarp: minZ } });
+    };
+  }
+
+  // Security & Humanize listeners
+  const unexpGuardCb = hudEl.querySelector('#p-unexpected-town-guard');
+  if (unexpGuardCb) {
+    unexpGuardCb.onchange = (e) => {
+      sendWebHudAction(profileId, { type: 'toggle-unexpected-town-guard', enabled: e.target.checked });
+    };
+  }
+
+  const skipUnexpBtn = hudEl.querySelector('#p-btn-skip-unexpected-wait');
+  if (skipUnexpBtn) {
+    skipUnexpBtn.onclick = () => {
+      sendWebHudAction(profileId, { type: 'skip-unexpected-wait' });
+    };
+  }
+
+  const saveHumanize = () => {
+    const cfg = {
+      enabled: !!hudEl.querySelector('#p-humanize-enabled')?.checked,
+      chancePercent: Math.max(0, Math.min(100, parseInt(hudEl.querySelector('#p-humanize-chance')?.value, 10) || 0)),
+      visitBlacksmith: !!hudEl.querySelector('#p-humanize-blacksmith')?.checked,
+      visitSundries: !!hudEl.querySelector('#p-humanize-sundries')?.checked,
+      randomWalk: !!hudEl.querySelector('#p-humanize-walk')?.checked,
+      openStorage: !!hudEl.querySelector('#p-humanize-storage')?.checked
+    };
+    sendWebHudAction(profileId, { type: 'update-humanize', config: cfg });
+  };
+  ['#p-humanize-enabled', '#p-humanize-chance', '#p-humanize-blacksmith', '#p-humanize-sundries', '#p-humanize-walk', '#p-humanize-storage'].forEach(sel => {
+    const el = hudEl.querySelector(sel);
+    if (el) el.onchange = saveHumanize;
+  });
+
+  const testHumanizeBtn = hudEl.querySelector('#p-btn-test-humanize');
+  if (testHumanizeBtn) {
+    testHumanizeBtn.onclick = async () => {
+      const r = await sendWebHudAction(profileId, { type: 'test-humanize' });
+      showToast(r && r.success !== false ? '🎭 สั่งทดสอบกิจกรรม Humanize ในจอเกมแล้ว' : '❌ สั่งงานจอเกมไม่สำเร็จ', r && r.success !== false ? 'success' : 'error');
+    };
   }
 
   // Archer event listeners
@@ -3860,6 +4148,36 @@ async function openWebBotHUD(profileId) {
   };
   ['#p-shop-enabled', '#p-shop-npckey'].forEach(sel => { const el = hudEl.querySelector(sel); if (el) el.onchange = saveShop; });
 
+  // Ultra-Low Spec & Auto-Config Char / Mute Display
+  const ultraLowSpecCb = hudEl.querySelector('#p-ultra-low-spec');
+  if (ultraLowSpecCb) {
+    ultraLowSpecCb.onchange = (e) => {
+      sendWebHudAction(profileId, { type: 'toggle-ultra-low-spec', enabled: e.target.checked });
+    };
+  }
+
+  const saveAutoConfig = () => {
+    sendWebHudAction(profileId, {
+      type: 'update-auto-config',
+      config: {
+        autoConfigCharEnabled: !!hudEl.querySelector('#p-auto-config-char')?.checked,
+        autoMuteDisplayEnabled: !!hudEl.querySelector('#p-auto-mute-display')?.checked
+      }
+    });
+  };
+  ['#p-auto-config-char', '#p-auto-mute-display'].forEach(sel => {
+    const el = hudEl.querySelector(sel);
+    if (el) el.onchange = saveAutoConfig;
+  });
+
+  const applyAutoConfigBtn = hudEl.querySelector('#p-btn-apply-autoconfig');
+  if (applyAutoConfigBtn) {
+    applyAutoConfigBtn.onclick = async () => {
+      const r = await sendWebHudAction(profileId, { type: 'apply-autoconfig-now' });
+      showToast(r && r.success !== false ? '⚡ สั่งตั้งค่าระยะล่า + สกิล + ปิดประกาศแล้ว' : '❌ สั่งงานจอเกมไม่สำเร็จ', r && r.success !== false ? 'success' : 'error');
+    };
+  }
+
   // Market sniper filter (pelican_market_filter_cfg)
   const MK_FIELDS = [['#p-mk-search-query', 'q', 'text'], ['#p-mk-cat-select', 'category', 'text'], ['#p-mk-kind-select', 'kind', 'text'],
     ['#p-mk-min-refine', 'minRefine', 'int'], ['#p-mk-max-price', 'maxPrice', 'int'], ['#p-mk-stat1-type', 'statType1', 'text'],
@@ -3899,7 +4217,7 @@ async function openWebBotHUD(profileId) {
   gameCall('#p-btn-test-shop', `(typeof window.executeAutoShopRoutine === 'function' && window.executeAutoShopRoutine(), true)`,
     'ส่งตัวละครกลับเมืองไปขาย/ซื้อของตามตั้งค่าตอนนี้เลยใช่ไหม?');
   ['#p-btn-sniff-equip', '#p-btn-mk-open-modal', '#p-btn-mk-copy-json', '#p-btn-dump-map', '#p-btn-dump-item', '#p-btn-dump-packets',
-    '#p-btn-dump-state', '#p-btn-dump-market', '#p-btn-dump-weight', '#p-btn-copy-out'].forEach(sel => {
+    '#p-btn-dump-state', '#p-btn-dump-market', '#p-btn-dump-weight', '#p-btn-dump-npc', '#p-btn-copy-out'].forEach(sel => {
     const btn = hudEl.querySelector(sel);
     if (btn) btn.onclick = () => showToast('ปุ่มนี้เป็นเครื่องมือดูข้อมูล ใช้ได้ในหน้าต่างเกมเท่านั้น', 'warning');
   });
@@ -4181,13 +4499,51 @@ function populateWebHudData(profileId, data) {
     }
   }
 
-  // Auto Loop Checkbox
+  // Auto Loop & Plan Script Checkbox
   const autoLoopCb = hud.querySelector('#p-auto-loop');
   if (autoLoopCb && document.activeElement !== autoLoopCb) autoLoopCb.checked = !!data.autoLoopEnabled;
 
-  // Farm Map Select
+  const planScriptCb = hud.querySelector('#p-plan-script-enabled');
+  if (planScriptCb && document.activeElement !== planScriptCb) planScriptCb.checked = !!data.planScriptEnabled;
+
+  const planNameEl = hud.querySelector('#p-plan-name-display');
+  if (planNameEl && data.currentPlanName !== undefined) {
+    planNameEl.innerText = data.currentPlanName || '(ยังไม่เลือกแผน)';
+  }
+
+  // Farm Map Select & Travel Config
   const mapSelect = hud.querySelector('#p-target-map-select');
   if (mapSelect && data.targetFarmMap && document.activeElement !== mapSelect) mapSelect.value = data.targetFarmMap;
+
+  const warpMinZenyInp = hud.querySelector('#p-warp-min-zeny');
+  if (warpMinZenyInp && data.travelConfig && document.activeElement !== warpMinZenyInp) {
+    warpMinZenyInp.value = Number(data.travelConfig.minZenyForWarp) || 0;
+  }
+
+  // Security & Humanize
+  const unexpGuardCb = hud.querySelector('#p-unexpected-town-guard');
+  if (unexpGuardCb && data.unexpectedTownGuardEnabled !== undefined && document.activeElement !== unexpGuardCb) {
+    unexpGuardCb.checked = !!data.unexpectedTownGuardEnabled;
+  }
+  const unexpBox = hud.querySelector('#p-unexpected-town-box');
+  if (unexpBox) unexpBox.style.display = data.unexpectedTownWaiting ? 'block' : 'none';
+  const unexpCd = hud.querySelector('#p-unexpected-countdown');
+  if (unexpCd && data.unexpectedTownCountdown) unexpCd.innerText = data.unexpectedTownCountdown;
+
+  const humanize = data.humanizeConfig || {};
+  const syncCb = (sel, val) => {
+    const el = hud.querySelector(sel);
+    if (el && val !== undefined && document.activeElement !== el) el.checked = !!val;
+  };
+  syncCb('#p-humanize-enabled', humanize.enabled);
+  const humChance = hud.querySelector('#p-humanize-chance');
+  if (humChance && humanize.chancePercent !== undefined && document.activeElement !== humChance) {
+    humChance.value = humanize.chancePercent;
+  }
+  syncCb('#p-humanize-blacksmith', humanize.visitBlacksmith);
+  syncCb('#p-humanize-sundries', humanize.visitSundries);
+  syncCb('#p-humanize-walk', humanize.randomWalk);
+  syncCb('#p-humanize-storage', humanize.openStorage);
 
   // Archer
   const archer = data.archerConfig || {};
@@ -4196,6 +4552,11 @@ function populateWebHudData(profileId, data) {
 
   const reqArrow = hud.querySelector('#p-archer-req');
   if (reqArrow && document.activeElement !== reqArrow) reqArrow.checked = !!archer.requireArrow;
+
+  const autoEquipArrow = hud.querySelector('#p-archer-auto-equip');
+  if (autoEquipArrow && archer.autoEquipArrow !== undefined && document.activeElement !== autoEquipArrow) {
+    autoEquipArrow.checked = !!archer.autoEquipArrow;
+  }
 
   const arrowType = hud.querySelector('#p-archer-type');
   if (arrowType && archer.arrowType && document.activeElement !== arrowType) arrowType.value = String(archer.arrowType);
@@ -4212,8 +4573,14 @@ function populateWebHudData(profileId, data) {
   const bwingQty = hud.querySelector('#p-archer-bwing-qty');
   if (bwingQty && document.activeElement !== bwingQty) bwingQty.value = archer.bwingBuyQty || 2;
 
+  const bwingCountEl = hud.querySelector('#p-bwing-count');
+  if (bwingCountEl && data.bwingCount !== undefined) {
+    bwingCountEl.innerText = data.bwingCount >= 0 ? String(data.bwingCount) : 'รอเปิดกระเป๋า';
+  }
+
   // Buff Potions
   const buffPotions = data.buffPotionConfig || {};
+  const potionCounts = data.potionCounts || {};
   ['90306', '90307', '90308'].forEach(id => {
     const pCfg = buffPotions[id];
     if (pCfg) {
@@ -4222,15 +4589,38 @@ function populateWebHudData(profileId, data) {
       const qty = hud.querySelector(`#p-potion-qty-${id}`);
       if (qty && document.activeElement !== qty && pCfg.targetQty !== undefined) qty.value = pCfg.targetQty;
     }
+    const cntEl = hud.querySelector(`#p-potion-count-${id}`);
+    if (cntEl && potionCounts[id] !== undefined) {
+      cntEl.innerText = potionCounts[id] >= 0 ? String(potionCounts[id]) : 'รอเปิดกระเป๋า';
+    }
   });
 
   // Sell
   const sell = data.sellConfig || {};
-  const sellTrash = hud.querySelector('#p-sell-trash');
-  if (sellTrash && document.activeElement !== sellTrash) sellTrash.checked = !!sell.enabled;
+  const sellEn = hud.querySelector('#p-sell-enabled');
+  if (sellEn && document.activeElement !== sellEn) sellEn.checked = !!sell.enabled;
 
-  const sellWeight = hud.querySelector('#p-sell-weight');
-  if (sellWeight && document.activeElement !== sellWeight) sellWeight.value = sell.weightThreshold || 80;
+  const weightCheckEn = hud.querySelector('#p-weight-check-enabled');
+  if (weightCheckEn && document.activeElement !== weightCheckEn) weightCheckEn.checked = sell.weightCheckEnabled !== false;
+
+  const weightThresh = hud.querySelector('#p-weight-threshold');
+  if (weightThresh && document.activeElement !== weightThresh) weightThresh.value = sell.weightThreshold || 80;
+
+  const curWeightVal = hud.querySelector('#p-cur-weight-val');
+  if (curWeightVal) {
+    const wStr = data.state?.weight || '--%';
+    curWeightVal.innerText = wStr;
+    const wNum = parseFloat(String(wStr).replace('%', ''));
+    const wLim = Number(sell.weightThreshold) || 80;
+    const alertBanner = hud.querySelector('#p-weight-alert-banner');
+    if (Number.isFinite(wNum) && sell.weightCheckEnabled !== false && wNum >= wLim) {
+      curWeightVal.style.color = '#f87171';
+      if (alertBanner) alertBanner.style.display = 'block';
+    } else {
+      curWeightVal.style.color = '#22c55e';
+      if (alertBanner) alertBanner.style.display = 'none';
+    }
+  }
 
   const syncSel = (id, val) => {
     const el = hud.querySelector(id);
@@ -4269,6 +4659,16 @@ function populateWebHudData(profileId, data) {
       if (typeof activeHud.renderStatsFilter === 'function') activeHud.renderStatsFilter();
     }
   }
+
+  // Shop & System Tab
+  const shop = data.shopConfig || {};
+  syncCb('#p-shop-enabled', shop.enabled);
+  const shopKeyEl = hud.querySelector('#p-shop-npckey');
+  if (shopKeyEl && shop.npcKey !== undefined && document.activeElement !== shopKeyEl) shopKeyEl.value = shop.npcKey || 'tools';
+
+  syncCb('#p-ultra-low-spec', data.ultraLowSpecEnabled !== false);
+  syncCb('#p-auto-config-char', data.autoConfigCharEnabled !== false);
+  syncCb('#p-auto-mute-display', data.autoMuteDisplayEnabled !== false);
 
   // Auth
   const auth = data.authConfig || {};

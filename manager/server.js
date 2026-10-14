@@ -1176,6 +1176,61 @@ function runPowerShell(script) {
   });
 }
 
+// Per-profile Zeny farming rate tracker (GP/M & GP/H)
+const zenyRateTrackers = {};
+function updateZenyRateTracker(profileId, liveState) {
+  if (!liveState || liveState.error || typeof liveState.zeny !== 'number') {
+    const existing = zenyRateTrackers[profileId];
+    if (!existing) return { gpm: 0, gph: 0, totalGained: 0, elapsedSec: 0 };
+    const elapsedMs = Math.max(0, (existing.lastTime || Date.now()) - existing.startTime);
+    const effectiveMin = Math.max(elapsedMs / 60000, 0.25);
+    const gpm = (elapsedMs >= 3000 && existing.totalGained > 0) ? Math.round(existing.totalGained / effectiveMin) : 0;
+    return { gpm, gph: gpm * 60, totalGained: existing.totalGained, elapsedSec: Math.round(elapsedMs / 1000) };
+  }
+  const now = Date.now();
+  const z = liveState.zeny;
+  const charName = liveState.charName || '';
+  let tr = zenyRateTrackers[profileId];
+  if (!tr || (charName && tr.charName && tr.charName !== charName)) {
+    tr = zenyRateTrackers[profileId] = {
+      charName,
+      startTime: now,
+      lastTime: now,
+      lastZeny: z,
+      totalGained: 0,
+      samples: []
+    };
+  } else {
+    if (charName && !tr.charName) tr.charName = charName;
+    const delta = z - tr.lastZeny;
+    tr.lastZeny = z;
+    tr.lastTime = now;
+    if (delta > 0) {
+      tr.totalGained += delta;
+      tr.samples.push({ t: now, gain: delta });
+    }
+  }
+  const windowMs = 60 * 60 * 1000; // 60-minute rolling window
+  const cutoff = now - windowMs;
+  if (tr.samples.length > 0 && tr.samples[0].t < cutoff) {
+    tr.samples = tr.samples.filter(s => s.t >= cutoff);
+  }
+  const windowStart = Math.max(tr.startTime, cutoff);
+  const elapsedMs = Math.max(0, now - windowStart);
+  const windowGain = tr.samples.reduce((sum, s) => sum + s.gain, 0);
+  let gpm = 0;
+  if (elapsedMs >= 3000 && windowGain > 0) {
+    const effectiveMin = Math.max(elapsedMs / 60000, 0.25);
+    gpm = Math.round(windowGain / effectiveMin);
+  }
+  return {
+    gpm,
+    gph: gpm * 60,
+    totalGained: tr.totalGained,
+    elapsedSec: Math.round((now - tr.startTime) / 1000)
+  };
+}
+
 const planSync = createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort });
 // Observation only by default. Pilot keys/profile IDs require a separately reviewed activation.
 const scriptRollout = loadScriptRollout({dataDir:path.join(__dirname,'data'),serviceOrigin:humanCheckSolver.serviceOrigin});
@@ -1807,6 +1862,8 @@ const server = http.createServer(async (req, res) => {
           delete runningProcesses[p.id];
         }
 
+        const zenyRate = updateZenyRateTracker(p.id, alive ? liveState : null);
+
         return {
           ...p,
           hasLoginPassword: !!credentials.getPassword(p.id),
@@ -1814,6 +1871,7 @@ const server = http.createServer(async (req, res) => {
           pid: alive ? (proc ? proc.pid : null) : null,
           uptime: alive ? (proc ? Math.round((Date.now() - proc.startTime) / 1000) : 0) : 0,
           liveState,
+          zenyRate,
           windowState: windowStates[p.id] || { isHidden: false }
         };
       })
@@ -1841,6 +1899,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     return sendJSON({ success: true, profiles: enriched, gameExe: getGameExe(), allWindowsHidden, captchaStats: getCaptchaStats() });
+  }
+
+  // POST /api/profiles/:id/reset-zeny-rate
+  if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/reset-zeny-rate$/)) {
+    const id = pathname.split("/")[3];
+    delete zenyRateTrackers[id];
+    return sendJSON({ success: true });
   }
 
   // GET /api/portrait?src=/art/classes/hunter-face.webp — cached character portrait
@@ -2564,20 +2629,52 @@ public class PmFocus {
       const sell = window.__sellConfig || {};
       const autosell = window.__autoMarketSellConfig || {};
       const marketFilter = window.__marketFilterConfig || {};
+      const travel = window.__travelConfig || {};
+      const humanize = window.__humanizeConfig || {};
+      const shop = window.__shopConfig || {};
       const state = typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null;
+      const bagCount = (itemId) => (typeof window.getBagItemCount === 'function' ? window.getBagItemCount(itemId) : 0);
       return {
         state: state,
+        botVersion: window.__pelicanBotVersion || null,
         targetFarmMap: window.__targetFarmMap || (document.getElementById('p-target-map-select')?.value) || (state ? state.targetMap : null),
         autoLoopEnabled: !!window.__autoLoopEnabled,
         isBotRunning: !!window.__isBotRunning,
+        planScriptEnabled: !!window.__planScriptEnabled,
+        currentPlanName: (window.__currentScriptPlan && window.__currentScriptPlan.name) || null,
+        travelConfig: {
+          minZenyForWarp: Number(travel.minZenyForWarp) || 0
+        },
+        unexpectedTownGuardEnabled: window.__unexpectedTownGuardEnabled !== false,
+        unexpectedTownWaiting: !!window.__unexpectedTownWaiting,
+        unexpectedTownCountdown: document.getElementById('p-unexpected-countdown')?.innerText || '--:--',
+        humanizeConfig: {
+          enabled: humanize.enabled !== false,
+          chance: Number(humanize.chance) || 70,
+          buyBlacksmith: humanize.buyBlacksmith !== false,
+          buySundries: humanize.buySundries !== false,
+          randomWalk: humanize.randomWalk !== false,
+          storeDeposit: humanize.storeDeposit !== false
+        },
         archerConfig: archer,
+        bwingCount: bagCount(90311),
         buffPotionConfig: buffPotions,
+        potionCounts: {
+          90306: bagCount(90306),
+          90307: bagCount(90307),
+          90308: bagCount(90308)
+        },
         sellConfig: sell,
         autoMarketSellConfig: autosell,
         marketFilterConfig: marketFilter,
+        shopConfig: shop,
+        ultraLowSpecEnabled: window.__ultraLowSpecEnabled !== false,
+        autoConfigCharEnabled: window.__autoConfigCharEnabled !== false,
+        autoMuteDisplayEnabled: window.__autoMuteDisplayEnabled !== false,
         authConfig: {
           enabled: !!auth.enabled,
           username: auth.username || (document.getElementById('p-auth-user')?.value) || '',
+          charName: auth.charName || (document.getElementById('p-auth-char')?.value) || '',
           hasPassword: !!(auth.password || (document.getElementById('p-auth-pass')?.value)),   // never the password itself
           autoResumeBot: !!auth.autoResumeBot
         },
@@ -2721,6 +2818,8 @@ public class PmFocus {
             try { localStorage.setItem('pelican_farm_map', map); } catch(e){}
             const mapSelect = document.getElementById('p-target-map-select');
             if (mapSelect) mapSelect.value = map;
+            if (typeof window.rememberFarmMap === 'function') window.rememberFarmMap(map);
+            if (window.__planScriptEnabled && typeof window.setPlanManualMap === 'function') window.setPlanManualMap(map);
             if (typeof window.setTargetFarmMap === 'function') window.setTargetFarmMap(map);
             return { success: true };
           })()`;
@@ -2728,23 +2827,122 @@ public class PmFocus {
           codeToRun = `(() => {
             const en = ${Boolean(payload.enabled)};
             window.__autoLoopEnabled = en;
-            window.__isBotRunning = en;
             try { localStorage.setItem('pelican_auto_loop', String(en)); } catch(e){}
-            try { localStorage.setItem('pelican_bot_running', String(en)); } catch(e){}
             const loopCb = document.getElementById('p-auto-loop');
             if (loopCb) loopCb.checked = en;
-            if (en) {
-              if (typeof window.startMasterBot === 'function') window.startMasterBot();
-            } else {
-              if (typeof window.stopMasterBot === 'function') window.stopMasterBot();
-            }
             if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
-            return { success: true, running: en };
+            return { success: true, autoLoopEnabled: en };
+          })()`;
+        } else if (payload.type === 'toggle-plan-script') {
+          codeToRun = `(() => {
+            const en = ${Boolean(payload.enabled)};
+            window.__planScriptEnabled = en;
+            try { localStorage.setItem('pelican_plan_script_enabled', String(en)); } catch(e){}
+            const planCb = document.getElementById('p-plan-script-enabled');
+            if (planCb) planCb.checked = en;
+            if (en) {
+              if (typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings();
+              if (typeof window.autoConfigureCombat === 'function') window.autoConfigureCombat();
+            }
+            return { success: true, planScriptEnabled: en };
+          })()`;
+        } else if (payload.type === 'update-travel') {
+          codeToRun = `(() => {
+            if (!window.__travelConfig) window.__travelConfig = {};
+            const minZ = Math.max(0, parseInt(${JSON.stringify(payload.minZenyForWarp)}, 10) || 0);
+            window.__travelConfig.minZenyForWarp = minZ;
+            try { localStorage.setItem('pelican_travel_cfg', JSON.stringify(window.__travelConfig)); } catch(e){}
+            if (typeof window.saveTravelConfig === 'function') window.saveTravelConfig();
+            const inp = document.getElementById('p-warp-min-zeny');
+            if (inp) inp.value = String(minZ);
+            return { success: true, minZenyForWarp: minZ };
+          })()`;
+        } else if (payload.type === 'toggle-unexpected-town-guard') {
+          codeToRun = `(() => {
+            const en = ${Boolean(payload.enabled)};
+            window.__unexpectedTownGuardEnabled = en;
+            try { localStorage.setItem('pelican_unexpected_town_guard', String(en)); } catch(e){}
+            const cb = document.getElementById('p-unexpected-town-guard');
+            if (cb) cb.checked = en;
+            return { success: true, enabled: en };
+          })()`;
+        } else if (payload.type === 'skip-unexpected-wait') {
+          codeToRun = `(() => {
+            if (typeof window.skipUnexpectedTownWait === 'function') window.skipUnexpectedTownWait();
+            return { success: true };
+          })()`;
+        } else if (payload.type === 'update-humanize') {
+          codeToRun = `(() => {
+            if (!window.__humanizeConfig) window.__humanizeConfig = {};
+            Object.assign(window.__humanizeConfig, ${JSON.stringify(payload.config || {})});
+            try { localStorage.setItem('pelican_humanize_cfg', JSON.stringify(window.__humanizeConfig)); } catch(e){}
+            const c = window.__humanizeConfig;
+            const setCb = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.checked = !!v; };
+            setCb('p-humanize-enabled', c.enabled);
+            setCb('p-humanize-blacksmith', c.buyBlacksmith);
+            setCb('p-humanize-sundries', c.buySundries);
+            setCb('p-humanize-walk', c.randomWalk);
+            setCb('p-humanize-storage', c.storeDeposit);
+            const chEl = document.getElementById('p-humanize-chance');
+            if (chEl && c.chance !== undefined) chEl.value = String(c.chance);
+            return { success: true };
+          })()`;
+        } else if (payload.type === 'test-humanize') {
+          codeToRun = `(() => {
+            window.__isManualTestingHumanize = true;
+            if (typeof window.runHumanizeRoutine === 'function') window.runHumanizeRoutine(() => {});
+            return { success: true };
+          })()`;
+        } else if (payload.type === 'toggle-ultra-low-spec') {
+          codeToRun = `(() => {
+            const en = ${Boolean(payload.enabled)};
+            window.__ultraLowSpecEnabled = en;
+            try { localStorage.setItem('pelican_ultra_low_spec', en ? 'true' : 'false'); } catch(e){}
+            if (typeof window.setUltraLowSpecMode === 'function') window.setUltraLowSpecMode(en);
+            const cb = document.getElementById('p-ultra-low-spec');
+            if (cb) cb.checked = en;
+            return { success: true, ultraLowSpecEnabled: en };
+          })()`;
+        } else if (payload.type === 'update-auto-config') {
+          codeToRun = `(() => {
+            const cfg = ${JSON.stringify(payload.config || {})};
+            if (cfg.autoConfigCharEnabled !== undefined) {
+              window.__autoConfigCharEnabled = !!cfg.autoConfigCharEnabled;
+              try { localStorage.setItem('pelican_auto_config_char_enabled', String(!!cfg.autoConfigCharEnabled)); } catch(e){}
+              const el = document.getElementById('p-auto-config-char');
+              if (el) el.checked = !!cfg.autoConfigCharEnabled;
+              if (cfg.autoConfigCharEnabled && typeof window.autoConfigureCombat === 'function') window.autoConfigureCombat(true);
+            }
+            if (cfg.autoMuteDisplayEnabled !== undefined) {
+              window.__autoMuteDisplayEnabled = !!cfg.autoMuteDisplayEnabled;
+              try { localStorage.setItem('pelican_auto_mute_display_enabled', String(!!cfg.autoMuteDisplayEnabled)); } catch(e){}
+              const el = document.getElementById('p-auto-mute-display');
+              if (el) el.checked = !!cfg.autoMuteDisplayEnabled;
+              if (cfg.autoMuteDisplayEnabled && typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings(true);
+            }
+            return { success: true };
+          })()`;
+        } else if (payload.type === 'apply-autoconfig-now') {
+          codeToRun = `(async () => {
+            if (typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings(true);
+            let ok = false;
+            if (typeof window.autoConfigureCombat === 'function') ok = await window.autoConfigureCombat(true);
+            return { success: true, applied: ok };
           })()`;
         } else if (payload.type === 'walk-to-map') {
-          codeToRun = `if (typeof window.startWalkToTargetMap === 'function') window.startWalkToTargetMap();`;
+          codeToRun = `(() => {
+            const select = document.getElementById('p-target-map-select');
+            const targetMap = (select ? select.value : '') || window.__targetFarmMap;
+            if (typeof window.walkToTargetMap === 'function') window.walkToTargetMap(targetMap, true);
+            else if (typeof window.startWalkToTargetMap === 'function') window.startWalkToTargetMap();
+            return { success: true };
+          })()`;
         } else if (payload.type === 'open-world-map') {
-          codeToRun = `if (typeof window.toggleWorldMapModal === 'function') window.toggleWorldMapModal();`;
+          codeToRun = `(() => {
+            if (typeof window.openWorldMap === 'function') window.openWorldMap();
+            else if (typeof window.toggleWorldMapModal === 'function') window.toggleWorldMapModal();
+            return { success: true };
+          })()`;
         } else if (payload.type === 'update-archer') {
           codeToRun = `(() => {
             if (!window.__archerConfig) window.__archerConfig = {};
@@ -2804,14 +3002,18 @@ public class PmFocus {
             Object.assign(window.__sellConfig, ${JSON.stringify(payload.config)});
             try { localStorage.setItem('pelican_sell_cfg', JSON.stringify(window.__sellConfig)); } catch(e){}
             if (typeof window.refreshStoreHud === 'function') window.refreshStoreHud();
-            const trashEl = document.getElementById('p-sell-trash');
+            const trashEl = document.getElementById('p-sell-enabled') || document.getElementById('p-sell-trash');
             if (trashEl && ${JSON.stringify(payload.config.enabled)} !== undefined) trashEl.checked = !!window.__sellConfig.enabled;
-            const weightEl = document.getElementById('p-sell-weight');
+            const wChkEl = document.getElementById('p-weight-check-enabled');
+            if (wChkEl && ${JSON.stringify(payload.config.weightCheckEnabled)} !== undefined) wChkEl.checked = !!window.__sellConfig.weightCheckEnabled;
+            const weightEl = document.getElementById('p-weight-threshold') || document.getElementById('p-sell-weight');
             if (weightEl && ${JSON.stringify(payload.config.weightThreshold)} !== undefined) weightEl.value = String(window.__sellConfig.weightThreshold);
-            const weapEl = document.getElementById('p-sell-weap');
+            const weapEl = document.getElementById('p-sell-rarity-weap') || document.getElementById('p-sell-weap');
             if (weapEl && ${JSON.stringify(payload.config.weaponRarity)} !== undefined) weapEl.value = String(window.__sellConfig.weaponRarity);
-            const armorEl = document.getElementById('p-sell-armor');
+            const armorEl = document.getElementById('p-sell-rarity-armor') || document.getElementById('p-sell-armor');
             if (armorEl && ${JSON.stringify(payload.config.armorRarity)} !== undefined) armorEl.value = String(window.__sellConfig.armorRarity);
+            const accEl = document.getElementById('p-sell-rarity-acc');
+            if (accEl && ${JSON.stringify(payload.config.accRarity)} !== undefined) accEl.value = String(window.__sellConfig.accRarity);
             const refEl = document.getElementById('p-sell-keep-refined');
             if (refEl && ${JSON.stringify(payload.config.keepRefined)} !== undefined) refEl.checked = !!window.__sellConfig.keepRefined;
             const specEl = document.getElementById('p-sell-keep-special');

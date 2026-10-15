@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "ceafe679f2f380a0766ee858cdd31047a9251580",
+  "sourceCommit": "01c8968e4df9b75851b9d2bb04b0f7de6313d9f4",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -56,7 +56,7 @@
     },
     {
       "path": "manager/image_board_solver.js",
-      "sha256": "9d9ede0794a8aa823ed7d8a13b978f955add33d11f3aa812353fb790a9981b1c"
+      "sha256": "ede5fa595f9e98ffbb95c8d0454118478db76066f49d2abc651394b938eddb04"
     },
     {
       "path": "manager/installer.js",

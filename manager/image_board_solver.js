@@ -440,6 +440,7 @@
 
     let cx = 0, cy = 0, lumSum = 0, lumSqSum = 0, satSum = 0;
     let sumR = 0, sumG = 0, sumB = 0;
+    const colorHist = new Float32Array(8);
     for (const [px, py] of validPts) {
       cx += px;
       cy += py;
@@ -447,10 +448,28 @@
       const r = R[p], g = G[p], b = B[p];
       sumR += r; sumG += g; sumB += b;
       const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      const sat = Math.max(r, g, b) - Math.min(r, g, b);
       lumSum += l;
       lumSqSum += l * l;
-      satSum += Math.max(r, g, b) - Math.min(r, g, b);
+      satSum += sat;
+      if (sat < 22) {
+        if (l > 95) colorHist[0]++;
+        else colorHist[1]++;
+      } else if (b > r + 15 && b >= g) {
+        colorHist[2]++;
+      } else if (b > g + 4 && r > g + 2) {
+        colorHist[3]++;
+      } else if (r - g > 42 && r > b + 35) {
+        colorHist[4]++;
+      } else if (r > b + 38 && g > b + 20) {
+        colorHist[5]++;
+      } else if (r >= g && g >= b) {
+        colorHist[6]++;
+      } else {
+        colorHist[7]++;
+      }
     }
+    for (let i = 0; i < 8; i++) colorHist[i] /= validPts.length;
     cx /= validPts.length;
     cy /= validPts.length;
     const meanLum = lumSum / validPts.length;
@@ -531,6 +550,7 @@
       meanR,
       meanG,
       meanB,
+      colorHist,
       polarMask,
       polarLum,
       polarGrad
@@ -574,23 +594,30 @@
       }
     }
 
-    const elongDiff = Math.abs(Math.log(top.elongation / slot.elongation)) * 0.95;
-    const fillDiff = Math.abs(Math.log(top.fillRatio / slot.fillRatio)) * 0.95;
+    const rawElongDiff = Math.abs(Math.log(top.elongation / slot.elongation));
+    const rawFillDiff = Math.abs(Math.log(top.fillRatio / slot.fillRatio));
+    const ultraElongatedPair = Math.max(top.elongation, slot.elongation) >= 6.0 && Math.min(top.elongation, slot.elongation) >= 2.15;
+    const elongDiff = (ultraElongatedPair ? Math.min(0.28, rawElongDiff * 0.45) : rawElongDiff) * 0.95;
+    const fillDiff = (ultraElongatedPair ? Math.min(0.25, rawFillDiff * 0.55) : rawFillDiff) * 0.95;
     const scaleRatio = slot.rmsRadius / top.rmsRadius;
-    const scalePenalty = (scaleRatio < 0.75 || scaleRatio > 1.15)
-      ? Math.abs(Math.log(scaleRatio)) * 1.2
-      : Math.abs(Math.log(scaleRatio / 0.94)) * 0.35;
+    const scalePenalty = (scaleRatio < 0.48 || scaleRatio > 1.20)
+      ? Math.abs(Math.log(scaleRatio)) * 0.85
+      : Math.abs(Math.log(scaleRatio / 0.88)) * 0.12;
     const areaRatio = slot.area / (top.area * 0.85);
-    const areaPenalty = Math.abs(Math.log(Math.max(0.25, Math.min(4.0, areaRatio)))) * 0.16;
+    const areaPenalty = Math.abs(Math.log(Math.max(0.35, Math.min(3.5, areaRatio)))) * 0.06;
     const lumStatPenalty = (Math.abs(top.meanLum - slot.meanLum) / 110 + Math.abs(top.stdLum - slot.stdLum) / 85 + Math.abs(top.meanSat - slot.meanSat) / 48) * 0.50;
     const rgbDiff = (Math.abs(top.meanR - slot.meanR) + Math.abs(top.meanG - slot.meanG) + Math.abs(top.meanB - slot.meanB));
     const topRG = top.meanR - top.meanG, slotRG = slot.meanR - slot.meanG;
     const topGB = top.meanG - top.meanB, slotGB = slot.meanG - slot.meanB;
     const chromaDiff = Math.abs(topRG - slotRG) + Math.abs(topGB - slotGB);
-    const rgbPenalty = (rgbDiff / 220) * 0.38 + (chromaDiff / 90) * 0.42;
+    let histDiff = 0;
+    if (top.colorHist && slot.colorHist) {
+      for (let i = 0; i < 8; i++) histDiff += Math.abs(top.colorHist[i] - slot.colorHist[i]);
+    }
+    const rgbPenalty = (rgbDiff / 220) * 0.35 + (chromaDiff / 90) * 0.40 + histDiff * 0.62;
 
     const totalScore = bestPolarDist + elongDiff + fillDiff + scalePenalty + areaPenalty + lumStatPenalty + rgbPenalty;
-    return { totalScore, bestPolarDist, elongDiff, fillDiff, scalePenalty, areaPenalty, lumStatPenalty, rgbPenalty };
+    return { totalScore, bestPolarDist, elongDiff, fillDiff, scalePenalty, areaPenalty, lumStatPenalty, rgbPenalty, histDiff };
   }
 
   /**

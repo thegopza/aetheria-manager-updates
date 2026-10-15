@@ -1356,6 +1356,481 @@ function buildClientActionEvalCode(payload) {
 }
 
 // ==========================================
+// STASH-ONLY & CONSOLIDATION ITEM SETTINGS
+// ==========================================
+const CONSOLIDATION_ITEMS_FILE = path.join(__dirname, "data", "consolidation_items.json");
+const DEFAULT_CONSOLIDATION_ITEMS_CFG = {
+  storeOnlyEnabled: false,
+  tradeOnConsolidate: false,
+  items: ["Enchant Rune"]
+};
+
+function sanitizeConsolidationItemsList(items) {
+  const raw = Array.isArray(items)
+    ? items
+    : (typeof items === "string" ? items.split(",") : DEFAULT_CONSOLIDATION_ITEMS_CFG.items);
+  const seen = new Set();
+  const out = [];
+  for (const x of raw) {
+    const s = String(x || "").trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out.length > 0 ? out : ["Enchant Rune"];
+}
+
+function loadConsolidationItemSettings() {
+  try {
+    if (fs.existsSync(CONSOLIDATION_ITEMS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(CONSOLIDATION_ITEMS_FILE, "utf8") || "{}");
+      return {
+        storeOnlyEnabled: Boolean(parsed.storeOnlyEnabled),
+        tradeOnConsolidate: Boolean(parsed.tradeOnConsolidate),
+        items: sanitizeConsolidationItemsList(parsed.items)
+      };
+    }
+  } catch (e) {}
+  return { ...DEFAULT_CONSOLIDATION_ITEMS_CFG, items: [...DEFAULT_CONSOLIDATION_ITEMS_CFG.items] };
+}
+
+function saveConsolidationItemSettings(cfg = {}) {
+  const cur = loadConsolidationItemSettings();
+  const next = {
+    storeOnlyEnabled: typeof cfg.storeOnlyEnabled === "boolean" ? cfg.storeOnlyEnabled : cur.storeOnlyEnabled,
+    tradeOnConsolidate: typeof cfg.tradeOnConsolidate === "boolean" ? cfg.tradeOnConsolidate : cur.tradeOnConsolidate,
+    items: cfg.items !== undefined ? sanitizeConsolidationItemsList(cfg.items) : cur.items
+  };
+  try {
+    fs.mkdirSync(path.dirname(CONSOLIDATION_ITEMS_FILE), { recursive: true });
+    fs.writeFileSync(CONSOLIDATION_ITEMS_FILE, JSON.stringify(next, null, 2), "utf8");
+  } catch (e) {}
+  return next;
+}
+
+// Build eval code to sync stashTradeConfig AND ensure standalone helpers exist on clients that haven't reloaded yet
+function buildStashTradeSyncEvalCode(cfg) {
+  const safeCfg = {
+    storeOnlyEnabled: Boolean(cfg && cfg.storeOnlyEnabled),
+    tradeOnConsolidate: Boolean(cfg && cfg.tradeOnConsolidate),
+    items: sanitizeConsolidationItemsList(cfg && cfg.items)
+  };
+  return `(() => {
+    const cfg = ${JSON.stringify(safeCfg)};
+    window.__stashTradeConfig = cfg;
+    try { localStorage.setItem('pelican_stash_trade_cfg', JSON.stringify(cfg)); } catch (e) {}
+
+    if (typeof window.matchesStashItemList !== 'function') {
+      const KNOWN_IDS = { 'enchant rune': 90340, 'accessory enchant rune': 90341, 'rough elunium': 90204, 'elunium': 90205, 'oridecon': 90203, 'phracon': 90201, 'emveretarcon': 90202 };
+      window.matchesStashItemList = function(itemOrName, listOverride) {
+        const list = Array.isArray(listOverride) ? listOverride : (window.__stashTradeConfig && Array.isArray(window.__stashTradeConfig.items) ? window.__stashTradeConfig.items : []);
+        if (!list.length) return false;
+        const raw = (itemOrName && typeof itemOrName === 'object') ? (itemOrName.raw || itemOrName) : null;
+        const itemId = raw ? Number(raw.id ?? itemOrName.id) : NaN;
+        const rawName = typeof itemOrName === 'string'
+          ? itemOrName
+          : String((raw && (raw.refinedName || raw.name)) || (itemOrName && itemOrName.name) || '');
+        const cleanName = rawName.replace(/\\+\\d+\\s*/g, '').replace(/\\[\\d+\\]/g, '').replace(/\\s*x\\d+$/i, '').trim().toLowerCase();
+        for (const entry of list) {
+          const w = String(entry || '').trim().toLowerCase();
+          if (!w) continue;
+          if (cleanName && (cleanName === w || rawName.trim().toLowerCase() === w)) return true;
+          if (Number.isFinite(itemId) && KNOWN_IDS[w] && itemId === KNOWN_IDS[w]) return true;
+        }
+        return false;
+      };
+    }
+    if (typeof window.isStashOnlyItem !== 'function') {
+      window.isStashOnlyItem = function(itemOrName) {
+        if (!window.__stashTradeConfig || !window.__stashTradeConfig.storeOnlyEnabled) return false;
+        return window.matchesStashItemList(itemOrName);
+      };
+    }
+    if (typeof window.hasStashOnlyItemsInBag !== 'function') {
+      window.hasStashOnlyItemsInBag = function() {
+        if (!window.__stashTradeConfig || !window.__stashTradeConfig.storeOnlyEnabled) return false;
+        const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+        return bag.some(it => it && !it.locked && !it.equipped && window.isStashOnlyItem(it.raw || it));
+      };
+    }
+    if (typeof window.setStashTradeConfig === 'function') {
+      window.setStashTradeConfig(cfg);
+    }
+    // Wrap isItemOnMarketSellList & sellSingleRuleNow on older clients so stash-only items are never market-sold
+    if (typeof window.isItemOnMarketSellList === 'function' && !window.isItemOnMarketSellList.__stashWrapped) {
+      const origMarketCheck = window.isItemOnMarketSellList;
+      const wrapped = function(itemName) {
+        if (typeof window.isStashOnlyItem === 'function' && window.isStashOnlyItem(itemName)) return false;
+        return origMarketCheck.apply(this, arguments);
+      };
+      wrapped.__stashWrapped = true;
+      window.isItemOnMarketSellList = wrapped;
+    }
+    if (typeof window.sellSingleRuleNow === 'function' && !window.sellSingleRuleNow.__stashWrapped) {
+      const origSellSingle = window.sellSingleRuleNow;
+      const wrappedSingle = async function(rule) {
+        if (rule && rule.itemName && typeof window.isStashOnlyItem === 'function' && window.isStashOnlyItem(rule.itemName)) {
+          return { success: false, message: 'ไอเทมนี้ถูกตั้งค่าเป็น "เก็บเข้าคลังอย่างเดียว" (ห้ามขายตลาดกลาง)' };
+        }
+        return origSellSingle.apply(this, arguments);
+      };
+      wrappedSingle.__stashWrapped = true;
+      window.sellSingleRuleNow = wrappedSingle;
+    }
+    if (typeof window.getConsolidationMatchingBagItems !== 'function') {
+      window.getConsolidationMatchingBagItems = function(itemList) {
+        const list = Array.isArray(itemList) ? itemList : (window.__stashTradeConfig && window.__stashTradeConfig.items) || [];
+        const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+        const matched = [];
+        let totalQty = 0, totalWeight = 0;
+        for (const it of bag) {
+          if (!it || it.locked || it.equipped) continue;
+          const raw = it.raw || it;
+          if (!window.matchesStashItemList(raw, list)) continue;
+          const qty = Math.max(1, Number(it.qty ?? raw.qty ?? 1) || 1);
+          const unitW = Math.max(0, Number(raw.weight ?? it.weight ?? 1) || 1);
+          matched.push({ slot: Number(it.slot ?? raw.slot), id: raw.id ?? it.id, name: it.name || raw.name || 'Item', qty, unitWeight: unitW, totalWeight: qty * unitW });
+          totalQty += qty;
+          totalWeight += qty * unitW;
+        }
+        return { items: matched, totalQty, totalWeight };
+      };
+    }
+    return { success: true, config: window.__stashTradeConfig };
+  })()`;
+}
+
+async function syncStashTradeConfigToPort(port, cfg = null) {
+  if (!port) return { success: false, error: "No port" };
+  const effectiveCfg = cfg || loadConsolidationItemSettings();
+  return evalProfilePort(port, buildStashTradeSyncEvalCode(effectiveCfg), 5000);
+}
+
+async function syncStashTradeConfigToAllClients(cfg = null) {
+  const effectiveCfg = cfg || loadConsolidationItemSettings();
+  const profiles = loadProfiles();
+  const online = profiles.filter(p => p.debugPort);
+  const results = await Promise.allSettled(online.map(p => syncStashTradeConfigToPort(p.debugPort, effectiveCfg)));
+  const syncedCount = results.filter(r => r.status === "fulfilled" && r.value && r.value.success && r.value.result && r.value.result.success).length;
+  return { syncedCount, totalChecked: online.length };
+}
+
+// Install consolidation storage/trade helpers onto a client port if running an older bot.js snapshot
+async function ensureClientConsolidationItemHelpers(port, cfg = null) {
+  await syncStashTradeConfigToPort(port, cfg);
+  const helperCode = `(() => {
+    const tradeRoom = () => (typeof window.getGameRoom === 'function') ? window.getGameRoom() : (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null);
+    const tradeZeny = () => Number(((typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData()) || {}).zeny);
+    const sameName = (x, y) => String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase();
+
+    if (typeof window.openStorageWindow !== 'function') {
+      window.openStorageWindow = function(timeoutMs = 7000) {
+        return new Promise(resolve => {
+          const room = tradeRoom();
+          if (!room) return resolve(null);
+          let done = false;
+          const finish = val => {
+            if (done) return;
+            done = true;
+            if (typeof unsub === 'function') unsub();
+            resolve(val);
+          };
+          const unsub = room.onMessage('storage', msg => finish(msg));
+          room.send('npc_interact', { id: 'storage' });
+          setTimeout(() => finish(null), timeoutMs);
+        });
+      };
+    }
+
+    if (typeof window.runConsolidationQuickSellTrash !== 'function') {
+      window.runConsolidationQuickSellTrash = async function(timeoutMs = 28000) {
+        try {
+          if (typeof window.triggerAutoSellTrash !== 'function') return { success: false, error: 'No triggerAutoSellTrash' };
+          const wasConsolidating = window.__isConsolidating;
+          window.__isConsolidating = false;
+          window.triggerAutoSellTrash();
+          await new Promise(r => setTimeout(r, 900));
+          const start = Date.now();
+          while (Date.now() - start < timeoutMs) {
+            if (!window.__isShopping && !window.__isNavigating) break;
+            await new Promise(r => setTimeout(r, 500));
+          }
+          window.__isConsolidating = wasConsolidating;
+          if (typeof window.closeShopUI === 'function') window.closeShopUI();
+          if (typeof window.sendNpcClose === 'function') window.sendNpcClose();
+          const live = (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData()) || {};
+          return { success: true, weight: Number(live.weight) || 0, weightLimit: Number(live.weightLimit) || 2000, zeny: Number(live.zeny) || 0 };
+        } catch (err) {
+          window.__isConsolidating = true;
+          return { success: false, error: err.message };
+        }
+      };
+    }
+
+    if (typeof window.withdrawConsolidationItemsFromStorage !== 'function') {
+      window.withdrawConsolidationItemsFromStorage = async function(itemList) {
+        const list = Array.isArray(itemList) && itemList.length > 0 ? itemList : ((window.__stashTradeConfig && window.__stashTradeConfig.items) || ['Enchant Rune']);
+        const room = tradeRoom();
+        if (!room) return { success: false, error: 'No room connection', withdrawnQty: 0 };
+        try {
+          const curMap = (typeof window.getCurrentMapName === 'function') ? window.getCurrentMapName() : '';
+          const coords = curMap.includes('คาราวาน') ? { x: 25, y: 18 } : { x: 159, y: 64 };
+          const pos = (typeof window.getPlayerCoords === 'function') ? window.getPlayerCoords() : null;
+          if (!pos || Math.hypot(pos.x - coords.x, pos.y - coords.y) > 4) {
+            room.send('move_to', { x: coords.x * 32 + 16, y: coords.y * 32 + 16 });
+            const walkStart = Date.now();
+            while (Date.now() - walkStart < 15000) {
+              await new Promise(r => setTimeout(r, 350));
+              const p = (typeof window.getPlayerCoords === 'function') ? window.getPlayerCoords() : null;
+              if (p && Math.hypot(p.x - coords.x, p.y - coords.y) <= 4) break;
+            }
+          }
+          let st = await window.openStorageWindow(8000);
+          if (!st || !Array.isArray(st.items)) return { success: false, error: 'เปิดคลังไม่สำเร็จ', withdrawnQty: 0 };
+          let withdrawnQty = 0;
+          const withdrawnDetails = [];
+          for (let pass = 0; pass < 8; pass++) {
+            const live = (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData()) || {};
+            const curWeight = Number(live.weight) || 0;
+            const maxWeight = Number(live.weightLimit) || 2000;
+            const safeAvailWeight = Math.max(0, maxWeight - curWeight - 20);
+            if (safeAvailWeight <= 0) break;
+            const stItems = Array.isArray(st.items) ? st.items : [];
+            const target = stItems.find(it => it && window.matchesStashItemList(it, list) && (Number(it.qty) || 0) > 0);
+            if (!target) break;
+            const unitW = Math.max(0.1, Number(target.weight) || 1);
+            const maxByWeight = unitW > 0 ? Math.floor(safeAvailWeight / unitW) : target.qty;
+            const takeQty = Math.min(Number(target.qty) || 1, maxByWeight);
+            if (takeQty <= 0) break;
+            const nextPromise = new Promise(resolve => {
+              let done = false;
+              const unsub = room.onMessage('storage', msg => { if (done) return; done = true; if (typeof unsub === 'function') unsub(); resolve(msg); });
+              setTimeout(() => { if (done) return; done = true; if (typeof unsub === 'function') unsub(); resolve(null); }, 3000);
+            });
+            room.send('storage_take', { slot: Number(target.slot), qty: Number(takeQty) });
+            const updated = await nextPromise;
+            withdrawnQty += takeQty;
+            withdrawnDetails.push((target.name || 'Item') + ' x' + takeQty);
+            if (updated && Array.isArray(updated.items)) st = updated;
+            else { await new Promise(r => setTimeout(r, 350)); break; }
+            await new Promise(r => setTimeout(r, 200));
+          }
+          if (typeof window.sendNpcClose === 'function') window.sendNpcClose();
+          const bagMatch = window.getConsolidationMatchingBagItems(list);
+          const liveAfter = (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData()) || {};
+          return { success: true, withdrawnQty, withdrawnDetails, bagMatchingQty: bagMatch.totalQty, bagMatchingWeight: bagMatch.totalWeight, weight: Number(liveAfter.weight) || 0, weightLimit: Number(liveAfter.weightLimit) || 2000 };
+        } catch (err) {
+          if (typeof window.sendNpcClose === 'function') window.sendNpcClose();
+          return { success: false, error: err.message, withdrawnQty: 0 };
+        }
+      };
+    }
+
+    if (typeof window.depositConsolidationItemsToStorage !== 'function') {
+      window.depositConsolidationItemsToStorage = async function(itemList, returnTileCoords = null) {
+        const list = Array.isArray(itemList) && itemList.length > 0 ? itemList : ((window.__stashTradeConfig && window.__stashTradeConfig.items) || ['Enchant Rune']);
+        const room = tradeRoom();
+        if (!room) return { success: false, error: 'No room connection', depositedQty: 0 };
+        const beforePos = (typeof window.getPlayerCoords === 'function') ? window.getPlayerCoords() : null;
+        try {
+          const curMap = (typeof window.getCurrentMapName === 'function') ? window.getCurrentMapName() : '';
+          const coords = curMap.includes('คาราวาน') ? { x: 25, y: 18 } : { x: 159, y: 64 };
+          const pos = (typeof window.getPlayerCoords === 'function') ? window.getPlayerCoords() : null;
+          if (!pos || Math.hypot(pos.x - coords.x, pos.y - coords.y) > 4) {
+            room.send('move_to', { x: coords.x * 32 + 16, y: coords.y * 32 + 16 });
+            const walkStart = Date.now();
+            while (Date.now() - walkStart < 15000) {
+              await new Promise(r => setTimeout(r, 350));
+              const p = (typeof window.getPlayerCoords === 'function') ? window.getPlayerCoords() : null;
+              if (p && Math.hypot(p.x - coords.x, p.y - coords.y) <= 4) break;
+            }
+          }
+          let st = await window.openStorageWindow(8000);
+          if (!st || !Array.isArray(st.items)) return { success: false, error: 'เปิดคลังไม่สำเร็จ', depositedQty: 0 };
+          const bagMatch = window.getConsolidationMatchingBagItems(list);
+          let depositedQty = 0;
+          for (const it of bagMatch.items) {
+            if (!Number.isFinite(it.slot) || it.qty <= 0) continue;
+            room.send('storage_put', { slot: Number(it.slot), qty: Number(it.qty) });
+            depositedQty += it.qty;
+            await new Promise(r => setTimeout(r, 260));
+          }
+          if (typeof window.sendNpcClose === 'function') window.sendNpcClose();
+          const backTarget = returnTileCoords || beforePos;
+          if (backTarget && Number.isFinite(backTarget.x) && Number.isFinite(backTarget.y)) {
+            room.send('move_to', { x: backTarget.x * 32 + 16, y: backTarget.y * 32 + 16 });
+            const backStart = Date.now();
+            while (Date.now() - backStart < 12000) {
+              await new Promise(r => setTimeout(r, 350));
+              const p = (typeof window.getPlayerCoords === 'function') ? window.getPlayerCoords() : null;
+              if (p && Math.hypot(p.x - backTarget.x, p.y - backTarget.y) <= 3) break;
+            }
+          }
+          const liveAfter = (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData()) || {};
+          return { success: true, depositedQty, weight: Number(liveAfter.weight) || 0, weightLimit: Number(liveAfter.weightLimit) || 2000 };
+        } catch (err) {
+          if (typeof window.sendNpcClose === 'function') window.sendNpcClose();
+          return { success: false, error: err.message, depositedQty: 0 };
+        }
+      };
+    }
+
+    // Ensure setupReceiverTradeWatcher and executeSenderTrade support item+zeny trades
+    if (!window.executeSenderTrade || window.executeSenderTrade.length < 4) {
+      window.setupReceiverTradeWatcher = function(allowedSenderName, timeoutMs = 60000) {
+        if (typeof window.stopReceiverTradeWatcher === 'function') window.stopReceiverTradeWatcher();
+        return new Promise((resolve) => {
+          const room = tradeRoom();
+          if (!room) return resolve({ success: false, error: 'No room connection' });
+          const expected = allowedSenderName ? String(allowedSenderName).trim() : '';
+          if (!expected) return resolve({ success: false, error: 'Missing sender name' });
+          window.__consolidationReceiverMode = true;
+          window.__consolidationExpectedSender = expected.toLowerCase();
+          const zenyBefore = tradeZeny();
+          let accepted = false, lockSent = false, confirmSent = false, finished = false, receivedOffer = 0, receivedItemsCount = 0;
+          let unsubInvite = null, unsubTrade = null;
+          const finish = (result) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            if (typeof unsubInvite === 'function') unsubInvite();
+            if (typeof unsubTrade === 'function') unsubTrade();
+            if (window.__receiverWatcherStop === stop) {
+              window.__receiverWatcherStop = null;
+              window.__consolidationReceiverMode = false;
+              window.__consolidationExpectedSender = null;
+            }
+            resolve(result);
+          };
+          const stop = reason => finish({ success: false, error: 'Receiver watcher ' + reason });
+          window.__receiverWatcherStop = stop;
+          const timer = setTimeout(() => finish({ success: false, error: 'Receiver timeout waiting for trade' }), timeoutMs);
+          unsubInvite = room.onMessage('invite', (inv) => {
+            if (finished || !inv || inv.kind !== 'trade' || accepted) return;
+            if (!sameName(inv.from, expected)) return;
+            accepted = true;
+            room.send('trade', { action: 'accept' });
+          });
+          unsubTrade = room.onMessage('trade', (tr) => {
+            if (finished) return;
+            if (!tr) {
+              if (!confirmSent) { accepted = false; lockSent = false; return; }
+              setTimeout(() => {
+                const now = tradeZeny();
+                const got = (isFinite(now) && isFinite(zenyBefore)) ? now - zenyBefore : receivedOffer;
+                finish((got > 0 || receivedItemsCount > 0)
+                  ? { success: true, receivedZeny: Math.max(0, got), receivedItemsCount }
+                  : { success: false, error: 'หน้าต่างเทรดปิดแต่เงิน/ไอเทมไม่เข้า' });
+              }, 1200);
+              return;
+            }
+            if (!sameName(tr.partner, expected)) return;
+            if (tr.theirs && typeof tr.theirs.zeny === 'number') receivedOffer = tr.theirs.zeny;
+            if (tr.theirs && Array.isArray(tr.theirs.items)) {
+              receivedItemsCount = tr.theirs.items.reduce((sum, x) => sum + (Number(x && x.qty) || 0), 0);
+            }
+            if (tr.theirs && tr.theirs.locked && tr.mine && !tr.mine.locked && !lockSent) {
+              lockSent = true;
+              setTimeout(() => { if (!finished) room.send('trade', { action: 'lock' }); }, 300);
+            }
+            if (tr.theirs && tr.theirs.locked && tr.mine && tr.mine.locked && !tr.mine.confirmed && !confirmSent) {
+              confirmSent = true;
+              setTimeout(() => { if (!finished) room.send('trade', { action: 'confirm' }); }, 400);
+            }
+          });
+        });
+      };
+
+      window.executeSenderTrade = function(receiverCharName, zenyAmount, timeoutMs = 45000, itemNamesToOffer = null, maxReceiverExtraWeight = null) {
+        if (window.__senderTradeBusy) return Promise.resolve({ success: false, error: 'กำลังเทรดอยู่แล้ว (ไม่ส่งซ้ำ)' });
+        return new Promise((resolve) => {
+          const room = tradeRoom();
+          if (!room) return resolve({ success: false, error: 'No room connection' });
+          if (!receiverCharName) return resolve({ success: false, error: 'Missing receiver name' });
+          const amount = Math.max(0, parseInt(zenyAmount) || 0);
+          const zenyBefore = tradeZeny();
+          if (isFinite(zenyBefore) && amount > zenyBefore) return resolve({ success: false, error: 'เงินไม่พอ' });
+          const offerItems = [];
+          let offerItemsTotalQty = 0;
+          if (Array.isArray(itemNamesToOffer) && itemNamesToOffer.length > 0 && typeof window.getConsolidationMatchingBagItems === 'function') {
+            const bagMatch = window.getConsolidationMatchingBagItems(itemNamesToOffer);
+            let remWeight = (typeof maxReceiverExtraWeight === 'number' && Number.isFinite(maxReceiverExtraWeight)) ? Math.max(0, maxReceiverExtraWeight) : Infinity;
+            for (const it of bagMatch.items) {
+              if (offerItems.length >= 10) break;
+              if (!Number.isFinite(it.slot) || it.qty <= 0) continue;
+              const unitW = Math.max(0, Number(it.unitWeight) || 1);
+              const allowedQty = (unitW > 0 && Number.isFinite(remWeight)) ? Math.min(it.qty, Math.floor(remWeight / unitW)) : it.qty;
+              if (allowedQty <= 0) continue;
+              offerItems.push({ slot: Number(it.slot), qty: Number(allowedQty) });
+              offerItemsTotalQty += allowedQty;
+              if (Number.isFinite(remWeight)) remWeight = Math.max(0, remWeight - allowedQty * unitW);
+            }
+          }
+          if (amount <= 0 && offerItems.length === 0) return resolve({ success: false, error: 'ไม่มีเงินหรือไอเทมที่จะเทรด' });
+          const bagMatchBefore = (offerItems.length > 0 && typeof window.getConsolidationMatchingBagItems === 'function')
+            ? window.getConsolidationMatchingBagItems(itemNamesToOffer).totalQty : 0;
+          window.__senderTradeBusy = true;
+          let opened = false, offerSent = false, lockSent = false, confirmSent = false, finished = false;
+          let unsubTrade = null;
+          const finish = (result) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            clearTimeout(noAnswer);
+            if (typeof unsubTrade === 'function') unsubTrade();
+            window.__senderTradeBusy = false;
+            resolve(result);
+          };
+          const timer = setTimeout(() => { try { room.send('trade', { action: 'cancel' }); } catch (e) {} finish({ success: false, error: 'Sender timeout in trade process' }); }, timeoutMs);
+          const noAnswer = setTimeout(() => { if (!opened) finish({ success: false, error: 'ตัวรับไม่ตอบรับคำขอเทรด (ไม่ได้ส่งคำขอซ้ำ)' }); }, 12000);
+          unsubTrade = room.onMessage('trade', (tr) => {
+            if (finished) return;
+            if (!tr) {
+              if (!opened) return;
+              if (!confirmSent) return finish({ success: false, error: 'อีกฝ่ายยกเลิก/ปิดหน้าต่างเทรด' });
+              setTimeout(() => {
+                const now = tradeZeny();
+                const sent = (isFinite(now) && isFinite(zenyBefore)) ? zenyBefore - now : null;
+                const bagMatchAfter = (offerItems.length > 0 && typeof window.getConsolidationMatchingBagItems === 'function')
+                  ? window.getConsolidationMatchingBagItems(itemNamesToOffer).totalQty : 0;
+                const sentItems = Math.max(0, bagMatchBefore - bagMatchAfter);
+                if (sent === null && offerItems.length === 0) finish({ success: true, transferredZeny: amount, transferredItemsQty: offerItemsTotalQty, unverified: true });
+                else if ((sent !== null && sent > 0) || sentItems > 0) finish({ success: true, transferredZeny: Math.max(0, sent || 0), transferredItemsQty: sentItems });
+                else finish({ success: false, error: 'หน้าต่างเทรดปิดแต่เงิน/ไอเทมไม่ลด (เทรดไม่สำเร็จ)' });
+              }, 1200);
+              return;
+            }
+            if (!sameName(tr.partner, receiverCharName)) return;
+            opened = true;
+            if (!offerSent) {
+              offerSent = true;
+              setTimeout(() => { if (!finished) room.send('trade', { action: 'offer', items: offerItems, zeny: amount }); }, 350);
+              return;
+            }
+            const zenyMatched = tr.mine && tr.mine.zeny === amount;
+            const itemsMatched = offerItems.length === 0 || (tr.mine && Array.isArray(tr.mine.items) && tr.mine.items.length === offerItems.length);
+            if (!lockSent && zenyMatched && itemsMatched && !tr.mine.locked) {
+              lockSent = true;
+              setTimeout(() => { if (!finished) room.send('trade', { action: 'lock' }); }, 400);
+              return;
+            }
+            if (lockSent && !confirmSent && tr.mine && tr.mine.locked && tr.theirs && tr.theirs.locked && !tr.mine.confirmed) {
+              confirmSent = true;
+              setTimeout(() => { if (!finished) room.send('trade', { action: 'confirm' }); }, 400);
+            }
+          });
+          setTimeout(() => { if (!finished) room.send('trade', { action: 'request', name: receiverCharName }); }, 600);
+        });
+      };
+    }
+    return { success: true };
+  })()`;
+  return evalProfilePort(port, helperCode, 6000);
+}
+
+// ==========================================
 // CENTRALIZED ZENY CONSOLIDATION WORKFLOW
 // ==========================================
 let consolidationState = {
@@ -1368,6 +1843,9 @@ let consolidationState = {
   currentSender: null,
   completedSenders: [],
   totalTransferredZeny: 0,
+  totalTransferredItems: 0,
+  tradeItemsEnabled: false,
+  tradeItemsList: [],
   logs: [],
   startTime: 0,
   endTime: 0
@@ -1381,8 +1859,16 @@ function addConsolidationLog(text, level = 'info') {
   console.log(`[Consolidation] [${level.toUpperCase()}] ${text}`);
 }
 
-async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, keepZeny = 0) {
+async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, keepZeny = 0, tradeItemsOpts = null) {
   if (consolidationState.running) return;
+  const savedItemCfg = loadConsolidationItemSettings();
+  const tradeItemsEnabled = (tradeItemsOpts && typeof tradeItemsOpts.enabled === 'boolean')
+    ? tradeItemsOpts.enabled
+    : Boolean(savedItemCfg.tradeOnConsolidate);
+  const tradeItemsList = (tradeItemsOpts && Array.isArray(tradeItemsOpts.items) && tradeItemsOpts.items.length > 0)
+    ? sanitizeConsolidationItemsList(tradeItemsOpts.items)
+    : sanitizeConsolidationItemsList(savedItemCfg.items);
+
   consolidationAborted = false;
   consolidationState.running = true;
   consolidationState.status = 'running';
@@ -1390,11 +1876,15 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
   consolidationState.step = 'เตรียมพร้อมและหยุดบอททุกจอ...';
   consolidationState.completedSenders = [];
   consolidationState.totalTransferredZeny = 0;
+  consolidationState.totalTransferredItems = 0;
+  consolidationState.tradeItemsEnabled = tradeItemsEnabled;
+  consolidationState.tradeItemsList = tradeItemsList;
   consolidationState.logs = [];
   consolidationState.startTime = Date.now();
   consolidationState.endTime = 0;
 
-  addConsolidationLog(`🚀 เริ่มต้นระบบรวมเงินเข้าตัวหลัก (Receiver ID: ${receiverProfileId})`, 'info');
+  const itemModeMsg = tradeItemsEnabled ? ` + เบิกคลังและเทรดไอเทม [${tradeItemsList.join(', ')}]` : '';
+  addConsolidationLog(`🚀 เริ่มต้นระบบรวมเงินเข้าตัวหลัก (Receiver ID: ${receiverProfileId})${itemModeMsg}`, 'info');
 
   const allProfiles = loadProfiles();
   const receiverProfile = allProfiles.find(p => p.id === receiverProfileId);
@@ -1414,6 +1904,15 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
   };
 
   try {
+    // Ensure all involved clients have up-to-date stash/consolidation item helpers
+    await Promise.all([receiverProfile, ...senderProfiles].map(p =>
+      ensureClientConsolidationItemHelpers(p.debugPort, {
+        ...savedItemCfg,
+        tradeOnConsolidate: tradeItemsEnabled,
+        items: tradeItemsList
+      }).catch(() => {})
+    ));
+
     // -------------------------------------------------------------
     // STEP 0: งานสำคัญที่ทำค้างอยู่ (ขายของ / ฝากคลัง / ตีบวก / ซื้อของ / เปลี่ยนอาชีพ / Weight Scroll) ต้องเสร็จก่อน —
     // ตั้ง __consolidationPending (ห้ามเริ่มงานใหม่) แล้วรอได้ถึง 3 นาที; จอที่ยังไม่เสร็จข้ามไปรอบนี้ (ไม่ตัดงานกลางคัน)
@@ -1539,6 +2038,23 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       throw new Error(`ตัวรับเงิน (${receiverProfile.name}) ไปไม่ถึงเมืองหลวง: ${(recvHome && recvHome.result && recvHome.result.error) || 'ไม่ทราบสาเหตุ'}`);
     }
 
+    // If tradeItemsEnabled, have the Receiver also sell trash & deposit any current matching items to free bag space before receiving trades
+    if (tradeItemsEnabled) {
+      addConsolidationLog(`🧹 ตัวรับเงิน (${receiverProfile.name}): แวะขายขยะและเคลียร์น้ำหนักกระเป๋าเตรียมรับไอเทม...`, 'info');
+      await evalProfilePort(receiverProfile.debugPort, `window.runConsolidationQuickSellTrash ? window.runConsolidationQuickSellTrash(25000) : null`, 30000);
+      const recvInitDeposit = await evalProfilePort(receiverProfile.debugPort, `(async () => {
+        const list = ${JSON.stringify(tradeItemsList)};
+        const m = typeof window.getConsolidationMatchingBagItems === 'function' ? window.getConsolidationMatchingBagItems(list) : { totalQty: 0 };
+        if (m.totalQty > 0 && typeof window.depositConsolidationItemsToStorage === 'function') {
+          return await window.depositConsolidationItemsToStorage(list);
+        }
+        return { success: true, depositedQty: 0 };
+      })()`, 30000);
+      if (recvInitDeposit?.result?.depositedQty > 0) {
+        addConsolidationLog(`📥 ตัวรับเงิน (${receiverProfile.name}) เก็บไอเทมเดิมในกระเป๋าเข้าคลังแล้ว ${recvInitDeposit.result.depositedQty} ชิ้น`, 'info');
+      }
+    }
+
     // -------------------------------------------------------------
     // STEP 3: ตัวรับเงินหา Channel ที่คนน้อยสุด และย้ายไป Channel นั้น
     // -------------------------------------------------------------
@@ -1582,12 +2098,12 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     addConsolidationLog(`📍 ตัวรับเงินอยู่ที่ CH ${targetChannel}`, 'info');
 
     // -------------------------------------------------------------
-    // STEP 4: จอรองทยอยย้าย Channel ตามมาทีละจอ และเรียงคิวเทรดเงินให้ตัวหลัก
+    // STEP 4: จอรองทยอยย้าย Channel ตามมาทีละจอ และเรียงคิวเทรดเงิน/ไอเทมให้ตัวหลัก
     // -------------------------------------------------------------
     if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
     consolidationState.stepIndex = 4;
-    consolidationState.step = `จอรองทยอยวาร์ปมา CH ${targetChannel} และเรียงคิวเทรดเงิน...`;
-    addConsolidationLog(`🤝 ขั้นตอนที่ 4/5: เริ่มเรียงคิวจอรอง (${senderProfiles.length} จอ) เทรดเงินให้ตัวหลัก...`, 'info');
+    consolidationState.step = `จอรองทยอยวาร์ปมา CH ${targetChannel} และเรียงคิวเทรด${tradeItemsEnabled ? 'เงิน + ไอเทม' : 'เงิน'}...`;
+    addConsolidationLog(`🤝 ขั้นตอนที่ 4/5: เริ่มเรียงคิวจอรอง (${senderProfiles.length} จอ) เทรด${tradeItemsEnabled ? 'เงินและไอเทม (' + tradeItemsList.join(', ') + ')' : 'เงิน'}ให้ตัวหลัก...`, 'info');
 
     const receiverLive = await queryClientState(receiverProfile.debugPort);
     const receiverCharName = receiverLive?.charName || receiverProfile.name;
@@ -1602,7 +2118,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       const live = await queryClientState(s.debugPort);
       const charName = live?.charName || s.name;
       const zeny = (live && typeof live.zeny === 'number') ? live.zeny : 0;
-      if (Math.max(0, zeny - keepZeny) <= 0) {
+      if (!tradeItemsEnabled && Math.max(0, zeny - keepZeny) <= 0) {
         addConsolidationLog(`⏭️ จอ ${s.name} (${charName}) มีเงิน ${zeny.toLocaleString()} z (ไม่พอโอนหรือติดเก็บสำรอง) -> ข้าม`, 'warning');
         consolidationState.completedSenders.push(s.id);
         continue;
@@ -1629,6 +2145,42 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       if (!(home && home.result && home.result.success)) return { ok: false, homeChannel: null, error: `ยังไม่ถึงเมืองหลวง: ${(home && home.result && home.result.error) || 'ไม่ทราบสาเหตุ'}` };
       const fromCh = await evalProfilePort(s.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 5000);
       const homeChannel = (fromCh && typeof fromCh.result === 'number') ? fromCh.result : null;
+
+      let bagMatchingQty = 0;
+      let bagMatchingWeight = 0;
+      if (tradeItemsEnabled) {
+        // 1. Sell trash first to free up bag weight before opening storage
+        addConsolidationLog(`🛒 จอ ${s.name}: แวะขายขยะเคลียร์น้ำหนักกระเป๋าก่อนเปิดคลัง...`, 'info');
+        const sellRes = await evalProfilePort(s.debugPort, `window.runConsolidationQuickSellTrash ? window.runConsolidationQuickSellTrash(28000) : { success: false }`, 32000);
+        if (sellRes?.result?.success) {
+          addConsolidationLog(`🧹 จอ ${s.name}: เคลียร์กระเป๋าเสร็จแล้ว (น้ำหนัก ${sellRes.result.weight}/${sellRes.result.weightLimit})`, 'info');
+        }
+        // 2. Open storage and withdraw matching items up to safe bag weight
+        addConsolidationLog(`📦 จอ ${s.name}: เปิดคลังเบิกไอเทม (${tradeItemsList.join(', ')})...`, 'info');
+        const wdRes = await evalProfilePort(
+          s.debugPort,
+          `window.withdrawConsolidationItemsFromStorage ? window.withdrawConsolidationItemsFromStorage(${JSON.stringify(tradeItemsList)}) : { success: false, error: 'No withdraw helper' }`,
+          40000
+        );
+        const wd = wdRes?.result || {};
+        bagMatchingQty = Number(wd.bagMatchingQty) || 0;
+        bagMatchingWeight = Number(wd.bagMatchingWeight) || 0;
+        if (wd.withdrawnQty > 0) {
+          addConsolidationLog(`📦 จอ ${s.name}: เบิกไอเทมจากคลังสำเร็จ +${wd.withdrawnQty} ชิ้น (รวมในกระเป๋า ${bagMatchingQty} ชิ้น, น้ำหนัก ${wd.weight}/${wd.weightLimit})`, 'success');
+        } else if (bagMatchingQty > 0) {
+          addConsolidationLog(`🎒 จอ ${s.name}: มีไอเทมในกระเป๋าพร้อมเทรด ${bagMatchingQty} ชิ้น (ไม่มีเพิ่มในคลัง)`, 'info');
+        } else {
+          addConsolidationLog(`ℹ️ จอ ${s.name}: ไม่มีไอเทม (${tradeItemsList.join(', ')}) ในคลังหรือในกระเป๋า`, 'info');
+        }
+
+        // Check if sender has neither Zeny nor items to trade -> skip channel switch!
+        const sLiveNow = await queryClientState(s.debugPort);
+        const zenyNow = (sLiveNow && typeof sLiveNow.zeny === 'number') ? sLiveNow.zeny : 0;
+        if (Math.max(0, zenyNow - keepZeny) <= 0 && bagMatchingQty <= 0) {
+          return { ok: true, nothingToTrade: true, homeChannel, bagMatchingQty: 0, bagMatchingWeight: 0 };
+        }
+      }
+
       addConsolidationLog(`🔄 จอ ${s.name} กำลังย้ายไป CH ${targetChannel} (รอคูลดาวน์/ที่ว่างให้เอง)...`, 'info');
       const mv = await evalProfilePort(s.debugPort, `window.moveToChannel ? window.moveToChannel(${targetChannel}, 120000) : (window.switchChannel ? window.switchChannel(${targetChannel}) : null)`, 125000);
       const there = mv && mv.result && mv.result.success;
@@ -1674,22 +2226,60 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         return { success: false, error: seen ? 'เดินไปไม่ถึงตัวรับเงิน' : 'ไม่เห็นตัวรับเงินในแมพ/channel นี้' };
       })()`, 50000);
       if (!(walk && walk.result && walk.result.success)) addConsolidationLog(`⚠️ จอ ${s.name}: ${(walk && walk.result && walk.result.error) || 'เดินไปหาตัวรับเงินไม่สำเร็จ'} — ลองขอเทรดเลย`, 'warning');
-      return { ok: true, homeChannel };
+      return { ok: true, homeChannel, bagMatchingQty, bagMatchingWeight };
     };
     // out of the receiver's channel (back where it came from, or the emptiest other one), then START BOT
     const releaseSender = async (s, homeChannel) => {
-      let away = homeChannel && homeChannel !== targetChannel ? homeChannel : null;
-      if (!away) {
-        const best = await evalProfilePort(s.debugPort, `(async () => { const r = await window.getChannelsList(3500); if (!r.success) return null; const cap = r.data.hardCap || 40; const c = r.data.channels.filter(x => x.channel !== ${targetChannel} && x.players < cap).sort((a, b) => a.players - b.players)[0]; return c ? c.channel : null; })()`, 8000);
-        away = best && typeof best.result === 'number' ? best.result : null;
-      }
-      if (away) {
-        addConsolidationLog(`↪️ จอ ${s.name} ออกจาก CH ${targetChannel} ไป CH ${away} เพื่อเปิดที่ให้จอถัดไป`, 'info');
-        await evalProfilePort(s.debugPort, `window.moveToChannel ? window.moveToChannel(${away}, 60000) : null`, 65000);
+      const curChRes = await evalProfilePort(s.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 4000);
+      const curCh = (curChRes && typeof curChRes.result === 'number') ? curChRes.result : null;
+      if (curCh === targetChannel) {
+        let away = homeChannel && homeChannel !== targetChannel ? homeChannel : null;
+        if (!away) {
+          const best = await evalProfilePort(s.debugPort, `(async () => { const r = await window.getChannelsList(3500); if (!r.success) return null; const cap = r.data.hardCap || 40; const c = r.data.channels.filter(x => x.channel !== ${targetChannel} && x.players < cap).sort((a, b) => a.players - b.players)[0]; return c ? c.channel : null; })()`, 8000);
+          away = best && typeof best.result === 'number' ? best.result : null;
+        }
+        if (away) {
+          addConsolidationLog(`↪️ จอ ${s.name} ออกจาก CH ${targetChannel} ไป CH ${away} เพื่อเปิดที่ให้จอถัดไป`, 'info');
+          await evalProfilePort(s.debugPort, `window.moveToChannel ? window.moveToChannel(${away}, 60000) : null`, 65000);
+        }
       }
       await evalProfilePort(s.debugPort, startBotJs);
       restarted.add(s.id);
       addConsolidationLog(`▶️ จอ ${s.name} เริ่มบอทกลับไปฟาร์มแล้ว`, 'success');
+    };
+
+    // Helper: check Receiver bag weight and deposit matching items to Receiver's storage if needed
+    const ensureReceiverWeightReady = async (incomingWeight = 0) => {
+      if (!tradeItemsEnabled) return Infinity;
+      const rStat = await evalProfilePort(receiverProfile.debugPort, `(() => {
+        const live = (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData()) || {};
+        const pos = (typeof window.getPlayerCoords === 'function' && window.getPlayerCoords()) || null;
+        const m = (typeof window.getConsolidationMatchingBagItems === 'function')
+          ? window.getConsolidationMatchingBagItems(${JSON.stringify(tradeItemsList)})
+          : { totalQty: 0, totalWeight: 0 };
+        return {
+          weight: Number(live.weight) || 0,
+          weightLimit: Number(live.weightLimit) || 2000,
+          matchingQty: m.totalQty,
+          pos
+        };
+      })()`, 5000);
+      const st = rStat?.result || { weight: 0, weightLimit: 2000, matchingQty: 0, pos: null };
+      const avail = Math.max(0, st.weightLimit - st.weight - 25);
+      const heavyRatio = st.weightLimit > 0 ? (st.weight / st.weightLimit) : 0;
+      if (st.matchingQty > 0 && (heavyRatio >= 0.65 || incomingWeight > avail)) {
+        addConsolidationLog(`📥 กระเป๋าตัวรับเงิน (${receiverCharName}) เริ่มหนัก (${st.weight}/${st.weightLimit}) -> เดินไปฝากไอเทมเข้าคลังก่อนรับเทรด...`, 'info');
+        const dep = await evalProfilePort(
+          receiverProfile.debugPort,
+          `window.depositConsolidationItemsToStorage ? window.depositConsolidationItemsToStorage(${JSON.stringify(tradeItemsList)}, ${JSON.stringify(st.pos)}) : { success: false }`,
+          35000
+        );
+        if (dep?.result?.success) {
+          addConsolidationLog(`✅ ตัวรับเงินฝากไอเทมเข้าคลังแล้ว ${dep.result.depositedQty} ชิ้น (น้ำหนักเหลือ ${dep.result.weight}/${dep.result.weightLimit})`, 'success');
+          return Math.max(0, (Number(dep.result.weightLimit) || 2000) - (Number(dep.result.weight) || 0) - 25);
+        }
+      }
+      return avail;
     };
 
     const prep = new Map();
@@ -1708,18 +2298,46 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       const senderCharName = senderLive?.charName || sender.name;
       const curZeny = (senderLive && typeof senderLive.zeny === 'number') ? senderLive.zeny : 0;
       const zenyToTransfer = Math.max(0, curZeny - keepZeny);
-      if (!ready || !ready.ok || zenyToTransfer <= 0) {
-        addConsolidationLog(`⚠️ จอ ${sender.name}: ${(ready && ready.error) || (zenyToTransfer <= 0 ? 'ไม่มีเงินให้โอน' : 'เตรียมตัวไม่สำเร็จ')} — ข้าม`, 'error');
+
+      if (ready && ready.nothingToTrade) {
+        addConsolidationLog(`⏭️ จอ ${sender.name} (${senderCharName}): ไม่มีเงินเกินสำรองและไม่มีไอเทมในคลัง/กระเป๋า -> ข้ามและกลับไปฟาร์ม`, 'warning');
+        consolidationState.completedSenders.push(sender.id);
+        await releaseSender(sender, ready.homeChannel);
+        startPrep(queue[i + SENDER_SLOTS]);
+        continue;
+      }
+
+      // Re-verify sender's matching items in bag if tradeItemsEnabled
+      let senderItemsQty = Number(ready && ready.bagMatchingQty) || 0;
+      let senderItemsWeight = Number(ready && ready.bagMatchingWeight) || 0;
+      if (tradeItemsEnabled) {
+        const bagCheck = await evalProfilePort(
+          sender.debugPort,
+          `window.getConsolidationMatchingBagItems ? window.getConsolidationMatchingBagItems(${JSON.stringify(tradeItemsList)}) : { totalQty: 0, totalWeight: 0 }`,
+          4000
+        );
+        if (bagCheck?.result) {
+          senderItemsQty = Number(bagCheck.result.totalQty) || 0;
+          senderItemsWeight = Number(bagCheck.result.totalWeight) || 0;
+        }
+      }
+
+      if (!ready || !ready.ok || (zenyToTransfer <= 0 && senderItemsQty <= 0)) {
+        addConsolidationLog(`⚠️ จอ ${sender.name}: ${(ready && ready.error) || 'ไม่มีเงินหรือไอเทมให้โอน'} — ข้าม`, 'error');
         await releaseSender(sender, ready && ready.homeChannel);
         startPrep(queue[i + SENDER_SLOTS]);
         continue;
       }
 
+      // Ensure Receiver has enough free weight before initiating trade
+      const receiverAvailWeight = tradeItemsEnabled && senderItemsQty > 0
+        ? await ensureReceiverWeightReady(senderItemsWeight)
+        : null;
+
       // B + C: the receiver waits for exactly this sender (replaces the previous watcher), then the sender
-      // requests ONE trade, offers, locks and confirms. Done = the sender's zeny really went down. One more
-      // try only when nothing moved (zeny unchanged), never while a trade may still be open.
-      let attempt = 0, moved = 0, lastErr = '';
-      while (attempt < 2 && moved <= 0) {
+      // requests ONE trade, offers, locks and confirms. Done = the sender's zeny or items really went down.
+      let attempt = 0, movedZeny = 0, movedItems = 0, lastErr = '';
+      while (attempt < 2 && movedZeny <= 0 && movedItems <= 0) {
         attempt++;
         if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
         addConsolidationLog(`👑 ตัวรับเงิน (${receiverCharName}) รอรับคำขอเทรดจาก '${senderCharName}'${attempt > 1 ? ' (ลองใหม่ครั้งที่ 2)' : ''}...`, 'info');
@@ -1728,35 +2346,57 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         `);
         await new Promise(r => setTimeout(r, 1200));
 
-        addConsolidationLog(`📤 จอ ${sender.name} (${senderCharName}) ส่งคำขอเทรดเงิน ${zenyToTransfer.toLocaleString()} z...`, 'info');
+        const itemOfferNote = (tradeItemsEnabled && senderItemsQty > 0) ? ` + ไอเทม ${senderItemsQty} ชิ้น` : '';
+        addConsolidationLog(`📤 จอ ${sender.name} (${senderCharName}) ส่งคำขอเทรดเงิน ${zenyToTransfer.toLocaleString()} z${itemOfferNote}...`, 'info');
         const tradeRes = await evalProfilePort(sender.debugPort, `
           (async () => {
             if (typeof window.executeSenderTrade === 'function') {
-              return await window.executeSenderTrade(${JSON.stringify(receiverCharName)}, ${zenyToTransfer}, 35000);
+              return await window.executeSenderTrade(
+                ${JSON.stringify(receiverCharName)},
+                ${zenyToTransfer},
+                38000,
+                ${tradeItemsEnabled ? JSON.stringify(tradeItemsList) : 'null'},
+                ${typeof receiverAvailWeight === 'number' && Number.isFinite(receiverAvailWeight) ? receiverAvailWeight : 'null'}
+              );
             }
             return { success: false, error: 'No executeSenderTrade function' };
           })()
-        `, 42000);
+        `, 44000);
         await new Promise(r => setTimeout(r, 1500));
         const after = await queryClientState(sender.debugPort);
         const afterZeny = (after && typeof after.zeny === 'number') ? after.zeny : null;
-        moved = afterZeny === null ? 0 : curZeny - afterZeny;
+        movedZeny = afterZeny === null ? 0 : Math.max(0, curZeny - afterZeny);
+        movedItems = Number(tradeRes?.result?.transferredItemsQty) || 0;
+        if (tradeItemsEnabled && senderItemsQty > 0 && movedItems === 0) {
+          const afterBag = await evalProfilePort(
+            sender.debugPort,
+            `window.getConsolidationMatchingBagItems ? window.getConsolidationMatchingBagItems(${JSON.stringify(tradeItemsList)}) : { totalQty: 0 }`,
+            4000
+          );
+          if (afterBag?.result && typeof afterBag.result.totalQty === 'number') {
+            movedItems = Math.max(0, senderItemsQty - afterBag.result.totalQty);
+          }
+        }
         lastErr = tradeRes?.result?.error || tradeRes?.error || '';
-        if (moved > 0) break;
-        if (tradeRes?.result?.success && afterZeny === null) { moved = zenyToTransfer; break; }   // can't read zeny: trust the game's answer
+        if (movedZeny > 0 || movedItems > 0) break;
+        if (tradeRes?.result?.success && afterZeny === null) { movedZeny = zenyToTransfer; break; }
         if (afterZeny === null || /No executeSenderTrade/.test(lastErr)) break;
         if (attempt < 2) {
-          addConsolidationLog(`⚠️ จอ ${sender.name} เทรดไม่สำเร็จ (${lastErr || 'เงินไม่ลด'}) — เงินยังอยู่ครบ จะลองใหม่อีก 1 ครั้ง`, 'warning');
+          addConsolidationLog(`⚠️ จอ ${sender.name} เทรดไม่สำเร็จ (${lastErr || 'เงิน/ไอเทมไม่ลด'}) — จะลองใหม่อีก 1 ครั้ง`, 'warning');
           await new Promise(r => setTimeout(r, 4000));
         }
       }
 
-      if (moved > 0) {
-        consolidationState.totalTransferredZeny += moved;
+      if (movedZeny > 0 || movedItems > 0) {
+        consolidationState.totalTransferredZeny += movedZeny;
+        consolidationState.totalTransferredItems += movedItems;
         consolidationState.completedSenders.push(sender.id);
-        addConsolidationLog(`✅ โอนเงินจาก [${senderCharName}] ให้ [${receiverCharName}] จำนวน ${moved.toLocaleString()} z สำเร็จ (ตรวจจากเงินที่ลดจริง)`, 'success');
+        const parts = [];
+        if (movedZeny > 0) parts.push(`เงิน ${movedZeny.toLocaleString()} z`);
+        if (movedItems > 0) parts.push(`ไอเทม ${movedItems.toLocaleString()} ชิ้น`);
+        addConsolidationLog(`✅ โอนจาก [${senderCharName}] ให้ [${receiverCharName}] สำเร็จ: ${parts.join(' + ')}`, 'success');
       } else {
-        addConsolidationLog(`⚠️ จอ ${sender.name} (${senderCharName}) เทรดไม่สำเร็จ: ${lastErr || 'เงินไม่ลด'} — ข้ามไปจอถัดไป`, 'error');
+        addConsolidationLog(`⚠️ จอ ${sender.name} (${senderCharName}) เทรดไม่สำเร็จ: ${lastErr || 'เงิน/ไอเทมไม่ลด'} — ข้ามไปจอถัดไป`, 'error');
       }
       evalProfilePort(receiverProfile.debugPort, `window.stopReceiverTradeWatcher ? window.stopReceiverTradeWatcher() : null`, 3000);
       // leave the channel free for the next one, back to farming; the sender after next starts moving in
@@ -1765,12 +2405,37 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       await new Promise(r => setTimeout(r, 1000));
     }
 
+    // If tradeItemsEnabled, have the Receiver deposit all collected items into its storage at the end of Step 4
+    if (tradeItemsEnabled) {
+      const endCheck = await evalProfilePort(
+        receiverProfile.debugPort,
+        `window.getConsolidationMatchingBagItems ? window.getConsolidationMatchingBagItems(${JSON.stringify(tradeItemsList)}) : { totalQty: 0 }`,
+        5000
+      );
+      const endQty = Number(endCheck?.result?.totalQty) || 0;
+      if (endQty > 0) {
+        consolidationState.step = `ตัวรับเงิน (${receiverCharName}) กำลังนำไอเทมที่รับมา (${endQty} ชิ้น) ไปฝากเข้าคลัง...`;
+        addConsolidationLog(`📦 ตัวรับเงิน (${receiverCharName}) กำลังนำไอเทมที่รับมาทั้งหมด (${endQty} ชิ้น) ไปฝากเข้าคลัง...`, 'info');
+        const endDep = await evalProfilePort(
+          receiverProfile.debugPort,
+          `window.depositConsolidationItemsToStorage ? window.depositConsolidationItemsToStorage(${JSON.stringify(tradeItemsList)}) : { success: false }`,
+          35000
+        );
+        if (endDep?.result?.success) {
+          addConsolidationLog(`✅ ตัวรับเงิน (${receiverCharName}) ฝากไอเทมเข้าคลังเรียบร้อย (${endDep.result.depositedQty} ชิ้น)`, 'success');
+        }
+      }
+    }
+
     // -------------------------------------------------------------
     // STEP 5: เสร็จสิ้นการโอนเงิน และสั่งเริ่มบอท (START BOT) ทุกจอกลับไปฟาร์ม
     // -------------------------------------------------------------
     consolidationState.stepIndex = 5;
     consolidationState.step = 'เสร็จสิ้นการรวมเงิน! กำลังเปิดบอทให้ทุกจอเดินทางกลับไปฟาร์ม...';
-    addConsolidationLog(`🎉 รวมเงินเสร็จสิ้นสมบูรณ์! ยอดเงินรวมที่โอนให้ ${receiverCharName}: ${consolidationState.totalTransferredZeny.toLocaleString()} z`, 'success');
+    const summaryItemsText = consolidationState.totalTransferredItems > 0
+      ? ` | ไอเทมรวม: ${consolidationState.totalTransferredItems.toLocaleString()} ชิ้น`
+      : '';
+    addConsolidationLog(`🎉 รวมเงินเสร็จสิ้นสมบูรณ์! ยอดเงินรวมที่โอนให้ ${receiverCharName}: ${consolidationState.totalTransferredZeny.toLocaleString()} z${summaryItemsText}`, 'success');
     addConsolidationLog('🚀 ขั้นตอนที่ 5/5: เริ่มสั่งเปิดบอท (START BOT) ทุกจอเพื่อเดินทางกลับไปฟาร์ม...', 'info');
 
     for (const p of involvedProfiles.filter(x => !restarted.has(x.id))) {
@@ -4472,6 +5137,33 @@ public class PmFocus {
     return;
   }
 
+  // GET / POST /api/consolidation/item-settings
+  if (pathname === "/api/consolidation/item-settings") {
+    if (req.method === "GET") {
+      return sendJSON({ success: true, settings: loadConsolidationItemSettings() });
+    }
+    if (req.method === "POST") {
+      let body = "";
+      req.on("data", chunk => body += chunk);
+      req.on("end", async () => {
+        try {
+          const payload = JSON.parse(body || "{}");
+          const saved = saveConsolidationItemSettings(payload);
+          const syncRes = await syncStashTradeConfigToAllClients(saved);
+          return sendJSON({
+            success: true,
+            settings: saved,
+            syncedClients: syncRes.syncedCount,
+            totalChecked: syncRes.totalChecked
+          });
+        } catch (e) {
+          return sendJSON({ success: false, error: e.message }, 400);
+        }
+      });
+      return;
+    }
+  }
+
   // POST /api/consolidation/start
   if (req.method === "POST" && pathname === "/api/consolidation/start") {
     let body = "";
@@ -4491,6 +5183,17 @@ public class PmFocus {
         }
         if (consolidationState.running) {
           return sendJSON({ success: false, error: "ระบบกำลังดำเนินการรวมเงินอยู่แล้วในขณะนี้" }, 409);
+        }
+
+        // Persist item trade preferences if supplied
+        let itemCfg = loadConsolidationItemSettings();
+        if (typeof payload.tradeOnConsolidate === "boolean" || Array.isArray(payload.items) || typeof payload.storeOnlyEnabled === "boolean") {
+          itemCfg = saveConsolidationItemSettings({
+            storeOnlyEnabled: typeof payload.storeOnlyEnabled === "boolean" ? payload.storeOnlyEnabled : itemCfg.storeOnlyEnabled,
+            tradeOnConsolidate: typeof payload.tradeOnConsolidate === "boolean" ? payload.tradeOnConsolidate : itemCfg.tradeOnConsolidate,
+            items: payload.items !== undefined ? payload.items : itemCfg.items
+          });
+          syncStashTradeConfigToAllClients(itemCfg).catch(() => {});
         }
 
         // Verify that Receiver and Senders have active Premium (required for in-game Trade)
@@ -4521,7 +5224,10 @@ public class PmFocus {
         }
 
         // Run in background
-        runConsolidationWorkflow(receiverId, validSenders, keepZeny);
+        runConsolidationWorkflow(receiverId, validSenders, keepZeny, {
+          enabled: Boolean(itemCfg.tradeOnConsolidate),
+          items: itemCfg.items
+        });
         return sendJSON({ success: true, message: "เริ่มต้นกระบวนการรวมเงินเรียบร้อยแล้ว" });
       } catch(e) {
         return sendJSON({ success: false, error: e.message }, 400);
@@ -5355,6 +6061,10 @@ server.listen(PORT, "127.0.0.1", () => {
   planSync.start();
   if(!TEST_INSTANCE)authSync.start();
   browserMode.start();
+  if (!TEST_INSTANCE) {
+    setTimeout(() => syncStashTradeConfigToAllClients().catch(() => {}), 3500);
+    setInterval(() => syncStashTradeConfigToAllClients().catch(() => {}), 25000);
+  }
   console.log(`========================================================`);
   console.log(`🚀 [Pmhee Ma weaw] Running on http://127.0.0.1:${PORT}`);
   console.log(`📁 Sessions directory: ${SESSIONS_DIR}`);

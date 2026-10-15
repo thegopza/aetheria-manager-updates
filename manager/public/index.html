@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=44000">
+  <link rel="stylesheet" href="style.css?v=44100">
   <link rel="stylesheet" href="inventory_market.css?v=4360">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=42900">
@@ -240,6 +240,62 @@
                   <span class="icon">⏹️</span> หยุดการรวมเงิน
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- STASH-ONLY & CONSOLIDATION ITEM TRADE BAR (Enchant Rune & Selected Items) -->
+        <div class="zeny-stash-trade-card" id="zeny-stash-trade-card">
+          <div class="zst-header-row">
+            <div class="zst-title-wrap">
+              <span class="zst-badge-icon">💎</span>
+              <div>
+                <div class="zst-title">ระบบเก็บหิน Enchant Rune เข้าคลังอย่างเดียว & เบิกมารวมตอนเทรด</div>
+                <div class="zst-subtitle">ป้องกันบอทนำหินรูนไปขายตลาดกลาง/NPC เด็ดขาด และสั่งให้ทุกตัวแวะขายขยะ + เบิกหินจากคลังมาเทรดรวมให้ตัวรับพร้อมเงินในรอบเดียว</div>
+              </div>
+            </div>
+            <span class="zst-sync-pill" id="zst-sync-status-pill">⚡ ซิงค์ทุกจออัตโนมัติ</span>
+          </div>
+
+          <div class="zst-toggles-grid">
+            <!-- Toggle 1: Store Only (Never sell to market or NPC) -->
+            <label class="zst-toggle-box" id="zst-box-store-only" for="cb-stash-only-enabled">
+              <input type="checkbox" id="cb-stash-only-enabled" class="zst-checkbox">
+              <div class="zst-toggle-content">
+                <div class="zst-toggle-top">
+                  <span class="zst-toggle-name">🔒 เก็บเข้าคลังอย่างเดียว (ห้ามขายตลาดกลาง / NPC เด็ดขาด)</span>
+                  <span class="zst-state-badge" id="badge-stash-only-state">ปิดอยู่</span>
+                </div>
+                <div class="zst-toggle-desc">
+                  เมื่อเปิด: แม้ไอเทมที่เลือกจะมีอยู่ใน Whitelist หรือตั้งกฎขายตลาดกลางไว้ บอทจะ<b>ไม่ขายเด็ดขาด</b> และจะนำฝากเข้าคลังอัตโนมัติทุกครั้งที่แวะเมือง
+                </div>
+              </div>
+            </label>
+
+            <!-- Toggle 2: Withdraw from Storage & Trade on Consolidate -->
+            <label class="zst-toggle-box" id="zst-box-trade-items" for="cb-trade-items-consolidate">
+              <input type="checkbox" id="cb-trade-items-consolidate" class="zst-checkbox">
+              <div class="zst-toggle-content">
+                <div class="zst-toggle-top">
+                  <span class="zst-toggle-name">📦 เบิกหินจากคลังมาเทรดรวมด้วยตอนรวมเงิน</span>
+                  <span class="zst-state-badge" id="badge-trade-items-state">โอนเฉพาะเงิน</span>
+                </div>
+                <div class="zst-toggle-desc">
+                  เมื่อติ๊กก่อนกดรวมเงิน: ทุกจอจะ<b>แวะขายขยะเคลียร์กระเป๋าก่อน</b> → เปิดคลังเบิกไอเทมที่เลือกตามน้ำหนักที่รับไหว → เทรดรวมให้ตัวรับพร้อมเงินทีเดียว (ตัวรับฝากเข้าคลังตัวเองอัตโนมัติ)
+                </div>
+              </div>
+            </label>
+          </div>
+
+          <!-- Item Selector Chips & Custom Input -->
+          <div class="zst-items-bar">
+            <div class="zst-items-label">🎯 ไอเทมที่ต้องการเก็บเข้าคลัง / เบิกมาเทรดรวม (คลิกเลือกได้หลายรายการ):</div>
+            <div class="zst-chips-wrap" id="zst-items-chips-container">
+              <!-- Populated by JS -->
+            </div>
+            <div class="zst-custom-add-wrap">
+              <input type="text" id="zst-custom-item-input" class="zst-custom-input" placeholder="พิมพ์ชื่อไอเทมอื่นเพิ่มเติม..." autocomplete="off">
+              <button type="button" id="btn-zst-add-custom-item" class="btn btn-secondary btn-sm">+ เพิ่มรายการ</button>
             </div>
           </div>
         </div>
@@ -1054,7 +1110,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4381"></script>
-  <script src="app.js?v=44010"></script>
+  <script src="app.js?v=44100"></script>
   <script src="patcher_module.js?v=41744"></script>
   <script src="builder_module.js?v=44009"></script>
   <script src="gear_builder.js?v=42900"></script>

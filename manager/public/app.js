@@ -2931,6 +2931,8 @@ function initZenyConsolidationEvents() {
   const btnStopConsolidation = document.getElementById("btn-stop-consolidation");
   const progressSection = document.getElementById("zeny-progress-section");
 
+  initConsolidationItemTradeUI();
+
   if (btnStartConsolidation) {
     btnStartConsolidation.onclick = async () => {
       const recProfile = currentProfiles.find(p => p.id === selectedReceiverProfileId);
@@ -2950,7 +2952,14 @@ function initZenyConsolidationEvents() {
 
       const recName = recProfile?.liveState?.charName || recProfile?.name || selectedReceiverProfileId;
       const keepZeny = getConsolidationKeepZeny();
-      if (!confirm(`คุณต้องการเริ่มต้นรวมเงินจาก ${senderList.length} จอ เข้าตัวหลัก [${recName}] ใช่หรือไม่?\n\n${keepZeny > 0 ? `💰 แต่ละจอจะเหลือเงินติดตัวไว้ ${keepZeny.toLocaleString()} z\n` : '💰 โอนเงินทั้งหมดของแต่ละจอ\n'}(ทุกจอจะหยุดบอท วาร์ปกลับเมืองหลวง และเรียงคิวเทรดเงิน)`)) {
+      const tradeItemsOn = Boolean(consolidationItemSettings.tradeOnConsolidate);
+      const tradeItemsNames = Array.isArray(consolidationItemSettings.items) && consolidationItemSettings.items.length > 0
+        ? consolidationItemSettings.items
+        : ["Enchant Rune"];
+      const itemConfirmNote = tradeItemsOn
+        ? `📦 เบิกไอเทมจากคลังมาเทรดรวมด้วย: ${tradeItemsNames.join(", ")}\n   (ทุกจอจะแวะขายขยะเคลียร์น้ำหนัก → เบิกหินจากคลัง → เทรดพร้อมเงิน และตัวรับจะฝากเข้าคลังอัตโนมัติ)\n`
+        : "";
+      if (!confirm(`คุณต้องการเริ่มต้นรวมเงินจาก ${senderList.length} จอ เข้าตัวหลัก [${recName}] ใช่หรือไม่?\n\n${keepZeny > 0 ? `💰 แต่ละจอจะเหลือเงินติดตัวไว้ ${keepZeny.toLocaleString()} z\n` : '💰 โอนเงินทั้งหมดของแต่ละจอ\n'}${itemConfirmNote}(ทุกจอจะหยุดบอท วาร์ปกลับเมืองหลวง และเรียงคิวเทรด)`)) {
         return;
       }
 
@@ -2971,7 +2980,10 @@ function initZenyConsolidationEvents() {
           body: JSON.stringify({
             receiverProfileId: selectedReceiverProfileId,
             senderProfileIds: senderList,
-            keepZeny
+            keepZeny,
+            storeOnlyEnabled: Boolean(consolidationItemSettings.storeOnlyEnabled),
+            tradeOnConsolidate: tradeItemsOn,
+            items: tradeItemsNames
           })
         });
         const text = await res.text();
@@ -2986,7 +2998,7 @@ function initZenyConsolidationEvents() {
           if (progressSection) progressSection.style.display = "block";
           btnStartConsolidation.style.display = "none";
           if (btnStopConsolidation) btnStopConsolidation.style.display = "inline-flex";
-          showToast(`🚀 เริ่มรวมเงินจาก ${senderList.length} จอ เข้า [${recName}] แล้ว`, "info");
+          showToast(`🚀 เริ่มรวมเงิน${tradeItemsOn ? ' + ไอเทม' : ''}จาก ${senderList.length} จอ เข้า [${recName}] แล้ว`, "info");
           startConsolidationPolling();
           updateZenyConsolidationView();
         } else {
@@ -3015,6 +3027,202 @@ function initZenyConsolidationEvents() {
       }
     };
   }
+}
+
+// ==========================================
+// STASH-ONLY & CONSOLIDATION ITEM TRADE UI
+// ==========================================
+const PRESET_CONSOLIDATION_ITEMS = [
+  { name: "Enchant Rune", icon: "✨" },
+  { name: "Accessory Enchant Rune", icon: "💍" },
+  { name: "Rough Elunium", icon: "🪨" },
+  { name: "Elunium", icon: "🛡️" },
+  { name: "Oridecon", icon: "⚔️" },
+  { name: "Phracon", icon: "🔩" },
+  { name: "Emveretarcon", icon: "🔶" }
+];
+
+let consolidationItemSettings = {
+  storeOnlyEnabled: false,
+  tradeOnConsolidate: false,
+  items: ["Enchant Rune"]
+};
+
+function renderConsolidationItemTradeUI() {
+  const cbStoreOnly = document.getElementById("cb-stash-only-enabled");
+  const cbTradeItems = document.getElementById("cb-trade-items-consolidate");
+  const boxStoreOnly = document.getElementById("zst-box-store-only");
+  const boxTradeItems = document.getElementById("zst-box-trade-items");
+  const badgeStoreOnly = document.getElementById("badge-stash-only-state");
+  const badgeTradeItems = document.getElementById("badge-trade-items-state");
+  const chipsContainer = document.getElementById("zst-items-chips-container");
+
+  const storeOn = Boolean(consolidationItemSettings.storeOnlyEnabled);
+  const tradeOn = Boolean(consolidationItemSettings.tradeOnConsolidate);
+  const selectedList = Array.isArray(consolidationItemSettings.items) && consolidationItemSettings.items.length > 0
+    ? consolidationItemSettings.items
+    : ["Enchant Rune"];
+  const selectedLower = new Set(selectedList.map(x => String(x || "").trim().toLowerCase()));
+
+  if (cbStoreOnly) cbStoreOnly.checked = storeOn;
+  if (cbTradeItems) cbTradeItems.checked = tradeOn;
+  if (boxStoreOnly) boxStoreOnly.classList.toggle("is-active-emerald", storeOn);
+  if (boxTradeItems) boxTradeItems.classList.toggle("is-active-purple", tradeOn);
+
+  if (badgeStoreOnly) {
+    badgeStoreOnly.textContent = storeOn ? "🟢 เปิดเก็บคลังอย่างเดียว" : "ปิดอยู่";
+    badgeStoreOnly.classList.toggle("on-emerald", storeOn);
+  }
+  if (badgeTradeItems) {
+    badgeTradeItems.textContent = tradeOn ? "🟣 เบิกคลังมาเทรดด้วย" : "โอนเฉพาะเงิน";
+    badgeTradeItems.classList.toggle("on-purple", tradeOn);
+  }
+
+  if (chipsContainer) {
+    const presetLower = new Set(PRESET_CONSOLIDATION_ITEMS.map(p => p.name.toLowerCase()));
+    const customItems = selectedList.filter(x => !presetLower.has(String(x || "").trim().toLowerCase()));
+
+    const presetHtml = PRESET_CONSOLIDATION_ITEMS.map(p => {
+      const isSelected = selectedLower.has(p.name.toLowerCase());
+      return `<button type="button" class="zst-item-chip ${isSelected ? 'active' : ''}" data-item-name="${escapeHTML(p.name)}" title="คลิกเพื่อเลือก/ยกเลิก ${escapeHTML(p.name)}">
+        <span>${isSelected ? '✅' : p.icon}</span>
+        <span>${escapeHTML(p.name)}</span>
+      </button>`;
+    }).join("");
+
+    const customHtml = customItems.map(name => {
+      return `<button type="button" class="zst-item-chip active" data-item-name="${escapeHTML(name)}" title="คลิกเพื่อเอา ${escapeHTML(name)} ออกจากรายการ">
+        <span>✅</span>
+        <span>${escapeHTML(name)}</span>
+        <span class="zst-chip-remove">×</span>
+      </button>`;
+    }).join("");
+
+    chipsContainer.innerHTML = presetHtml + customHtml;
+  }
+}
+
+async function saveAndSyncConsolidationItemSettings(patch = {}, toastLabel = "") {
+  consolidationItemSettings = {
+    ...consolidationItemSettings,
+    ...patch
+  };
+  if (!Array.isArray(consolidationItemSettings.items) || consolidationItemSettings.items.length === 0) {
+    consolidationItemSettings.items = ["Enchant Rune"];
+  }
+  renderConsolidationItemTradeUI();
+
+  const syncPill = document.getElementById("zst-sync-status-pill");
+  if (syncPill) syncPill.textContent = "⏳ กำลังซิงค์ไปทุกจอ...";
+
+  try {
+    const res = await fetch(`${API_BASE}/api/consolidation/item-settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(consolidationItemSettings)
+    }).then(r => r.json());
+    if (res && res.success && res.settings) {
+      consolidationItemSettings = res.settings;
+      renderConsolidationItemTradeUI();
+      if (syncPill) {
+        syncPill.textContent = `✅ ซิงค์แล้ว (${res.syncedClients || 0}/${res.totalChecked || 0} จอ)`;
+      }
+      if (toastLabel) {
+        showToast(`${toastLabel} (ซิงค์ ${res.syncedClients || 0} จอ)`, "success");
+      }
+    }
+  } catch (err) {
+    if (syncPill) syncPill.textContent = "⚠️ ซิงค์ไม่สำเร็จ";
+    console.warn("saveAndSyncConsolidationItemSettings error:", err);
+  }
+}
+
+let consolidationItemTradeUIInitialized = false;
+async function initConsolidationItemTradeUI() {
+  if (consolidationItemTradeUIInitialized) return;
+  consolidationItemTradeUIInitialized = true;
+
+  const cbStoreOnly = document.getElementById("cb-stash-only-enabled");
+  const cbTradeItems = document.getElementById("cb-trade-items-consolidate");
+  const chipsContainer = document.getElementById("zst-items-chips-container");
+  const customInput = document.getElementById("zst-custom-item-input");
+  const btnAddCustom = document.getElementById("btn-zst-add-custom-item");
+
+  if (cbStoreOnly) {
+    cbStoreOnly.onchange = () => {
+      const enabled = cbStoreOnly.checked;
+      saveAndSyncConsolidationItemSettings(
+        { storeOnlyEnabled: enabled },
+        enabled
+          ? `🔒 เปิดโหมดเก็บ [${consolidationItemSettings.items.join(", ")}] เข้าคลังอย่างเดียว (ห้ามขาย)`
+          : "🔓 ปิดโหมดเก็บหินเข้าคลังอย่างเดียวแล้ว"
+      );
+    };
+  }
+
+  if (cbTradeItems) {
+    cbTradeItems.onchange = () => {
+      const enabled = cbTradeItems.checked;
+      saveAndSyncConsolidationItemSettings(
+        { tradeOnConsolidate: enabled },
+        enabled
+          ? `📦 เปิดเบิก [${consolidationItemSettings.items.join(", ")}] จากคลังมาเทรดรวมตอนรวมเงิน`
+          : "💰 ตั้งค่าให้รวมเฉพาะเงิน Zeny อย่างเดียว"
+      );
+    };
+  }
+
+  if (chipsContainer) {
+    chipsContainer.onclick = (e) => {
+      const btn = e.target.closest(".zst-item-chip");
+      if (!btn) return;
+      const itemName = (btn.dataset.itemName || "").trim();
+      if (!itemName) return;
+      const cur = Array.isArray(consolidationItemSettings.items) ? [...consolidationItemSettings.items] : ["Enchant Rune"];
+      const idx = cur.findIndex(x => String(x || "").trim().toLowerCase() === itemName.toLowerCase());
+      if (idx >= 0) {
+        if (cur.length <= 1) {
+          showToast("⚠️ ต้องเลือกไอเทมไว้อย่างน้อย 1 รายการ", "warning");
+          return;
+        }
+        cur.splice(idx, 1);
+      } else {
+        cur.push(itemName);
+      }
+      saveAndSyncConsolidationItemSettings({ items: cur }, `🎯 อัปเดตรายการไอเทม: ${cur.join(", ")}`);
+    };
+  }
+
+  const handleAddCustom = () => {
+    if (!customInput) return;
+    const val = (customInput.value || "").trim();
+    if (!val) return;
+    const cur = Array.isArray(consolidationItemSettings.items) ? [...consolidationItemSettings.items] : ["Enchant Rune"];
+    if (!cur.some(x => String(x || "").trim().toLowerCase() === val.toLowerCase())) {
+      cur.push(val);
+    }
+    customInput.value = "";
+    saveAndSyncConsolidationItemSettings({ items: cur }, `➕ เพิ่ม "${val}" ในรายการเก็บคลัง/เทรดรวมแล้ว`);
+  };
+
+  if (btnAddCustom) btnAddCustom.onclick = handleAddCustom;
+  if (customInput) {
+    customInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        handleAddCustom();
+      }
+    });
+  }
+
+  renderConsolidationItemTradeUI();
+  try {
+    const res = await fetch(`${API_BASE}/api/consolidation/item-settings`).then(r => r.json());
+    if (res && res.success && res.settings) {
+      consolidationItemSettings = res.settings;
+      renderConsolidationItemTradeUI();
+    }
+  } catch (e) {}
 }
 
 function startConsolidationPolling() {

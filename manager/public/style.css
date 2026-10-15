@@ -4070,3 +4070,255 @@ label {
 
 /* fixed-grid section in the "จัดหน้าต่าง" menu */
 .dropdown-content .dropdown-sep { padding: 6px 12px 3px; margin-top: 4px; border-top: 1px solid rgba(148, 163, 184, 0.15); font-size: 10.5px; color: #94a3b8; }
+
+/* ==========================================
+   ZENY STASH-ONLY & CONSOLIDATION ITEM TRADE CARD
+   ========================================== */
+.zeny-stash-trade-card {
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.92), rgba(17, 24, 39, 0.95));
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 12px;
+  padding: 14px 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.zst-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.zst-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.zst-badge-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.22), rgba(56, 189, 248, 0.18));
+  border: 1px solid rgba(168, 85, 247, 0.45);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.zst-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #f8fafc;
+}
+
+.zst-subtitle {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.zst-sync-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #38bdf8;
+  white-space: nowrap;
+}
+
+.zst-toggles-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 10px;
+}
+
+.zst-toggle-box {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 13px;
+  border-radius: 10px;
+  background: rgba(30, 41, 59, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  user-select: none;
+}
+
+.zst-toggle-box:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(30, 41, 59, 0.78);
+}
+
+.zst-toggle-box.is-active-emerald {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), rgba(15, 23, 42, 0.85));
+  border-color: rgba(52, 211, 153, 0.55);
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.15);
+}
+
+.zst-toggle-box.is-active-purple {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.18), rgba(15, 23, 42, 0.85));
+  border-color: rgba(192, 132, 252, 0.55);
+  box-shadow: 0 0 18px rgba(168, 85, 247, 0.15);
+}
+
+.zst-checkbox {
+  width: 17px;
+  height: 17px;
+  margin-top: 2px;
+  accent-color: #10b981;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+#cb-trade-items-consolidate {
+  accent-color: #a855f7;
+}
+
+.zst-toggle-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.zst-toggle-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.zst-toggle-name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.zst-state-badge {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.zst-state-badge.on-emerald {
+  background: rgba(16, 185, 129, 0.22);
+  color: #6ee7b7;
+  border-color: rgba(52, 211, 153, 0.5);
+}
+
+.zst-state-badge.on-purple {
+  background: rgba(168, 85, 247, 0.24);
+  color: #e9d5ff;
+  border-color: rgba(192, 132, 252, 0.55);
+}
+
+.zst-toggle-desc {
+  font-size: 11px;
+  color: #94a3b8;
+  line-height: 1.45;
+  margin-top: 4px;
+}
+
+.zst-toggle-desc b {
+  color: #e2e8f0;
+}
+
+.zst-items-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.zst-items-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+
+.zst-chips-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+
+.zst-item-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #94a3b8;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.zst-item-chip:hover {
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #e2e8f0;
+}
+
+.zst-item-chip.active {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.24), rgba(168, 85, 247, 0.22));
+  border-color: #38bdf8;
+  color: #f8fafc;
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.2);
+}
+
+.zst-chip-remove {
+  margin-left: 2px;
+  font-size: 12px;
+  color: #fca5a5;
+  opacity: 0.75;
+  cursor: pointer;
+}
+
+.zst-chip-remove:hover {
+  opacity: 1;
+  color: #ef4444;
+}
+
+.zst-custom-add-wrap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zst-custom-input {
+  background: rgba(15, 23, 42, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 6px;
+  color: #f8fafc;
+  font-size: 11.5px;
+  padding: 4px 9px;
+  width: 175px;
+}
+
+.zst-custom-input:focus {
+  outline: none;
+  border-color: #38bdf8;
+}
+

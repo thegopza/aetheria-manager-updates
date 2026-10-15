@@ -22,6 +22,7 @@
   let data = { settings: {}, market: null, clients: [] };
   let open = false, pollTimer = null, busy = false, filter = 'all', pointerDown = false, pendingRender = false;
   let lastPlansSig = '';
+  let openForceId = null;
 
   function build() {
     const tab = document.createElement('button');
@@ -72,6 +73,7 @@
         <button type="button" data-f="all" class="on">ทุกจอ</button>
         <button type="button" data-f="on">เปิดอยู่</button>
         <button type="button" data-f="active">มี Premium</button>
+        <button type="button" data-f="inactive">ไม่มี Premium</button>
         <span class="pm-filter-sp"></span>
         <button type="button" class="pm-mini" id="pm-all-on">เปิดทุกจอ</button>
         <button type="button" class="pm-mini" id="pm-all-off">ปิดทุกจอ</button>
@@ -98,7 +100,9 @@
       pointerDown = false;
       if (pendingRender) { pendingRender = false; render(); }
     });
-    drawer.querySelector('#pm-body').addEventListener('change', onToggle);
+    drawer.querySelector('#pm-body').addEventListener('change', onBodyChange);
+    drawer.querySelector('#pm-body').addEventListener('input', onBodyInput);
+    drawer.querySelector('#pm-body').addEventListener('click', onBodyClick);
     drawer.querySelector('#pm-settings').addEventListener('change', onSetting);
     drawer.querySelector('#pm-filter').addEventListener('click', e => {
       const b = e.target.closest('[data-f]'); if (!b) return;
@@ -133,6 +137,13 @@
   async function load() {
     if (busy || pointerDown) return;
     try { await api(''); } catch (e) { /* Manager restarting */ }
+  }
+
+  function getSelectedPlanCost() {
+    const s = data.settings || {}, m = data.market;
+    const plans = (m && m.plans && m.plans.length) ? m.plans : [{ id: '7d', days: 7, tokens: 1000 }, { id: '30d', days: 30, tokens: 3500 }, { id: '90d', days: 90, tokens: 8000 }];
+    const cur = plans.find(p => p.id === s.planId) || plans[0];
+    return cur ? cur.tokens : 1000;
   }
 
   function renderSettings() {
@@ -214,6 +225,71 @@
           : '(รอหมดอายุก่อนค่อยซื้อรอบใหม่)'
       );
     }
+
+    // Update counts on filter buttons
+    const allCount = data.clients.length;
+    const onCount = data.clients.filter(c => c.enabled).length;
+    const vipCount = data.clients.filter(c => c.premiumUntil && c.premiumUntil > Date.now()).length;
+    const noVipCount = allCount - vipCount;
+    const filterEl = document.getElementById('pm-filter');
+    if (filterEl) {
+      setText(filterEl.querySelector('[data-f="all"]'), `ทุกจอ (${allCount})`);
+      setText(filterEl.querySelector('[data-f="on"]'), `เปิดอยู่ (${onCount})`);
+      setText(filterEl.querySelector('[data-f="active"]'), `มี VIP (${vipCount})`);
+      setText(filterEl.querySelector('[data-f="inactive"]'), `ไม่มี VIP (${noVipCount})`);
+    }
+  }
+
+  function updateForceEstimate(row, c) {
+    const box = row.querySelector('.pm-force-box');
+    if (!box || box.hidden) return;
+    const cost = c.cost || getSelectedPlanCost();
+    const curTokens = Number(c.tokens) || 0;
+    const needForPlan = Math.max(0, cost - curTokens);
+    const qtyInp = box.querySelector('.pm-f-qty');
+    const noResChk = box.querySelector('.pm-f-nores');
+    const actChk = box.querySelector('.pm-f-act');
+    const estEl = box.querySelector('.pm-f-est');
+    const needBtn = box.querySelector('[data-f-preset="need"]');
+    if (needBtn) setText(needBtn, needForPlan > 0 ? `ครบแพ็ก (+${fmt(needForPlan)})` : `ครบแพ็ก (${fmt(cost)})`);
+
+    const wantQty = Math.max(0, Math.floor(Number(qtyInp && qtyInp.value) || 0));
+    const noRes = Boolean(noResChk && noResChk.checked);
+    const autoAct = Boolean(actChk && actChk.checked);
+    const bestAsk = (data.market && data.market.bestAsk) || 25000;
+    const reserve = noRes ? 0 : Math.max(0, Number(data.settings && data.settings.reserveZeny) || 0);
+    const usableZeny = c.zeny != null ? Math.max(0, c.zeny - reserve) : null;
+    const maxAff = noRes ? c.maxBuyAllZeny : c.maxBuyWithReserve;
+    const maxQty = maxAff ? maxAff.qty : (usableZeny != null && bestAsk > 0 ? Math.floor(usableZeny / bestAsk) : null);
+
+    if (!estEl) return;
+    if (!c.hasPort && !c.online) {
+      estEl.className = 'pm-f-est warn';
+      setText(estEl, '⚠️ จอนี้ยังไม่ได้เปิดเกม (ต้องออนไลน์ก่อนจึงจะสั่งซื้อได้)');
+      return;
+    }
+    if (wantQty === 0 && curTokens >= cost && autoAct) {
+      estEl.className = 'pm-f-est ok';
+      setText(estEl, `✅ มี ${fmt(curTokens)} Token ครบแล้ว → กดยืนยันเพื่อปลดล็อค/ต่อ Premium ทันที`);
+      return;
+    }
+    if (maxQty != null && maxQty <= 0) {
+      const altAll = !noRes && c.maxBuyAllZeny && c.maxBuyAllZeny.qty > 0
+        ? ` (หากติ๊ก "ไม่กันเงินสำรอง" จะซื้อได้ ${fmt(c.maxBuyAllZeny.qty)} Token)`
+        : '';
+      estEl.className = 'pm-f-est warn';
+      setText(estEl, `⚠️ เงินที่ใช้ได้ (${fmt(usableZeny)} z) ไม่พอซื้อแม้แต่ 1 Token${altAll}`);
+      return;
+    }
+    if (maxQty != null && wantQty > maxQty) {
+      const estCost = maxAff ? maxAff.zeny : maxQty * bestAsk;
+      estEl.className = 'pm-f-est partial';
+      setText(estEl, `💡 สั่ง ${fmt(wantQty)} Token แต่เงินพอซื้อได้ ${fmt(maxQty)} Token (~${fmt(estCost)} z) → ระบบจะซื้อเท่าที่เงินพอ`);
+      return;
+    }
+    const estCost = wantQty * bestAsk;
+    estEl.className = 'pm-f-est ok';
+    setText(estEl, `✅ ซื้อ ${fmt(wantQty)} Token (ใช้เงินประมาณ ~${fmt(estCost)} z${usableZeny != null ? ` · เงินใช้ได้ ${fmt(usableZeny)} z` : ''})`);
   }
 
   function createRowEl(c) {
@@ -236,14 +312,42 @@
         </div>
         <div class="pm-state" hidden></div>
         <div class="pm-last" hidden></div>
+        <div class="pm-force-box" hidden>
+          <div class="pm-f-head">
+            <span>⚡ บังคับซื้อ Token ทันที (ถ้าเงินไม่พอจะซื้อเท่าที่พอ)</span>
+            <button type="button" class="pm-f-close" data-force-close="${esc(c.id)}" title="ปิด">✕</button>
+          </div>
+          <div class="pm-f-presets">
+            <button type="button" data-f-preset="need" data-row-id="${esc(c.id)}">ครบแพ็ก</button>
+            <button type="button" data-f-preset="100" data-row-id="${esc(c.id)}">+100</button>
+            <button type="button" data-f-preset="500" data-row-id="${esc(c.id)}">+500</button>
+            <button type="button" data-f-preset="1000" data-row-id="${esc(c.id)}">1,000</button>
+            <button type="button" data-f-preset="max" data-row-id="${esc(c.id)}">เท่าที่เงินพอ</button>
+          </div>
+          <div class="pm-f-controls">
+            <label class="pm-f-input-wrap">
+              <span>จำนวนเหรียญ:</span>
+              <input type="number" class="pm-f-qty" min="0" max="100000" step="1" value="1000">
+            </label>
+            <button type="button" class="pm-f-submit" data-force-exec="${esc(c.id)}">🛒 ซื้อทันที</button>
+          </div>
+          <div class="pm-f-opts">
+            <label><input type="checkbox" class="pm-f-nores"> ไม่กันเงินสำรอง (ใช้เงินทั้งหมด)</label>
+            <label><input type="checkbox" class="pm-f-act" checked> ปลดล็อค/ต่อ VIP ทันทีเมื่อครบ</label>
+          </div>
+          <div class="pm-f-est"></div>
+        </div>
       </div>
-      <label class="pm-switch"><input type="checkbox" data-id="${esc(c.id)}"><span></span></label>`;
+      <div class="pm-side-actions">
+        <label class="pm-switch"><input type="checkbox" data-id="${esc(c.id)}"><span></span></label>
+        <button type="button" class="pm-force-btn" data-force-toggle="${esc(c.id)}" title="บังคับซื้อ Token / Premium ทันที">⚡ ซื้อ</button>
+      </div>`;
     patchRowEl(row, c);
     return row;
   }
 
   function patchRowEl(row, c) {
-    const cost = c.cost || 1000;
+    const cost = c.cost || getSelectedPlanCost();
     const pct = c.tokens == null ? 0 : Math.min(100, Math.round(c.tokens / cost * 100));
     const tgtPct = c.target == null ? null : Math.min(100, Math.round(c.target / cost * 100));
     const active = Boolean(c.premiumUntil && c.premiumUntil > Date.now());
@@ -279,11 +383,15 @@
     if (vipEl) {
       if (active) {
         vipEl.hidden = false;
+        vipEl.className = 'pm-vip';
         const vipTitle = new Date(c.premiumUntil).toLocaleString('th-TH');
         if (vipEl.title !== vipTitle) vipEl.title = vipTitle;
         setText(vipEl, 'Premium · ' + left(c.premiumUntil));
       } else {
-        vipEl.hidden = true;
+        vipEl.hidden = false;
+        vipEl.className = 'pm-vip no-vip';
+        vipEl.title = 'ตัวละครนี้ยังไม่มีสถานะ Premium';
+        setText(vipEl, 'ไม่มี Premium');
       }
     }
 
@@ -291,7 +399,7 @@
 
     const barEl = row.querySelector('.pm-bar');
     if (barEl) {
-      if (c.enabled) {
+      if (c.enabled || c.tokens != null) {
         barEl.hidden = false;
         const barTitle = `Token ${fmt(c.tokens)} / ${fmt(cost)}${c.target != null ? ' · เป้าตอนนี้ ' + fmt(c.target) : ''}`;
         if (barEl.title !== barTitle) barEl.title = barTitle;
@@ -299,7 +407,7 @@
         if (fillEl && fillEl.style.width !== pct + '%') fillEl.style.width = pct + '%';
         const emEl = barEl.querySelector('em');
         if (emEl) {
-          if (tgtPct != null && tgtPct < 100) {
+          if (tgtPct != null && tgtPct > 0 && tgtPct < 100) {
             emEl.hidden = false;
             if (emEl.style.left !== tgtPct + '%') emEl.style.left = tgtPct + '%';
           } else {
@@ -326,7 +434,7 @@
 
     const lastEl = row.querySelector('.pm-last');
     if (lastEl) {
-      if (c.enabled && last) {
+      if ((c.enabled || last) && last) {
         lastEl.hidden = false;
         const nextLastCls = 'pm-last' + (last.ok ? '' : ' bad');
         if (lastEl.className !== nextLastCls) lastEl.className = nextLastCls;
@@ -342,6 +450,26 @@
     if (swLbl && swLbl.title !== swTitle) swLbl.title = swTitle;
     const swInput = row.querySelector('.pm-switch input');
     if (swInput && swInput.checked !== Boolean(c.enabled)) swInput.checked = Boolean(c.enabled);
+
+    const forceBtn = row.querySelector('.pm-force-btn');
+    const isForceOpen = String(openForceId) === String(c.id);
+    if (forceBtn) forceBtn.classList.toggle('active', isForceOpen);
+    const forceBox = row.querySelector('.pm-force-box');
+    if (forceBox) {
+      const wasHidden = forceBox.hidden;
+      forceBox.hidden = !isForceOpen;
+      if (isForceOpen && wasHidden) {
+        const curTokens = Number(c.tokens) || 0;
+        const need = Math.max(0, cost - curTokens);
+        const qtyInp = forceBox.querySelector('.pm-f-qty');
+        if (qtyInp) qtyInp.value = String(need > 0 ? need : cost);
+        const noResChk = forceBox.querySelector('.pm-f-nores');
+        if (noResChk && c.maxBuyWithReserve && c.maxBuyWithReserve.qty === 0 && c.maxBuyAllZeny && c.maxBuyAllZeny.qty > 0) {
+          noResChk.checked = true;
+        }
+      }
+      if (isForceOpen) updateForceEstimate(row, c);
+    }
   }
 
   function renderList() {
@@ -349,6 +477,7 @@
     let list = data.clients.slice();
     if (filter === 'on') list = list.filter(c => c.enabled);
     if (filter === 'active') list = list.filter(c => c.premiumUntil && c.premiumUntil > Date.now());
+    if (filter === 'inactive') list = list.filter(c => !(c.premiumUntil && c.premiumUntil > Date.now()));
     list.sort((a, b) => (b.enabled - a.enabled) || (b.online - a.online) || String(a.name).localeCompare(String(b.name), 'th', { numeric: true }));
 
     if (!list.length) {
@@ -400,7 +529,96 @@
       else toast(enabled ? 'เปิด Premium อัตโนมัติแล้ว' : 'ปิด Premium อัตโนมัติแล้ว', 'success');
     } finally { busy = false; }
   }
-  function onToggle(e) { const t = e.target; if (t.dataset.id) toggle(t.dataset.id, t.checked); }
+
+  function onBodyChange(e) {
+    const t = e.target;
+    if (t.dataset.id) {
+      toggle(t.dataset.id, t.checked);
+      return;
+    }
+    const row = t.closest('.pm-row');
+    if (row) {
+      const c = data.clients.find(x => String(x.id) === String(row.dataset.rowId));
+      if (c) updateForceEstimate(row, c);
+    }
+  }
+
+  function onBodyInput(e) {
+    const row = e.target.closest('.pm-row');
+    if (!row) return;
+    const c = data.clients.find(x => String(x.id) === String(row.dataset.rowId));
+    if (c) updateForceEstimate(row, c);
+  }
+
+  async function onBodyClick(e) {
+    const toggleBtn = e.target.closest('[data-force-toggle]');
+    if (toggleBtn) {
+      const id = String(toggleBtn.dataset.forceToggle);
+      openForceId = String(openForceId) === id ? null : id;
+      renderList();
+      return;
+    }
+    const closeBtn = e.target.closest('[data-force-close]');
+    if (closeBtn) {
+      openForceId = null;
+      renderList();
+      return;
+    }
+    const presetBtn = e.target.closest('[data-f-preset]');
+    if (presetBtn) {
+      const row = presetBtn.closest('.pm-row');
+      const c = row && data.clients.find(x => String(x.id) === String(row.dataset.rowId));
+      if (!row || !c) return;
+      const cost = c.cost || getSelectedPlanCost();
+      const curTokens = Number(c.tokens) || 0;
+      const need = Math.max(0, cost - curTokens);
+      const qtyInp = row.querySelector('.pm-f-qty');
+      const noResChk = row.querySelector('.pm-f-nores');
+      const kind = presetBtn.dataset.fPreset;
+      if (qtyInp) {
+        if (kind === 'need') qtyInp.value = String(need > 0 ? need : cost);
+        else if (kind === 'max') {
+          const noRes = Boolean(noResChk && noResChk.checked);
+          const maxAff = noRes ? c.maxBuyAllZeny : c.maxBuyWithReserve;
+          qtyInp.value = String(maxAff && maxAff.qty > 0 ? maxAff.qty : cost);
+        } else {
+          qtyInp.value = String(Number(kind) || cost);
+        }
+      }
+      updateForceEstimate(row, c);
+      return;
+    }
+    const execBtn = e.target.closest('[data-force-exec]');
+    if (execBtn) {
+      const id = String(execBtn.dataset.forceExec);
+      const row = execBtn.closest('.pm-row');
+      if (!row || busy) return;
+      const qtyInp = row.querySelector('.pm-f-qty');
+      const noResChk = row.querySelector('.pm-f-nores');
+      const actChk = row.querySelector('.pm-f-act');
+      const qty = Math.max(0, Math.floor(Number(qtyInp && qtyInp.value) || 0));
+      const ignoreReserve = Boolean(noResChk && noResChk.checked);
+      const autoActivate = Boolean(actChk ? actChk.checked : true);
+      busy = true;
+      execBtn.disabled = true;
+      const oldTxt = execBtn.textContent;
+      execBtn.textContent = '⏳ กำลังซื้อ...';
+      try {
+        const r = await api('/force-buy', { profileId: id, qty, ignoreReserve, autoActivate });
+        if (r.success === false) {
+          toast(r.error || 'บังคับซื้อไม่สำเร็จ', 'error');
+        } else {
+          toast((r.forceResult && r.forceResult.message) || 'บังคับซื้อสำเร็จ', 'success');
+          openForceId = null;
+          render();
+        }
+      } finally {
+        busy = false;
+        execBtn.disabled = false;
+        execBtn.textContent = oldTxt;
+      }
+    }
+  }
 
   async function onSetting(e) {
     const t = e.target; if (!t.dataset.set) return;

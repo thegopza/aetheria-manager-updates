@@ -429,8 +429,123 @@ function createPremiumService(opts) {
     } finally { ticking = false; }
   }
 
+  async function forceBuy(p, opts) {
+    opts = opts || {};
+    if (!p || !p.debugPort) return { ok: false, error: 'จอนี้ไม่ได้ออนไลน์อยู่' };
+    const R = rt(p.id);
+    const r = await evalProfilePort(p.debugPort, READ_JS, T.readTimeoutMs);
+    const snap = r && r.success !== false && r.result && typeof r.result === 'object' ? r.result : null;
+    if (snap) {
+      R.snap = snap;
+      R.at = now();
+      if (snap.exchange) market = { bestAsk: snap.exchange.bestAsk, plans: snap.exchange.plans, feePercent: snap.exchange.feePercent, at: now() };
+    }
+    if (!snap || !snap.ok) return { ok: false, error: 'อ่านสถานะตัวละครไม่ได้ (อาจยังไม่ได้เข้าเกม)' };
+    const ex = snap.exchange;
+    if (!ex) return { ok: false, error: 'อ่านตลาด Token ในเกมไม่ได้' };
+
+    const plan = (ex.plans || []).find(pl => pl.id === (opts.planId || settings.planId)) || (ex.plans || [])[0] || { id: '7d', days: 7, tokens: 1000 };
+    const wantQty = Math.max(0, Math.min(100000, Math.floor(Number(opts.qty) || 0)));
+    const ignoreReserve = Boolean(opts.ignoreReserve);
+    const autoActivate = opts.autoActivate !== false;
+    const reserve = ignoreReserve ? 0 : Math.max(0, Number(settings.reserveZeny) || 0);
+    const budget = Math.max(0, (Number(snap.zeny) || 0) - reserve);
+
+    let bought = 0;
+    let tokensNow = Number(ex.tokens) || 0;
+    let buyError = null;
+    let spentEst = 0;
+
+    if (wantQty > 0) {
+      const w = walkAsks(ex.asks, wantQty, budget);
+      if (w.qty <= 0) {
+        if (!ex.asks || !ex.asks.length) {
+          buyError = 'ไม่มีคนตั้งขาย Token ในตลาดตอนนี้';
+        } else if (budget <= 0) {
+          buyError = 'เงินไม่พอ (หักเงินสำรอง ' + reserve.toLocaleString() + ' z แล้วไม่เหลือเงินซื้อ)';
+        } else {
+          const cheapest = ex.bestAsk || (ex.asks[0] && ex.asks[0].price) || 0;
+          buyError = 'เงินไม่พอซื้อแม้แต่ 1 Token (ใช้ได้ ' + budget.toLocaleString() + ' z · ราคาต่ำสุด ' + Number(cheapest).toLocaleString() + ' z)';
+        }
+      } else {
+        const maxZeny = Math.min(budget, Math.ceil(w.zeny * 1.01));
+        const targetCap = tokensNow + w.qty;
+        R.buyAt = now();
+        const res = await evalOk(p.debugPort, ACTIONS.buy(w.qty, maxZeny, targetCap), T.actTimeoutMs);
+        if (res.ok && res.result) {
+          bought = Math.max(0, (Number(res.result.after) || 0) - (Number(res.result.before) || 0));
+          tokensNow = Number(res.result.after) || tokensNow;
+          spentEst = w.zeny;
+          ex.tokens = tokensNow;
+          snap.zeny = Math.max(0, (Number(snap.zeny) || 0) - w.zeny);
+          const note = bought < wantQty
+            ? `บังคับซื้อ ${bought}/${wantQty} Token (เท่าที่เงินพอ · ${res.result.before} → ${res.result.after})`
+            : `บังคับซื้อ ${bought} Token (${res.result.before} → ${res.result.after})`;
+          remember(p.id, note, true);
+          R.lastError = null;
+        } else {
+          buyError = res.error || 'ซื้อ Token ไม่สำเร็จ';
+          R.lastError = buyError;
+          remember(p.id, 'บังคับซื้อไม่สำเร็จ: ' + buyError, false);
+        }
+      }
+    }
+
+    let activated = false;
+    let activateError = null;
+    if (autoActivate && plan && tokensNow >= plan.tokens && (bought > 0 || wantQty === 0 || !(toMs(ex.premiumUntil) > now()))) {
+      const wasActive = toMs(ex.premiumUntil) > now();
+      R.activateAt = now();
+      const actRes = await evalOk(p.debugPort, ACTIONS.activate(plan.id, plan.tokens), T.actTimeoutMs);
+      if (actRes.ok && actRes.result) {
+        activated = true;
+        tokensNow = actRes.result.tokens != null ? Number(actRes.result.tokens) : (tokensNow - plan.tokens);
+        ex.tokens = tokensNow;
+        ex.premiumUntil = actRes.result.premiumUntil;
+        remember(p.id, 'บังคับ' + (wasActive ? 'ต่อ' : 'ปลดล็อค') + ' Premium ' + plan.days + ' วัน · ถึง ' + new Date(toMs(actRes.result.premiumUntil)).toLocaleString('th-TH'), true);
+        R.lastError = null;
+      } else {
+        activateError = actRes.error || 'ปลดล็อค Premium ไม่สำเร็จ';
+        if (!bought) {
+          R.lastError = activateError;
+          remember(p.id, 'บังคับซื้อ Premium ไม่สำเร็จ: ' + activateError, false);
+        }
+      }
+    }
+
+    if (cl(p.id).enabled) {
+      R.decision = decide(R.snap, settings, gateOpen(p.id, R.snap), now(), T);
+    }
+
+    if (bought === 0 && !activated) {
+      return { ok: false, error: buyError || activateError || 'ไม่สามารถซื้อได้' };
+    }
+    const msgParts = [];
+    if (bought > 0) {
+      msgParts.push(
+        bought < wantQty
+          ? `ซื้อได้ ${bought.toLocaleString()} Token (จากที่สั่ง ${wantQty.toLocaleString()} · ซื้อเท่าที่เงินพอ)`
+          : `ซื้อสำเร็จ ${bought.toLocaleString()} Token`
+      );
+    }
+    if (activated) {
+      msgParts.push(`ปลดล็อค/ต่อ Premium ${plan.days} วันเรียบร้อย`);
+    }
+    return {
+      ok: true,
+      profileId: p.id,
+      wantQty,
+      bought,
+      spentEst,
+      activated,
+      tokens: tokensNow,
+      message: msgParts.join(' · ')
+    };
+  }
+
   function view() {
     const profiles = loadProfiles();
+    const reserve = Math.max(0, Number(settings.reserveZeny) || 0);
     return {
       success: true, settings, market,
       clients: profiles.map(p => {
@@ -439,12 +554,16 @@ function createPremiumService(opts) {
         const s = R.snap, d = R.decision;
         const ex = s && s.exchange;
         const ep = s && s.plan ? effectivePlan(s.plan, settings) : null;
+        const zeny = s && s.ok ? s.zeny : null;
+        const maxBuyWithReserve = ex && ex.asks && zeny != null ? walkAsks(ex.asks, 100000, Math.max(0, zeny - reserve)) : null;
+        const maxBuyAllZeny = ex && ex.asks && zeny != null ? walkAsks(ex.asks, 100000, Math.max(0, zeny)) : null;
         return {
           id: p.id, name: p.name, charName: (s && s.name) || p.lastCharName || null, charClass: p.lastCharClass || null,
-          enabled: !!c.enabled, online: !!(s && s.ok),
-          zeny: s && s.ok ? s.zeny : null, level: s && s.ok ? s.level : null,
+          enabled: !!c.enabled, online: !!(s && s.ok), hasPort: !!p.debugPort,
+          zeny, level: s && s.ok ? s.level : null,
           tokens: ex ? ex.tokens : null, premiumUntil: ex ? toMs(ex.premiumUntil) || null : null,
           target: d && d.target != null ? d.target : null, cost: d && d.plan ? d.plan.tokens : null,
+          maxBuyWithReserve, maxBuyAllZeny,
           status: d ? d.action : (c.enabled ? 'pending' : 'off'), statusText: d ? d.text : (c.enabled ? 'รอรอบตรวจถัดไป' : 'ปิดอยู่'),
           planName: ep ? ep.name : null, planBlocked: ep && !(c.gatePlan && c.gatePlan === ep.id && !hasNonZenyBlock(ep)) ? ep.blocked : [],
           lastError: R.lastError || null, checkedAt: R.at || null, history: (c.history || []).slice(0, 5)
@@ -476,6 +595,18 @@ function createPremiumService(opts) {
       sendJSON(view());
       return true;
     }
+    if (pathname === '/api/premium/force-buy') {
+      const id = String(body.profileId || '');
+      const p = loadProfiles().find(x => x.id === id);
+      if (!p) { sendJSON({ success: false, error: 'ไม่พบจอนี้' }, 400); return true; }
+      const fb = await forceBuy(p, body);
+      if (!fb.ok) {
+        sendJSON(Object.assign(view(), { success: false, error: fb.error, forceResult: fb }), 400);
+        return true;
+      }
+      sendJSON(Object.assign(view(), { forceResult: fb }));
+      return true;
+    }
     if (pathname === '/api/premium/refresh') {
       await tick().catch(e => log('tick failed', e.message));
       sendJSON(view());
@@ -493,7 +624,7 @@ function createPremiumService(opts) {
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
-  return { handleRoute, tick, start, stop, view, _settings: () => settings, _clients: () => clients };
+  return { handleRoute, tick, forceBuy, start, stop, view, _settings: () => settings, _clients: () => clients };
 }
 
 module.exports = { createPremiumService, decide, walkAsks, tokenTarget, sanitizeSettings, effectivePlan, toMs, READ_JS, ACTIONS, DEFAULTS, TIMING };

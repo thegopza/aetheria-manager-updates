@@ -20,7 +20,13 @@ const fs = require('fs');
 const path = require('path');
 
 const DAY = 86400000;
-const DEFAULTS = { reserveZeny: 2000000, planId: '7d', leadDays: 1 };
+const DEFAULTS = {
+  reserveZeny: 2000000,
+  planId: '7d',
+  leadDays: 1,
+  prebuyNextRound: true,
+  requireGearComplete: true
+};
 const TIMING = {
   tickMs: 60000,
   buyCooldownMs: 90000,
@@ -220,9 +226,11 @@ function walkAsks(asks, want, budget) {
 }
 
 // How many Token should the wallet hold right now?
-// No Premium → the full plan price. Premium on → grows linearly so the full price is there `leadDays` before the end.
-function tokenTarget(cost, days, leadDays, premiumUntilMs, nowMs) {
+// No Premium → the full plan price. Premium on → grows linearly so the full price is there `leadDays` before the end
+// (or 0 while Premium is active if prebuyNextRound === false).
+function tokenTarget(cost, days, leadDays, premiumUntilMs, nowMs, prebuyNextRound) {
   if (!premiumUntilMs || premiumUntilMs <= nowMs) return cost;
+  if (prebuyNextRound === false) return 0;
   const period = days * DAY;
   const spread = Math.max(DAY / 4, period - Math.max(0, leadDays) * DAY);
   const remaining = premiumUntilMs - nowMs;
@@ -231,24 +239,43 @@ function tokenTarget(cost, days, leadDays, premiumUntilMs, nowMs) {
   return Math.ceil(cost * frac);
 }
 
+function isGearBlockerText(b) {
+  return String(b || '').trim().startsWith('เซ็ตอุปกรณ์');
+}
+
+function effectivePlan(plan, cfg) {
+  if (!plan) return null;
+  const reqGear = !cfg || cfg.requireGearComplete !== false;
+  if (reqGear) return plan;
+  const blocked = Array.isArray(plan.blocked) ? plan.blocked.filter(b => !isGearBlockerText(b)) : [];
+  return Object.assign({}, plan, { blocked, gearBlocked: false });
+}
+
 // What to do for one client. snap = READ_JS result, cfg = settings, gateOpen = plan gate result (after latch)
 function decide(snap, cfg, gateOpen, nowMs, timing) {
   const T = Object.assign({}, TIMING, timing || {});
   if (!snap || !snap.ok) return { action: 'offline', text: 'ออฟไลน์ / ยังไม่เข้าเกม' };
-  if (!gateOpen) return { action: 'plan', text: 'รอแผน: ' + ((snap.plan && snap.plan.blocked && snap.plan.blocked[0]) || 'ยังไม่ผ่าน') };
+  const ep = effectivePlan(snap.plan, cfg);
+  if (!gateOpen) return { action: 'plan', text: 'รอแผน: ' + ((ep && ep.blocked && ep.blocked[0]) || 'ยังไม่ผ่าน') };
   const ex = snap.exchange;
   if (!ex) return { action: 'wait', text: 'อ่านตลาด Token ไม่ได้' };
   const plan = (ex.plans || []).find(p => p.id === cfg.planId) || (ex.plans || [])[0];
   if (!plan) return { action: 'wait', text: 'ไม่พบแพ็กเกจ Premium ในเกม' };
   const until = toMs(ex.premiumUntil);
   const active = until > nowMs;
-  const target = tokenTarget(plan.tokens, plan.days, cfg.leadDays, until, nowMs);
+  const prebuy = !cfg || cfg.prebuyNextRound !== false;
+  const target = tokenTarget(plan.tokens, plan.days, cfg.leadDays, until, nowMs, prebuy);
   const base = { plan, target, active, premiumUntil: until || null, tokens: ex.tokens };
   if (ex.tokens >= plan.tokens && (!active || until - nowMs <= T.renewBeforeMs)) {
     return Object.assign(base, { action: 'activate', text: active ? 'ต่อ Premium ' + plan.days + ' วัน' : 'ปลดล็อค Premium ' + plan.days + ' วัน' });
   }
   const need = target - ex.tokens;
-  if (need <= 0) return Object.assign(base, { action: 'idle', text: active ? 'Premium ใช้งานอยู่ · Token ครบตามแผนแล้ว' : 'รอปลดล็อค' });
+  if (need <= 0) {
+    const idleText = active
+      ? (prebuy ? 'Premium ใช้งานอยู่ · Token ครบตามแผนแล้ว' : 'Premium ใช้งานอยู่ (ปิดซื้อเผื่อรอบถัดไป)')
+      : 'รอปลดล็อค';
+    return Object.assign(base, { action: 'idle', text: idleText });
+  }
   const budget = Math.max(0, (Number(snap.zeny) || 0) - Math.max(0, Number(cfg.reserveZeny) || 0));
   if (budget <= 0) return Object.assign(base, { action: 'wait', need, text: 'เงินไม่พอ (เก็บสำรองไว้ ' + Number(cfg.reserveZeny || 0).toLocaleString() + ' z)' });
   const w = walkAsks(ex.asks, need, budget);
@@ -265,7 +292,9 @@ function sanitizeSettings(s) {
   return {
     reserveZeny: Number.isFinite(reserve) && reserve >= 0 ? Math.min(reserve, 2e9) : DEFAULTS.reserveZeny,
     planId: typeof s.planId === 'string' && /^[\w-]{1,20}$/.test(s.planId) ? s.planId : DEFAULTS.planId,
-    leadDays: Number.isFinite(lead) && lead >= 0 && lead <= 30 ? lead : DEFAULTS.leadDays
+    leadDays: Number.isFinite(lead) && lead >= 0 && lead <= 30 ? lead : DEFAULTS.leadDays,
+    prebuyNextRound: s.prebuyNextRound !== undefined ? Boolean(s.prebuyNextRound) : DEFAULTS.prebuyNextRound,
+    requireGearComplete: s.requireGearComplete !== undefined ? Boolean(s.requireGearComplete) : DEFAULTS.requireGearComplete
   };
 }
 
@@ -316,27 +345,42 @@ function createPremiumService(opts) {
     save();
   }
 
-  // Non-zeny blockers (Set Gear not completed, Base/Job level not reached, pending trigger actions) must NEVER be
+  // Non-zeny blockers (Set Gear not completed when requireGearComplete is on, Base/Job level not reached, pending trigger actions) must NEVER be
   // bypassed by a latched gatePlan — only pure zeny triggers ('เงิน ... z') stay latched after buying Token lowers zeny.
   function hasNonZenyBlock(plan) {
-    if (!plan) return false;
-    if (plan.gearBlocked) return true;
-    const blocked = Array.isArray(plan.blocked) ? plan.blocked : [];
+    const ep = effectivePlan(plan, settings);
+    if (!ep) return false;
+    if (ep.gearBlocked) return true;
+    const blocked = Array.isArray(ep.blocked) ? ep.blocked : [];
     return blocked.some(b => !/^เงิน\s[\d,]+\s*z$/.test(String(b || '').trim()));
   }
 
-  // Plan gate with latch: once every trigger AND Set Gear of plan X passed, X stays open (zeny triggers flip back after buying)
+  // Plan gate with latch: once every trigger (and Set Gear when requireGearComplete is on) of plan X passed, X stays open (zeny triggers flip back after buying)
   function gateOpen(id, snap) {
     if (!snap || !snap.ok) return false;
     const c = cl(id);
-    if (!snap.plan) return true;
-    if (hasNonZenyBlock(snap.plan)) {
-      if (c.gatePlan && c.gatePlan === snap.plan.id) { c.gatePlan = null; save(); }
+    const ep = effectivePlan(snap.plan, settings);
+    if (!ep) return true;
+    if (hasNonZenyBlock(ep)) {
+      if (c.gatePlan && c.gatePlan === ep.id) { c.gatePlan = null; save(); }
       return false;
     }
-    if (c.gatePlan && c.gatePlan === snap.plan.id) return true;
-    if (!snap.plan.blocked || !snap.plan.blocked.length) { c.gatePlan = snap.plan.id; save(); return true; }
+    if (c.gatePlan && c.gatePlan === ep.id) return true;
+    if (!ep.blocked || !ep.blocked.length) { c.gatePlan = ep.id; save(); return true; }
     return false;
+  }
+
+  function recomputeDecisions() {
+    for (const [id, R] of runtime.entries()) {
+      const c = clients[id];
+      if (!c || !c.enabled || !R || !R.snap) continue;
+      const d = decide(R.snap, settings, gateOpen(id, R.snap), now(), T);
+      if (R.snap.busy && R.snap.busy.length && (d.action === 'buy' || d.action === 'activate')) {
+        d.action = 'wait';
+        d.text = 'รอบอทว่าง (' + R.snap.busy[0] + ')';
+      }
+      R.decision = d;
+    }
   }
 
   async function evalOk(port, code, timeoutMs) {
@@ -394,6 +438,7 @@ function createPremiumService(opts) {
         const R = runtime.get(p.id) || {};
         const s = R.snap, d = R.decision;
         const ex = s && s.exchange;
+        const ep = s && s.plan ? effectivePlan(s.plan, settings) : null;
         return {
           id: p.id, name: p.name, charName: (s && s.name) || p.lastCharName || null, charClass: p.lastCharClass || null,
           enabled: !!c.enabled, online: !!(s && s.ok),
@@ -401,7 +446,7 @@ function createPremiumService(opts) {
           tokens: ex ? ex.tokens : null, premiumUntil: ex ? toMs(ex.premiumUntil) || null : null,
           target: d && d.target != null ? d.target : null, cost: d && d.plan ? d.plan.tokens : null,
           status: d ? d.action : (c.enabled ? 'pending' : 'off'), statusText: d ? d.text : (c.enabled ? 'รอรอบตรวจถัดไป' : 'ปิดอยู่'),
-          planName: s && s.plan ? s.plan.name : null, planBlocked: s && s.plan && !(c.gatePlan && c.gatePlan === s.plan.id && !hasNonZenyBlock(s.plan)) ? s.plan.blocked : [],
+          planName: ep ? ep.name : null, planBlocked: ep && !(c.gatePlan && c.gatePlan === ep.id && !hasNonZenyBlock(ep)) ? ep.blocked : [],
           lastError: R.lastError || null, checkedAt: R.at || null, history: (c.history || []).slice(0, 5)
         };
       })
@@ -416,6 +461,7 @@ function createPremiumService(opts) {
     if (pathname === '/api/premium/settings') {
       settings = sanitizeSettings(Object.assign({}, settings, body));
       save();
+      recomputeDecisions();
       sendJSON(view());
       return true;
     }
@@ -450,4 +496,4 @@ function createPremiumService(opts) {
   return { handleRoute, tick, start, stop, view, _settings: () => settings, _clients: () => clients };
 }
 
-module.exports = { createPremiumService, decide, walkAsks, tokenTarget, sanitizeSettings, toMs, READ_JS, ACTIONS, DEFAULTS, TIMING };
+module.exports = { createPremiumService, decide, walkAsks, tokenTarget, sanitizeSettings, effectivePlan, toMs, READ_JS, ACTIONS, DEFAULTS, TIMING };

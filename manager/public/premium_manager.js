@@ -48,8 +48,24 @@
             <select id="pm-plan" data-set="planId"></select></div>
           <div class="pm-field"><label for="pm-reserve">เก็บเงินสำรองไว้ (z)</label>
             <input id="pm-reserve" data-set="reserveZeny" inputmode="numeric" value=""></div>
-          <div class="pm-field"><label for="pm-lead">ซื้อครบก่อนหมด (วัน)</label>
+          <div class="pm-field" id="pm-lead-field"><label for="pm-lead">ซื้อครบก่อนหมด (วัน)</label>
             <input id="pm-lead" data-set="leadDays" inputmode="decimal" value=""></div>
+        </div>
+        <div class="pm-toggles">
+          <label class="pm-opt-toggle on" for="pm-prebuy">
+            <div class="pm-opt-txt">
+              <b>ซื้อเผื่อไว้รอบถัดไป</b>
+              <small>สะสม Token ล่วงหน้าตอนมี VIP</small>
+            </div>
+            <span class="pm-switch"><input type="checkbox" id="pm-prebuy" data-set="prebuyNextRound" checked><span></span></span>
+          </label>
+          <label class="pm-opt-toggle on" for="pm-req-gear">
+            <div class="pm-opt-txt">
+              <b>ซื้อเซ็ตให้ครบก่อน</b>
+              <small>รอใส่เซ็ตอุปกรณ์ในแผนครบก่อน</small>
+            </div>
+            <span class="pm-switch"><input type="checkbox" id="pm-req-gear" data-set="requireGearComplete" checked><span></span></span>
+          </label>
         </div>
       </section>
       <nav class="pm-filter" id="pm-filter">
@@ -62,8 +78,8 @@
       </nav>
       <div class="pm-body" id="pm-body"></div>
       <footer class="pm-foot">
-        เริ่มทำงานเมื่อ Plan Script ผ่านครบทุกเงื่อนไข (เลเวล ใส่เซ็ต เงิน) · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที<br>
-        ยังไม่มี Premium → ซื้อ Token ราคาขายต่ำสุดจนครบแล้วปลดล็อค · มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด <b id="pm-lead-hint"></b>
+        <span id="pm-gate-hint">เริ่มทำงานเมื่อ Plan Script ผ่านครบทุกเงื่อนไข (เลเวล ใส่เซ็ต เงิน) · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที</span><br>
+        ยังไม่มี Premium → ซื้อ Token ราคาขายต่ำสุดจนครบแล้วปลดล็อค · <span id="pm-prebuy-hint">มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด</span> <b id="pm-lead-hint"></b>
       </footer>`;
     document.body.append(tab, scrim, drawer);
 
@@ -155,8 +171,49 @@
       if (leadInp.value !== nextLead) leadInp.value = nextLead;
     }
 
+    const prebuyOn = s.prebuyNextRound !== false;
+    const prebuyChk = document.getElementById('pm-prebuy');
+    if (prebuyChk && prebuyChk.checked !== prebuyOn) prebuyChk.checked = prebuyOn;
+    const prebuyCard = prebuyChk && prebuyChk.closest('.pm-opt-toggle');
+    if (prebuyCard) prebuyCard.classList.toggle('on', prebuyOn);
+
+    const reqGearOn = s.requireGearComplete !== false;
+    const reqGearChk = document.getElementById('pm-req-gear');
+    if (reqGearChk && reqGearChk.checked !== reqGearOn) reqGearChk.checked = reqGearOn;
+    const reqGearCard = reqGearChk && reqGearChk.closest('.pm-opt-toggle');
+    if (reqGearCard) reqGearCard.classList.toggle('on', reqGearOn);
+
+    const leadField = document.getElementById('pm-lead-field');
+    if (leadField) leadField.classList.toggle('disabled', !prebuyOn);
+    if (leadInp) leadInp.disabled = !prebuyOn;
+
+    const gateHint = document.getElementById('pm-gate-hint');
+    if (gateHint) {
+      setText(
+        gateHint,
+        reqGearOn
+          ? 'เริ่มทำงานเมื่อ Plan Script ผ่านครบทุกเงื่อนไข (เลเวล ใส่เซ็ต เงิน) · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที'
+          : 'เริ่มทำงานเมื่อผ่านเงื่อนไขเลเวล/เงินในแผน (ไม่ต้องรอซื้อเซ็ตครบ) · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที'
+      );
+    }
+
+    const prebuyHint = document.getElementById('pm-prebuy-hint');
+    if (prebuyHint) {
+      setText(
+        prebuyHint,
+        prebuyOn ? 'มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด' : 'มี Premium แล้ว → หยุดซื้อเผื่อรอบถัดไป'
+      );
+    }
+
     const hint = document.getElementById('pm-lead-hint');
-    if (hint) setText(hint, cur ? `(${cur.days} วัน → ครบใน ${Math.max(0.25, cur.days - (Number(s.leadDays) || 0))} วัน)` : '');
+    if (hint) {
+      setText(
+        hint,
+        prebuyOn
+          ? (cur ? `(${cur.days} วัน → ครบใน ${Math.max(0.25, cur.days - (Number(s.leadDays) || 0))} วัน)` : '')
+          : '(รอหมดอายุก่อนค่อยซื้อรอบใหม่)'
+      );
+    }
   }
 
   function createRowEl(c) {
@@ -347,7 +404,7 @@
 
   async function onSetting(e) {
     const t = e.target; if (!t.dataset.set) return;
-    let v = t.value;
+    let v = t.type === 'checkbox' ? Boolean(t.checked) : t.value;
     if (t.dataset.set === 'reserveZeny') v = Number(String(v).replace(/[^0-9]/g, '')) || 0;
     if (t.dataset.set === 'leadDays') v = Number(v);
     busy = true;

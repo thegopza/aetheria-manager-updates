@@ -2681,6 +2681,15 @@ function isJailMapName(mapStr) {
   return /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(s);
 }
 
+function isConfirmedOutOfJailMap(state) {
+  if (!state || typeof state.map !== 'string') return false;
+  const s = state.map.trim();
+  if (!s || s === '--' || s === '-' || /ไม่ทราบแมพ|unknown|loading|กำลังโหลด/i.test(s)) return false;
+  if (isJailMapName(s)) return false;
+  if (!state.charName) return false;
+  return true;
+}
+
 const jailStoppingInFlight = new Set();
 async function recordProfileJailedAndStop(profile, state) {
   if (!profile || !profile.id) return false;
@@ -2721,7 +2730,7 @@ function clearProfileJailStatus(profileId, resetAutoStop = false) {
   let changed = false;
   for (const p of fresh) {
     if (!profileId || String(p.id) === pid) {
-      if (p.isJailed || p.jailedAt || p.jailedMap || (resetAutoStop && p.jailAutoStopped)) {
+      if (p.isJailed || p.jailedAt || p.jailedMap || (resetAutoStop && p.jailAutoStopped) || (!resetAutoStop && !p.jailAutoStopped)) {
         delete p.isJailed;
         delete p.jailedAt;
         delete p.jailedMap;
@@ -2792,7 +2801,7 @@ setInterval(async () => {
               }
               await recordProfileJailedAndStop(p, state);
             }
-          } else if (state && typeof state.map === 'string' && state.map.trim() && state.map.trim() !== '--') {
+          } else if (isConfirmedOutOfJailMap(state)) {
             prisonAlertedByProfile.delete(p.id);
             if (p.isJailed || p.jailAutoStopped) clearProfileJailStatus(p.id, true);
           }
@@ -3307,7 +3316,7 @@ const server = http.createServer(async (req, res) => {
             } else {
               p.jailedMap = liveState.map;
             }
-          } else if (typeof liveState.map === 'string' && liveState.map.trim() && liveState.map.trim() !== '--' && (p.isJailed || p.jailAutoStopped)) {
+          } else if (isConfirmedOutOfJailMap(liveState) && (p.isJailed || p.jailAutoStopped)) {
             clearProfileJailStatus(p.id, true);
             p.isJailed = false;
             p.jailAutoStopped = false;
@@ -3735,7 +3744,7 @@ const server = http.createServer(async (req, res) => {
     const profilesForLaunch = loadProfiles();
     const p0 = profilesForLaunch.find(p => p.id === id);
     if (!p0) return sendJSON({ success: false, error: "Profile not found" }, 404);
-    if (p0.isJailed && !p0.jailAutoStopped) {
+    if (!p0.jailAutoStopped) {
       p0.jailAutoStopped = true;
       saveProfiles(profilesForLaunch);
     }
@@ -3832,6 +3841,14 @@ const server = http.createServer(async (req, res) => {
     const openFlags = await Promise.all(allProfiles.map(p => clientAlreadyOpen(p)));
     const skipped = allProfiles.filter((p, i) => openFlags[i]).map(p => p.name);
     const toOpen = allProfiles.filter((p, i) => !openFlags[i]);
+    let jailGuardUpdated = false;
+    for (const p0 of toOpen) {
+      if (!p0.jailAutoStopped) {
+        p0.jailAutoStopped = true;
+        jailGuardUpdated = true;
+      }
+    }
+    if (jailGuardUpdated) saveProfiles(allProfiles);
     if (isBrowserMode()) {
       (async () => {
         const launched = [], failed = [];

@@ -670,11 +670,13 @@ function createPartyService(opts) {
       return (s && s.name) || (p && p.lastCharName) || null;
     })).filter(Boolean);
 
-    for (const id of party.memberIds) {
+    for (const id of [party.leaderId].concat(party.memberIds)) {
       const P = profiles.get(id), S = states.get(id), m = mrt(party.id, id);
-      if (!S || !S.ok || !S.name || !inGame.has(S.name)) continue;
-      const ft = resolveFollowTarget(party, id, profiles, states);
-      if (ft.mode === 'none') {
+      if (!S || !S.ok || !S.name || (id !== party.leaderId && !inGame.has(S.name))) continue;
+      const ft = id === party.leaderId
+        ? { mode: 'none', targetId: null, targetName: null, targetSnap: null }
+        : resolveFollowTarget(party, id, profiles, states);
+      if (ft.mode === 'none' || ft.viaPriest) {
         if (!S.follow || S.returningToPriest) continue;
         if (now() - (m.unfollowAt || 0) < T.unfollowCooldownMs) continue;
         m.unfollowAt = now();
@@ -682,6 +684,7 @@ function createPartyService(opts) {
         const r = await act(P, ACTIONS.stopFollow(), 'stop-follow');
         if (r.ok) { S.follow = null; log('stop-follow', S.name, '(was following ' + prev + ')'); }
       } else {
+        if (S.returningToPriest) continue;
         if (!ft.targetName) continue;
         if (planBlocked(S) || (S.busy && S.busy.length)) continue;
         const TS = ft.targetSnap;
@@ -772,10 +775,9 @@ function createPartyService(opts) {
       const P = profiles.get(id), S = states.get(id);
       if (!P || !S || !S.ok || !S.helpers || !S.helpers.updatePartySyncState) continue;
       let effMode = 'none';
-      if (id === party.leaderId) {
-        effMode = (priest && priest.id !== party.leaderId) ? 'priest' : 'none';
-      } else {
-        effMode = resolveFollowTarget(party, id, profiles, states).mode;
+      if (id !== party.leaderId) {
+        const ft = resolveFollowTarget(party, id, profiles, states);
+        effMode = ft.viaPriest ? 'none' : ft.mode;
       }
       await act(P, ACTIONS.syncClientPartyState({
         partyId: party.id,

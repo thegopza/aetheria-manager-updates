@@ -241,7 +241,8 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
       while (clock() - started < clientBackTimeoutMs) {
         const now = await probe(p);
         if (now && now.inGame && now.loadedAt > info.loadedAt) {
-          if (!isCurrentFor(target, now)) {
+          const liveTarget = currentTarget();
+          if (!isCurrentFor(target, now) && !(liveTarget && isCurrentFor(liveTarget, now))) {
             await sleep(3000);
             continue;
           }
@@ -273,21 +274,24 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
     }
   }
 
+  function syncManagedLatest() {
+    if (!getCachedManagedRelease) return;
+    try {
+      const cached = getCachedManagedRelease();
+      if (cached && /^\d+\.\d+\.\d+$/.test(cached.version || '') && /^[a-f0-9]{64}$/.test(cached.hash || '') && status.latest?.sha !== cached.hash) {
+        status.latest = { sha: cached.hash, blobSha: cached.hash, version: cached.version,
+          message: 'PmheeAether payload v' + cached.version, date: Date.now(), managed: true };
+        status.ready = { sha: cached.hash, at: Date.now(), observedLive: true };
+        status.lastError = null;
+      }
+    } catch (_) {}
+  }
+
   async function updateCycle() {
     if (busyCycle) return;
     busyCycle = true;
     try {
-      if (getCachedManagedRelease) {
-        try {
-          const cached = getCachedManagedRelease();
-          if (cached && /^\d+\.\d+\.\d+$/.test(cached.version || '') && /^[a-f0-9]{64}$/.test(cached.hash || '') && status.latest?.sha !== cached.hash) {
-            status.latest = { sha: cached.hash, blobSha: cached.hash, version: cached.version,
-              message: 'PmheeAether payload v' + cached.version, date: Date.now(), managed: true };
-            status.ready = { sha: cached.hash, at: Date.now(), observedLive: true };
-            status.lastError = null;
-          }
-        } catch (_) {}
-      }
+      syncManagedLatest();
       if (!status.ready) return;
       const settleUntil = status.latest ? status.latest.date + SETTLE_MS : 0;
       if (!status.latest?.managed && Date.now() < settleUntil && Date.now() - manualAt > SETTLE_MS) {
@@ -296,7 +300,7 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
         return;
       }
       status.settleUntil = null;
-      const target = currentTarget();
+      let target = currentTarget();
       if (!target) return;
       // A newer release supersedes old failures.
       let dropped = false;
@@ -305,6 +309,8 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
       const profiles = loadProfiles().filter(p => p.debugPort);
       let pending = 0;
       for (const p of profiles) {
+        syncManagedLatest();
+        target = currentTarget() || target;
         const info = await probe(p);
         if (!info) { delete status.clients[p.id]; continue; }
         if (isCurrentFor(target, info)) {

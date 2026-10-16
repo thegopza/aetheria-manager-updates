@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "475a2bc763efaf61b844dacb4df28ebe84190c8f",
+  "sourceCommit": "1289b92636519fa6433694b0ea3ce1bd98f48675",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -8,7 +8,7 @@
     },
     {
       "path": "manager/bot_auto_update.js",
-      "sha256": "b40cf9a77a51f8613a785646f90fa383b50ddcbcd7a9f3b28ccd8f556b73e897"
+      "sha256": "0332c270e93da2ece1523f415a7c2dd25dac525a80aeae842a889e3268789128"
     },
     {
       "path": "manager/browser_mode.js",
@@ -232,7 +232,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "6dabc96435883cd78fadd7eeafd29dd0d24f3bf94b7d300d1373a166a0bd91d4"
+      "sha256": "dc2c192a965635424a10e4413542c11e1c826f2646b7e3d92bd4a9635e1306fd"
     },
     {
       "path": "manager/test_isolation.js",

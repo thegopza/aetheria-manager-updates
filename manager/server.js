@@ -3316,7 +3316,7 @@ const partyService = createPartyService({
   loadProfiles,
   evalProfilePort,
   dataFile: path.join(__dirname, "data", "parties.json"),
-  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
+  isBusy: () => consolidationState.running
 });
 partyService.start();
 

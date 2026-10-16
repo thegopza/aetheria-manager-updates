@@ -32,21 +32,21 @@ const BUSY_FLAGS = ['__isNavigating', '__isWalkingToMap', '__isShopping', '__isR
   '__isMarketScanning', '__isWeightScrollBusy'];
 
 const TIMING = {
-  tickMs: 10000,
+  tickMs: 5000,
   inviteCooldownMs: 15000,
   inviteMaxAttempts: 3,
   excludeAfterFailMs: 5 * 60 * 1000,
   dropOfflineAfterMs: 2 * 60 * 1000,
   dropOtherPartyAfterMs: 45 * 1000,
   settingsCooldownMs: 15000,
-  mapCooldownMs: 60000,
+  mapCooldownMs: 18000,
   channelCooldownMs: 45000,
   channelFailsBeforeFallback: 2,
   fallbackCooldownMs: 3 * 60 * 1000,
   acceptDelayMs: 1500,
   leaveCooldownMs: 15000,
   disbandGapMs: 1200,
-  gatherCooldownMs: 45000,
+  gatherCooldownMs: 12000,
   memberMoveWaitMs: 120000,
   leaderMoveWaitMs: 45000,
   unfollowCooldownMs: 20000,
@@ -96,7 +96,7 @@ const READ_JS = `(() => {
       const toast = document.querySelector('.invite-toast');
       if (toast) {
         const txt = (toast.innerText || toast.textContent || '').trim();
-        const m = txt.match(/^(\S+)\s+เชิญคุณเข้าปาร์ตี้/m);
+        const m = txt.match(/^(\\S+)\\s+เชิญคุณเข้าปาร์ตี้/m);
         if (m) invite = { kind: 'party', from: m[1] };
       }
     }
@@ -121,6 +121,7 @@ const READ_JS = `(() => {
     const ci = order.indexOf(cls);
     const levelPending = (p.triggers || []).filter(t => t && (t.type === 'base_level' || t.type === 'job_level')).filter(t => {
       if (done[t.id]) return false;
+      if (Array.isArray(t.actions) && t.actions.length && !t.actions.some(a => a && (a.type === 'change_map' || a.type === 'change_class'))) return false;
       if (pend[t.id]) {
         // Still retrying: only blocks while a map / class step is left (gear, arrows, selling don't move the character)
         const left = Array.isArray(pend[t.id].actions) ? pend[t.id].actions.map(i => (t.actions || [])[i]).filter(Boolean) : (t.actions || []);
@@ -138,16 +139,25 @@ const READ_JS = `(() => {
     }).map(t => (t.type === 'base_level' ? 'Base ' : 'Job ') + t.targetLevel + (t.classId ? ' ' + t.classId : ''));
     return { name: p.name || null, levelPending };
   })();
+  let needsPriestBuff = false;
+  try {
+    if (typeof window.getPartyPriestBuffStatus === 'function') {
+      needsPriestBuff = Boolean(window.getPartyPriestBuffStatus(20000).needsPriest);
+    }
+  } catch (e) {}
   return {
     ok: true,
     name: (me && me.name) || (live && live.charName) || null,
     level: (me && me.level) || (live && live.baseLv) || null,
-    classId: me ? me.classId : null,
+    classId: (me && me.classId) || (live && live.classId) || null,
     mapId: room.state.mapId || null,
     mapName: room.state.displayName || null,
     channel: typeof room.state.channel === 'number' ? room.state.channel : null,
     targetMap: window.__targetFarmMap || (live && live.targetMap) || null,
+    keptFarmMap: window.__keptFarmMap || null,
     botRunning: window.__isBotRunning === true,
+    returningToPriest: window.__returningToPriest === true,
+    needsPriestBuff,
     busy,
     plan,
     partyKnown: !!g.party,
@@ -158,7 +168,13 @@ const READ_JS = `(() => {
       members: (party.members || []).map(m => ({ name: m.name, online: m.online !== false, mapId: m.mapId, mapName: m.mapName, channel: m.channel, level: m.level }))
     } : null,
     invite: invite && invite.kind === 'party' && (!invite.expiresAt || invite.expiresAt > Date.now()) ? { from: invite.from, expiresAt: invite.expiresAt } : null,
-    helpers: { moveToChannel: typeof window.moveToChannel === 'function', findLeast: typeof window.findLeastPopulatedChannel === 'function', setTargetFarmMap: typeof window.setTargetFarmMap === 'function' }
+    helpers: {
+      moveToChannel: typeof window.moveToChannel === 'function',
+      findLeast: typeof window.findLeastPopulatedChannel === 'function',
+      evaluateAnchorChannel: typeof window.evaluatePartyChannelSwitch === 'function',
+      setTargetFarmMap: typeof window.setTargetFarmMap === 'function',
+      updatePartySyncState: typeof window.updatePartySyncState === 'function'
+    }
   };
 })()`;
 
@@ -215,10 +231,12 @@ const ACTIONS = {
   setMap: (map, walkNow) => `(() => {
     const map = ${JSON.stringify(map)};
     if (typeof window.clearSafeMap === 'function') window.clearSafeMap('ปาร์ตี้: ตามแมพหัวตี้');
+    window.__partyForcedMap = map;
+    if (typeof window.setPlanManualMap === 'function') window.setPlanManualMap(map);
     window.__targetFarmMap = map;
     try { localStorage.setItem('pelican_farm_map', map); } catch (e) {}
     const sel = document.getElementById('p-target-map-select'); if (sel) sel.value = map;
-    if (typeof window.setTargetFarmMap === 'function') window.setTargetFarmMap(map, ${walkNow ? 'true' : 'false'});
+    if (typeof window.setTargetFarmMap === 'function') window.setTargetFarmMap(map, ${walkNow ? 'true' : 'false'}, { fromParty: true });
     return { success: true };
   })()`,
   // Same idea as the zeny consolidation: moveToChannel waits for the cooldown / a free slot by itself;
@@ -237,10 +255,47 @@ const ACTIONS = {
     let r = await window.findLeastPopulatedChannel();
     const ch = typeof r === 'number' ? r : (r && (r.channel != null ? r.channel : r.ch));
     return typeof ch === 'number' ? { success: true, channel: ch } : { success: false, error: 'no-channel' };
+  })()`,
+  evaluateAnchorChannel: (partySize, partyNames) => `(async () => {
+    if (typeof window.evaluatePartyChannelSwitch !== 'function') return { success: false, error: 'no-helper' };
+    return await window.evaluatePartyChannelSwitch(${Number(partySize) || 1}, ${JSON.stringify(partyNames || [])});
+  })()`,
+  syncClientPartyState: sync => `(() => {
+    if (typeof window.updatePartySyncState === 'function') return window.updatePartySyncState(${JSON.stringify(sync)});
+    window.__pmPartySync = ${JSON.stringify(sync)};
+    return { success: true };
   })()`
 };
 
 // ---------------------------------------------------------------- pure helpers (unit-tested)
+function isCityMapName(m) {
+  return /เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน/.test(String(m || ''));
+}
+
+function isPriestClass(cls) {
+  return /^(priest|acolyte)$/i.test(String(cls || '').trim());
+}
+
+function findPartyPriest(party, profiles, states) {
+  if (!party || !states) return null;
+  const L = states.get(party.leaderId);
+  const inGame = new Set(inGameMemberNames(L));
+  const allIds = [party.leaderId].concat(Array.isArray(party.memberIds) ? party.memberIds : []);
+  let fallback = null;
+  for (const id of allIds) {
+    const S = states.get(id);
+    const P = profiles ? profiles.get(id) : null;
+    if (!S || !S.ok || !S.name) continue;
+    if (id !== party.leaderId && inGame.size > 0 && !inGame.has(S.name)) continue;
+    const cls = S.classId || (P && P.lastCharClass) || '';
+    if (!isPriestClass(cls)) continue;
+    const entry = { id: String(id), name: S.name, snap: S, profile: P };
+    if (!isCityMapName(S.mapName)) return entry;
+    if (!fallback) fallback = entry;
+  }
+  return fallback;
+}
+
 function assignedIds(parties) {
   const s = new Set();
   for (const p of parties) { s.add(p.leaderId); for (const id of p.memberIds || []) s.add(id); }
@@ -314,6 +369,14 @@ function sanitizeFollowModes(party) {
 function resolveFollowTarget(party, memberId, profiles, states) {
   const mode = normalizeFollowMode(party && party.followModes && party.followModes[memberId], party, memberId);
   if (mode === 'none') return { mode: 'none', targetId: null, targetName: null, targetSnap: null };
+  // เมื่อในปาร์ตี้มี Priest ออนไลน์: โหมดตามหัวตี้ ('leader') จะยึด Priest เป็นหลัก (ตามพระเป็นศูนย์กลาง)
+  const priest = findPartyPriest(party, profiles, states);
+  if (mode === 'leader' && priest) {
+    if (String(memberId) === String(priest.id)) {
+      return { mode: 'none', targetId: null, targetName: null, targetSnap: null, isAnchorPriest: true };
+    }
+    return { mode: 'leader', targetId: priest.id, targetName: priest.name, targetSnap: priest.snap, viaPriest: true };
+  }
   const targetId = mode === 'leader' ? party.leaderId : mode.slice(7);
   const targetSnap = states ? states.get(targetId) : null;
   const targetProfile = profiles ? profiles.get(targetId) : null;
@@ -598,15 +661,21 @@ function createPartyService(opts) {
     }
 
     // Per-member follow / assist mode:
-    // - 'none' (default): cancel the game's follow (e.g. after รวมทีม) so the member farms the map independently.
-    // - 'leader' or 'member:<id>': engage the game's follow on that party member so this character walks after
-    //   and AUTO-assists them whenever both are on the same map & CH.
+    // - 'none' (default): cancel the game's follow (e.g. after รวมทีม) so the member farms the map independently
+    //   (unless it is temporarily walking back to the Priest for buffs: S.returningToPriest === true).
+    // - 'leader' or 'member:<id>': engage the game's follow on that party member (or the Priest when a Priest is in the party).
+    const priest = findPartyPriest(party, profiles, states);
+    const allPartyNames = [L.name].concat(party.memberIds.map(id => {
+      const s = states.get(id), p = profiles.get(id);
+      return (s && s.name) || (p && p.lastCharName) || null;
+    })).filter(Boolean);
+
     for (const id of party.memberIds) {
       const P = profiles.get(id), S = states.get(id), m = mrt(party.id, id);
       if (!S || !S.ok || !S.name || !inGame.has(S.name)) continue;
       const ft = resolveFollowTarget(party, id, profiles, states);
       if (ft.mode === 'none') {
-        if (!S.follow) continue;
+        if (!S.follow || S.returningToPriest) continue;
         if (now() - (m.unfollowAt || 0) < T.unfollowCooldownMs) continue;
         m.unfollowAt = now();
         const prev = S.follow;
@@ -626,43 +695,119 @@ function createPartyService(opts) {
       }
     }
 
-    // Same map + same CH as the leader
+    // Same map + same CH as the party (Priest is the Channel Anchor when present on the farm map; otherwise Leader)
+    let leaderMap = null;
+    if (L.targetMap && !isCityMapName(L.targetMap)) leaderMap = L.targetMap;
+    else if (L.mapName && !isCityMapName(L.mapName)) leaderMap = L.mapName;
+    else if (L.keptFarmMap && !isCityMapName(L.keptFarmMap)) leaderMap = L.keptFarmMap;
+    else if (rt.lastLeaderFarmMap && !isCityMapName(rt.lastLeaderFarmMap)) leaderMap = rt.lastLeaderFarmMap;
+    else leaderMap = L.targetMap || L.mapName;
+    if (leaderMap && !isCityMapName(leaderMap)) rt.lastLeaderFarmMap = leaderMap;
+
     if (party.syncMap) {
-      const leaderMap = L.targetMap || L.mapName;
+      let anchorId = party.leaderId;
+      let anchorSnap = L;
+      if (priest && priest.snap && priest.snap.ok && priest.snap.mapId && !isCityMapName(priest.snap.mapName)) {
+        const onFarmMap = !leaderMap || (priest.snap.mapName && priest.snap.mapName.includes(leaderMap)) || priest.snap.mapId === L.mapId;
+        if (onFarmMap) {
+          anchorId = priest.id;
+          anchorSnap = priest.snap;
+        }
+      }
+
+      const anchorOnFarm = Boolean(anchorSnap && anchorSnap.mapId && !isCityMapName(anchorSnap.mapName));
+      const needsInitialChannelCheck = Boolean(
+        anchorOnFarm &&
+        rt.settledMapId !== anchorSnap.mapId &&
+        anchorSnap.helpers &&
+        anchorSnap.helpers.evaluateAnchorChannel
+      );
+      const desiredCh = (anchorOnFarm && rt.settledMapId === anchorSnap.mapId && typeof rt.settledChannel === 'number')
+        ? rt.settledChannel
+        : (anchorSnap ? anchorSnap.channel : L.channel);
+
       const movers = [];
+      // If Priest is the Channel Anchor (or settledChannel is locked on this map) and the Leader is on a different CH on the same map, Leader moves too!
+      if (anchorOnFarm && L.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && L.channel !== desiredCh && !(L.busy && L.busy.length) && L.helpers && L.helpers.moveToChannel) {
+        if (anchorId !== party.leaderId || rt.settledMapId === anchorSnap.mapId) {
+          movers.push(party.leaderId);
+        }
+      }
+
       for (const id of party.memberIds) {
         const P = profiles.get(id), S = states.get(id), m = mrt(party.id, id);
         if (!S || !S.ok || !S.name || !inGame.has(S.name)) continue;
         if (planBlocked(S)) continue; // the plan still levels this character on its own maps
         if (S.busy && S.busy.length) continue;
-        if (leaderMap && S.targetMap !== leaderMap && S.helpers && S.helpers.setTargetFarmMap && now() - m.mapAt >= T.mapCooldownMs) {
+        const wrongTarget = Boolean(leaderMap && S.targetMap !== leaderMap);
+        const wrongCurrentMap = Boolean(
+          leaderMap &&
+          !isCityMapName(leaderMap) &&
+          S.botRunning &&
+          S.mapName &&
+          !S.mapName.includes(leaderMap) &&
+          !isCityMapName(S.mapName)
+        );
+        if ((wrongTarget || wrongCurrentMap) && S.helpers && S.helpers.setTargetFarmMap && now() - m.mapAt >= T.mapCooldownMs) {
           m.mapAt = now();
           await act(P, ACTIONS.setMap(leaderMap, S.botRunning), 'set-map');
         }
-        if (channelTarget(L, S) != null && S.helpers && S.helpers.moveToChannel) movers.push(id);
+        if (anchorSnap && S.mapId && S.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && S.channel !== desiredCh && S.helpers && S.helpers.moveToChannel) {
+          movers.push(id);
+        }
       }
-      if (movers.length && !rt.gathering && now() - rt.gatherAt >= T.gatherCooldownMs && !isBusy()) {
-        gatherChannels(party, profiles, L, movers).catch(e => log('gather error', e.message));
+      if ((needsInitialChannelCheck || movers.length) && !rt.gathering && now() - rt.gatherAt >= T.gatherCooldownMs && !isBusy()) {
+        gatherChannels(party, profiles, anchorId, anchorSnap, movers, needsInitialChannelCheck, allPartyNames).catch(e => log('gather error', e.message));
       }
       if (rt.gathering && rt.gatherNote) notes.push(rt.gatherNote);
       else if (rt.channelNote) notes.push(rt.channelNote);
     }
+
+    // Push Priest-centric sync state to all clients in the party that support updatePartySyncState
+    const membersNeedingBuff = [party.leaderId].concat(party.memberIds).reduce((acc, id) => {
+      const s = states.get(id);
+      return acc + (s && s.ok && s.needsPriestBuff ? 1 : 0);
+    }, 0);
+    for (const id of [party.leaderId].concat(party.memberIds)) {
+      const P = profiles.get(id), S = states.get(id);
+      if (!P || !S || !S.ok || !S.helpers || !S.helpers.updatePartySyncState) continue;
+      let effMode = 'none';
+      if (id === party.leaderId) {
+        effMode = (priest && priest.id !== party.leaderId) ? 'priest' : 'none';
+      } else {
+        effMode = resolveFollowTarget(party, id, profiles, states).mode;
+      }
+      await act(P, ACTIONS.syncClientPartyState({
+        partyId: party.id,
+        leaderName: L.name,
+        priestName: priest ? priest.name : null,
+        isAnchorPriest: Boolean(priest && String(priest.id) === String(id)),
+        followMode: effMode,
+        forcedMap: (party.syncMap && id !== party.leaderId && !planBlocked(S)) ? leaderMap : null,
+        partyNames: allPartyNames,
+        membersNeedingBuff
+      }), 'sync-party-state');
+    }
+
     rt.notes = notes;
   }
 
-  // Bring members onto the leader's CH, the way the zeny consolidation does it: one character at a time,
-  // wait for moveToChannel (it waits out cooldown / a full CH itself), then check where it really is.
-  // A member that can't get in → the leader moves to the least populated CH and everyone follows to the
-  // CH the leader REALLY ended up on.
-  async function gatherChannels(party, profiles, L, movers) {
+  // Bring everyone onto the Anchor's CH (Priest when present on the farm map, otherwise Leader):
+  // 1. On first arrival at a farm map (rt.settledMapId !== anchorSnap.mapId), the Anchor checks once for the
+  //    least-crowded channel and locks rt.settledMapId + rt.settledChannel so it NEVER loops switching channels.
+  // 2. Moves members (including Leader when Priest is Anchor, and independent 'none' members) to that locked CH.
+  // 3. If a member can't enter that CH (full 40/40), the Anchor moves to the least-crowded CH and updates rt.settledChannel.
+  async function gatherChannels(party, profiles, anchorId, anchorSnap, movers, needsInitialChannelCheck, allPartyNames) {
     const rt = prt(party.id);
     rt.gathering = true; rt.gatherAt = now();
-    const leaderP = profiles.get(party.leaderId);
+    const anchorP = profiles.get(anchorId) || profiles.get(party.leaderId);
+    const anchorLabel = (priestLabel => priestLabel ? 'พระ (' + anchorSnap.name + ')' : 'หัวตี้')(isPriestClass(anchorSnap && anchorSnap.classId));
     const moveAll = async (ids, ch) => {
       for (const id of ids) {
         if (!parties.includes(party)) return { ok: false, aborted: true };
         const S = states.get(id);
         const nm = (S && S.name) || id;
+        if (S && S.channel === ch) continue;
         rt.gatherNote = nm + ' กำลังย้ายไป CH ' + ch + ' (รอคูลดาวน์/ที่ว่างให้เอง)';
         const r = await act(profiles.get(id), ACTIONS.moveChannelWait(ch, T.memberMoveWaitMs), 'move-ch', T.memberMoveWaitMs + 10000);
         if (!(r.ok && r.result && r.result.success)) return { ok: false, who: nm, error: (r.result && r.result.error) || r.error };
@@ -670,35 +815,79 @@ function createPartyService(opts) {
       return { ok: true };
     };
     try {
-      const first = await moveAll(movers, L.channel);
+      let targetCh = (rt.settledMapId === anchorSnap.mapId && typeof rt.settledChannel === 'number')
+        ? rt.settledChannel
+        : anchorSnap.channel;
+
+      // Step 1: One-time least-crowded channel selection upon entering a farm map (never loops on the same mapId)
+      if (needsInitialChannelCheck && anchorP && anchorSnap && anchorSnap.mapId) {
+        rt.gatherNote = anchorLabel + ' กำลังสแกนหา CH ที่คนน้อยสุด (เช็กครั้งเดียวเมื่อลงแมพ)';
+        const ev = await act(anchorP, ACTIONS.evaluateAnchorChannel(1 + party.memberIds.length, allPartyNames || []), 'eval-anchor-ch', 12000);
+        if (ev.ok && ev.result && ev.result.shouldSwitch && typeof ev.result.channel === 'number' && ev.result.channel !== anchorSnap.channel) {
+          const wantCh = ev.result.channel;
+          rt.gatherNote = anchorLabel + ' กำลังย้ายไป CH ' + wantCh + ' (คนน้อยสุด)';
+          const am = await act(anchorP, ACTIONS.moveChannelWait(wantCh, T.leaderMoveWaitMs), 'anchor-move-ch', T.leaderMoveWaitMs + 10000);
+          const realCh = (am.result && typeof am.result.channel === 'number') ? am.result.channel : anchorSnap.channel;
+          targetCh = realCh;
+          anchorSnap.channel = realCh;
+        } else {
+          targetCh = anchorSnap.channel;
+        }
+        rt.settledMapId = anchorSnap.mapId;
+        rt.settledChannel = targetCh;
+      }
+
+      // Recompute who needs to move to targetCh now
+      const LNow = states.get(party.leaderId);
+      const inGameNow = new Set(inGameMemberNames(LNow));
+      const todoIds = [];
+      for (const id of [party.leaderId].concat(party.memberIds)) {
+        const S = states.get(id);
+        if (!S || !S.ok || !S.name) continue;
+        if (id !== party.leaderId && !inGameNow.has(S.name)) continue;
+        if (planBlocked(S) || (S.busy && S.busy.length) || !(S.helpers && S.helpers.moveToChannel)) continue;
+        if (S.mapId === anchorSnap.mapId && S.channel !== targetCh) todoIds.push(id);
+      }
+      for (const id of movers || []) {
+        if (!todoIds.includes(id)) {
+          const S = states.get(id);
+          if (S && S.channel !== targetCh) todoIds.push(id);
+        }
+      }
+
+      if (!todoIds.length) { rt.channelNote = null; return; }
+      const first = await moveAll(todoIds, targetCh);
       if (first.ok) { rt.channelNote = null; return; }
       if (first.aborted) return;
       if (now() - rt.fallbackAt < T.fallbackCooldownMs) {
-        rt.channelNote = first.who + ' เข้า CH ' + L.channel + ' ไม่ได้ — จะลองใหม่อีกครั้ง';
+        rt.channelNote = first.who + ' เข้า CH ' + targetCh + ' ไม่ได้ — จะลองใหม่อีกครั้ง';
         return;
       }
       rt.fallbackAt = now();
-      rt.gatherNote = first.who + ' เข้า CH ' + L.channel + ' ไม่ได้ — หัวตี้กำลังหา CH ที่คนน้อยสุด';
-      const least = await act(leaderP, ACTIONS.leastChannel(), 'least-ch', 15000);
+      rt.gatherNote = first.who + ' เข้า CH ' + targetCh + ' ไม่ได้ — ' + anchorLabel + ' กำลังหา CH ที่คนน้อยสุด';
+      const least = await act(anchorP, ACTIONS.leastChannel(), 'least-ch', 15000);
       const ch = least.ok && least.result ? least.result.channel : null;
-      if (typeof ch !== 'number' || ch === L.channel) {
-        rt.channelNote = first.who + ' เข้า CH ' + L.channel + ' ไม่ได้ และหา CH ที่ว่างกว่าไม่ได้';
+      if (typeof ch !== 'number' || ch === targetCh) {
+        rt.channelNote = first.who + ' เข้า CH ' + targetCh + ' ไม่ได้ และหา CH ที่ว่างกว่าไม่ได้';
         return;
       }
-      rt.gatherNote = 'หัวตี้กำลังย้ายไป CH ' + ch + ' (คนน้อยสุด)';
-      const lm = await act(leaderP, ACTIONS.moveChannelWait(ch, T.leaderMoveWaitMs), 'leader-move-ch', T.leaderMoveWaitMs + 10000);
+      rt.gatherNote = anchorLabel + ' กำลังย้ายไป CH ' + ch + ' (คนน้อยสุด)';
+      const lm = await act(anchorP, ACTIONS.moveChannelWait(ch, T.leaderMoveWaitMs), 'leader-move-ch', T.leaderMoveWaitMs + 10000);
       const real = lm.result && typeof lm.result.channel === 'number' ? lm.result.channel : null;
-      if (real == null || real === L.channel) {
-        rt.channelNote = 'หัวตี้ย้ายไป CH ' + ch + ' ไม่ได้ — จะลองใหม่ภายหลัง';
+      if (real == null || real === targetCh) {
+        rt.channelNote = anchorLabel + ' ย้ายไป CH ' + ch + ' ไม่ได้ — จะลองใหม่ภายหลัง';
         return;
       }
-      // Everyone on the leader's map follows to where the leader really is now
+      rt.settledMapId = anchorSnap.mapId;
+      rt.settledChannel = real;
+      // Everyone on the farm map follows to where the Anchor really is now
       await refreshStates(true);
       const L2 = states.get(party.leaderId);
       const inGame2 = new Set(inGameMemberNames(L2));
-      const follow = party.memberIds.filter(id => {
+      const follow = [party.leaderId].concat(party.memberIds).filter(id => {
+        if (id === anchorId) return false;
         const S = states.get(id);
-        return S && S.ok && S.name && inGame2.has(S.name) && !planBlocked(S) && !(S.busy && S.busy.length) && S.helpers && S.helpers.moveToChannel && channelTarget(L2, S) != null;
+        return S && S.ok && S.name && (id === party.leaderId || inGame2.has(S.name)) && !planBlocked(S) && !(S.busy && S.busy.length) && S.helpers && S.helpers.moveToChannel && S.mapId === anchorSnap.mapId && S.channel !== real;
       });
       const second = await moveAll(follow, real);
       rt.channelNote = second.ok
@@ -728,16 +917,22 @@ function createPartyService(opts) {
   function memberView(party, id, profiles, leaderSnap) {
     const P = profiles.get(id), S = states.get(id);
     const inGame = new Set(inGameMemberNames(leaderSnap));
+    const priest = findPartyPriest(party, profiles, states);
+    const anchorSnap = (priest && priest.snap && priest.snap.ok && priest.snap.mapId && !isCityMapName(priest.snap.mapName)) ? priest.snap : leaderSnap;
     const ft = id === party.leaderId ? { mode: 'none', targetId: null, targetName: null } : resolveFollowTarget(party, id, profiles, states);
     let status = 'offline', text = 'ออฟไลน์';
     if (S && S.ok && S.name) {
       if (inGame.has(S.name)) {
-        const same = leaderSnap && S.mapId === leaderSnap.mapId && S.channel === leaderSnap.channel;
+        const same = anchorSnap && S.mapId === anchorSnap.mapId && S.channel === anchorSnap.channel;
         status = same ? 'joined' : 'apart';
-        if (same && ft.mode !== 'none' && S.follow && (!ft.targetName || S.follow === ft.targetName)) {
-          text = ft.mode === 'leader' ? 'ตามหัวตี้' : ('ตาม ' + (ft.targetName || S.follow));
+        if (same && S.returningToPriest && priest) {
+          text = 'เดินไปรับบัฟพระ (' + priest.name + ')';
+        } else if (same && ft.isAnchorPriest) {
+          text = 'พระหลัก (ศูนย์กลางตี้)';
+        } else if (same && ft.mode !== 'none' && S.follow && (!ft.targetName || S.follow === ft.targetName)) {
+          text = ft.viaPriest ? ('ตามพระ (' + ft.targetName + ')') : (ft.mode === 'leader' ? 'ตามหัวตี้' : ('ตาม ' + (ft.targetName || S.follow)));
         } else {
-          text = same ? 'อยู่ด้วยกัน' : (S.mapId !== (leaderSnap && leaderSnap.mapId) ? 'กำลังไปแมพหัวตี้' : 'กำลังย้าย CH');
+          text = same ? 'อยู่ด้วยกัน' : (S.mapId !== (anchorSnap && anchorSnap.mapId) ? 'กำลังไปแมพตี้' : 'กำลังย้าย CH');
         }
         if (!same && planBlocked(S)) { status = 'plan'; text = 'แผนยังเก็บเลเวล (' + S.plan.levelPending[0] + ')'; }
       } else if (S.party && leaderSnap && S.party.leader !== leaderSnap.name) { status = 'other'; text = 'อยู่ตี้อื่น'; }
@@ -745,8 +940,8 @@ function createPartyService(opts) {
     } else if (S && S.reason === 'not-in-game') { status = 'offline'; text = 'ยังไม่เข้าเกม'; }
     return {
       id, profileName: P ? P.name : id, charName: (S && S.name) || (P && P.lastCharName) || null,
-      charClass: P ? P.lastCharClass || null : null, level: S && S.level, mapName: S && S.mapName, channel: S && S.channel,
-      followMode: ft.mode, followTargetId: ft.targetId, followTargetName: ft.targetName, following: (S && S.follow) || null,
+      charClass: (S && S.classId) || (P ? P.lastCharClass || null : null), level: S && S.level, mapName: S && S.mapName, channel: S && S.channel,
+      followMode: ft.isAnchorPriest ? 'leader' : ft.mode, followTargetId: ft.targetId, followTargetName: ft.targetName, following: (S && S.follow) || null,
       status, statusText: text
     };
   }
@@ -769,7 +964,7 @@ function createPartyService(opts) {
     });
     const clients = [...profiles.values()].map(p => {
       const S = states.get(p.id);
-      return { id: p.id, name: p.name, charName: (S && S.name) || p.lastCharName || null, charClass: p.lastCharClass || null,
+      return { id: p.id, name: p.name, charName: (S && S.name) || p.lastCharName || null, charClass: (S && S.classId) || p.lastCharClass || null,
         level: S && S.ok ? S.level : null, online: !!(S && S.ok && S.name), inGameParty: !!(S && S.party), assigned: taken.has(p.id),
         planPending: planBlocked(S) ? S.plan.levelPending[0] : null,
         mapName: S && S.mapName, channel: S && S.channel };
@@ -779,6 +974,12 @@ function createPartyService(opts) {
 
   async function disband(party) {
     const profiles = profileMap();
+    for (const id of [party.leaderId].concat(party.memberIds || [])) {
+      const P = profiles.get(id), S = states.get(id);
+      if (P && S && S.ok && S.helpers && S.helpers.updatePartySyncState) {
+        await act(P, ACTIONS.syncClientPartyState(null), 'clear-party-sync');
+      }
+    }
     let leaderName = null;
     // Members first (otherwise the game hands leadership to a member and the party lives on), then the leader.
     // The server drops rapid back-to-back party changes, so space them out and retry a few rounds.
@@ -907,6 +1108,9 @@ function createPartyService(opts) {
       save();
       const profiles = profileMap();
       const S = states.get(id), L = states.get(party.leaderId);
+      if (S && S.ok && S.helpers && S.helpers.updatePartySyncState) {
+        await act(profiles.get(id), ACTIONS.syncClientPartyState(null), 'clear-party-sync');
+      }
       if (S && S.ok && S.follow) {
         const r = await act(profiles.get(id), ACTIONS.stopFollow(), 'stop-follow');
         if (r.ok) S.follow = null;
@@ -943,4 +1147,4 @@ function createPartyService(opts) {
   return { handleRoute, tick, start, stop, view, _parties: () => parties, _states: () => states };
 }
 
-module.exports = { createPartyService, pickCandidates, channelTarget, assignedIds, sanitizeParty, normalizeFollowMode, sanitizeFollowModes, normalizeStates, READ_JS, ACTIONS, MAX_MEMBERS };
+module.exports = { createPartyService, pickCandidates, channelTarget, assignedIds, sanitizeParty, normalizeFollowMode, sanitizeFollowModes, findPartyPriest, resolveFollowTarget, normalizeStates, READ_JS, ACTIONS, MAX_MEMBERS };

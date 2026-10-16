@@ -32,7 +32,7 @@ const BUSY_FLAGS = ['__isNavigating', '__isWalkingToMap', '__isShopping', '__isR
   '__isMarketScanning', '__isWeightScrollBusy'];
 
 const TIMING = {
-  tickMs: 5000,
+  tickMs: 2500,
   inviteCooldownMs: 15000,
   inviteMaxAttempts: 3,
   excludeAfterFailMs: 5 * 60 * 1000,
@@ -140,9 +140,11 @@ const READ_JS = `(() => {
     return { name: p.name || null, levelPending };
   })();
   let needsPriestBuff = false;
+  let buffStatus = null;
   try {
     if (typeof window.getPartyPriestBuffStatus === 'function') {
-      needsPriestBuff = Boolean(window.getPartyPriestBuffStatus(20000).needsPriest);
+      buffStatus = window.getPartyPriestBuffStatus(25000);
+      needsPriestBuff = Boolean(buffStatus && buffStatus.needsPriest);
     }
   } catch (e) {}
   return {
@@ -157,7 +159,9 @@ const READ_JS = `(() => {
     keptFarmMap: window.__keptFarmMap || null,
     botRunning: window.__isBotRunning === true,
     returningToPriest: window.__returningToPriest === true,
+    priestBuffingTarget: window.__priestBuffingTarget || null,
     needsPriestBuff,
+    buffStatus,
     busy,
     plan,
     partyKnown: !!g.party,
@@ -766,11 +770,44 @@ function createPartyService(opts) {
       else if (rt.channelNote) notes.push(rt.channelNote);
     }
 
-    // Push Priest-centric sync state to all clients in the party that support updatePartySyncState
-    const membersNeedingBuff = [party.leaderId].concat(party.memberIds).reduce((acc, id) => {
+    // Push Priest-centric sync state + priority buffQueue to all clients in the party that support updatePartySyncState
+    const buffQueue = [];
+    for (const id of [party.leaderId].concat(party.memberIds)) {
       const s = states.get(id);
-      return acc + (s && s.ok && s.needsPriestBuff ? 1 : 0);
-    }, 0);
+      if (!s || !s.ok || !s.name) continue;
+      if (priest && String(priest.id) === String(id)) continue;
+      if (priest && priest.snap && priest.snap.ok) {
+        if (s.mapId !== priest.snap.mapId || s.channel !== priest.snap.channel) continue;
+      }
+      const bs = s.buffStatus || {};
+      const minCoreBuffMs = typeof bs.minCoreBuffMs === 'number'
+        ? bs.minCoreBuffMs
+        : Math.min(typeof bs.blessingMs === 'number' ? bs.blessingMs : 999999, typeof bs.agiMs === 'number' ? bs.agiMs : 999999);
+      const hpPct = typeof bs.hpPct === 'number' ? bs.hpPct : 1;
+      const needsHeal = Boolean(bs.needsHeal || (hpPct > 0 && hpPct < 0.65));
+      const needsBuff = Boolean(s.needsPriestBuff || s.returningToPriest || bs.needsBuff || minCoreBuffMs < 25000);
+      if (needsHeal || needsBuff) {
+        buffQueue.push({
+          id: String(id),
+          name: s.name,
+          hpPct,
+          minCoreBuffMs,
+          blessingMs: typeof bs.blessingMs === 'number' ? bs.blessingMs : 0,
+          agiMs: typeof bs.agiMs === 'number' ? bs.agiMs : 0,
+          needsHeal,
+          needsBuff,
+          returningToPriest: Boolean(s.returningToPriest)
+        });
+      }
+    }
+    // Sort by priority: 1) Emergency heal (lowest HP% first) -> 2) Lowest remaining core buff time first
+    buffQueue.sort((a, b) => {
+      if (a.needsHeal !== b.needsHeal) return a.needsHeal ? -1 : 1;
+      if (a.needsHeal && b.needsHeal && Math.abs(a.hpPct - b.hpPct) > 0.05) return a.hpPct - b.hpPct;
+      return a.minCoreBuffMs - b.minCoreBuffMs;
+    });
+
+    const membersNeedingBuff = buffQueue.length;
     for (const id of [party.leaderId].concat(party.memberIds)) {
       const P = profiles.get(id), S = states.get(id);
       if (!P || !S || !S.ok || !S.helpers || !S.helpers.updatePartySyncState) continue;
@@ -787,7 +824,8 @@ function createPartyService(opts) {
         followMode: effMode,
         forcedMap: (party.syncMap && id !== party.leaderId && !planBlocked(S)) ? leaderMap : null,
         partyNames: allPartyNames,
-        membersNeedingBuff
+        membersNeedingBuff,
+        buffQueue
       }), 'sync-party-state');
     }
 
@@ -927,7 +965,9 @@ function createPartyService(opts) {
       if (inGame.has(S.name)) {
         const same = anchorSnap && S.mapId === anchorSnap.mapId && S.channel === anchorSnap.channel;
         status = same ? 'joined' : 'apart';
-        if (same && S.returningToPriest && priest) {
+        if (same && S.priestBuffingTarget) {
+          text = 'เดินไปบัฟ ' + S.priestBuffingTarget;
+        } else if (same && S.returningToPriest && priest) {
           text = 'เดินไปรับบัฟพระ (' + priest.name + ')';
         } else if (same && ft.isAnchorPriest) {
           text = 'พระหลัก (ศูนย์กลางตี้)';

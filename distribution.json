@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "a5b441c64ce2f52af9621bf441106292cf29e5f1",
+  "sourceCommit": "e5283383f40c8ada7b9f2f92b71c327a98b8f062",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -96,7 +96,7 @@
     },
     {
       "path": "manager/party_api.js",
-      "sha256": "5b9b6ac2b8624140fa739b53a325e79372197aab38b1a522989895e3f0f55abb"
+      "sha256": "85ecccba4510e139fabe66c2c73baa35ccf453d69edd4600bff90cfb994ccf3a"
     },
     {
       "path": "manager/plan_sync.js",

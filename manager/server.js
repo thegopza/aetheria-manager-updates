@@ -1348,7 +1348,20 @@ function buildClientActionEvalCode(payload) {
   } else if (payload.type === 'export-config') {
     return `(typeof window.exportAllBotSettings === 'function' ? window.exportAllBotSettings() : null)`;
   } else if (payload.type === 'import-config') {
-    return `(typeof window.importAllBotSettings === 'function' ? window.importAllBotSettings(${JSON.stringify(payload.configJson)}) : { success: false, error: 'import function not available' })`;
+    return `(() => {
+      try {
+        if (typeof window.freeBotLocalStorageSpace === 'function') window.freeBotLocalStorageSpace(true);
+        const s = Object.getPrototypeOf(window.localStorage);
+        const len = window.localStorage.length;
+        const drop = [];
+        for (let i = 0; i < len; i++) {
+          const k = s.key.call(window.localStorage, i);
+          if (k && (k.startsWith('webgame.chat.') || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_icon_manifest' || /__(?:icon_manifest|item_catalog|latest_inventory|packet_logs|last_weight)$/.test(k))) drop.push(k);
+        }
+        drop.forEach(k => s.removeItem.call(window.localStorage, k));
+      } catch (e) {}
+      return typeof window.importAllBotSettings === 'function' ? window.importAllBotSettings(${JSON.stringify(payload.configJson)}) : { success: false, error: 'import function not available' };
+    })()`;
   } else if (payload.type === 'eval' && payload.code) {
     return payload.code;
   }
@@ -5851,6 +5864,17 @@ public class PmFocus {
           if (profile.debugPort) {
             const codeToRun = `(() => {
               if (typeof window.importAllBotSettings === 'function') {
+                try {
+                  if (typeof window.freeBotLocalStorageSpace === 'function') window.freeBotLocalStorageSpace(true);
+                  const s = Object.getPrototypeOf(window.localStorage);
+                  const len = window.localStorage.length;
+                  const drop = [];
+                  for (let i = 0; i < len; i++) {
+                    const k = s.key.call(window.localStorage, i);
+                    if (k && (k.startsWith('webgame.chat.') || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_icon_manifest' || /__(?:icon_manifest|item_catalog|latest_inventory|packet_logs|last_weight)$/.test(k))) drop.push(k);
+                  }
+                  drop.forEach(k => s.removeItem.call(window.localStorage, k));
+                } catch (e) {}
                 const res = window.importAllBotSettings(${JSON.stringify(presetConfig)});
                 try {
                   if (window.__planScriptEnabled && window.__currentScriptPlan && typeof window.planMapForNow === 'function') {

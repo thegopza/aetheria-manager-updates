@@ -366,7 +366,10 @@
     const main = comps[0];
     const validPts = [];
     for (const c of comps) {
-      if (c === main || (c.count >= 25 && Math.hypot(c.cx - main.cx, c.cy - main.cy) <= 32)) {
+      const distMain = Math.hypot(c.cx - main.cx, c.cy - main.cy);
+      const inInterior = c.cx >= 24 && c.cx <= w - 24 && c.cy >= 22 && c.cy <= h - 22;
+      const isBowPart = inInterior && ((main.count <= 900 && c.count >= 160 && distMain <= 42.6) || (main.count < 120 && c.count >= 65 && distMain <= 36));
+      if (c === main || (c.count >= 25 && distMain <= 32) || isBowPart) {
         for (const [px, py] of c.pts) {
           for (let dy = -1; dy <= 1; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
@@ -429,7 +432,7 @@
         if (nearCore) corePts.push([lx, ly]);
       }
     }
-    if (corePts.length >= 80) {
+    if (corePts.length >= 80 && corePts.length >= validPts.length * 0.50) {
       finalMask.fill(0);
       validPts.length = 0;
       for (const pt of corePts) {
@@ -596,7 +599,12 @@
 
     const rawElongDiff = Math.abs(Math.log(top.elongation / slot.elongation));
     const rawFillDiff = Math.abs(Math.log(top.fillRatio / slot.fillRatio));
-    const ultraElongatedPair = Math.max(top.elongation, slot.elongation) >= 6.0 && Math.min(top.elongation, slot.elongation) >= 2.15;
+    const maxEl = Math.max(top.elongation, slot.elongation), minEl = Math.min(top.elongation, slot.elongation);
+    const maxFl = Math.max(top.fillRatio, slot.fillRatio), minFl = Math.min(top.fillRatio, slot.fillRatio);
+    const ultraElongatedPair = maxEl >= 6.0 && (
+      (minEl >= 2.15 && maxFl <= 2.35 && !(minFl <= 0.95 && maxFl >= 1.80)) ||
+      (minEl >= 1.85 && maxFl <= 1.45)
+    );
     const elongDiff = (ultraElongatedPair ? Math.min(0.28, rawElongDiff * 0.45) : rawElongDiff) * 0.95;
     const fillDiff = (ultraElongatedPair ? Math.min(0.25, rawFillDiff * 0.55) : rawFillDiff) * 0.95;
     const scaleRatio = slot.rmsRadius / top.rmsRadius;
@@ -611,10 +619,38 @@
     const topGB = top.meanG - top.meanB, slotGB = slot.meanG - slot.meanB;
     const chromaDiff = Math.abs(topRG - slotRG) + Math.abs(topGB - slotGB);
     let histDiff = 0;
+    let structColorPenalty = 0;
     if (top.colorHist && slot.colorHist) {
       for (let i = 0; i < 8; i++) histDiff += Math.abs(top.colorHist[i] - slot.colorHist[i]);
+      histDiff = histDiff - Math.abs(top.colorHist[4] - slot.colorHist[4]) - Math.abs(top.colorHist[5] - slot.colorHist[5])
+        + Math.abs((top.colorHist[4] + top.colorHist[5]) - (slot.colorHist[4] + slot.colorHist[5])) * 0.85
+        + (Math.abs(top.colorHist[4] - slot.colorHist[4]) + Math.abs(top.colorHist[5] - slot.colorHist[5])) * 0.35;
+
+      // Blue-dominant pair: distinguish corked Blue Potion (warm >= 0.06) from corkless Butterfly Wing (warm <= 0.015)
+      if (top.colorHist[2] >= 0.45 && slot.colorHist[2] >= 0.45) {
+        const topWarm = top.colorHist[4] + top.colorHist[5] + top.colorHist[6];
+        const slotWarm = slot.colorHist[4] + slot.colorHist[5] + slot.colorHist[6];
+        if ((topWarm >= 0.06 && slotWarm <= 0.015) || (slotWarm >= 0.06 && topWarm <= 0.015)) {
+          structColorPenalty += 1.45;
+        }
+      }
+      // Metallic gray blade (Dagger: sat <= 20, achromatic >= 0.60, bright silver >= 0.38) vs warm wooden item (Bow/Arrows/Wand)
+      const topGray = top.colorHist[0] + top.colorHist[1], slotGray = slot.colorHist[0] + slot.colorHist[1];
+      const topWarmAll = top.colorHist[4] + top.colorHist[5] + top.colorHist[6], slotWarmAll = slot.colorHist[4] + slot.colorHist[5] + slot.colorHist[6];
+      const isDaggerLike = (o, oGray, oWarm) => o.meanSat <= 20 && oGray >= 0.60 && o.colorHist[0] >= 0.38 && oWarm <= 0.30;
+      const isWoodLike = (o, oGray, oWarm) => o.meanSat >= 30 && oGray <= 0.35 && (oWarm >= 0.42 || o.colorHist[2] >= 0.06);
+      if ((isDaggerLike(slot, slotGray, slotWarmAll) && (isWoodLike(top, topGray, topWarmAll) || (top.elongation <= 1.65 && slot.elongation >= 3.2))) ||
+          (isDaggerLike(top, topGray, topWarmAll) && (isWoodLike(slot, slotGray, slotWarmAll) || (slot.elongation <= 1.65 && top.elongation >= 3.2)))) {
+        structColorPenalty += 0.75;
+      }
+      // Large round Ring (area >= 2400, elong <= 1.24, low white rim <= 0.06) vs small elongated glass Red Potion (area < 0.55*ref, white rim >= 0.10)
+      const isLargeRingLike = o => o.area >= 2400 && o.elongation <= 1.24 && o.colorHist[0] <= 0.06;
+      const isSmallBottleLike = (o, ref) => o.area < ref.area * 0.55 && o.rmsRadius < ref.rmsRadius * 0.72 && o.colorHist[0] >= 0.10 && o.elongation >= 1.30;
+      if ((isLargeRingLike(top) && isSmallBottleLike(slot, top)) || (isLargeRingLike(slot) && isSmallBottleLike(top, slot))) {
+        structColorPenalty += 0.75;
+      }
     }
-    const rgbPenalty = (rgbDiff / 220) * 0.35 + (chromaDiff / 90) * 0.40 + histDiff * 0.62;
+    const rgbPenalty = (rgbDiff / 220) * 0.35 + (chromaDiff / 90) * 0.40 + histDiff * 0.62 + structColorPenalty;
 
     const totalScore = bestPolarDist + elongDiff + fillDiff + scalePenalty + areaPenalty + lumStatPenalty + rgbPenalty;
     return { totalScore, bestPolarDist, elongDiff, fillDiff, scalePenalty, areaPenalty, lumStatPenalty, rgbPenalty, histDiff };
@@ -734,6 +770,8 @@
     resolveTargetItem,
     matchTemplateOnBoard,
     findGoldenFrame,
+    extractBoxObject,
+    compareObjects,
     findBottomCandidates,
     solveFrameChallenge
   };

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "9544c92e273a80773a26b00e64d6dba9c4373b73",
+  "sourceCommit": "c86d0bd7037b7412168e700bd9277eef98807786",
   "files": [
     {
       "path": "manager/auth_sync.js",
@@ -56,7 +56,7 @@
     },
     {
       "path": "manager/image_board_solver.js",
-      "sha256": "ede5fa595f9e98ffbb95c8d0454118478db76066f49d2abc651394b938eddb04"
+      "sha256": "161d0dcf2a175fec243001d213adf7d3450ebdfee8ef1834375865dde20cd657"
     },
     {
       "path": "manager/installer.js",
@@ -80,7 +80,7 @@
     },
     {
       "path": "manager/offline_coordinator.js",
-      "sha256": "3cdd6a395ef1264e7d114fc5b2f01bcc948d9fdb296a75cf92bb69fe8bceb06e"
+      "sha256": "75703aa64a40ec2a7ab6a745da1bb51f9ae77f1c6281b484e06a8bf838f21345"
     },
     {
       "path": "manager/offline_journal.js",
@@ -152,7 +152,7 @@
     },
     {
       "path": "manager/public/image_board_solver.js",
-      "sha256": "9d9ede0794a8aa823ed7d8a13b978f955add33d11f3aa812353fb790a9981b1c"
+      "sha256": "161d0dcf2a175fec243001d213adf7d3450ebdfee8ef1834375865dde20cd657"
     },
     {
       "path": "manager/public/index.html",
@@ -232,7 +232,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "eac58324f08a01db7fae9e2d9f01b2cbc2b3671b90edd48a6903dfb77bf897e9"
+      "sha256": "e9be24ffa73692b29de0d58a0369145fc9729c53e19989513da9ea27b9d00f92"
     },
     {
       "path": "manager/test_isolation.js",

@@ -88,14 +88,20 @@
     document.body.classList.toggle('pt-open', v);
     clearInterval(pollTimer);
     if (v) { load(); pollTimer = setInterval(load, 5000); }
-    else { closePicker(); pollTimer = setInterval(load, 30000); }
+    else { closePicker(); pollTimer = setInterval(load, 10000); }
   }
+  window.openPartyDrawer = () => setOpen(true);
+  window.refreshPartyManagerData = () => load();
 
   async function api(path, body) {
     const res = await fetch(API + path, body === undefined ? undefined : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const j = await res.json().catch(() => ({ success: false, error: 'HTTP ' + res.status }));
     if (j && Array.isArray(j.parties)) {
       data = j;
+      window.__partyManagerData = j;
+      if (typeof window.onPartyDataUpdated === 'function') {
+        try { window.onPartyDataUpdated(j); } catch (_) {}
+      }
       if (pointerDown && body === undefined) pendingRender = true;
       else render();
     }

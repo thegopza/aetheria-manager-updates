@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=44100">
+  <link rel="stylesheet" href="style.css?v=44201">
   <link rel="stylesheet" href="inventory_market.css?v=4360">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=42900">
@@ -125,6 +125,26 @@
             </button>
           </nav>
           <span class="live-pill" id="live-polling-badge"><i></i> Realtime Sync · 2s</span>
+          <div class="view-mode-bar" data-tab-only="profiles">
+            <div class="view-mode-switch" role="group" aria-label="โหมดการแสดงผลการ์ด">
+              <button type="button" class="view-mode-btn active" id="btn-view-mode-default" onclick="setCardViewMode('default')" title="แสดงการ์ดเรียงตามปกติ">
+                <span>📋</span> <span>เรียงปกติ</span>
+              </button>
+              <button type="button" class="view-mode-btn" id="btn-view-mode-party" onclick="setCardViewMode('party')" title="จัดกลุ่มการ์ดตามปาร์ตี้ vs ฟาร์มเดี่ยว พร้อมเปรียบเทียบ GP/M และ GP/H">
+                <span>👑</span> <span>จัดกลุ่มตามตี้ (เทียบ GP/M)</span>
+              </button>
+            </div>
+            <div class="view-sort-box" title="เรียงลำดับการ์ดภายในกลุ่ม">
+              <span class="view-sort-lbl">เรียง:</span>
+              <select id="card-sort-select" class="view-sort-select" onchange="setCardSortMode(this.value)">
+                <option value="default">ลำดับเดิม</option>
+                <option value="gpm_desc">⚡ GP/M สูง → ต่ำ</option>
+                <option value="gpm_asc">📉 GP/M ต่ำ → สูง</option>
+                <option value="zeny_desc">💰 Zeny มาก → น้อย</option>
+                <option value="level_desc">🆙 Lv สูง → ต่ำ</option>
+              </select>
+            </div>
+          </div>
         </div>
         <div class="toolbar" data-tab-only="profiles">
           <div class="toolbar-group">
@@ -1110,14 +1130,14 @@
   </div>
 
   <script src="image_board_solver.js?v=4381"></script>
-  <script src="app.js?v=44100"></script>
+  <script src="app.js?v=44201"></script>
   <script src="patcher_module.js?v=41744"></script>
   <script src="builder_module.js?v=44009"></script>
   <script src="gear_builder.js?v=42900"></script>
   <script src="inventory_market.js?v=4370"></script>
   <script src="bot_update.js?v=44002"></script>
   <script src="config_copy.js?v=4400"></script>
-  <script src="party_manager.js?v=44005"></script>
+  <script src="party_manager.js?v=44201"></script>
   <script src="premium_manager.js?v=44011"></script>
   <script src="guild_manager.js?v=44004"></script>
   <script src="jail_manager.js?v=44004"></script>

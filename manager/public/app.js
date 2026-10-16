@@ -200,6 +200,10 @@ async function fetchProfiles() {
         lblHideAll.innerText = allWindowsHidden ? "แสดงกราฟิกทุกจอ" : "พักกราฟิกทุกจอ (Zero-Render)";
       }
 
+      if (typeof window.refreshPartyManagerData === 'function' && (Date.now() - (window.__lastPartyPollAt || 0) > 4000)) {
+        window.__lastPartyPollAt = Date.now();
+        window.refreshPartyManagerData();
+      }
       renderProfiles();
       updateMetrics();
       updateActiveWebHuds();
@@ -1114,9 +1118,10 @@ function onPortraitError(img) {
 }
 
 function getPortraitSrc(p, state) {
-  let src = state?.portrait || p.lastPortrait || '';
+  const hasLiveChar = Boolean(state && state.charName);
+  let src = (hasLiveChar ? state?.portrait : '') || p.lastPortrait || state?.portrait || '';
   if (!src) {
-    const rawCls = String(state?.charClass || p.lastCharClass || p.charClass || 'novice').toLowerCase();
+    const rawCls = String((hasLiveChar && state?.charClass) || p.lastCharClass || p.charClass || 'novice').toLowerCase();
     const cls = rawCls.split(/[^a-z]+/)[0] || 'novice';
     src = `https://www.aetheria-online.in.th/art/classes/${cls}-face.webp`;
   } else if (!src.startsWith('http')) {
@@ -1362,7 +1367,7 @@ function buildProfileCard(p) {
   const isJailed = Boolean(p.isJailed || (state && typeof state.map === 'string' && /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(state.map)));
 
   const charName = state?.charName || p.lastCharName || null;
-  const curClass = state?.charClass || p.lastCharClass || p.charClass || 'Archer';
+  const curClass = (state?.charName && state?.charClass) ? state.charClass : (p.lastCharClass || p.charClass || state?.charClass || 'Archer');
   const hue = getClassHue(curClass);
   const portraitSrc = getPortraitSrc(p, state);
   const initial = escapeHTML(String(charName || p.name || '?').trim().charAt(0).toUpperCase());
@@ -1475,6 +1480,7 @@ function buildProfileCard(p) {
             <span class="chip chip-class">${escapeHTML(curClass)}</span>
             ${baseLv !== null ? `<span class="lv-text">Base <b>${baseLv}</b></span>` : ''}
             ${jobLv !== null ? `<span class="lv-text">Job <b>${jobLv}</b></span>` : ''}
+            ${buildPartyRoleChip(p.id)}
           </div>
         </div>
         <div class="card-meta">
@@ -1704,8 +1710,515 @@ function morphNode(oldNode, newNode) {
   Array.from(oldNode.childNodes).forEach((child, i) => morphNode(child, newKids[i]));
 }
 
+// ==========================================
+// PARTY GROUP VIEW & GP/M · GP/H COMPARISON
+// ==========================================
+let cardViewMode = 'default';
+let cardSortMode = 'default';
+try {
+  const urlView = new URLSearchParams(window.location.search).get('view');
+  cardViewMode = (urlView === 'party' || urlView === 'default') ? urlView : (localStorage.getItem('pelican_card_view_mode') || 'default');
+  cardSortMode = localStorage.getItem('pelican_card_sort_mode') || 'default';
+} catch (_) {}
+const collapsedCardGroups = new Set();
+
+function syncViewModeControls() {
+  const btnDefault = document.getElementById('btn-view-mode-default');
+  const btnParty = document.getElementById('btn-view-mode-party');
+  const sortSel = document.getElementById('card-sort-select');
+  if (btnDefault) btnDefault.classList.toggle('active', cardViewMode !== 'party');
+  if (btnParty) btnParty.classList.toggle('active', cardViewMode === 'party');
+  if (sortSel && sortSel.value !== cardSortMode) sortSel.value = cardSortMode;
+}
+
+function setCardViewMode(mode) {
+  cardViewMode = mode === 'party' ? 'party' : 'default';
+  try { localStorage.setItem('pelican_card_view_mode', cardViewMode); } catch (_) {}
+  syncViewModeControls();
+  if (cardViewMode === 'party' && typeof window.refreshPartyManagerData === 'function') {
+    window.refreshPartyManagerData();
+  }
+  renderProfiles();
+}
+
+function setCardSortMode(sort) {
+  cardSortMode = sort || 'default';
+  try { localStorage.setItem('pelican_card_sort_mode', cardSortMode); } catch (_) {}
+  syncViewModeControls();
+  renderProfiles();
+}
+
+function toggleCardGroupCollapse(groupKey, event) {
+  if (event) event.stopPropagation();
+  if (collapsedCardGroups.has(groupKey)) collapsedCardGroups.delete(groupKey);
+  else collapsedCardGroups.add(groupKey);
+  renderProfiles();
+}
+
+window.onPartyDataUpdated = function () {
+  if (currentProfiles && currentProfiles.length > 0) {
+    renderProfiles();
+  }
+};
+
+function isPriestClassName(cls) {
+  return /^(priest|acolyte|พระ)$/i.test(String(cls || '').trim());
+}
+
+function getPartyRoleMap() {
+  const map = new Map();
+  const pData = window.__partyManagerData;
+  const parties = (pData && Array.isArray(pData.parties)) ? pData.parties : [];
+  const profileById = new Map(currentProfiles.map(p => [p.id, p]));
+
+  parties.forEach((party, idx) => {
+    const pIndex = party.index || (idx + 1);
+    const allSlots = [party.leader, ...(Array.isArray(party.members) ? party.members : [])].filter(Boolean);
+    let anchorPriestId = null;
+    for (const slot of allSlots) {
+      const prof = profileById.get(slot.id);
+      const liveCls = (prof?.liveState?.charName && prof?.liveState?.charClass) ? prof.liveState.charClass : '';
+      const candidates = [liveCls, slot.charClass, prof?.lastCharClass, prof?.charClass];
+      if (candidates.some(c => isPriestClassName(c))) {
+        anchorPriestId = slot.id;
+        break;
+      }
+    }
+    allSlots.forEach((slot) => {
+      const isLeader = Boolean(party.leader && slot.id === party.leader.id);
+      const isAnchorPriest = slot.id === anchorPriestId;
+      map.set(slot.id, {
+        partyId: party.id,
+        partyIndex: pIndex,
+        isLeader,
+        isAnchorPriest,
+        followMode: slot.followMode || 'none',
+        status: slot.status || '',
+        statusText: slot.statusText || ''
+      });
+    });
+  });
+  return map;
+}
+
+function buildPartyRoleChip(profileId) {
+  const info = getPartyRoleMap().get(profileId);
+  if (!info) return '';
+  if (info.isLeader && info.isAnchorPriest) {
+    return `<span class="party-role-chip role-priest-leader" onclick="if(window.openPartyDrawer)window.openPartyDrawer()" title="หัวตี้ + พระหลักศูนย์กลางของปาร์ตี้ #${info.partyIndex}">👑✨ หัวตี้·พระ #${info.partyIndex}</span>`;
+  }
+  if (info.isLeader) {
+    return `<span class="party-role-chip role-leader" onclick="if(window.openPartyDrawer)window.openPartyDrawer()" title="หัวหน้าปาร์ตี้ #${info.partyIndex}">👑 หัวตี้ #${info.partyIndex}</span>`;
+  }
+  if (info.isAnchorPriest) {
+    return `<span class="party-role-chip role-priest" onclick="if(window.openPartyDrawer)window.openPartyDrawer()" title="พระหลักจุดศูนย์กลางของปาร์ตี้ #${info.partyIndex}">✨ พระหลัก #${info.partyIndex}</span>`;
+  }
+  return `<span class="party-role-chip role-member" onclick="if(window.openPartyDrawer)window.openPartyDrawer()" title="สมาชิกปาร์ตี้ #${info.partyIndex}${info.statusText ? ' · ' + escapeHTML(info.statusText) : ''}">👥 ตี้ #${info.partyIndex}</span>`;
+}
+
+function getProfileBaseLevelNum(p) {
+  const st = p.isRunning ? p.liveState : null;
+  if (st && typeof st.baseLv === 'number') return st.baseLv;
+  if (st && st.levels) {
+    const nums = String(st.levels).match(/\d+/g);
+    if (nums && nums[0]) return Number(nums[0]);
+  }
+  return 0;
+}
+
+function sortProfileList(list) {
+  if (!Array.isArray(list) || list.length <= 1 || cardSortMode === 'default') return list;
+  const copy = list.slice();
+  copy.sort((a, b) => {
+    if (cardSortMode === 'gpm_desc') {
+      const d = getProfileZenyRate(b).gpm - getProfileZenyRate(a).gpm;
+      if (d !== 0) return d;
+      return (b.isRunning ? 1 : 0) - (a.isRunning ? 1 : 0);
+    }
+    if (cardSortMode === 'gpm_asc') {
+      const aRate = getProfileZenyRate(a).gpm;
+      const bRate = getProfileZenyRate(b).gpm;
+      if (a.isRunning !== b.isRunning) return a.isRunning ? -1 : 1;
+      return aRate - bRate;
+    }
+    if (cardSortMode === 'zeny_desc') {
+      const az = (a.isRunning && a.liveState && typeof a.liveState.zeny === 'number') ? a.liveState.zeny : -1;
+      const bz = (b.isRunning && b.liveState && typeof b.liveState.zeny === 'number') ? b.liveState.zeny : -1;
+      return bz - az;
+    }
+    if (cardSortMode === 'level_desc') {
+      return getProfileBaseLevelNum(b) - getProfileBaseLevelNum(a);
+    }
+    return 0;
+  });
+  return copy;
+}
+
+function summarizeGroupStats(profiles) {
+  let onlineCount = 0;
+  let farmingCount = 0;
+  let totalGpm = 0;
+  let totalGph = 0;
+  let totalGained = 0;
+  let topEarner = null;
+
+  for (const p of profiles) {
+    const rate = getProfileZenyRate(p);
+    if (p.isRunning) {
+      onlineCount++;
+      if (p.liveState && p.liveState.isBotRunning) farmingCount++;
+      totalGpm += rate.gpm || 0;
+      totalGph += rate.gph || 0;
+      totalGained += rate.totalGained || 0;
+      if ((rate.gpm || 0) > 0 && (!topEarner || rate.gpm > topEarner.gpm)) {
+        topEarner = {
+          id: p.id,
+          name: (p.liveState && p.liveState.charName) || p.lastCharName || p.name,
+          gpm: rate.gpm,
+          gph: rate.gph
+        };
+      }
+    }
+  }
+
+  const avgGpm = onlineCount > 0 ? Math.round(totalGpm / onlineCount) : 0;
+  const avgGph = onlineCount > 0 ? Math.round(totalGph / onlineCount) : 0;
+
+  return {
+    totalCount: profiles.length,
+    onlineCount,
+    farmingCount,
+    totalGpm,
+    totalGph,
+    totalGained,
+    avgGpm,
+    avgGph,
+    topEarner
+  };
+}
+
+function resetAllZenyRates(event) {
+  if (event) event.stopPropagation();
+  for (const p of currentProfiles) {
+    delete clientZenyTrackers[p.id];
+    if (p.zenyRate) p.zenyRate = { gpm: 0, gph: 0, totalGained: 0, elapsedSec: 0 };
+    fetch(`${API_BASE}/api/profiles/${p.id}/reset-zeny-rate`, { method: 'POST' }).catch(() => {});
+  }
+  renderProfiles();
+  if (typeof showToast === 'function') {
+    showToast('🔄 รีเซ็ต GP/M · GP/H ทุกจอพร้อมกันแล้ว (เริ่มเทียบความไวใหม่จาก 0)', 'success');
+  }
+}
+
+function resetGroupZenyRate(groupKey, event) {
+  if (event) event.stopPropagation();
+  const roleMap = getPartyRoleMap();
+  let targets = [];
+  let label = 'กลุ่มนี้';
+  if (groupKey === 'solo') {
+    targets = currentProfiles.filter(p => !roleMap.has(p.id));
+    label = 'กลุ่มฟาร์มเดี่ยว (Solo)';
+  } else if (groupKey.startsWith('party:')) {
+    const pid = groupKey.slice(6);
+    targets = currentProfiles.filter(p => {
+      const r = roleMap.get(p.id);
+      return r && r.partyId === pid;
+    });
+    const first = targets[0] ? roleMap.get(targets[0].id) : null;
+    label = first ? `ปาร์ตี้ #${first.partyIndex}` : 'ปาร์ตี้นี้';
+  }
+  for (const p of targets) {
+    delete clientZenyTrackers[p.id];
+    if (p.zenyRate) p.zenyRate = { gpm: 0, gph: 0, totalGained: 0, elapsedSec: 0 };
+    fetch(`${API_BASE}/api/profiles/${p.id}/reset-zeny-rate`, { method: 'POST' }).catch(() => {});
+  }
+  renderProfiles();
+  if (typeof showToast === 'function') {
+    showToast(`🔄 รีเซ็ต GP/M · GP/H ของ ${label} (${targets.length} จอ) แล้ว`, 'info');
+  }
+}
+
+function buildPartyVsSoloBanner(partyCount, partyStats, soloStats) {
+  const maxAvg = Math.max(1, partyStats.avgGpm, soloStats.avgGpm);
+  const partyBarPct = partyStats.avgGpm > 0 ? Math.max(6, Math.round((partyStats.avgGpm / maxAvg) * 100)) : 0;
+  const soloBarPct = soloStats.avgGpm > 0 ? Math.max(6, Math.round((soloStats.avgGpm / maxAvg) * 100)) : 0;
+
+  let verdictHtml = `<div class="pvs-verdict neutral"><span class="pvs-verdict-icon">⏳</span><div><div class="pvs-verdict-title">รอข้อมูลเปรียบเทียบ GP/M ต่อจอ</div><div class="pvs-verdict-sub">เปิดบอทฟาร์มทั้งแบบตี้และแบบเดี่ยว ระบบจะคำนวณให้ทันทีว่าแบบไหนทำเงินต่อจอได้ไวกว่ากัน</div></div></div>`;
+
+  if (partyStats.avgGpm > 0 && soloStats.avgGpm > 0) {
+    const diffGpm = partyStats.avgGpm - soloStats.avgGpm;
+    const diffGph = partyStats.avgGph - soloStats.avgGph;
+    const base = Math.min(partyStats.avgGpm, soloStats.avgGpm);
+    const pct = base > 0 ? ((Math.abs(diffGpm) / base) * 100).toFixed(1) : '0.0';
+    if (Math.abs(diffGpm) <= Math.max(50, base * 0.02)) {
+      verdictHtml = `
+        <div class="pvs-verdict tie">
+          <span class="pvs-verdict-icon">⚖️</span>
+          <div>
+            <div class="pvs-verdict-title">สูสีกัน! รายได้เฉลี่ยต่อจอใกล้เคียงกันมาก (ต่างกัน ~${pct}%)</div>
+            <div class="pvs-verdict-sub">แบบตี้ ${partyStats.avgGpm.toLocaleString()} z/m ต่อจอ vs แบบเดี่ยว ${soloStats.avgGpm.toLocaleString()} z/m ต่อจอ</div>
+          </div>
+        </div>`;
+    } else if (diffGpm > 0) {
+      verdictHtml = `
+        <div class="pvs-verdict party-win">
+          <span class="pvs-verdict-icon">🏆</span>
+          <div>
+            <div class="pvs-verdict-title">ฟาร์มแบบตี้ไวกว่า <b>+${pct}%</b> ต่อจอ!</div>
+            <div class="pvs-verdict-sub">ได้มากกว่าเฉลี่ย <b>+${diffGpm.toLocaleString()} z/m</b> (<b>+${diffGph.toLocaleString()} z/h</b>) ต่อ 1 จอที่ออนไลน์</div>
+          </div>
+        </div>`;
+    } else {
+      const absGpm = Math.abs(diffGpm);
+      const absGph = Math.abs(diffGph);
+      verdictHtml = `
+        <div class="pvs-verdict solo-win">
+          <span class="pvs-verdict-icon">⚡</span>
+          <div>
+            <div class="pvs-verdict-title">ฟาร์มเดี่ยว (Solo) ไวกว่า <b>+${pct}%</b> ต่อจอ!</div>
+            <div class="pvs-verdict-sub">ได้มากกว่าเฉลี่ย <b>+${absGpm.toLocaleString()} z/m</b> (<b>+${absGph.toLocaleString()} z/h</b>) ต่อ 1 จอที่ออนไลน์</div>
+          </div>
+        </div>`;
+    }
+  } else if (partyStats.avgGpm > 0 && soloStats.onlineCount === 0) {
+    verdictHtml = `
+      <div class="pvs-verdict party-win">
+        <span class="pvs-verdict-icon">👑</span>
+        <div>
+          <div class="pvs-verdict-title">กำลังฟาร์มแบบตี้: เฉลี่ย <b>${partyStats.avgGpm.toLocaleString()} z/m</b> (${partyStats.avgGph.toLocaleString()} z/h) ต่อจอ</div>
+          <div class="pvs-verdict-sub">รวมทุกตี้ ${partyStats.totalGpm.toLocaleString()} z/m · ${partyStats.totalGph.toLocaleString()} z/h (ไม่มีจอฟาร์มเดี่ยวออนไลน์)</div>
+        </div>
+      </div>`;
+  } else if (soloStats.avgGpm > 0 && partyStats.onlineCount === 0) {
+    verdictHtml = `
+      <div class="pvs-verdict solo-win">
+        <span class="pvs-verdict-icon">⚔️</span>
+        <div>
+          <div class="pvs-verdict-title">กำลังฟาร์มเดี่ยว: เฉลี่ย <b>${soloStats.avgGpm.toLocaleString()} z/m</b> (${soloStats.avgGph.toLocaleString()} z/h) ต่อจอ</div>
+          <div class="pvs-verdict-sub">รวมโซโล่ ${soloStats.totalGpm.toLocaleString()} z/m · ${soloStats.totalGph.toLocaleString()} z/h (ยังไม่มีจอในปาร์ตี้ออนไลน์)</div>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="party-vs-solo-banner" data-group-id="banner-party-vs-solo">
+      <div class="pvs-top-row">
+        <div class="pvs-heading">
+          <span class="pvs-badge-icon">📊</span>
+          <div>
+            <div class="pvs-title">เปรียบเทียบความไว: ฟาร์มแบบตี้ (Party) vs ฟาร์มเดี่ยว (Solo)</div>
+            <div class="pvs-subtitle">เทียบค่าเฉลี่ย GP/M (ต่อนาที) และ GP/H (ต่อชั่วโมง) ต่อ 1 จอที่ออนไลน์ เพื่อดูว่าโหมดไหนคุ้มค่ากว่ากัน</div>
+          </div>
+        </div>
+        <div class="pvs-actions">
+          <button type="button" class="btn btn-ghost btn-sm pvs-btn-reset" onclick="resetAllZenyRates(event)" title="รีเซ็ตตัวนับ GP/M และ GP/H ของทุกจอพร้อมกัน เพื่อเริ่มจับเวลาเปรียบเทียบใหม่พร้อมกัน">
+            <span>🔄</span> รีเซ็ต GP/M ทุกจอพร้อมกัน
+          </button>
+          <button type="button" class="btn btn-ghost btn-sm pvs-btn-party" onclick="if(window.openPartyDrawer)window.openPartyDrawer()" title="เปิดหน้าต่างตั้งค่าปาร์ตี้">
+            <span>👑</span> จัดการตี้ (${partyCount})
+          </button>
+        </div>
+      </div>
+
+      <div class="pvs-grid">
+        <!-- PARTY SUMMARY -->
+        <div class="pvs-metric-box is-party ${partyStats.avgGpm > soloStats.avgGpm && partyStats.avgGpm > 0 ? 'is-leading' : ''}">
+          <div class="pvs-box-head">
+            <span class="pvs-box-tag party">👑 เฉลี่ยแบบตี้ (ต่อ 1 จอ)</span>
+            <span class="pvs-box-count">${partyCount} ตี้ · ออนไลน์ <b>${partyStats.onlineCount}</b>/${partyStats.totalCount} จอ</span>
+          </div>
+          <div class="pvs-main-numbers">
+            <div class="pvs-num-col">
+              <span class="pvs-num-lbl">⚡ เฉลี่ย GP/M ต่อจอ</span>
+              <span class="pvs-num-val gpm">${partyStats.avgGpm.toLocaleString()} <small>z/m</small></span>
+            </div>
+            <div class="pvs-num-sep"></div>
+            <div class="pvs-num-col">
+              <span class="pvs-num-lbl">📈 เฉลี่ย GP/H ต่อจอ</span>
+              <span class="pvs-num-val gph">${partyStats.avgGph.toLocaleString()} <small>z/h</small></span>
+            </div>
+          </div>
+          <div class="pvs-bar-track"><div class="pvs-bar-fill party" style="width: ${partyBarPct}%;"></div></div>
+          <div class="pvs-box-foot">
+            <span>รวมทุกตี้: <b>${partyStats.totalGpm.toLocaleString()} z/m</b> · <b>${partyStats.totalGph.toLocaleString()} z/h</b></span>
+            <span>สะสมรอบนี้: <b>+${partyStats.totalGained.toLocaleString()} z</b></span>
+          </div>
+        </div>
+
+        <!-- SOLO SUMMARY -->
+        <div class="pvs-metric-box is-solo ${soloStats.avgGpm > partyStats.avgGpm && soloStats.avgGpm > 0 ? 'is-leading' : ''}">
+          <div class="pvs-box-head">
+            <span class="pvs-box-tag solo">⚔️ เฉลี่ยฟาร์มเดี่ยว (ต่อ 1 จอ)</span>
+            <span class="pvs-box-count">โซโล่ · ออนไลน์ <b>${soloStats.onlineCount}</b>/${soloStats.totalCount} จอ</span>
+          </div>
+          <div class="pvs-main-numbers">
+            <div class="pvs-num-col">
+              <span class="pvs-num-lbl">⚡ เฉลี่ย GP/M ต่อจอ</span>
+              <span class="pvs-num-val gpm">${soloStats.avgGpm.toLocaleString()} <small>z/m</small></span>
+            </div>
+            <div class="pvs-num-sep"></div>
+            <div class="pvs-num-col">
+              <span class="pvs-num-lbl">📈 เฉลี่ย GP/H ต่อจอ</span>
+              <span class="pvs-num-val gph">${soloStats.avgGph.toLocaleString()} <small>z/h</small></span>
+            </div>
+          </div>
+          <div class="pvs-bar-track"><div class="pvs-bar-fill solo" style="width: ${soloBarPct}%;"></div></div>
+          <div class="pvs-box-foot">
+            <span>รวมโซโล่: <b>${soloStats.totalGpm.toLocaleString()} z/m</b> · <b>${soloStats.totalGph.toLocaleString()} z/h</b></span>
+            <span>สะสมรอบนี้: <b>+${soloStats.totalGained.toLocaleString()} z</b></span>
+          </div>
+        </div>
+
+        <!-- VERDICT -->
+        <div class="pvs-verdict-wrap">
+          ${verdictHtml}
+        </div>
+      </div>
+    </div>`;
+}
+
+function buildPartyGroupSection(party, idx, profileById, roleMap, soloAvgGpm) {
+  const pIndex = party.index || (idx + 1);
+  const groupKey = `party:${party.id}`;
+  const isCollapsed = collapsedCardGroups.has(groupKey);
+
+  const rawSlots = [party.leader, ...(Array.isArray(party.members) ? party.members : [])].filter(Boolean);
+  let partyProfiles = rawSlots.map(s => profileById.get(s.id)).filter(Boolean);
+
+  // Default order inside party: Leader -> Priest Anchor -> Other Members
+  if (cardSortMode === 'default') {
+    partyProfiles.sort((a, b) => {
+      const ra = roleMap.get(a.id) || {};
+      const rb = roleMap.get(b.id) || {};
+      const score = r => (r.isLeader ? 0 : r.isAnchorPriest ? 1 : 2);
+      return score(ra) - score(rb);
+    });
+  } else {
+    partyProfiles = sortProfileList(partyProfiles);
+  }
+
+  const stats = summarizeGroupStats(partyProfiles);
+  const leaderSlot = party.leader || {};
+  const leaderName = leaderSlot.charName || leaderSlot.profileName || 'หัวตี้';
+  const priestSlot = rawSlots.find(s => {
+    const r = roleMap.get(s.id);
+    return r && r.isAnchorPriest;
+  });
+  const priestName = priestSlot ? (priestSlot.charName || priestSlot.profileName) : null;
+  const anchorSlot = (priestSlot && priestSlot.mapName) ? priestSlot : leaderSlot;
+  const mapLabel = anchorSlot.mapName || '--';
+  const chLabel = anchorSlot.channel ? `CH ${anchorSlot.channel}` : '';
+  const expLabel = party.expMode === 'even-share' ? 'EXP แชร์กัน' : 'EXP แยก';
+
+  let vsSoloBadge = '';
+  if (stats.avgGpm > 0 && soloAvgGpm > 0) {
+    const diffPct = Math.round(((stats.avgGpm - soloAvgGpm) / soloAvgGpm) * 100);
+    if (diffPct > 2) {
+      vsSoloBadge = `<span class="pg-vs-pill win" title="เฉลี่ยต่อจอของตี้นี้สูงกว่าค่าเฉลี่ยฟาร์มเดี่ยว">+${diffPct}% vs โซโล่</span>`;
+    } else if (diffPct < -2) {
+      vsSoloBadge = `<span class="pg-vs-pill loss" title="เฉลี่ยต่อจอของตี้นี้ต่ำกว่าค่าเฉลี่ยฟาร์มเดี่ยว">${diffPct}% vs โซโล่</span>`;
+    } else {
+      vsSoloBadge = `<span class="pg-vs-pill tie">≈ พอๆ กับโซโล่</span>`;
+    }
+  }
+
+  return `
+    <section class="profile-group-section is-party-group ${isCollapsed ? 'is-collapsed' : ''}" data-group-id="group-party-${party.id}">
+      <header class="profile-group-header" onclick="toggleCardGroupCollapse('${groupKey}', event)">
+        <div class="pg-head-left">
+          <button type="button" class="pg-collapse-btn" title="${isCollapsed ? 'คลิกเพื่อขยายดูการ์ดในตี้นี้' : 'คลิกเพื่อพับเก็บการ์ดในตี้นี้'}">${isCollapsed ? '▶' : '▼'}</button>
+          <span class="pg-group-badge party">👑 ปาร์ตี้ #${pIndex}</span>
+          <div class="pg-title-block">
+            <div class="pg-title-main">
+              <span>หัวตี้: <b>${escapeHTML(leaderName)}</b></span>
+              ${priestName ? `<span class="pg-priest-pill">✨ พระหลัก: <b>${escapeHTML(priestName)}</b></span>` : `<span class="pg-no-priest-pill">ไม่มีพระในตี้</span>`}
+            </div>
+            <div class="pg-meta-pills">
+              <span class="pg-meta-chip">👥 สมาชิก <b>${partyProfiles.length}</b>/${party.max || 6} · ออนไลน์ <b>${stats.onlineCount}</b></span>
+              <span class="pg-meta-chip map">📍 ${escapeHTML(mapLabel)}${chLabel ? ` · <b>${escapeHTML(chLabel)}</b>` : ''}</span>
+              <span class="pg-meta-chip">${escapeHTML(expLabel)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="pg-head-right" onclick="event.stopPropagation()">
+          <div class="pg-rate-summary">
+            <div class="pg-rate-col">
+              <span class="pg-rate-lbl">⚡ รวมทั้งตี้ (${stats.onlineCount} จอ)</span>
+              <span class="pg-rate-val total">${stats.totalGpm.toLocaleString()} <small>z/m</small> · <span class="gph">${stats.totalGph.toLocaleString()} <small>z/h</small></span></span>
+            </div>
+            <div class="pg-rate-sep"></div>
+            <div class="pg-rate-col">
+              <span class="pg-rate-lbl">👤 เฉลี่ยต่อจอ ${vsSoloBadge}</span>
+              <span class="pg-rate-val avg">${stats.avgGpm.toLocaleString()} <small>z/m</small> · <span class="gph">${stats.avgGph.toLocaleString()} <small>z/h</small></span></span>
+            </div>
+          </div>
+          <div class="pg-head-actions">
+            <button type="button" class="btn btn-ghost btn-sm pg-action-btn" onclick="resetGroupZenyRate('${groupKey}', event)" title="รีเซ็ต GP/M · GP/H เฉพาะสมาชิกในปาร์ตี้นี้">🔄 รีเซ็ตตี้</button>
+            <button type="button" class="btn btn-ghost btn-sm pg-action-btn" onclick="if(window.openPartyDrawer)window.openPartyDrawer()" title="ตั้งค่าปาร์ตี้นี้">⚙️ ตั้งค่าตี้</button>
+          </div>
+        </div>
+      </header>
+      ${isCollapsed ? '' : `
+      <div class="profile-group-grid profiles-grid">
+        ${partyProfiles.map(buildProfileCard).join('')}
+      </div>`}
+    </section>`;
+}
+
+function buildSoloGroupSection(soloProfiles) {
+  const groupKey = 'solo';
+  const isCollapsed = collapsedCardGroups.has(groupKey);
+  const sortedSolo = sortProfileList(soloProfiles);
+  const stats = summarizeGroupStats(sortedSolo);
+
+  return `
+    <section class="profile-group-section is-solo-group ${isCollapsed ? 'is-collapsed' : ''}" data-group-id="group-solo">
+      <header class="profile-group-header" onclick="toggleCardGroupCollapse('${groupKey}', event)">
+        <div class="pg-head-left">
+          <button type="button" class="pg-collapse-btn" title="${isCollapsed ? 'คลิกเพื่อขยายดูการ์ดฟาร์มเดี่ยว' : 'คลิกเพื่อพับเก็บการ์ดฟาร์มเดี่ยว'}">${isCollapsed ? '▶' : '▼'}</button>
+          <span class="pg-group-badge solo">⚔️ ฟาร์มเดี่ยว (Solo)</span>
+          <div class="pg-title-block">
+            <div class="pg-title-main">
+              <span>ตัวละครที่ไม่ได้อยู่ในปาร์ตี้ (${stats.totalCount} จอ)</span>
+              ${stats.topEarner ? `<span class="pg-top-earner-pill" title="จอฟาร์มเดี่ยวที่ทำ GP/M สูงสุดในตอนนี้">🏆 สูงสุด: <b>${escapeHTML(stats.topEarner.name)}</b> (${stats.topEarner.gpm.toLocaleString()} z/m)</span>` : ''}
+            </div>
+            <div class="pg-meta-pills">
+              <span class="pg-meta-chip">🖥️ ออนไลน์ <b>${stats.onlineCount}</b>/${stats.totalCount} จอ</span>
+              <span class="pg-meta-chip">⚔️ กำลังฟาร์ม <b>${stats.farmingCount}</b> จอ</span>
+              <span class="pg-meta-chip">💰 สะสมรอบนี้ <b>+${stats.totalGained.toLocaleString()} z</b></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="pg-head-right" onclick="event.stopPropagation()">
+          <div class="pg-rate-summary">
+            <div class="pg-rate-col">
+              <span class="pg-rate-lbl">⚡ รวมโซโล่ (${stats.onlineCount} จอ)</span>
+              <span class="pg-rate-val total">${stats.totalGpm.toLocaleString()} <small>z/m</small> · <span class="gph">${stats.totalGph.toLocaleString()} <small>z/h</small></span></span>
+            </div>
+            <div class="pg-rate-sep"></div>
+            <div class="pg-rate-col">
+              <span class="pg-rate-lbl">👤 เฉลี่ยต่อจอ</span>
+              <span class="pg-rate-val avg">${stats.avgGpm.toLocaleString()} <small>z/m</small> · <span class="gph">${stats.avgGph.toLocaleString()} <small>z/h</small></span></span>
+            </div>
+          </div>
+          <div class="pg-head-actions">
+            <button type="button" class="btn btn-ghost btn-sm pg-action-btn" onclick="resetGroupZenyRate('solo', event)" title="รีเซ็ต GP/M · GP/H เฉพาะกลุ่มฟาร์มเดี่ยว">🔄 รีเซ็ตโซโล่</button>
+          </div>
+        </div>
+      </header>
+      ${isCollapsed ? '' : `
+      <div class="profile-group-grid profiles-grid">
+        ${sortedSolo.length > 0 ? sortedSolo.map(buildProfileCard).join('') : `<div class="empty-state" style="padding: 24px;"><p style="margin:0;">ทุกโปรไฟล์ถูกจัดอยู่ในปาร์ตี้หมดแล้ว</p></div>`}
+      </div>`}
+    </section>`;
+}
+
 function renderProfiles() {
+  syncViewModeControls();
   if (currentProfiles.length === 0) {
+    gridEl.classList.remove('grouped-mode');
     gridEl.innerHTML = `
       <div class="empty-state">
         <div class="empty-icon">🎮</div>
@@ -1717,11 +2230,49 @@ function renderProfiles() {
   }
 
   const tpl = document.createElement('template');
-  tpl.innerHTML = currentProfiles.map(buildProfileCard).join('');
+  if (cardViewMode === 'party') {
+    gridEl.classList.add('grouped-mode');
+    const pData = window.__partyManagerData;
+    const parties = (pData && Array.isArray(pData.parties)) ? pData.parties : [];
+    const profileById = new Map(currentProfiles.map(p => [p.id, p]));
+    const roleMap = getPartyRoleMap();
+
+    const partyProfilesAll = currentProfiles.filter(p => roleMap.has(p.id));
+    const soloProfilesAll = currentProfiles.filter(p => !roleMap.has(p.id));
+    const partyStats = summarizeGroupStats(partyProfilesAll);
+    const soloStats = summarizeGroupStats(soloProfilesAll);
+
+    let html = buildPartyVsSoloBanner(parties.length, partyStats, soloStats);
+    if (parties.length === 0) {
+      html += `
+        <section class="profile-group-section is-party-group" data-group-id="group-no-party">
+          <div class="pg-empty-party-notice">
+            <div>
+              <strong>👑 ยังไม่ได้สร้างปาร์ตี้ในระบบ</strong>
+              <p>คุณสามารถกดปุ่มด้านขวาเพื่อเลือกหัวตี้และจัดสมาชิกเข้าตี้ เพื่อเปรียบเทียบ GP/M · GP/H กับกลุ่มฟาร์มเดี่ยวได้ทันที</p>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" onclick="if(window.openPartyDrawer)window.openPartyDrawer()">➕ สร้าง / จัดปาร์ตี้</button>
+          </div>
+        </section>`;
+    } else {
+      html += parties.map((party, idx) => buildPartyGroupSection(party, idx, profileById, roleMap, soloStats.avgGpm)).join('');
+    }
+    html += buildSoloGroupSection(soloProfilesAll);
+    tpl.innerHTML = html;
+  } else {
+    gridEl.classList.remove('grouped-mode');
+    const sorted = sortProfileList(currentProfiles);
+    tpl.innerHTML = sorted.map(buildProfileCard).join('');
+  }
+
   const newCards = Array.from(tpl.content.children);
   const oldCards = Array.from(gridEl.children);
   const sameLayout = oldCards.length === newCards.length &&
-    oldCards.every((el, i) => el.dataset.profileId === newCards[i].dataset.profileId);
+    oldCards.every((el, i) => {
+      const oldKey = el.dataset.profileId || el.dataset.groupId || '';
+      const newKey = newCards[i].dataset.profileId || newCards[i].dataset.groupId || '';
+      return oldKey !== '' && oldKey === newKey;
+    });
 
   if (!sameLayout) {
     gridEl.replaceChildren(...newCards);

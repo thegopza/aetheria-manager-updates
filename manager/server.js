@@ -4161,23 +4161,25 @@ const server = http.createServer(async (req, res) => {
     const changed = enriched.filter(p => {
       const s = p.liveState;
       if (!s || s.error) return false;
-      const portrait = s.portrait && portraitPathFromSrc(s.portrait);
+      const hasChar = Boolean(s.charName);
+      const portrait = hasChar && s.portrait && portraitPathFromSrc(s.portrait);
       const premChanged = (Number(s.premiumUntil) > 0 && Number(s.premiumUntil) !== Number(p.lastPremiumUntil || 0)) ||
-                          (s.hasPremium === false && Number(p.lastPremiumUntil || 0) > Date.now());
-      return (portrait && portrait !== p.lastPortrait) || (s.charName && s.charName !== p.lastCharName) || premChanged;
+                          (hasChar && s.hasPremium === false && Number(p.lastPremiumUntil || 0) > Date.now());
+      return (portrait && portrait !== p.lastPortrait) || (hasChar && s.charName !== p.lastCharName) || (hasChar && s.charClass && s.charClass !== p.lastCharClass) || premChanged;
     });
     if (changed.length > 0) {
       const fresh = loadProfiles();
       changed.forEach(p => {
         const target = fresh.find(f => f.id === p.id);
         if (!target) return;
-        const portrait = p.liveState.portrait && portraitPathFromSrc(p.liveState.portrait);
+        const hasChar = Boolean(p.liveState.charName);
+        const portrait = hasChar && p.liveState.portrait && portraitPathFromSrc(p.liveState.portrait);
         if (portrait) target.lastPortrait = p.lastPortrait = portrait;
-        if (p.liveState.charName) target.lastCharName = p.lastCharName = p.liveState.charName;
-        if (p.liveState.charClass) target.lastCharClass = p.lastCharClass = p.liveState.charClass;
+        if (hasChar) target.lastCharName = p.lastCharName = p.liveState.charName;
+        if (hasChar && p.liveState.charClass) target.lastCharClass = p.lastCharClass = p.liveState.charClass;
         if (Number(p.liveState.premiumUntil) > 0) {
           target.lastPremiumUntil = p.lastPremiumUntil = Number(p.liveState.premiumUntil);
-        } else if (p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
+        } else if (hasChar && p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
           target.lastPremiumUntil = p.lastPremiumUntil = 0;
         }
       });

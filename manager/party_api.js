@@ -29,7 +29,7 @@ const EXP_MODES = ['individual', 'even-share'];
 const LOOT_MODES = ['personal', 'round-robin', 'leader'];
 const BUSY_FLAGS = ['__isNavigating', '__isWalkingToMap', '__isShopping', '__isRecovering', '__isConsolidating',
   '__isChangingJob', '__isAutoSellingNow', '__isManualSelling', '__isStoring', '__isGearRefining',
-  '__isMarketScanning', '__isWeightScrollBusy'];
+  '__isMarketScanning', '__isWeightScrollBusy', '__isCheckingPostSellChannel', '__pendingPostSellChannelCheck'];
 
 const TIMING = {
   tickMs: 2500,
@@ -160,6 +160,8 @@ const READ_JS = `(() => {
     botRunning: window.__isBotRunning === true,
     returningToPriest: window.__returningToPriest === true,
     priestBuffingTarget: window.__priestBuffingTarget || null,
+    lastPostSellChannelSwitch: window.__lastPostSellChannelSwitch || null,
+    channelCheckMode: window.__channelCheckMode || 'all',
     needsPriestBuff,
     buffStatus,
     busy,
@@ -252,6 +254,9 @@ const ACTIONS = {
     await new Promise(x => setTimeout(x, 1500));
     const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
     const cur = room && room.state && typeof room.state.channel === 'number' ? room.state.channel : (typeof window.getCurrentChannel === 'function' ? window.getCurrentChannel() : null);
+    if (cur === ${Number(ch)} && window.__isBotRunning && !window.__isShopping && !window.__isNavigating) {
+      setTimeout(() => { try { if (window.__isBotRunning && typeof window.activateInGameAuto === 'function') window.activateInGameAuto(); } catch (_) {} }, 600);
+    }
     return { success: cur === ${Number(ch)}, channel: cur, error: cur === ${Number(ch)} ? null : ((r && r.error) || 'ย้าย CH ไม่สำเร็จ') };
   })()`,
   leastChannel: () => `(async () => {
@@ -436,6 +441,7 @@ function createPartyService(opts) {
   const { loadProfiles, evalProfilePort } = opts;
   const dataFile = opts.dataFile || path.join(__dirname, 'data', 'parties.json');
   const isBusy = opts.isBusy || (() => false);
+  const getChannelCheckMode = opts.getChannelCheckMode || (() => 'all');
   const now = opts.now || (() => Date.now());
   const sleep = opts.sleep || (ms => new Promise(r => setTimeout(r, ms)));
   const log = opts.log || ((...a) => console.log('[Party]', ...a));
@@ -470,7 +476,7 @@ function createPartyService(opts) {
     return memberRt.get(k);
   };
   const prt = pid => {
-    if (!runtime.has(pid)) runtime.set(pid, { notes: [], settingsAt: 0, fallbackAt: 0, leaveAt: 0, lastTickAt: 0, gatherAt: 0, gathering: false, gatherNote: null, channelNote: null });
+    if (!runtime.has(pid)) runtime.set(pid, { notes: [], settingsAt: 0, fallbackAt: 0, leaveAt: 0, lastTickAt: 0, gatherAt: 0, gathering: false, gatherNote: null, channelNote: null, lastPostSellFollowAt: 0, settledByMemberName: null });
     return runtime.get(pid);
   };
 
@@ -677,6 +683,7 @@ function createPartyService(opts) {
     for (const id of [party.leaderId].concat(party.memberIds)) {
       const P = profiles.get(id), S = states.get(id), m = mrt(party.id, id);
       if (!S || !S.ok || !S.name || (id !== party.leaderId && !inGame.has(S.name))) continue;
+      if (id === party.leaderId && (!priest || S.follow !== priest.name)) continue;
       const ft = id === party.leaderId
         ? { mode: 'none', targetId: null, targetName: null, targetSnap: null }
         : resolveFollowTarget(party, id, profiles, states);
@@ -722,8 +729,46 @@ function createPartyService(opts) {
         }
       }
 
+      const chMode = typeof getChannelCheckMode === 'function' ? (getChannelCheckMode() || 'all') : 'all';
+      const partyChannelCheckEnabled = (chMode === 'all' || chMode === 'party_only');
+
+      // When any party member returns from selling items to the farm map and selects/moves to the least-populated CH,
+      // lock the party onto that channel and pull all other party members on the farm map (including Leader & Priest) to follow.
+      let triggeredByPostSell = false;
+      if (partyChannelCheckEnabled) {
+        let latestSwitch = null;
+        for (const id of [party.leaderId].concat(party.memberIds)) {
+          const S = states.get(id);
+          if (!S || !S.ok || !S.name) continue;
+          if (id !== party.leaderId && !inGame.has(S.name)) continue;
+          if (!S.mapId || isCityMapName(S.mapName)) continue;
+          const onPartyFarmMap = !leaderMap || (S.mapName && S.mapName.includes(leaderMap)) || (anchorSnap && S.mapId === anchorSnap.mapId);
+          if (!onPartyFarmMap) continue;
+          const sw = S.lastPostSellChannelSwitch;
+          if (!sw || typeof sw.channel !== 'number' || typeof sw.at !== 'number') continue;
+          if (sw.at <= (rt.lastPostSellFollowAt || 0)) continue;
+          if (now() - sw.at > 180000) continue;
+          if (S.channel !== sw.channel) continue;
+          if (sw.mapId && S.mapId !== sw.mapId) continue;
+          if (!latestSwitch || sw.at > latestSwitch.sw.at) {
+            latestSwitch = { id, snap: S, sw };
+          }
+        }
+        if (latestSwitch) {
+          rt.lastPostSellFollowAt = latestSwitch.sw.at;
+          rt.settledMapId = latestSwitch.snap.mapId;
+          rt.settledChannel = latestSwitch.sw.channel;
+          rt.settledByMemberName = latestSwitch.snap.name;
+          anchorId = latestSwitch.id;
+          anchorSnap = latestSwitch.snap;
+          triggeredByPostSell = true;
+          log('post-sell-ch-follow', latestSwitch.snap.name, 'selected CH', latestSwitch.sw.channel, 'on', latestSwitch.snap.mapId);
+        }
+      }
+
       const anchorOnFarm = Boolean(anchorSnap && anchorSnap.mapId && !isCityMapName(anchorSnap.mapName));
       const needsInitialChannelCheck = Boolean(
+        partyChannelCheckEnabled &&
         anchorOnFarm &&
         rt.settledMapId !== anchorSnap.mapId &&
         anchorSnap.helpers &&
@@ -734,7 +779,7 @@ function createPartyService(opts) {
         : (anchorSnap ? anchorSnap.channel : L.channel);
 
       const movers = [];
-      // If Priest is the Channel Anchor (or settledChannel is locked on this map) and the Leader is on a different CH on the same map, Leader moves too!
+      // If Priest or another returning member is the Channel Anchor (or settledChannel is locked on this map) and the Leader is on a different CH on the same map, Leader moves too!
       if (anchorOnFarm && L.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && L.channel !== desiredCh && !(L.busy && L.busy.length) && L.helpers && L.helpers.moveToChannel) {
         if (anchorId !== party.leaderId || rt.settledMapId === anchorSnap.mapId) {
           movers.push(party.leaderId);
@@ -763,7 +808,7 @@ function createPartyService(opts) {
           movers.push(id);
         }
       }
-      if ((needsInitialChannelCheck || movers.length) && !rt.gathering && now() - rt.gatherAt >= T.gatherCooldownMs && !isBusy()) {
+      if ((needsInitialChannelCheck || movers.length) && !rt.gathering && (triggeredByPostSell || now() - rt.gatherAt >= T.gatherCooldownMs) && !isBusy()) {
         gatherChannels(party, profiles, anchorId, anchorSnap, movers, needsInitialChannelCheck, allPartyNames).catch(e => log('gather error', e.message));
       }
       if (rt.gathering && rt.gatherNote) notes.push(rt.gatherNote);
@@ -959,11 +1004,13 @@ function createPartyService(opts) {
     const inGame = new Set(inGameMemberNames(leaderSnap));
     const priest = findPartyPriest(party, profiles, states);
     const anchorSnap = (priest && priest.snap && priest.snap.ok && priest.snap.mapId && !isCityMapName(priest.snap.mapName)) ? priest.snap : leaderSnap;
+    const rt = prt(party.id);
+    const targetCh = (anchorSnap && rt && rt.settledMapId === anchorSnap.mapId && typeof rt.settledChannel === 'number') ? rt.settledChannel : (anchorSnap && anchorSnap.channel);
     const ft = id === party.leaderId ? { mode: 'none', targetId: null, targetName: null } : resolveFollowTarget(party, id, profiles, states);
     let status = 'offline', text = 'ออฟไลน์';
     if (S && S.ok && S.name) {
       if (inGame.has(S.name)) {
-        const same = anchorSnap && S.mapId === anchorSnap.mapId && S.channel === anchorSnap.channel;
+        const same = anchorSnap && S.mapId === anchorSnap.mapId && S.channel === targetCh;
         status = same ? 'joined' : 'apart';
         if (same && S.priestBuffingTarget) {
           text = 'เดินไปบัฟ ' + S.priestBuffingTarget;
@@ -1011,7 +1058,8 @@ function createPartyService(opts) {
         planPending: planBlocked(S) ? S.plan.levelPending[0] : null,
         mapName: S && S.mapName, channel: S && S.channel };
     });
-    return { success: true, parties: list, clients, statesAt, maxMembers: MAX_MEMBERS };
+    const channelCheckMode = typeof getChannelCheckMode === 'function' ? (getChannelCheckMode() || 'all') : 'all';
+    return { success: true, parties: list, clients, statesAt, maxMembers: MAX_MEMBERS, channelCheckMode };
   }
 
   async function disband(party) {

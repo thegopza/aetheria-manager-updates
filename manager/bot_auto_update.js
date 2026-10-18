@@ -33,7 +33,7 @@ const CLIENT_PROBE_JS = `(() => {
   if (window.__isShopping) busy.push('กำลังซื้อ/ขายกับ NPC');
   if (window.__isRecovering) busy.push('กำลังชุบชีวิต');
   if (window.__isNavigating) busy.push('กำลังเดินทาง');
-  if (window.__isConsolidating || window.__consolidationReceiverMode) busy.push('กำลังรวมเงิน/เทรด');
+  if (window.__isConsolidating || window.__consolidationReceiverMode || window.__consolidationPending) busy.push('กำลังรวมเงิน/เทรด');
   if (window.__isChangingJob) busy.push('กำลังเปลี่ยนอาชีพ');
   if (window.__isGearRefining) busy.push('กำลังตีบวก (เซ็ตอุปกรณ์)');
   if (window.__isStoring) busy.push('กำลังฝากของเข้าคลัง');
@@ -44,6 +44,7 @@ const CLIENT_PROBE_JS = `(() => {
   if (window.__unexpectedTownWaiting) busy.push('กำลังพักรอนิรภัย (กลับเมืองผิดปกติ)');
   if (window.__isHumanizing) busy.push('กำลังทำกิจกรรม Humanize ในเมือง');
   if (window.__isWeightScrollBusy) busy.push('กำลังใช้ Weight Limit Scroll');
+  if (window.__isCheckingPostSellChannel) busy.push('กำลังเช็ค/ย้าย Channel ที่คนน้อยสุด');
   if (window.__senderTradeBusy) busy.push('กำลังส่งของ/เงินผ่านเทรด');
   const nameEl = document.querySelector('.hud-name');
   let map = '';
@@ -80,7 +81,7 @@ function getBuffer(url) {
 const gitBlobSha = buf => crypto.createHash('sha1').update(`blob ${buf.length}\0`).update(buf).digest('hex');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataDir, getManagedRelease, getCachedManagedRelease, sleep = ms => new Promise(r => setTimeout(r, ms)), clock = () => Date.now(), clientBackTimeoutMs = CLIENT_BACK_TIMEOUT_MS }) {
+function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataDir, getManagedRelease, getCachedManagedRelease, isConsolidating, sleep = ms => new Promise(r => setTimeout(r, ms)), clock = () => Date.now(), clientBackTimeoutMs = CLIENT_BACK_TIMEOUT_MS }) {
   const stateFile = path.join(dataDir, 'bot_update_state.json');
   let saved = { enabled: true };
   try { saved = Object.assign(saved, JSON.parse(fs.readFileSync(stateFile, 'utf8'))); } catch (e) {}
@@ -289,6 +290,7 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
 
   async function updateCycle() {
     if (busyCycle) return;
+    if (typeof isConsolidating === 'function' && isConsolidating()) return;
     busyCycle = true;
     try {
       syncManagedLatest();
@@ -309,6 +311,7 @@ function createBotAutoUpdater({ loadProfiles, evalProfilePort, getGameDir, dataD
       const profiles = loadProfiles().filter(p => p.debugPort);
       let pending = 0;
       for (const p of profiles) {
+        if (typeof isConsolidating === 'function' && isConsolidating()) break;
         syncManagedLatest();
         target = currentTarget() || target;
         const info = await probe(p);

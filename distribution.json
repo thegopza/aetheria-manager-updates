@@ -1,18 +1,22 @@
 {
   "schema": 1,
-  "sourceCommit": "6ba2c071a1c8e8504486974942983c06858004c9",
+  "sourceCommit": "4144045ac98ccad4759d978c29099feff4ec6268",
   "files": [
+    {
+      "path": "manager/asset_cache.js",
+      "sha256": "80ba9eeccede9d0bcb016fdd7efe03196852235304effb310e476367331f00d4"
+    },
     {
       "path": "manager/auth_sync.js",
       "sha256": "5bce6480799085a6921ef10494729fe975be378daa51291cf1381c08cbc827ce"
     },
     {
       "path": "manager/bot_auto_update.js",
-      "sha256": "0332c270e93da2ece1523f415a7c2dd25dac525a80aeae842a889e3268789128"
+      "sha256": "44ff403451329b721bd9ae498a62441a0fe729ffba39a994470971d8986e4615"
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "5919591e14c919028372f5e7c6523e770827252204ddcd2d09c944228868f1c9"
+      "sha256": "6757c0f4dc428b347368004e9473207be822215587095e2b5d74dbf8cb322df9"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -56,7 +60,7 @@
     },
     {
       "path": "manager/image_board_solver.js",
-      "sha256": "aeadbd39fbc0c3477e81b41e3a4be1cb58a72f6bde60570186cc7fab89d0579d"
+      "sha256": "73eecaa5736ebb9b9d0b757c18a5fa3f48f0e0a586a3b2e3a571f3a74d341fa7"
     },
     {
       "path": "manager/installer.js",
@@ -96,7 +100,7 @@
     },
     {
       "path": "manager/party_api.js",
-      "sha256": "85ecccba4510e139fabe66c2c73baa35ccf453d69edd4600bff90cfb994ccf3a"
+      "sha256": "09dcc92bd06ea171a9959798f50a758a4b5abc5dc7e86d920814845a58c8e19e"
     },
     {
       "path": "manager/plan_sync.js",
@@ -116,7 +120,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "44d388eb931b4036f2c24b78a3d664366e20cad2f9ac549afc5053daa56cbbb1"
+      "sha256": "d83329443fa1e42d1c6446f515f7a8739d1ae65b70f6a54bfb00f8c098fa4759"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -152,11 +156,11 @@
     },
     {
       "path": "manager/public/image_board_solver.js",
-      "sha256": "161d0dcf2a175fec243001d213adf7d3450ebdfee8ef1834375865dde20cd657"
+      "sha256": "73eecaa5736ebb9b9d0b757c18a5fa3f48f0e0a586a3b2e3a571f3a74d341fa7"
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "b3a8ce536ee94ab14b2723558b9c9a81ac8c50dcd34714ce38989969a5b83871"
+      "sha256": "3056bc69013e155ad6440920f62ac078c5fd72f40ae3dd71583e8a4abb8390ac"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -180,7 +184,7 @@
     },
     {
       "path": "manager/public/party_manager.js",
-      "sha256": "63907b53a785d1b3de4f819143a9d8c4228b02921cb1866811a47e7ca938d196"
+      "sha256": "b8238aa93d5424a98d5a1abd7183a7c27ae6930e3db35de7460b0d746642f0fa"
     },
     {
       "path": "manager/public/patcher_module.js",
@@ -211,6 +215,10 @@
       "sha256": "2d32ecf8ae2ad8e490f82018be8c4c395746bbed08a3677b94a2f4a0ee8a33fd"
     },
     {
+      "path": "manager/screen_proxy_manager.js",
+      "sha256": "fa80e27e6fbda75ddf0e925cc81c951293df537a8ebde3e8817f22010d56b37f"
+    },
+    {
       "path": "manager/script_bootstrap.js",
       "sha256": "dfb73ffef15c1c3ac74524f32abdf3090660447735b18c1fb14e2dbc96b9f728"
     },
@@ -232,7 +240,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "23414694f51420207fbe3569b995fdbcd6e52958eb6ad87b96fd0b5270ae04bd"
+      "sha256": "072ffbe0d5f9a29ca1484f3793183e1ca49b9fb3583779e778fa4f932c27e025"
     },
     {
       "path": "manager/test_isolation.js",

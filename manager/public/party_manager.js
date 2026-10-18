@@ -33,6 +33,15 @@
         <div><h2>ปาร์ตี้</h2><p>จัดตี้อัตโนมัติหรือเลือกคนเอง สูงสุด 6 คนรวมหัวตี้</p></div>
         <button class="pt-close" id="pt-close" type="button" aria-label="ปิด">✕</button>
       </header>
+      <div class="pt-ch-mode-bar" style="padding:8px 14px; background:rgba(15,23,42,0.75); border-bottom:1px solid rgba(255,255,255,0.08); display:flex; align-items:center; gap:8px; font-size:11.5px;">
+        <label for="pt-channel-check-mode" style="color:#94a3b8; white-space:nowrap; font-weight:600;">📡 โหมดเช็ค CH:</label>
+        <select id="pt-channel-check-mode" style="flex:1; background:#0f172a; color:#e2e8f0; border:1px solid rgba(56,189,248,0.35); border-radius:6px; padding:4px 8px; font-size:11.5px; outline:none; cursor:pointer;" title="เมื่อมีคนในตี้ขายของเสร็จแล้วกลับมาแมพฟาร์ม ระบบจะเลือก CH คนน้อยสุดให้ และดึงคนในตี้ที่เหลือย้ายตาม">
+          <option value="all">🔄 หลังขายของ: ย้าย CH คนน้อยสุด + ดึงตี้ตาม (ทุกจอ)</option>
+          <option value="party_only">👑 เฉพาะปาร์ตี้: หลังขายของย้าย CH คนน้อยสุด + ดึงตี้ตาม</option>
+          <option value="solo_only">👤 เฉพาะฟาร์มเดี่ยว: เช็ค CH คนน้อยสุดหลังขายของ</option>
+          <option value="off">⏸️ ปิด (ไม่เช็ค/ไม่ย้าย CH หลังขายของ)</option>
+        </select>
+      </div>
       <div class="pt-body" id="pt-body"></div>
       <footer class="pt-foot">
         <button class="pt-add" id="pt-add" type="button">➕ เพิ่มตี้</button>
@@ -51,6 +60,14 @@
     tab.addEventListener('click', () => setOpen(true));
     scrim.addEventListener('click', () => setOpen(false));
     drawer.querySelector('#pt-close').addEventListener('click', () => setOpen(false));
+    const chModeSel = drawer.querySelector('#pt-channel-check-mode');
+    if (chModeSel) {
+      chModeSel.addEventListener('change', () => {
+        if (typeof window.setChannelCheckMode === 'function') {
+          window.setChannelCheckMode(chModeSel.value);
+        }
+      });
+    }
     drawer.querySelector('#pt-add').addEventListener('click', () => openPicker({ mode: 'leader', partyId: null }));
     drawer.querySelector('#pt-pick-back').addEventListener('click', closePicker);
     drawer.querySelector('#pt-search').addEventListener('input', renderPicker);
@@ -361,6 +378,10 @@
   function render() {
     const badge = document.getElementById('pt-tab-badge');
     if (badge) setText(badge, data.parties.length ? String(data.parties.length) : '');
+    const chSel = document.getElementById('pt-channel-check-mode');
+    if (chSel && data.channelCheckMode && document.activeElement !== chSel && chSel.value !== data.channelCheckMode) {
+      chSel.value = data.channelCheckMode;
+    }
     const body = document.getElementById('pt-body');
     if (!body) return;
 

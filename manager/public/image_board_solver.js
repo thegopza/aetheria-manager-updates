@@ -208,12 +208,68 @@
     const R = new Float32Array(w * h);
     const G = new Float32Array(w * h);
     const B = new Float32Array(w * h);
+    const greenPts = [];
     for (let ly = 0; ly < h; ly++) {
       for (let lx = 0; lx < w; lx++) {
         const i = ((y1 + ly) * bw + (x1 + lx)) * 4;
-        R[ly * w + lx] = bp[i];
-        G[ly * w + lx] = bp[i + 1];
-        B[ly * w + lx] = bp[i + 2];
+        const r = bp[i], g = bp[i + 1], b = bp[i + 2];
+        R[ly * w + lx] = r;
+        G[ly * w + lx] = g;
+        B[ly * w + lx] = b;
+        if (g > 140 && g - r > 95 && b > 85 && Math.abs(g - 185) < 55 && Math.abs(b - 129) < 55 && r < 65) {
+          greenPts.push([lx, ly]);
+        }
+      }
+    }
+
+    // If box contains a Discord #10b981 selection circle (radius ~26), inpaint the ring pixels
+    if (greenPts.length >= 25) {
+      let sx = 0, sy = 0;
+      for (const [gx, gy] of greenPts) { sx += gx; sy += gy; }
+      const cx0 = sx / greenPts.length, cy0 = sy / greenPts.length;
+      let bestCx = cx0, bestCy = cy0, bestCnt = -1;
+      for (let dy = -6; dy <= 6; dy += 0.5) {
+        for (let dx = -6; dx <= 6; dx += 0.5) {
+          let cnt = 0;
+          for (const [gx, gy] of greenPts) {
+            const d = Math.hypot(gx - (cx0 + dx), gy - (cy0 + dy));
+            if (d >= 24.2 && d <= 27.8) cnt++;
+          }
+          if (cnt > bestCnt) { bestCnt = cnt; bestCx = cx0 + dx; bestCy = cy0 + dy; }
+        }
+      }
+      const isRing = new Uint8Array(w * h);
+      for (let ly = Math.max(0, Math.floor(bestCy - 31)); ly <= Math.min(h - 1, Math.ceil(bestCy + 31)); ly++) {
+        for (let lx = Math.max(0, Math.floor(bestCx - 31)); lx <= Math.min(w - 1, Math.ceil(bestCx + 31)); lx++) {
+          const d = Math.hypot(lx - bestCx, ly - bestCy);
+          if (d >= 23.2 && d <= 28.8) {
+            const p = ly * w + lx;
+            if (G[p] - R[p] > 35 && G[p] > 75 && B[p] > 55) isRing[p] = 1;
+          }
+        }
+      }
+      for (let pass = 0; pass < 4; pass++) {
+        const cR = new Float32Array(R), cG = new Float32Array(G), cB = new Float32Array(B);
+        for (let ly = Math.max(2, Math.floor(bestCy - 31)); ly <= Math.min(h - 3, Math.ceil(bestCy + 31)); ly++) {
+          for (let lx = Math.max(2, Math.floor(bestCx - 31)); lx <= Math.min(w - 3, Math.ceil(bestCx + 31)); lx++) {
+            const p = ly * w + lx;
+            if (!isRing[p]) continue;
+            let sr = 0, sg = 0, sb = 0, cnt = 0;
+            for (let dy = -3; dy <= 3; dy++) {
+              for (let dx = -3; dx <= 3; dx++) {
+                const np = (ly + dy) * w + (lx + dx);
+                if (!isRing[np]) {
+                  sr += cR[np]; sg += cG[np]; sb += cB[np];
+                  cnt++;
+                }
+              }
+            }
+            if (cnt > 0) {
+              R[p] = sr / cnt; G[p] = sg / cnt; B[p] = sb / cnt;
+              isRing[p] = 0;
+            }
+          }
+        }
       }
     }
 
@@ -244,6 +300,39 @@
             nR[p] = sR / matchPairs;
             nG[p] = sG / matchPairs;
             nB[p] = sB / matchPairs;
+          }
+        }
+      }
+      R.set(nR); G.set(nG); B.set(nB);
+    }
+    // Clamp 3-4px translucent white/gray scribble strokes (dR, dG, dB > 10 with low chroma delta)
+    for (const rad of [3, 4, 3, 4]) {
+      const nR = new Float32Array(R), nG = new Float32Array(G), nB = new Float32Array(B);
+      for (let ly = rad; ly < h - rad; ly++) {
+        for (let lx = rad; lx < w - rad; lx++) {
+          const p = ly * w + lx;
+          const dirs = [
+            [p - rad, p + rad],
+            [p - rad * w, p + rad * w],
+            [p - rad * w - rad, p + rad * w + rad],
+            [p - rad * w + rad, p + rad * w - rad]
+          ];
+          let scribPairs = 0, sR = 0, sG = 0, sB = 0;
+          for (const [p1, p2] of dirs) {
+            const d12 = Math.abs(R[p1] - R[p2]) + Math.abs(G[p1] - G[p2]) + Math.abs(B[p1] - B[p2]);
+            if (d12 >= 22) continue;
+            const mR = (R[p1] + R[p2]) * 0.5, mG = (G[p1] + G[p2]) * 0.5, mB = (B[p1] + B[p2]) * 0.5;
+            const dR = R[p] - mR, dG = G[p] - mG, dB = B[p] - mB;
+            const chromaDelta = Math.max(dR, dG, dB) - Math.min(dR, dG, dB);
+            if (dR > 10 && dG > 10 && dB > 10 && dR < 85 && chromaDelta <= 16) {
+              scribPairs++;
+              sR += mR; sG += mG; sB += mB;
+            }
+          }
+          if (scribPairs >= 1) {
+            nR[p] = sR / scribPairs;
+            nG[p] = sG / scribPairs;
+            nB[p] = sB / scribPairs;
           }
         }
       }
@@ -284,7 +373,7 @@
       const mr = entry.sumR / entry.count, mg = entry.sumG / entry.count, mb = entry.sumB / entry.count;
       const sum = mr + mg + mb;
       const sat = Math.max(mr, mg, mb) - Math.min(mr, mg, mb);
-      if (sum < 270 && sat < 140 && (entry.count >= 14 || (entry.count >= 5 && sum < 245))) {
+      if (sum < 265 && sat < 56 && (entry.count >= 14 || (entry.count >= 5 && sum < 115))) {
         bgColors.push({ r: mr, g: mg, b: mb });
       }
     }
@@ -367,8 +456,8 @@
     const validPts = [];
     for (const c of comps) {
       const distMain = Math.hypot(c.cx - main.cx, c.cy - main.cy);
-      const inInterior = c.cx >= 24 && c.cx <= w - 24 && c.cy >= 22 && c.cy <= h - 22;
-      const isBowPart = inInterior && ((main.count <= 900 && c.count >= 160 && distMain <= 42.6) || (main.count < 120 && c.count >= 65 && distMain <= 36));
+      const inInterior = c.cx >= 16 && c.cx <= w - 16 && c.cy >= 16 && c.cy <= h - 16;
+      const isBowPart = inInterior && ((main.count <= 900 && c.count >= 135 && distMain <= 50) || (main.count < 180 && c.count >= 65 && distMain <= 40));
       if (c === main || (c.count >= 25 && distMain <= 32) || isBowPart) {
         for (const [px, py] of c.pts) {
           for (let dy = -1; dy <= 1; dy++) {
@@ -464,7 +553,7 @@
         colorHist[3]++;
       } else if (r - g > 42 && r > b + 35) {
         colorHist[4]++;
-      } else if (r > b + 38 && g > b + 20) {
+      } else if (r > g + 5 && r > b + 50 && g > b + 30) {
         colorHist[5]++;
       } else if (r >= g && g >= b) {
         colorHist[6]++;
@@ -634,11 +723,11 @@
           structColorPenalty += 1.45;
         }
       }
-      // Metallic gray blade (Dagger: sat <= 20, achromatic >= 0.60, bright silver >= 0.38) vs warm wooden item (Bow/Arrows/Wand)
+      // Metallic gray blade/mace (sat <= 23.5, achromatic >= 0.60, bright silver >= 0.38) vs warm wooden item (Bow/Arrows/Wand)
       const topGray = top.colorHist[0] + top.colorHist[1], slotGray = slot.colorHist[0] + slot.colorHist[1];
       const topWarmAll = top.colorHist[4] + top.colorHist[5] + top.colorHist[6], slotWarmAll = slot.colorHist[4] + slot.colorHist[5] + slot.colorHist[6];
-      const isDaggerLike = (o, oGray, oWarm) => o.meanSat <= 20 && oGray >= 0.60 && o.colorHist[0] >= 0.38 && oWarm <= 0.30;
-      const isWoodLike = (o, oGray, oWarm) => o.meanSat >= 30 && oGray <= 0.35 && (oWarm >= 0.42 || o.colorHist[2] >= 0.06);
+      const isDaggerLike = (o, oGray, oWarm) => o.meanSat <= 23.5 && oGray >= 0.60 && o.colorHist[0] >= 0.38 && oWarm <= 0.30;
+      const isWoodLike = (o, oGray, oWarm) => (o.meanSat >= 30 && oGray <= 0.40 && (oWarm >= 0.42 || o.colorHist[2] >= 0.06)) || (o.meanSat >= 24 && oWarm >= 0.45 && o.colorHist[0] <= 0.34);
       if ((isDaggerLike(slot, slotGray, slotWarmAll) && (isWoodLike(top, topGray, topWarmAll) || (top.elongation <= 1.65 && slot.elongation >= 3.2))) ||
           (isDaggerLike(top, topGray, topWarmAll) && (isWoodLike(slot, slotGray, slotWarmAll) || (slot.elongation <= 1.65 && top.elongation >= 3.2)))) {
         structColorPenalty += 0.75;
@@ -648,6 +737,24 @@
       const isSmallBottleLike = (o, ref) => o.area < ref.area * 0.55 && o.rmsRadius < ref.rmsRadius * 0.72 && o.colorHist[0] >= 0.10 && o.elongation >= 1.30;
       if ((isLargeRingLike(top) && isSmallBottleLike(slot, top)) || (isLargeRingLike(slot) && isSmallBottleLike(top, slot))) {
         structColorPenalty += 0.75;
+      }
+      // Royal Crown (solid round, white ermine fur >= 0.15) vs Smoking Pipe or Sunflower Hairpin (white <= 0.06)
+      const isCrownLike = o => o.area >= 2600 && o.elongation <= 1.16 && o.fillRatio >= 5.75 && o.colorHist[0] >= 0.15 && o.meanSat >= 50 && o.meanSat <= 78;
+      const isPipeOrHairpinLike = o => (o.area <= 1550 && o.elongation >= 1.32 && o.colorHist[0] <= 0.06 && (o.colorHist[4] + o.colorHist[5] + o.colorHist[6]) >= 0.65) || (o.meanSat >= 82 && o.colorHist[0] <= 0.04 && o.colorHist[7] >= 0.15);
+      if ((isCrownLike(top) && isPipeOrHairpinLike(slot)) || (isCrownLike(slot) && isPipeOrHairpinLike(top))) {
+        structColorPenalty += 1.10;
+      }
+      // Steampunk Goggles (cyan/blue lenses: hist[2]>=0.09, hist[7]>=0.15, sum>=0.26) vs Smoking Pipe / Binoculars (hist[7]<=0.06, warm>=0.68)
+      const isGogglesLike = o => o.colorHist[2] >= 0.09 && o.colorHist[7] >= 0.15 && (o.colorHist[2] + o.colorHist[7]) >= 0.26;
+      const isWarmNoTeal = o => o.colorHist[7] <= 0.06 && (o.colorHist[4] + o.colorHist[5] + o.colorHist[6]) >= 0.68;
+      if ((isGogglesLike(top) && isWarmNoTeal(slot)) || (isGogglesLike(slot) && isWarmNoTeal(top))) {
+        structColorPenalty += 0.65;
+      }
+      // White Opal (bright oval, lum>=170, hist[0]>=0.52, el>=1.16) vs Round Metal Shield (circular, lum<=162, el<=1.12, hist[7]>=0.14)
+      const isOpalLike = o => o.meanLum >= 170 && o.colorHist[0] >= 0.52 && o.elongation >= 1.16 && o.colorHist[7] <= 0.09;
+      const isRoundShieldLike = o => o.meanLum <= 162 && o.elongation <= 1.12 && o.colorHist[7] >= 0.14;
+      if ((isOpalLike(top) && isRoundShieldLike(slot)) || (isOpalLike(slot) && isRoundShieldLike(top))) {
+        structColorPenalty += 0.55;
       }
     }
     const rgbPenalty = (rgbDiff / 220) * 0.35 + (chromaDiff / 90) * 0.40 + histDiff * 0.62 + structColorPenalty;
@@ -662,7 +769,8 @@
   function findBottomCandidates(boardData) {
     if (!boardData || !boardData.data) return [];
     const bw = boardData.width || 480;
-    const bh = boardData.height || 330;
+    const rawBh = boardData.height || 330;
+    const bh = (bw === 480 && rawBh === 368) ? 330 : rawBh;
     const sx = bw / 480;
     const sy = bh / 330;
     const rawCols = [

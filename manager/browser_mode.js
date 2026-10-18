@@ -227,7 +227,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const saved = loadProfileStorage(profileId);
     const hasSaved = saved && Object.keys(saved).length > 0;
     const restoreJs = hasSaved
-      ? `try { const __s = ${JSON.stringify(saved)}; if (window.localStorage) { for (const [k, v] of Object.entries(__s)) { if (typeof v === 'string' && window.localStorage.getItem(k) === null) window.localStorage.setItem(k, v); } } } catch (_) {}`
+      ? `try { const __s = ${JSON.stringify(saved)}; for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && window.sessionStorage.getItem(sk) === null) window.sessionStorage.setItem(sk, v); } else if (window.localStorage && window.localStorage.getItem(k) === null) { window.localStorage.setItem(k, v); } } } catch (_) {}`
       : '';
     const cacheFlag = Boolean(effectiveAssetCache && effectiveAssetCache.isEnabled());
     return `window.__pmProfileId = ${JSON.stringify(profileId)}; window.__pmLocalAssetCacheEnabled = ${cacheFlag}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {} ${restoreJs}`;
@@ -250,13 +250,19 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const prefix = `pelican_${c.profileId}__`;
       const entries = await evaluate(c, `(() => {
         const out = {};
-        if (!window.localStorage) return out;
-        const pfx = ${JSON.stringify(prefix)};
-        for (let i = 0; i < window.localStorage.length; i++) {
-          const k = window.localStorage.key(i);
-          if (k && (k.startsWith(pfx) || (k.startsWith('pelican_') && !k.includes('__')))) {
-            out[k] = window.localStorage.getItem(k);
+        if (window.localStorage) {
+          const pfx = ${JSON.stringify(prefix)};
+          const extraKeys = new Set(['aetheria.device', 'ui.windows', 'partyFrameFolded', 'skip-anim:refine', 'hudMenuOpen', 'webgame.camera']);
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const k = window.localStorage.key(i);
+            if (k && (k.startsWith(pfx) || (k.startsWith('pelican_') && !k.includes('__')) || extraKeys.has(k))) {
+              out[k] = window.localStorage.getItem(k);
+            }
           }
+        }
+        if (window.sessionStorage) {
+          const ssVal = window.sessionStorage.getItem('aetheria.session');
+          if (ssVal) out['__ss:aetheria.session'] = ssVal;
         }
         return out;
       })()`, 3000);
@@ -780,9 +786,14 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if (tunnelInfo && tunnelInfo.proxyServerUrl) {
         try {
           let savedBounds = null;
+          let savedCookies = [];
           try {
             const winInfo = await send('Browser.getWindowForTarget', { targetId: c.targetId });
             if (winInfo && winInfo.bounds) savedBounds = winInfo.bounds;
+          } catch (_) {}
+          try {
+            const cookieRes = await send('Network.getCookies', { urls: [gameUrl] }, c.sessionId, 3000);
+            if (Array.isArray(cookieRes?.cookies)) savedCookies = cookieRes.cookies;
           } catch (_) {}
           const ctxRes = await send('Target.createBrowserContext', {
             disposeOnDetach: false,
@@ -791,6 +802,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           });
           const browserContextId = ctxRes?.browserContextId || null;
           if (browserContextId) {
+            if (savedCookies.length > 0) {
+              await send('Storage.setCookies', { cookies: savedCookies, browserContextId }, undefined, 3000).catch(() => {});
+            }
             const oldTargetId = c.targetId;
             const { targetId: newTargetId } = await send('Target.createTarget', { url: 'about:blank', newWindow: true, browserContextId });
             drop(c);

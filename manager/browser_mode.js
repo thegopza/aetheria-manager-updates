@@ -497,6 +497,15 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     } catch (_) {}
   }
 
+  async function getCustomBrowserContexts() {
+    try {
+      const r = await send('Target.getBrowserContexts', {}, undefined, 3000);
+      return new Set(Array.isArray(r?.browserContextIds) ? r.browserContextIds : []);
+    } catch (_) {
+      return new Set();
+    }
+  }
+
   // After a Manager restart the browser windows are still there: find them again by __pmProfileId
   function rediscover() {
     if (!rediscovering) rediscovering = rediscoverOnce().finally(() => { rediscovering = null; });
@@ -506,8 +515,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (!(await browserAlive())) throw Error('CDP not available');
     await connect();
     const { targetInfos } = await send('Target.getTargets');
+    const customContexts = await getCustomBrowserContexts();
     const surviving=new Set(targetInfos.map(t=>t.targetId));
-    for(const c of Array.from(clients.values()))if(!surviving.has(c.targetId)){diagnostic(c,'closed');knownTargets.delete(c.profileId);saveKnownTargets();drop(c);}
+    for(const c of Array.from(clients.values())){
+      if(c.browserContextId && !customContexts.has(c.browserContextId)) c.browserContextId = null;
+      if(!surviving.has(c.targetId)){diagnostic(c,'closed');knownTargets.delete(c.profileId);saveKnownTargets();drop(c);}
+    }
     const allProfiles = loadProfiles() || [];
     const unattachedPages = targetInfos.filter(x => x.type === 'page' && isGameUrl(x.url) && !Array.from(clients.values()).some(c => c.targetId === x.targetId));
     for (const t of unattachedPages) {
@@ -560,11 +573,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           }
         }
         const profile = identified && !stoppedProfiles.has(identified) && allProfiles.find(p => p.id === identified);
+        const isCustomCtx = Boolean(t.browserContextId && customContexts.has(t.browserContextId));
         if (profile) {
-          if (screenProxy && (screenProxy.isEnabled() || t.browserContextId)) {
+          if (screenProxy && (screenProxy.isEnabled() || isCustomCtx)) {
             await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort }).catch(() => {});
           }
-          const c = await attach(profile.id, t.targetId, probeFailed, t.browserContextId || null);
+          const c = await attach(profile.id, t.targetId, probeFailed, isCustomCtx ? t.browserContextId : null);
           startProxy(c, profile.debugPort);
           if (probeFailed) await reloadCrashedClient(c, 'rediscover-crashed', true);
         }
@@ -670,11 +684,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     let existing = clients.get(profile.id);
     if (!existing) {
       const { targetInfos } = await send('Target.getTargets');
+      const customContexts = await getCustomBrowserContexts();
       const claimedTargets = new Set([...Array.from(clients.values()).map(c => c.targetId), ...Array.from(knownTargets.entries()).filter(([k]) => k !== profile.id).map(([, v]) => v)]);
       const orphans = targetInfos.filter(t => t.type === 'page' && isGameUrl(t.url) && !claimedTargets.has(t.targetId));
       if (orphans.length === 1) {
         try {
-          existing = await attach(profile.id, orphans[0].targetId, true, orphans[0].browserContextId || null);
+          const orphanCtx = (orphans[0].browserContextId && customContexts.has(orphans[0].browserContextId)) ? orphans[0].browserContextId : null;
+          existing = await attach(profile.id, orphans[0].targetId, true, orphanCtx);
         } catch (_) {}
       }
     }
@@ -759,6 +775,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   async function applyProxyModeToOpenWindows({ onlyProfileIds } = {}) {
     if (!screenProxy) return { switched: 0, updatedTunnels: 0, details: [] };
     await connect().catch(() => {});
+    const customContexts = await getCustomBrowserContexts();
     const allProfiles = loadProfiles() || [];
     const filterSet = Array.isArray(onlyProfileIds) && onlyProfileIds.length > 0 ? new Set(onlyProfileIds) : null;
     let switched = 0;
@@ -767,6 +784,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
     for (const c of Array.from(clients.values())) {
       if (filterSet && !filterSet.has(c.profileId)) continue;
+      if (c.browserContextId && !customContexts.has(c.browserContextId)) c.browserContextId = null;
       const profile = allProfiles.find(p => p.id === c.profileId) || { id: c.profileId, debugPort: c.port };
       await syncClientStorage(c).catch(() => {});
       if (!screenProxy.isEnabled()) {
@@ -776,7 +794,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         continue;
       }
       const tunnelInfo = await screenProxy.acquireForProfile(c.profileId, { debugPort: profile.debugPort });
-      if (c.browserContextId) {
+      if (c.browserContextId && customContexts.has(c.browserContextId)) {
         // Already running in a proxy-enabled BrowserContext pointing to 127.0.0.1:<tunnelPort>
         updatedTunnels++;
         details.push({ profileId: c.profileId, action: 'tunnel-updated', proxyHost: tunnelInfo?.lease?.proxyHost || null });

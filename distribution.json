@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "49a90fb229a15d52fdaf544a928c4a3aabe0e98e",
+  "sourceCommit": "0ba7a6ea9a897b0184227de2df49d8fa610e1350",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "098e6e12c3091587d4de4ea7395dd2291e8c403d7874cd96d204fc1a3096c255"
+      "sha256": "5cb40ddfe3e0db43cb0a1b0c11fc004530afd180858d588a4329f637cd37a4d5"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -32,7 +32,7 @@
     },
     {
       "path": "manager/credentials.js",
-      "sha256": "ec9930654e3e81a28c435c07ca28a3e3be1936ea28e9fafe7088d8fc6588ae47"
+      "sha256": "02e922dbb0a119ac804abe06e5204ef93a39e3a4fd9f229bddcda4db2161f783"
     },
     {
       "path": "manager/discord_bot.js",
@@ -240,7 +240,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "072ffbe0d5f9a29ca1484f3793183e1ca49b9fb3583779e778fa4f932c27e025"
+      "sha256": "e08036fb3a6196fb84b870016946e47a6918c68c3ce3290929e793d89343e194"
     },
     {
       "path": "manager/test_isolation.js",

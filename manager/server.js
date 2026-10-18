@@ -105,7 +105,51 @@ const { createScreenProxyManager } = require("./screen_proxy_manager");
 const imageBoardSolver = require('./image_board_solver');
 const { createScriptCoordinator } = require('./script_coordinator');
 const { loadScriptRollout, saveScriptRolloutSelection } = require('./script_rollout');
+const PROFILES_BACKUP_FILE = path.join(__dirname, "data", "profiles.backup.json");
+const PLANS_BACKUP_FILE = path.join(__dirname, "data", "plans.backup.json");
+const PRESETS_BACKUP_FILE = path.join(__dirname, "data", "presets.backup.json");
+
+function writeJsonAtomic(filePath, data) {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const text = JSON.stringify(data, null, 2);
+  const tmpFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(tmpFile, text, "utf8");
+    fs.renameSync(tmpFile, filePath);
+  } catch (e) {
+    try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
+    fs.writeFileSync(filePath, text, "utf8");
+  }
+}
+
+let lastValidPresetsCache = null;
 function loadPresets() {
+  if (fs.existsSync(PRESETS_FILE)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(PRESETS_FILE, "utf8"));
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        lastValidPresetsCache = parsed;
+        if (!fs.existsSync(PRESETS_BACKUP_FILE)) {
+          try { writeJsonAtomic(PRESETS_BACKUP_FILE, parsed); } catch (_) {}
+        }
+        return parsed;
+      }
+    } catch (e) {}
+  }
+  if (fs.existsSync(PRESETS_BACKUP_FILE)) {
+    try {
+      const backup = JSON.parse(fs.readFileSync(PRESETS_BACKUP_FILE, "utf8"));
+      if (Array.isArray(backup) && backup.length > 0) {
+        lastValidPresetsCache = backup;
+        try { writeJsonAtomic(PRESETS_FILE, backup); } catch (_) {}
+        return backup;
+      }
+    } catch (_) {}
+  }
+  if (lastValidPresetsCache && lastValidPresetsCache.length > 0) {
+    return lastValidPresetsCache;
+  }
   if (!fs.existsSync(PRESETS_FILE)) {
     const defaultPresets = [
       {
@@ -159,13 +203,18 @@ function loadPresets() {
         }
       }
     ];
-    fs.writeFileSync(PRESETS_FILE, JSON.stringify(defaultPresets, null, 2), "utf8");
+    writeJsonAtomic(PRESETS_FILE, defaultPresets);
     return defaultPresets;
   }
-  try { return JSON.parse(fs.readFileSync(PRESETS_FILE, "utf8")); } catch(e) { return []; }
+  return [];
 }
 function savePresets(presets) {
-  fs.writeFileSync(PRESETS_FILE, JSON.stringify(presets, null, 2), "utf8");
+  if (!Array.isArray(presets)) return;
+  lastValidPresetsCache = presets;
+  writeJsonAtomic(PRESETS_FILE, presets);
+  if (presets.length > 0) {
+    try { writeJsonAtomic(PRESETS_BACKUP_FILE, presets); } catch (_) {}
+  }
 }
 
 
@@ -243,17 +292,40 @@ function normalizePlansData(raw) {
   return { profiles: defaultProfiles, assignments };
 }
 
+let lastValidPlansCache = null;
 function loadPlans() {
-  if (!fs.existsSync(PLANS_FILE)) return normalizePlansData({});
-  try { 
-    const raw = JSON.parse(fs.readFileSync(PLANS_FILE, "utf8"));
-    return normalizePlansData(raw);
-  } catch(e) { 
-    return normalizePlansData({}); 
+  if (fs.existsSync(PLANS_FILE)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(PLANS_FILE, "utf8"));
+      if (raw && Array.isArray(raw.profiles)) {
+        const norm = normalizePlansData(raw);
+        lastValidPlansCache = norm;
+        if (!fs.existsSync(PLANS_BACKUP_FILE)) {
+          try { writeJsonAtomic(PLANS_BACKUP_FILE, norm); } catch (_) {}
+        }
+        return norm;
+      }
+    } catch (e) {}
   }
+  if (fs.existsSync(PLANS_BACKUP_FILE)) {
+    try {
+      const backup = JSON.parse(fs.readFileSync(PLANS_BACKUP_FILE, "utf8"));
+      if (backup && Array.isArray(backup.profiles)) {
+        const norm = normalizePlansData(backup);
+        lastValidPlansCache = norm;
+        try { writeJsonAtomic(PLANS_FILE, norm); } catch (_) {}
+        return norm;
+      }
+    } catch (_) {}
+  }
+  if (lastValidPlansCache) return lastValidPlansCache;
+  return normalizePlansData({});
 }
 function savePlans(plans) {
-  fs.writeFileSync(PLANS_FILE, JSON.stringify(plans, null, 2), "utf8");
+  if (!plans || typeof plans !== "object") return;
+  lastValidPlansCache = plans;
+  writeJsonAtomic(PLANS_FILE, plans);
+  try { writeJsonAtomic(PLANS_BACKUP_FILE, plans); } catch (_) {}
 }
 
 const SESSIONS_DIR = path.join(BASE_DIR, "sessions");
@@ -281,44 +353,400 @@ const runningProcesses = {};
 const windowStates = {}; // profileId -> { isHidden: boolean }
 let allWindowsHidden = false;
 
-function loadProfiles() {
-  if (!fs.existsSync(PROFILES_FILE)) {
-    const defaultProfiles = [
-      {
-        id: "profile_1",
-        name: "Hunter Main",
-        account: "Main Account",
-        charClass: "Hunter",
-        targetMap: "ซากโบราณสถาน Lv.45–55",
-        debugPort: 49876,
-        autoStart: true,
-        notes: "ฟาร์มหลัก ธนูเพลิง / Arrow Crafting",
-        createdAt: Date.now()
-      },
-      {
-        id: "profile_2",
-        name: "Farmer Alt",
-        account: "Second Account",
-        charClass: "Archer / Rogue",
-        targetMap: "ถนนต้นหลิว",
-        debugPort: 49877,
-        autoStart: true,
-        notes: "ฟาร์มหาขยะและวัตถุดิบทำยา",
-        createdAt: Date.now()
-      }
-    ];
-    fs.writeFileSync(PROFILES_FILE, JSON.stringify(defaultProfiles, null, 2), "utf8");
-    return defaultProfiles;
-  }
+const DEFAULT_WHITELIST_STR = "Phracon, Rough Elunium, Enchant Rune, Composite Bow, Crossbow, Gakkung, Hunter Bow";
+
+function getDefaultMockProfiles() {
+  return [
+    {
+      id: "profile_1",
+      name: "Hunter Main",
+      account: "Main Account",
+      charClass: "Hunter",
+      targetMap: "ซากโบราณสถาน Lv.45–55",
+      debugPort: 49876,
+      autoStart: true,
+      notes: "ฟาร์มหลัก ธนูเพลิง / Arrow Crafting",
+      createdAt: Date.now()
+    },
+    {
+      id: "profile_2",
+      name: "Farmer Alt",
+      account: "Second Account",
+      charClass: "Archer / Rogue",
+      targetMap: "ถนนต้นหลิว",
+      debugPort: 49877,
+      autoStart: true,
+      notes: "ฟาร์มหาขยะและวัตถุดิบทำยา",
+      createdAt: Date.now()
+    }
+  ];
+}
+
+function isSingleDefaultMockProfile(p) {
+  if (!p || typeof p !== "object") return false;
+  if (p.lastCharName || p.generatedAccount) return false;
+  if (p.id === "profile_1" && p.name === "Hunter Main" && p.account === "Main Account") return true;
+  if (p.id === "profile_2" && p.name === "Farmer Alt" && p.account === "Second Account") return true;
+  return false;
+}
+
+function isUntouchedDefaultMockProfiles(profiles) {
+  if (!Array.isArray(profiles) || profiles.length === 0) return true;
+  if (profiles.length > 2) return false;
+  return profiles.every(isSingleDefaultMockProfile);
+}
+
+const DELETED_PROFILES_FILE = path.join(__dirname, "data", "deleted_profiles.json");
+function loadDeletedProfileIds() {
   try {
-    return JSON.parse(fs.readFileSync(PROFILES_FILE, "utf8"));
+    if (!fs.existsSync(DELETED_PROFILES_FILE)) return new Set();
+    const arr = JSON.parse(fs.readFileSync(DELETED_PROFILES_FILE, "utf8"));
+    return new Set(Array.isArray(arr) ? arr.map(String) : []);
+  } catch (_) {
+    return new Set();
+  }
+}
+function recordDeletedProfileId(id) {
+  if (!id) return;
+  try {
+    const set = loadDeletedProfileIds();
+    set.add(String(id));
+    writeJsonAtomic(DELETED_PROFILES_FILE, Array.from(set));
+  } catch (_) {}
+}
+
+function recoverProfilesFromLocalEvidence() {
+  const deletedIds = loadDeletedProfileIds();
+  // 1. Check dedicated backup file first
+  if (fs.existsSync(PROFILES_BACKUP_FILE)) {
+    try {
+      const backup = JSON.parse(fs.readFileSync(PROFILES_BACKUP_FILE, "utf8"));
+      const filteredBackup = Array.isArray(backup) ? backup.filter(p => p && !deletedIds.has(String(p.id))) : [];
+      if (filteredBackup.length > 0 && !isUntouchedDefaultMockProfiles(filteredBackup)) {
+        console.log(`[PmheeAether Manager] 🛡️ กู้คืนโปรไฟล์ ${filteredBackup.length} จอจากไฟล์สำรอง data/profiles.backup.json สำเร็จ`);
+        return filteredBackup;
+      }
+    } catch (_) {}
+  }
+
+  // 2. Reconstruct from local evidence in sessions/_browser_storage, data/*, plans.json, and sessions/profile_*
+  try {
+    const dataDir = path.join(__dirname, "data");
+    const map = new Map();
+    const ensure = (id) => {
+      const s = String(id || "").trim();
+      if (!s.startsWith("profile_") || deletedIds.has(s)) return null;
+      if (!map.has(s)) map.set(s, { id: s });
+      return map.get(s);
+    };
+
+    // 2a. sessions/_browser_storage/*.json
+    const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
+    if (fs.existsSync(bsDir)) {
+      for (const f of fs.readdirSync(bsDir)) {
+        if (!f.endsWith(".json")) continue;
+        const id = f.slice(0, -5);
+        const p = ensure(id);
+        if (!p) continue;
+        try {
+          const d = JSON.parse(fs.readFileSync(path.join(bsDir, f), "utf8"));
+          const pfx = `pelican_${id}__`;
+          const rawAuth = d[`${pfx}auth_cfg`] || d["pelican_auth_cfg"];
+          if (rawAuth) {
+            try {
+              const auth = JSON.parse(rawAuth);
+              if (auth && typeof auth === "object") {
+                if (auth.username && String(auth.username).trim()) {
+                  p.account = String(auth.username).trim();
+                  p.hasRealEvidence = true;
+                }
+                if (auth.charName && String(auth.charName).trim()) {
+                  p.lastCharName = String(auth.charName).trim();
+                  p.hasRealEvidence = true;
+                }
+                if (auth.password && String(auth.password).trim() && !credentials.getPassword(id)) {
+                  credentials.setPassword(id, String(auth.password).trim());
+                  p.hasRealEvidence = true;
+                }
+              }
+            } catch (_) {}
+          }
+          const farmMap = d[`${pfx}farm_map`] || d[`${pfx}target_map`] || d[`${pfx}last_farm_map`];
+          if (farmMap && typeof farmMap === "string" && farmMap.trim()) {
+            p.targetMap = farmMap.trim();
+            p.hasRealEvidence = true;
+          }
+          const rawSell = d[`${pfx}sell_cfg`];
+          if (rawSell) {
+            try {
+              const sell = JSON.parse(rawSell);
+              if (sell && typeof sell.whitelist === "string" && sell.whitelist.trim()) {
+                p.whitelist = sell.whitelist.trim();
+              }
+            } catch (_) {}
+          }
+          if (!p.lastCharName) {
+            for (const k of Object.keys(d)) {
+              const m = k.match(new RegExp(`^pelican_${id}__plan_state_(.+)_plan_`));
+              if (m && m[1]) {
+                p.lastCharName = m[1];
+                p.hasRealEvidence = true;
+                break;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+    }
+
+    // 2b. credentials.json
+    if (typeof credentials.listProfileIds === "function") {
+      for (const id of credentials.listProfileIds()) {
+        const p = ensure(id);
+        if (p) {
+          p.hasSavedPassword = true;
+          p.hasRealEvidence = true;
+        }
+      }
+    }
+
+    // 2c. proxy_register_state_v1.json
+    const proxyRegFile = path.join(dataDir, "proxy_register_state_v1.json");
+    if (fs.existsSync(proxyRegFile)) {
+      try {
+        const prx = JSON.parse(fs.readFileSync(proxyRegFile, "utf8"))?.entries || {};
+        for (const [id, entry] of Object.entries(prx)) {
+          const p = ensure(id);
+          if (p && entry && entry.username) {
+            if (!p.account) p.account = String(entry.username).trim();
+            p.generatedAccount = true;
+            p.hasRealEvidence = true;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2d. zeny_rate_state.json
+    const zenyFile = path.join(dataDir, "zeny_rate_state.json");
+    if (fs.existsSync(zenyFile)) {
+      try {
+        const trackers = JSON.parse(fs.readFileSync(zenyFile, "utf8"))?.trackers || {};
+        for (const [id, trk] of Object.entries(trackers)) {
+          const p = ensure(id);
+          if (p && trk && trk.charName) {
+            if (!p.lastCharName) p.lastCharName = String(trk.charName).trim();
+            p.hasRealEvidence = true;
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2e. guilds.json
+    const guildsFile = path.join(dataDir, "guilds.json");
+    if (fs.existsSync(guildsFile)) {
+      try {
+        const guilds = JSON.parse(fs.readFileSync(guildsFile, "utf8"))?.guilds || [];
+        for (const g of guilds) {
+          for (const [id, m] of Object.entries(g?.members || {})) {
+            const p = ensure(id);
+            if (p && m) {
+              if (m.charName && !p.lastCharName) p.lastCharName = String(m.charName).trim();
+              if (m.charClass && !p.charClass) p.charClass = String(m.charClass).trim();
+              p.hasRealEvidence = true;
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2f. parties.json & premium.json & plans.json
+    const partiesFile = path.join(dataDir, "parties.json");
+    if (fs.existsSync(partiesFile)) {
+      try {
+        const parties = JSON.parse(fs.readFileSync(partiesFile, "utf8"))?.parties || [];
+        for (const pt of parties) {
+          for (const id of [pt?.leaderId, ...(pt?.memberIds || []), ...(pt?.excludedIds || [])]) {
+            const p = ensure(id);
+            if (p) p.hasRealEvidence = true;
+          }
+        }
+      } catch (_) {}
+    }
+    const premiumFile = path.join(dataDir, "premium.json");
+    if (fs.existsSync(premiumFile)) {
+      try {
+        const clients = JSON.parse(fs.readFileSync(premiumFile, "utf8"))?.clients || {};
+        for (const id of Object.keys(clients)) {
+          const p = ensure(id);
+          if (p) p.hasRealEvidence = true;
+        }
+      } catch (_) {}
+    }
+    if (fs.existsSync(PLANS_FILE)) {
+      try {
+        const assignments = JSON.parse(fs.readFileSync(PLANS_FILE, "utf8"))?.assignments || {};
+        for (const id of Object.keys(assignments)) {
+          const p = ensure(id);
+          if (p) p.hasRealEvidence = true;
+        }
+      } catch (_) {}
+    }
+
+    // 2g. screen_proxy_leases.json (preserve assigned debugPort)
+    const leasesFile = path.join(dataDir, "screen_proxy_leases.json");
+    if (fs.existsSync(leasesFile)) {
+      try {
+        const leases = JSON.parse(fs.readFileSync(leasesFile, "utf8"))?.leases || {};
+        for (const [id, l] of Object.entries(leases)) {
+          if (map.has(id) && Number(l?.debugPort) >= 1024) {
+            map.get(id).debugPort = Number(l.debugPort);
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2h. sessions/profile_* folders (for Electron mode)
+    if (fs.existsSync(SESSIONS_DIR)) {
+      for (const entry of fs.readdirSync(SESSIONS_DIR, { withFileTypes: true })) {
+        if (!entry.isDirectory() || !entry.name.startsWith("profile_")) continue;
+        const id = entry.name;
+        const hasLevelDb = fs.existsSync(path.join(SESSIONS_DIR, id, "Local Storage"));
+        if (id !== "profile_1" && id !== "profile_2") {
+          const p = ensure(id);
+          if (p) p.hasRealEvidence = true;
+        } else if (hasLevelDb) {
+          const p = ensure(id);
+          if (p) p.hasRealEvidence = true;
+        }
+      }
+    }
+
+    const validCandidates = Array.from(map.values()).filter(p => p.hasRealEvidence);
+    if (validCandidates.length === 0) return null;
+
+    // Sort: profile_main first, profile_1, profile_2, then profile_<ts> by timestamp
+    validCandidates.sort((a, b) => {
+      const rank = (id) => {
+        if (id === "profile_main") return 0;
+        if (id === "profile_1") return 1;
+        if (id === "profile_2") return 2;
+        const m = id.match(/^profile_(\d+)/);
+        return m ? Number(m[1]) : Number.MAX_SAFE_INTEGER;
+      };
+      return rank(a.id) - rank(b.id) || a.id.localeCompare(b.id);
+    });
+
+    const usedPorts = new Set();
+    let nextPort = 49876;
+    const recovered = validCandidates.map((c, idx) => {
+      let port = Number(c.debugPort) || 0;
+      if (port < 1024 || usedPorts.has(port)) {
+        while (usedPorts.has(nextPort)) nextPort++;
+        port = nextPort++;
+      }
+      usedPorts.add(port);
+      const tsMatch = c.id.match(/^profile_(\d{10,})/);
+      const createdAt = tsMatch ? Number(tsMatch[1]) : (Date.now() - (validCandidates.length - idx) * 1000);
+      const wl = c.whitelist || DEFAULT_WHITELIST_STR;
+      const isMain = c.id === "profile_main";
+      const displayName = isMain
+        ? (c.lastCharName ? `Main (${c.lastCharName})` : "Main")
+        : (c.lastCharName || c.account || (c.id === "profile_2" ? "Farmer Alt" : `Client ${idx + 1}`));
+      return {
+        id: c.id,
+        name: displayName,
+        account: c.account || "",
+        autoRegister: false,
+        ...(c.generatedAccount ? { generatedAccount: true } : {}),
+        charClass: c.charClass || "Hunter",
+        targetMap: c.targetMap || "ถนนต้นหลิว",
+        debugPort: port,
+        autoStart: !isMain,
+        ...(isMain ? { isMain: true } : {}),
+        notes: isMain ? "จอหลัก (Main Session)" : "",
+        createdAt,
+        whitelist: wl,
+        sellConfig: { whitelist: wl },
+        ...(c.lastCharName ? { lastCharName: c.lastCharName } : {}),
+        ...(c.charClass ? { lastCharClass: c.charClass } : {})
+      };
+    });
+
+    console.log(`[PmheeAether Manager] 🛡️ กู้คืนโปรไฟล์อัตโนมัติ ${recovered.length} จอจากข้อมูลในเครื่อง (sessions / data) สำเร็จ!`);
+    return recovered;
   } catch (e) {
-    return [];
+    console.warn(`[PmheeAether Manager] ⚠️ Auto-recovery check failed: ${e.message}`);
+    return null;
   }
 }
 
-function saveProfiles(profiles) {
-  fs.writeFileSync(PROFILES_FILE, JSON.stringify(profiles, null, 2), "utf8");
+let lastValidProfilesCache = null;
+
+function loadProfiles() {
+  let parsed = null;
+  let readFailed = false;
+  if (fs.existsSync(PROFILES_FILE)) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(PROFILES_FILE, "utf8"));
+      if (Array.isArray(raw)) parsed = raw;
+      else readFailed = true;
+    } catch (e) {
+      readFailed = true;
+    }
+  }
+
+  // If file was transiently unreadable or corrupted mid-write, never return [] when we have cache/backup
+  if (readFailed) {
+    if (lastValidProfilesCache && lastValidProfilesCache.length > 0) {
+      return lastValidProfilesCache.map(p => ({ ...p }));
+    }
+    const recoveredOnCorrupt = recoverProfilesFromLocalEvidence();
+    if (recoveredOnCorrupt && recoveredOnCorrupt.length > 0) {
+      lastValidProfilesCache = recoveredOnCorrupt.map(p => ({ ...p }));
+      try { writeJsonAtomic(PROFILES_FILE, recoveredOnCorrupt); } catch (_) {}
+      try { writeJsonAtomic(PROFILES_BACKUP_FILE, recoveredOnCorrupt); } catch (_) {}
+      return recoveredOnCorrupt;
+    }
+  }
+
+  // If file does not exist OR contains only the 2 untouched install-time mock profiles, attempt auto-recovery
+  if (!parsed || isUntouchedDefaultMockProfiles(parsed)) {
+    const recovered = recoverProfilesFromLocalEvidence();
+    if (recovered && recovered.length > 0) {
+      lastValidProfilesCache = recovered.map(p => ({ ...p }));
+      try { writeJsonAtomic(PROFILES_FILE, recovered); } catch (_) {}
+      try { writeJsonAtomic(PROFILES_BACKUP_FILE, recovered); } catch (_) {}
+      return recovered;
+    }
+    if (!parsed) {
+      const defaultProfiles = getDefaultMockProfiles();
+      writeJsonAtomic(PROFILES_FILE, defaultProfiles);
+      return defaultProfiles;
+    }
+    return parsed;
+  }
+
+  lastValidProfilesCache = parsed.map(p => ({ ...p }));
+  if (!fs.existsSync(PROFILES_BACKUP_FILE)) {
+    try { writeJsonAtomic(PROFILES_BACKUP_FILE, parsed); } catch (_) {}
+  }
+  return parsed;
+}
+
+function saveProfiles(profiles, options = {}) {
+  if (!Array.isArray(profiles)) return;
+  const allowEmpty = Boolean(options && options.allowEmpty);
+  if (profiles.length === 0 && !allowEmpty && lastValidProfilesCache && lastValidProfilesCache.length > 0) {
+    console.warn("[PmheeAether Manager] ⚠️ ป้องกันการเขียนทับ profiles.json ด้วยรายการว่างเปล่า (Preserved existing profiles)");
+    return;
+  }
+  writeJsonAtomic(PROFILES_FILE, profiles);
+  if (!isUntouchedDefaultMockProfiles(profiles)) {
+    lastValidProfilesCache = profiles.map(p => ({ ...p }));
+    try { writeJsonAtomic(PROFILES_BACKUP_FILE, profiles); } catch (_) {}
+  } else if (allowEmpty && profiles.length === 0) {
+    lastValidProfilesCache = [];
+  }
 }
 
 function isProcessAlive(pid) {
@@ -4958,6 +5386,16 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // POST /api/profiles/recover (Manual / explicit auto-recovery trigger)
+  if (req.method === "POST" && pathname === "/api/profiles/recover") {
+    const recovered = recoverProfilesFromLocalEvidence();
+    if (recovered && recovered.length > 0) {
+      saveProfiles(recovered);
+      return sendJSON({ success: true, recoveredCount: recovered.length, profiles: recovered });
+    }
+    return sendJSON({ success: false, recoveredCount: 0, error: "ไม่พบข้อมูลโปรไฟล์สำรองในโฟลเดอร์นี้" }, 404);
+  }
+
   // 4. DELETE /api/profiles/:id
   if (req.method === "DELETE" && pathname.match(/^\/api\/profiles\/[^/]+$/)) {
     const id = pathname.split("/")[3];
@@ -4966,6 +5404,7 @@ const server = http.createServer(async (req, res) => {
     if (idx === -1) return sendJSON({ success: false, error: "Profile not found" }, 404);
 
     screenProxy.releaseProfile(id, "deleted").catch(() => {});
+    recordDeletedProfileId(id);
     // Stop process if running
     if (runningProcesses[id] && isProcessAlive(runningProcesses[id].pid)) {
       try { process.kill(runningProcesses[id].pid, "SIGTERM"); } catch (e) {}
@@ -4973,7 +5412,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     profiles.splice(idx, 1);
-    saveProfiles(profiles);
+    saveProfiles(profiles, { allowEmpty: true });
+    if (profiles.length === 0) {
+      try { writeJsonAtomic(PROFILES_BACKUP_FILE, []); } catch (_) {}
+    }
     return sendJSON({ success: true });
   }
 

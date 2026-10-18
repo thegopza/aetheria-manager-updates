@@ -244,19 +244,31 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     } catch (_) {}
   }
 
+  let lastSharedHarvestAt = 0;
   async function syncClientStorage(c) {
     if (!c || !c.sessionId || !storageDir) return;
     try {
       const prefix = `pelican_${c.profileId}__`;
-      const entries = await evaluate(c, `(() => {
+      const harvestAll = !c.browserContextId && (Date.now() - lastSharedHarvestAt > 60000);
+      if (harvestAll) lastSharedHarvestAt = Date.now();
+      const res = await evaluate(c, `(() => {
         const out = {};
+        const other = {};
         if (window.localStorage) {
           const pfx = ${JSON.stringify(prefix)};
+          const doHarvest = ${Boolean(harvestAll)};
           const extraKeys = new Set(['aetheria.device', 'ui.windows', 'partyFrameFolded', 'skip-anim:refine', 'hudMenuOpen', 'webgame.camera']);
           for (let i = 0; i < window.localStorage.length; i++) {
             const k = window.localStorage.key(i);
-            if (k && (k.startsWith(pfx) || (k.startsWith('pelican_') && !k.includes('__')) || extraKeys.has(k))) {
+            if (!k) continue;
+            if (k.startsWith(pfx) || (k.startsWith('pelican_') && !k.includes('__')) || extraKeys.has(k)) {
               out[k] = window.localStorage.getItem(k);
+            } else if (doHarvest && k.startsWith('pelican_profile_')) {
+              const m = k.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
+              if (m && m[1]) {
+                if (!other[m[1]]) other[m[1]] = {};
+                other[m[1]][k] = window.localStorage.getItem(k);
+              }
             }
           }
         }
@@ -264,10 +276,23 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           const ssVal = window.sessionStorage.getItem('aetheria.session');
           if (ssVal) out['__ss:aetheria.session'] = ssVal;
         }
-        return out;
+        return { out, other };
       })()`, 3000);
+      const entries = res && res.out ? res.out : res;
       if (entries && typeof entries === 'object' && Object.keys(entries).length > 0) {
         saveProfileStorage(c.profileId, entries);
+      }
+      if (res && res.other && typeof res.other === 'object') {
+        let harvestedNew = false;
+        for (const [otherId, map] of Object.entries(res.other)) {
+          if (!map || typeof map !== 'object' || Object.keys(map).length === 0) continue;
+          const existing = loadProfileStorage(otherId);
+          if (!existing || Object.keys(existing).length === 0) harvestedNew = true;
+          saveProfileStorage(otherId, map);
+        }
+        if (harvestedNew && typeof loadProfiles === 'function') {
+          try { loadProfiles(); } catch (_) {}
+        }
       }
     } catch (_) {}
   }

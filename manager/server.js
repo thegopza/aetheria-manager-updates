@@ -744,6 +744,9 @@ function saveProfiles(profiles, options = {}) {
   if (!isUntouchedDefaultMockProfiles(profiles)) {
     lastValidProfilesCache = profiles.map(p => ({ ...p }));
     try { writeJsonAtomic(PROFILES_BACKUP_FILE, profiles); } catch (_) {}
+    if (typeof scheduleCentralProfileBackupSync === "function") {
+      scheduleCentralProfileBackupSync();
+    }
   } else if (allowEmpty && profiles.length === 0) {
     lastValidProfilesCache = [];
   }
@@ -4302,6 +4305,177 @@ setInterval(async () => {
   }
 }, 2000);
 
+// Cloud Profile & Credential (ID / Password) Backup Sync & Restore
+let centralProfileBackupTimer = null;
+let centralProfileBackupInFlight = false;
+
+function buildLocalProfileBackupPayload() {
+  const profiles = loadProfiles() || [];
+  const deviceId = getEffectiveDeviceNickname();
+  const cleanProfiles = [];
+  const credsMap = {};
+  for (const p of profiles) {
+    if (!p || !p.id) continue;
+    const password = credentials.getPassword(p.id) || "";
+    const username = String(p.account || p.username || "").trim();
+    const characterName = String((p.liveState && p.liveState.charName) || p.lastCharName || "").trim();
+    const copy = { ...p };
+    delete copy.liveState;
+    delete copy.password;
+    if (username) {
+      copy.account = username;
+      copy.username = username;
+    }
+    if (characterName) copy.lastCharName = characterName;
+    cleanProfiles.push({
+      id: p.id,
+      name: p.name || p.id,
+      characterName,
+      username,
+      account: username,
+      password,
+      server: p.server || "aetheria-main",
+      profile: copy
+    });
+    if (username || password) {
+      credsMap[p.id] = { username, password, updatedAt: Date.now() };
+    }
+  }
+  return {
+    format: "pmhee-aetheria-profile-backup-v1",
+    exportedAt: new Date().toISOString(),
+    machineId: deviceId,
+    machineName: deviceId,
+    profiles: cleanProfiles,
+    credentials: credsMap
+  };
+}
+
+function applyProfileBackupPayload(data) {
+  if (!data || typeof data !== "object") return { restoredProfiles: 0, restoredCredentials: 0 };
+  const rawList = Array.isArray(data.profiles) ? data.profiles : [];
+  if (rawList.length === 0) return { restoredProfiles: 0, restoredCredentials: 0 };
+  const existing = loadProfiles() || [];
+  const existingById = new Map(existing.map(p => [p.id, p]));
+  const merged = [];
+  const seenIds = new Set();
+  let restoredCredentials = 0;
+  const credsObj = (data.credentials && typeof data.credentials === "object") ? data.credentials : {};
+
+  for (const item of rawList) {
+    if (!item || typeof item !== "object") continue;
+    const base = (item.profile && typeof item.profile === "object") ? { ...item.profile } : { ...item };
+    const id = String(base.id || item.id || item.profileId || "").trim();
+    if (!id || seenIds.has(id)) continue;
+    seenIds.add(id);
+    const prev = existingById.get(id) || {};
+    const username = String(item.username || item.account || base.account || base.username || (credsObj[id] && credsObj[id].username) || prev.account || prev.username || "").trim();
+    const password = String(item.password || (credsObj[id] && credsObj[id].password) || "").trim();
+    const charName = String(item.characterName || base.lastCharName || prev.lastCharName || "").trim();
+    delete base.password;
+    delete base.liveState;
+    const finalProfile = {
+      ...prev,
+      ...base,
+      id,
+      name: String(item.name || base.name || prev.name || id).trim(),
+      server: String(item.server || base.server || prev.server || "aetheria-main").trim(),
+      ...(username ? { account: username, username } : {}),
+      ...(charName ? { lastCharName: charName } : {})
+    };
+    merged.push(finalProfile);
+    if (password) {
+      credentials.setPassword(id, password);
+      restoredCredentials++;
+    }
+  }
+
+  for (const [id, cred] of Object.entries(credsObj)) {
+    if (cred && cred.password && !rawList.some(x => (x.id || x.profileId) === id)) {
+      credentials.setPassword(id, String(cred.password));
+      restoredCredentials++;
+    }
+  }
+
+  // Keep any existing non-mock profiles that were not in the backup
+  if (!isUntouchedDefaultMockProfiles(existing)) {
+    for (const p of existing) {
+      if (p && p.id && !seenIds.has(p.id)) {
+        merged.push(p);
+      }
+    }
+  }
+
+  if (merged.length > 0) {
+    saveProfiles(merged);
+  }
+  return { restoredProfiles: merged.length, restoredCredentials };
+}
+
+async function syncProfileBackupToCentral() {
+  if (TEST_INSTANCE || centralProfileBackupInFlight) return null;
+  centralProfileBackupInFlight = true;
+  try {
+    const accountSettings = humanCheckSolver.loadSettings();
+    if (!accountSettings || !accountSettings.accountId) return null;
+    const currentProfiles = loadProfiles() || [];
+    if (currentProfiles.length === 0 || isUntouchedDefaultMockProfiles(currentProfiles)) return null;
+    const payload = buildLocalProfileBackupPayload();
+    const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/profile-backup', {
+      machineId: payload.machineId,
+      machineName: payload.machineName,
+      profiles: payload.profiles
+    });
+    return res;
+  } catch (_) {
+    return null;
+  } finally {
+    centralProfileBackupInFlight = false;
+  }
+}
+
+function scheduleCentralProfileBackupSync(delayMs = 3500) {
+  if (TEST_INSTANCE) return;
+  if (centralProfileBackupTimer) clearTimeout(centralProfileBackupTimer);
+  centralProfileBackupTimer = setTimeout(() => {
+    centralProfileBackupTimer = null;
+    syncProfileBackupToCentral().catch(() => {});
+  }, delayMs);
+}
+
+async function restoreProfilesFromCentral() {
+  try {
+    const accountSettings = humanCheckSolver.loadSettings();
+    if (!accountSettings || !accountSettings.accountId) return { success: false, error: 'NO_ACCOUNT' };
+    const deviceId = getEffectiveDeviceNickname();
+    const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/profile-restore', {
+      machineId: deviceId
+    });
+    if (res && res.success && Array.isArray(res.profiles) && res.profiles.length > 0) {
+      const result = applyProfileBackupPayload(res);
+      console.log(`[Central Admin] 🛡️ กู้คืนโปรไฟล์จากเซิร์ฟเวอร์สำเร็จ ${result.restoredProfiles} จอ (รหัสผ่าน ${result.restoredCredentials} จอ)`);
+      return { success: true, ...result };
+    }
+    return { success: false, error: 'NO_CLOUD_BACKUP' };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+if (!TEST_INSTANCE) {
+  setTimeout(async () => {
+    const current = loadProfiles() || [];
+    if (isUntouchedDefaultMockProfiles(current)) {
+      await restoreProfilesFromCentral().catch(() => {});
+    } else {
+      await syncProfileBackupToCentral().catch(() => {});
+    }
+  }, 6000);
+  setInterval(() => {
+    syncProfileBackupToCentral().catch(() => {});
+  }, 120000);
+}
+
 // Poll remote commands from Central Admin Dashboard (https://api.noggunsshop.xyz)
 let centralCommandPollInFlight = false;
 async function pollCentralCommands() {
@@ -4326,6 +4500,8 @@ async function pollCentralCommands() {
           }
         } else if (cmd.action === 'update_bot' || cmd.action === 'refresh_payload') {
           botAutoUpdater.retryFailed().catch(() => {});
+        } else if (cmd.action === 'restore_profiles') {
+          await restoreProfilesFromCentral().catch(() => {});
         }
         ackIds.push(cmd.id);
       }
@@ -5386,14 +5562,57 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /api/profiles/recover (Manual / explicit auto-recovery trigger)
+  // POST /api/profiles/recover (Manual / explicit auto-recovery trigger — local evidence first, then central server backup)
   if (req.method === "POST" && pathname === "/api/profiles/recover") {
     const recovered = recoverProfilesFromLocalEvidence();
     if (recovered && recovered.length > 0) {
       saveProfiles(recovered);
-      return sendJSON({ success: true, recoveredCount: recovered.length, profiles: recovered });
+      return sendJSON({ success: true, source: "local", recoveredCount: recovered.length, profiles: recovered });
     }
-    return sendJSON({ success: false, recoveredCount: 0, error: "ไม่พบข้อมูลโปรไฟล์สำรองในโฟลเดอร์นี้" }, 404);
+    const cloud = await restoreProfilesFromCentral();
+    if (cloud && cloud.success && cloud.restoredProfiles > 0) {
+      const fresh = loadProfiles();
+      return sendJSON({ success: true, source: "cloud", recoveredCount: cloud.restoredProfiles, restoredCredentials: cloud.restoredCredentials, profiles: fresh });
+    }
+    return sendJSON({ success: false, recoveredCount: 0, error: "ไม่พบข้อมูลโปรไฟล์สำรองในโฟลเดอร์นี้หรือบนเซิร์ฟเวอร์" }, 404);
+  }
+
+  // GET /api/profiles/export-backup (Export all local profiles + credentials as JSON)
+  if (req.method === "GET" && pathname === "/api/profiles/export-backup") {
+    const payload = buildLocalProfileBackupPayload();
+    return sendJSON({ success: true, backup: payload });
+  }
+
+  // POST /api/profiles/import-backup (Import backup JSON exported from Admin Console or Manager)
+  if (req.method === "POST" && pathname === "/api/profiles/import-backup") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const target = (parsed && parsed.backup && typeof parsed.backup === "object") ? parsed.backup : parsed;
+        const result = applyProfileBackupPayload(target);
+        if (result.restoredProfiles === 0) {
+          return sendJSON({ success: false, error: "ไม่พบรายการโปรไฟล์ในไฟล์สำรองที่เลือก" }, 400);
+        }
+        scheduleCentralProfileBackupSync(1000);
+        return sendJSON({
+          success: true,
+          restoredProfiles: result.restoredProfiles,
+          restoredCredentials: result.restoredCredentials,
+          profiles: loadProfiles()
+        });
+      } catch (err) {
+        return sendJSON({ success: false, error: "ไฟล์สำรองไม่ถูกต้อง: " + err.message }, 400);
+      }
+    });
+    return;
+  }
+
+  // POST /api/profiles/sync-cloud-backup (Force immediate sync of profiles + ID/Pass to central server)
+  if (req.method === "POST" && pathname === "/api/profiles/sync-cloud-backup") {
+    const resSync = await syncProfileBackupToCentral();
+    return sendJSON({ success: Boolean(resSync && resSync.success), result: resSync });
   }
 
   // 4. DELETE /api/profiles/:id
@@ -7117,6 +7336,12 @@ server.listen(PORT, "127.0.0.1", () => {
   if(!TEST_INSTANCE)authSync.start();
   browserMode.start();
   if (!TEST_INSTANCE) {
+    try {
+      const spSettings = screenProxy.loadSettings();
+      if (spSettings && spSettings.updatedAt == null) {
+        screenProxy.saveSettings({ enabled: true, mode: "owner-queue" });
+      }
+    } catch (_) {}
     setTimeout(() => {
       if (isBrowserMode() && typeof browserMode.syncAssetCacheToOpenWindows === "function") {
         browserMode.syncAssetCacheToOpenWindows().catch(() => {});
@@ -7125,6 +7350,11 @@ server.listen(PORT, "127.0.0.1", () => {
         syncScreenProxyForOpenProfiles().catch(() => {});
       }
     }, 2800);
+    setInterval(() => {
+      if (screenProxy.isEnabled()) {
+        syncScreenProxyForOpenProfiles().catch(() => {});
+      }
+    }, 60000);
     setTimeout(() => syncStashTradeConfigToAllClients().catch(() => {}), 3500);
     setInterval(() => syncStashTradeConfigToAllClients().catch(() => {}), 25000);
   }

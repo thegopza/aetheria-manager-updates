@@ -8308,6 +8308,23 @@ async function handleImportProfileSubmit(e) {
   }
 
   try {
+    if (parsed && (parsed.format === 'pmhee-aetheria-profile-backup-v1' || (Array.isArray(parsed.profiles) && !parsed.presets))) {
+      const resBackup = await fetch(`${API_BASE}/api/profiles/import-backup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(parsed)
+      });
+      const resultBackup = await resBackup.json();
+      if (resultBackup.success) {
+        alert(`🎉 กู้คืนโปรไฟล์สำเร็จ ${resultBackup.restoredProfiles || 0} จอ (พร้อม ID/Password ${resultBackup.restoredCredentials || 0} จอ) เรียบร้อยแล้ว!`);
+        closeImportProfileModal();
+        if (typeof fetchProfiles === 'function') fetchProfiles();
+      } else {
+        alert('นำเข้าไฟล์สำรองโปรไฟล์ไม่สำเร็จ: ' + (resultBackup.error || 'เกิดข้อผิดพลาด'));
+      }
+      return;
+    }
+
     const res = await fetch(`${API_BASE}/api/presets/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -8528,7 +8545,9 @@ function setupPresetsEventListeners() {
           const parsed = JSON.parse(text);
           const nameInput = document.getElementById('import-preset-name');
           if (nameInput) {
-            if (Array.isArray(parsed) || parsed.presets) {
+            if (parsed && (parsed.format === 'pmhee-aetheria-profile-backup-v1' || (Array.isArray(parsed.profiles) && !parsed.presets))) {
+              nameInput.value = `ไฟล์สำรองโปรไฟล์ + ID/Pass (${parsed.profiles.length} จอ)`;
+            } else if (Array.isArray(parsed) || parsed.presets) {
               nameInput.value = `ชุดโปรไฟล์นำเข้า (${(parsed.presets || parsed).length} รายการ)`;
             } else if (parsed.name) {
               nameInput.value = parsed.name;

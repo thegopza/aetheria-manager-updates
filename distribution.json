@@ -1,10 +1,10 @@
 {
   "schema": 1,
-  "sourceCommit": "1a8ad7e978cb91dc0197ae5d319dc98983fd812d",
+  "sourceCommit": "b92a6c972f5b082de75b5ba6b1878bf589f354d2",
   "files": [
     {
       "path": "manager/asset_cache.js",
-      "sha256": "80ba9eeccede9d0bcb016fdd7efe03196852235304effb310e476367331f00d4"
+      "sha256": "b34eae59344b9b6c5b9e31beec190b1e0f58714f898655fda1ef182e8d3156e1"
     },
     {
       "path": "manager/auth_sync.js",

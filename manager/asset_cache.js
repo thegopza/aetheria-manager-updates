@@ -29,7 +29,9 @@ const CACHEABLE_EXTENSIONS = new Set([
   '.woff',
   '.ttf',
   '.otf',
-  '.eot'
+  '.eot',
+  '.js',
+  '.css'
 ]);
 
 const MIME_BY_EXT = {
@@ -51,11 +53,18 @@ const MIME_BY_EXT = {
   '.woff': 'font/woff',
   '.ttf': 'font/ttf',
   '.otf': 'font/otf',
-  '.eot': 'application/vnd.ms-fontobject'
+  '.eot': 'application/vnd.ms-fontobject',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8'
 };
 
 // Patterns for CDP Fetch.enable interception
 const CDP_ASSET_FETCH_PATTERNS = [
+  '*://*.aetheria-online.in.th/assets/*.js*',
+  '*://*.aetheria-online.in.th/assets/*.css*',
+  '*://aetheria-online.in.th/assets/*.js*',
+  '*://aetheria-online.in.th/assets/*.css*',
+  '*://cdnjs.cloudflare.com/ajax/libs/*.js*',
   '*://*.aetheria-online.in.th/*.png*',
   '*://*.aetheria-online.in.th/*.webp*',
   '*://*.aetheria-online.in.th/*.jpg*',
@@ -101,7 +110,8 @@ function isAllowedAssetHost(hostname) {
   return (
     h === 'aetheria-online.in.th' ||
     h.endsWith('.aetheria-online.in.th') ||
-    h === 'fonts.gstatic.com'
+    h === 'fonts.gstatic.com' ||
+    h === 'cdnjs.cloudflare.com'
   );
 }
 
@@ -120,7 +130,14 @@ function isCacheableAssetUrl(rawUrl) {
   // Never cache dynamic security/captcha/auth endpoints if any ever use image extensions
   if (/human[-_]?check|captcha|verify|auth|session|login/i.test(lowerPath)) return false;
   const ext = getExtensionFromPathname(lowerPath);
-  return Boolean(ext);
+  if (!ext) return false;
+  if (ext === '.js' || ext === '.css') {
+    const h = parsed.hostname.toLowerCase();
+    if (h === 'cdnjs.cloudflare.com') return lowerPath.startsWith('/ajax/libs/');
+    // Only cache immutable hashed Vite bundles under /assets/ (never cache root bot.js or dynamic scripts)
+    return lowerPath.startsWith('/assets/') && /-[a-z0-9_]{6,}\.(js|css)$/i.test(lowerPath);
+  }
+  return true;
 }
 
 function normalizeAssetCacheKey(rawUrl) {

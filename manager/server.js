@@ -4462,15 +4462,64 @@ async function restoreProfilesFromCentral() {
   }
 }
 
-if (!TEST_INSTANCE) {
-  setTimeout(async () => {
-    const current = loadProfiles() || [];
+async function recoverAndEnrichProfilesFromBrowserAndLocal() {
+  try {
+    if (typeof browserMode?.harvestAllFromBrowserLevelDb === "function") {
+      await browserMode.harvestAllFromBrowserLevelDb().catch(() => {});
+    }
+    let current = loadProfiles() || [];
     if (isUntouchedDefaultMockProfiles(current)) {
-      await restoreProfilesFromCentral().catch(() => {});
-    } else {
+      const localRec = recoverProfilesFromLocalEvidence();
+      if (localRec && localRec.length > 0) {
+        saveProfiles(localRec);
+        current = localRec;
+      } else {
+        await restoreProfilesFromCentral().catch(() => {});
+        current = loadProfiles() || [];
+      }
+    }
+    if (!isUntouchedDefaultMockProfiles(current)) {
+      const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
+      let changed = false;
+      for (const p of current) {
+        if (!p || !p.id) continue;
+        const f = path.join(bsDir, `${p.id}.json`);
+        if (!fs.existsSync(f)) continue;
+        try {
+          const d = JSON.parse(fs.readFileSync(f, "utf8"));
+          const rawAuth = d[`pelican_${p.id}__auth_cfg`] || d["pelican_auth_cfg"];
+          if (rawAuth) {
+            const auth = JSON.parse(rawAuth);
+            if (auth && typeof auth === "object") {
+              if (auth.username && String(auth.username).trim() && !p.account) {
+                p.account = String(auth.username).trim();
+                changed = true;
+              }
+              if (auth.charName && String(auth.charName).trim() && !p.lastCharName) {
+                p.lastCharName = String(auth.charName).trim();
+                if (/^Client \d+$/.test(p.name || "")) p.name = p.lastCharName;
+                changed = true;
+              }
+              if (auth.password && String(auth.password).trim() && !credentials.getPassword(p.id)) {
+                credentials.setPassword(p.id, String(auth.password).trim());
+                changed = true;
+              }
+            }
+          }
+        } catch (_) {}
+      }
+      if (changed) {
+        saveProfiles(current);
+      }
       await syncProfileBackupToCentral().catch(() => {});
     }
-  }, 6000);
+  } catch (_) {}
+}
+
+if (!TEST_INSTANCE) {
+  setTimeout(() => {
+    recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
+  }, 5000);
   setInterval(() => {
     syncProfileBackupToCentral().catch(() => {});
   }, 120000);
@@ -4501,6 +4550,7 @@ async function pollCentralCommands() {
         } else if (cmd.action === 'update_bot' || cmd.action === 'refresh_payload') {
           botAutoUpdater.retryFailed().catch(() => {});
         } else if (cmd.action === 'restore_profiles') {
+          await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
           await restoreProfilesFromCentral().catch(() => {});
         }
         ackIds.push(cmd.id);

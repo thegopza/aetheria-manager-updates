@@ -90,7 +90,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     try {
       fs.mkdirSync(storageDir, { recursive: true });
       const f = path.join(storageDir, `${profileId}.json`);
-      const merged = { ...loadProfileStorage(profileId), ...entries };
+      const merged = { ...loadProfileStorage(profileId) };
+      for (const [k, v] of Object.entries(entries)) {
+        if (v !== null && v !== undefined) merged[k] = v;
+      }
       fs.writeFileSync(f + '.tmp', JSON.stringify(merged), 'utf8');
       fs.renameSync(f + '.tmp', f);
     } catch (_) {}
@@ -261,13 +264,15 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           for (let i = 0; i < window.localStorage.length; i++) {
             const k = window.localStorage.key(i);
             if (!k) continue;
+            const rawVal = window.localStorage[k];
+            if (typeof rawVal !== 'string') continue;
             if (k.startsWith(pfx) || (k.startsWith('pelican_') && !k.includes('__')) || extraKeys.has(k)) {
-              out[k] = window.localStorage.getItem(k);
+              out[k] = rawVal;
             } else if (doHarvest && k.startsWith('pelican_profile_')) {
               const m = k.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
               if (m && m[1]) {
                 if (!other[m[1]]) other[m[1]] = {};
-                other[m[1]][k] = window.localStorage.getItem(k);
+                other[m[1]][k] = rawVal;
               }
             }
           }
@@ -512,7 +517,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         const pfx = ${JSON.stringify(prefix)};
         for (let i = 0; i < window.localStorage.length; i++) {
           const k = window.localStorage.key(i);
-          if (k && k.startsWith(pfx)) out[k] = window.localStorage.getItem(k);
+          if (k && k.startsWith(pfx) && typeof window.localStorage[k] === 'string') out[k] = window.localStorage[k];
         }
         return out;
       })()`, 3000);
@@ -896,6 +901,80 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     return { synced, enabled };
   }
 
+  let levelDbHarvestPromise = null;
+  async function harvestAllFromBrowserLevelDb() {
+    if (!storageDir) return { harvestedProfiles: 0, totalKeys: 0 };
+    if (levelDbHarvestPromise) return levelDbHarvestPromise;
+    levelDbHarvestPromise = (async () => {
+      let targetId = null;
+      let listener = null;
+      try {
+        const levelDbDir = path.join(userDataDir, 'Default', 'Local Storage', 'leveldb');
+        if (!fs.existsSync(levelDbDir)) return { harvestedProfiles: 0, totalKeys: 0 };
+        await ensureBrowser();
+        const origin = new URL(gameUrl).origin;
+        const recoverUrl = `${origin}/__pmhee_recover__`;
+        const created = await send('Target.createTarget', { url: 'about:blank' }, undefined, 5000);
+        targetId = created && created.targetId;
+        if (!targetId) return { harvestedProfiles: 0, totalKeys: 0 };
+        const attached = await send('Target.attachToTarget', { targetId, flatten: true }, undefined, 5000);
+        const sessionId = attached && attached.sessionId;
+        if (!sessionId) return { harvestedProfiles: 0, totalKeys: 0 };
+        listener = msg => {
+          if (msg.method === 'Fetch.requestPaused' && msg.sessionId === sessionId) {
+            send('Fetch.fulfillRequest', {
+              requestId: msg.params.requestId,
+              responseCode: 200,
+              responseHeaders: [{ name: 'Content-Type', value: 'text/html' }],
+              body: Buffer.from('<html></html>').toString('base64')
+            }, sessionId, 3000).catch(() => {});
+          }
+        };
+        listeners.add(listener);
+        await send('Fetch.enable', { patterns: [{ urlPattern: `${recoverUrl}*` }] }, sessionId, 4000);
+        await send('Page.navigate', { url: recoverUrl }, sessionId, 5000);
+        await new Promise(r => setTimeout(r, 220));
+        const evalRes = await send('Runtime.evaluate', {
+          expression: `(() => {
+            const out = {};
+            if (!window.localStorage) return out;
+            for (let i = 0; i < window.localStorage.length; i++) {
+              const k = window.localStorage.key(i);
+              if (!k || !k.startsWith('pelican_')) continue;
+              const v = window.localStorage[k];
+              if (typeof v === 'string') out[k] = v;
+            }
+            return out;
+          })()`,
+          returnByValue: true
+        }, sessionId, 5000);
+        const allKeys = evalRes?.result?.value || {};
+        const byProfile = {};
+        let totalKeys = 0;
+        for (const [k, v] of Object.entries(allKeys)) {
+          if (typeof v !== 'string') continue;
+          const m = k.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
+          if (m && m[1]) {
+            if (!byProfile[m[1]]) byProfile[m[1]] = {};
+            byProfile[m[1]][k] = v;
+            totalKeys++;
+          }
+        }
+        for (const [pid, map] of Object.entries(byProfile)) {
+          saveProfileStorage(pid, map);
+        }
+        return { harvestedProfiles: Object.keys(byProfile).length, totalKeys };
+      } catch (_) {
+        return { harvestedProfiles: 0, totalKeys: 0 };
+      } finally {
+        if (listener) listeners.delete(listener);
+        if (targetId) await send('Target.closeTarget', { targetId }, undefined, 3000).catch(() => {});
+        levelDbHarvestPromise = null;
+      }
+    })();
+    return levelDbHarvestPromise;
+  }
+
   function start() {
     if(started)return;started=true;
     // reconnect to a browser left open by a previous Manager run
@@ -909,7 +988,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if(ws){const socket=ws;ws=null;socket.close();}
     for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(Error('BROWSER_MODE_DISPOSED'));}pending.clear();
   }
-  return { launch, stop, isOpen, start, dispose, findBrowser, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, status:()=>Object.fromEntries(diagnostics) };
+  return { launch, stop, isOpen, start, dispose, findBrowser, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
 }
 
 module.exports = { createBrowserMode, findBrowser, HEALTH_JS };

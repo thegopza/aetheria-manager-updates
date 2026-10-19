@@ -94,7 +94,7 @@ const { handleConfigCopyRoute } = require("./config_copy_api");
 const { createPlanSync } = require("./plan_sync");
 const { createAuthSync } = require("./auth_sync");
 const credentials = require("./credentials");
-const { createBrowserMode } = require("./browser_mode");
+const { createBrowserMode, extractPelicanStorageFromLevelDb, mergeAuthConfigString } = require("./browser_mode");
 const { createDiscordBotService } = require("./discord_bot");
 const { allowLocalRequest } = require("./local_request_security");
 const { createHumanCheckSolver } = require("./human_check_solver");
@@ -415,21 +415,50 @@ function recordDeletedProfileId(id) {
   } catch (_) {}
 }
 
+function writeOrMergeProfileStorageFile(pid, incomingMap) {
+  if (!pid || !incomingMap || typeof incomingMap !== "object") return false;
+  try {
+    const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
+    fs.mkdirSync(bsDir, { recursive: true });
+    const f = path.join(bsDir, `${pid}.json`);
+    let cur = {};
+    if (fs.existsSync(f)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(f, "utf8"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) cur = parsed;
+      } catch (_) {}
+    }
+    let changed = false;
+    for (const [k, v] of Object.entries(incomingMap)) {
+      if (typeof v !== "string") continue;
+      if (k.endsWith("__auth_cfg") || k === "pelican_auth_cfg") {
+        const merged = mergeAuthConfigString(cur[k], v);
+        if (merged !== cur[k]) {
+          cur[k] = merged;
+          changed = true;
+        }
+        try {
+          const auth = JSON.parse(cur[k]);
+          if (auth && auth.password && String(auth.password).trim() && !credentials.getPassword(pid)) {
+            credentials.setPassword(pid, String(auth.password).trim());
+          }
+        } catch (_) {}
+      } else if (cur[k] !== v) {
+        cur[k] = v;
+        changed = true;
+      }
+    }
+    if (changed) {
+      writeJsonAtomic(f, cur);
+    }
+    return changed;
+  } catch (_) {
+    return false;
+  }
+}
+
 function recoverProfilesFromLocalEvidence() {
   const deletedIds = loadDeletedProfileIds();
-  // 1. Check dedicated backup file first
-  if (fs.existsSync(PROFILES_BACKUP_FILE)) {
-    try {
-      const backup = JSON.parse(fs.readFileSync(PROFILES_BACKUP_FILE, "utf8"));
-      const filteredBackup = Array.isArray(backup) ? backup.filter(p => p && !deletedIds.has(String(p.id))) : [];
-      if (filteredBackup.length > 0 && !isUntouchedDefaultMockProfiles(filteredBackup)) {
-        console.log(`[PmheeAether Manager] 🛡️ กู้คืนโปรไฟล์ ${filteredBackup.length} จอจากไฟล์สำรอง data/profiles.backup.json สำเร็จ`);
-        return filteredBackup;
-      }
-    } catch (_) {}
-  }
-
-  // 2. Reconstruct from local evidence in sessions/_browser_storage, data/*, plans.json, and sessions/profile_*
   try {
     const dataDir = path.join(__dirname, "data");
     const map = new Map();
@@ -439,6 +468,34 @@ function recoverProfilesFromLocalEvidence() {
       if (!map.has(s)) map.set(s, { id: s });
       return map.get(s);
     };
+
+    // 1. Seed from dedicated backup file if present (never return early before enriching credentials/accounts!)
+    if (fs.existsSync(PROFILES_BACKUP_FILE)) {
+      try {
+        const backup = JSON.parse(fs.readFileSync(PROFILES_BACKUP_FILE, "utf8"));
+        const filteredBackup = Array.isArray(backup) ? backup.filter(p => p && !deletedIds.has(String(p.id))) : [];
+        if (filteredBackup.length > 0 && !isUntouchedDefaultMockProfiles(filteredBackup)) {
+          for (const bp of filteredBackup) {
+            const p = ensure(bp.id);
+            if (!p) continue;
+            Object.assign(p, bp, { id: String(bp.id).trim(), hasRealEvidence: true });
+          }
+        }
+      } catch (_) {}
+    }
+
+    // 2.0 Harvest Chromium LevelDB directly from disk into sessions/_browser_storage/*.json
+    try {
+      const browserLdbDir = path.join(SESSIONS_DIR, "_browser", "Default", "Local Storage", "leveldb");
+      if (fs.existsSync(browserLdbDir)) {
+        const diskHarvest = extractPelicanStorageFromLevelDb(browserLdbDir);
+        if (diskHarvest && diskHarvest.byProfile) {
+          for (const [pid, entries] of Object.entries(diskHarvest.byProfile)) {
+            writeOrMergeProfileStorageFile(pid, entries);
+          }
+        }
+      }
+    } catch (_) {}
 
     // 2a. sessions/_browser_storage/*.json
     const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
@@ -572,7 +629,7 @@ function recoverProfilesFromLocalEvidence() {
         }
       } catch (_) {}
     }
-    const premiumFile = path.join(dataDir, "premium.json");
+    const premiumFile = path.join(premiumDirOrData(dataDir), "premium.json");
     if (fs.existsSync(premiumFile)) {
       try {
         const clients = JSON.parse(fs.readFileSync(premiumFile, "utf8"))?.clients || {};
@@ -622,6 +679,20 @@ function recoverProfilesFromLocalEvidence() {
         }
         if (p && fs.existsSync(ldbDir)) {
           try {
+            const parsedLdb = extractPelicanStorageFromLevelDb(ldbDir, id);
+            if (parsedLdb && parsedLdb.byProfile && parsedLdb.byProfile[id]) {
+              writeOrMergeProfileStorageFile(id, parsedLdb.byProfile[id]);
+              const rawAuth = parsedLdb.byProfile[id][`pelican_${id}__auth_cfg`] || parsedLdb.byProfile[id]["pelican_auth_cfg"];
+              if (rawAuth) {
+                try {
+                  const auth = JSON.parse(rawAuth);
+                  if (auth && auth.username && !p.account) p.account = String(auth.username).trim();
+                  if (auth && auth.charName && !p.lastCharName) p.lastCharName = String(auth.charName).trim();
+                  if (auth && auth.password && !credentials.getPassword(id)) credentials.setPassword(id, String(auth.password).trim());
+                  p.hasRealEvidence = true;
+                } catch (_) {}
+              }
+            }
             let foundCred = null;
             for (const f of fs.readdirSync(ldbDir)) {
               if (!f.endsWith(".ldb") && !f.endsWith(".log")) continue;
@@ -667,27 +738,30 @@ function recoverProfilesFromLocalEvidence() {
       }
       usedPorts.add(port);
       const tsMatch = c.id.match(/^profile_(\d{10,})/);
-      const createdAt = tsMatch ? Number(tsMatch[1]) : (Date.now() - (validCandidates.length - idx) * 1000);
+      const createdAt = Number(c.createdAt) || (tsMatch ? Number(tsMatch[1]) : (Date.now() - (validCandidates.length - idx) * 1000));
       const wl = c.whitelist || DEFAULT_WHITELIST_STR;
-      const isMain = c.id === "profile_main";
-      const displayName = isMain
+      const isMain = Boolean(c.isMain) || c.id === "profile_main";
+      const existingCustomName = c.name && !/^Client \d+$/.test(c.name) ? c.name : "";
+      const displayName = existingCustomName || (isMain
         ? (c.lastCharName ? `Main (${c.lastCharName})` : "Main")
-        : (c.lastCharName || c.account || (c.id === "profile_2" ? "Farmer Alt" : `Client ${idx + 1}`));
+        : (c.lastCharName || c.account || (c.id === "profile_2" ? "Farmer Alt" : `Client ${idx + 1}`)));
+      const { hasRealEvidence, hasSavedPassword, ...rest } = c;
       return {
+        ...rest,
         id: c.id,
         name: displayName,
         account: c.account || "",
-        autoRegister: false,
+        autoRegister: Boolean(c.autoRegister),
         ...(c.generatedAccount ? { generatedAccount: true } : {}),
         charClass: c.charClass || "Hunter",
         targetMap: c.targetMap || "ถนนต้นหลิว",
         debugPort: port,
-        autoStart: !isMain,
+        autoStart: c.autoStart !== undefined ? Boolean(c.autoStart) : !isMain,
         ...(isMain ? { isMain: true } : {}),
-        notes: isMain ? "จอหลัก (Main Session)" : "",
+        notes: c.notes !== undefined ? c.notes : (isMain ? "จอหลัก (Main Session)" : ""),
         createdAt,
         whitelist: wl,
-        sellConfig: { whitelist: wl },
+        sellConfig: c.sellConfig && typeof c.sellConfig === "object" ? c.sellConfig : { whitelist: wl },
         ...(c.lastCharName ? { lastCharName: c.lastCharName } : {}),
         ...(c.charClass ? { lastCharClass: c.charClass } : {})
       };
@@ -700,6 +774,7 @@ function recoverProfilesFromLocalEvidence() {
     return null;
   }
 }
+function premiumDirOrData(dataDir) { return dataDir; }
 
 let lastValidProfilesCache = null;
 
@@ -4495,7 +4570,6 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
   try {
     const home = os.homedir();
     const currentMgrDir = path.resolve(__dirname).toLowerCase();
-    const currentRootDir = path.resolve(__dirname, "..").toLowerCase();
     const searchRoots = new Set([
       path.resolve(__dirname, ".."),
       path.resolve(__dirname, "../.."),
@@ -4508,12 +4582,15 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
       path.join(home, "AppData", "Local", "Temp"),
       "C:\\",
       "D:\\",
-      "E:\\"
+      "E:\\",
+      "C:\\$Recycle.Bin",
+      "D:\\$Recycle.Bin",
+      "E:\\$Recycle.Bin"
     ]);
     const candidateMgrDirs = [];
     const seenDirs = new Set();
-    const checkDir = (dir, depth = 0) => {
-      if (!dir || depth > 2) return;
+    const checkDir = (dir, depth = 0, maxDepth = 2) => {
+      if (!dir || depth > maxDepth) return;
       let norm;
       try { norm = path.resolve(dir).toLowerCase(); } catch (_) { return; }
       if (seenDirs.has(norm)) return;
@@ -4522,34 +4599,43 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
       try {
         const hasServerJs = fs.existsSync(path.join(dir, "server.js"));
         const hasSubMgr = fs.existsSync(path.join(dir, "manager", "server.js"));
-        if (hasServerJs && norm !== currentMgrDir) {
+        const hasSessionsOnly = !hasServerJs && !hasSubMgr && (
+          fs.existsSync(path.join(dir, "sessions", "_browser", "Default", "Local Storage", "leveldb")) ||
+          fs.existsSync(path.join(dir, "sessions", "_browser_storage"))
+        );
+        if ((hasServerJs || hasSessionsOnly) && norm !== currentMgrDir) {
           candidateMgrDirs.push(dir);
         }
         if (hasSubMgr && path.resolve(dir, "manager").toLowerCase() !== currentMgrDir) {
           candidateMgrDirs.push(path.join(dir, "manager"));
         }
-        if (depth < 2) {
+        if (depth < maxDepth) {
+          const isRecycle = norm.includes("$recycle.bin");
           const entries = fs.readdirSync(dir, { withFileTypes: true });
           for (const e of entries) {
             if (!e.isDirectory()) continue;
-            if (/^(windows|program files|program files \(x86\)|programdata|\$recycle\.bin|system volume information|node_modules|\.git|appdata)$/i.test(e.name)) continue;
-            if (depth === 0 || /pelican|pmhee|aetheria|bot|manager|release|rar\$|7z/i.test(e.name)) {
-              checkDir(path.join(dir, e.name), depth + 1);
+            if (/^(windows|program files|program files \(x86\)|programdata|system volume information|node_modules|\.git|appdata)$/i.test(e.name)) continue;
+            if (!isRecycle && /^\$recycle\.bin$/i.test(e.name)) continue;
+            if (isRecycle || depth === 0 || /pelican|pmhee|aetheria|bot|manager|release|rar\$|7z|\$r/i.test(e.name)) {
+              checkDir(path.join(dir, e.name), depth + 1, maxDepth);
             }
           }
         }
       } catch (_) {}
     };
-    for (const r of searchRoots) checkDir(r, 0);
+    for (const r of searchRoots) {
+      const isRec = String(r).toLowerCase().includes("$recycle.bin");
+      checkDir(r, 0, isRec ? 3 : 2);
+    }
 
     for (const mgrDir of candidateMgrDirs) {
       try {
         const otherRoot = path.resolve(mgrDir, "..");
         // 1. Copy credentials.json entries if missing locally
-        const otherCredsFile = path.join(mgrDir, "data", "credentials.json");
-        if (fs.existsSync(otherCredsFile)) {
+        for (const credPath of [path.join(mgrDir, "data", "credentials.json"), path.join(otherRoot, "manager", "data", "credentials.json")]) {
+          if (!fs.existsSync(credPath)) continue;
           try {
-            const raw = JSON.parse(fs.readFileSync(otherCredsFile, "utf8"));
+            const raw = JSON.parse(fs.readFileSync(credPath, "utf8"));
             if (raw && typeof raw === "object") {
               for (const [pid, val] of Object.entries(raw)) {
                 if (!pid.startsWith("profile_") || credentials.getPassword(pid)) continue;
@@ -4559,25 +4645,32 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
             }
           } catch (_) {}
         }
-        // 2. Copy _browser_storage/*.json if missing locally
+        // 2. Merge _browser_storage/*.json and extract LevelDB directly
         for (const sessBase of [path.join(otherRoot, "sessions"), path.join(mgrDir, "sessions")]) {
           const otherBs = path.join(sessBase, "_browser_storage");
           if (fs.existsSync(otherBs)) {
-            const localBs = path.join(SESSIONS_DIR, "_browser_storage");
-            fs.mkdirSync(localBs, { recursive: true });
             for (const f of fs.readdirSync(otherBs)) {
               if (!f.endsWith(".json")) continue;
-              const src = path.join(otherBs, f);
-              const dst = path.join(localBs, f);
-              if (!fs.existsSync(dst)) {
-                try { fs.copyFileSync(src, dst); } catch (_) {}
-              }
+              const pid = f.slice(0, -5);
+              if (!pid.startsWith("profile_")) continue;
+              try {
+                const srcData = JSON.parse(fs.readFileSync(path.join(otherBs, f), "utf8"));
+                writeOrMergeProfileStorageFile(pid, srcData);
+              } catch (_) {}
             }
           }
-          // 3. Copy _browser/Default/Local Storage/leveldb if missing or richer than local
+          // 3. Extract _browser/Default/Local Storage/leveldb directly and merge into local _browser_storage
           const otherLdb = path.join(sessBase, "_browser", "Default", "Local Storage", "leveldb");
           const localLdb = path.join(SESSIONS_DIR, "_browser", "Default", "Local Storage", "leveldb");
           if (fs.existsSync(otherLdb)) {
+            try {
+              const diskHarvest = extractPelicanStorageFromLevelDb(otherLdb);
+              if (diskHarvest && diskHarvest.byProfile) {
+                for (const [pid, entries] of Object.entries(diskHarvest.byProfile)) {
+                  writeOrMergeProfileStorageFile(pid, entries);
+                }
+              }
+            } catch (_) {}
             const sumBytes = d => {
               if (!fs.existsSync(d)) return 0;
               try {
@@ -4594,17 +4687,26 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
               }
             }
           }
-          // 3b. Copy Electron sessions/profile_*/Local Storage/leveldb if missing locally
+          // 3b. Extract Electron sessions/profile_*/Local Storage/leveldb directly
           if (fs.existsSync(sessBase)) {
             for (const entry of fs.readdirSync(sessBase, { withFileTypes: true })) {
               if (!entry.isDirectory() || !entry.name.startsWith("profile_")) continue;
-              const srcP = path.join(sessBase, entry.name, "Local Storage", "leveldb");
-              const dstP = path.join(SESSIONS_DIR, entry.name, "Local Storage", "leveldb");
-              if (fs.existsSync(srcP) && !fs.existsSync(dstP)) {
-                fs.mkdirSync(dstP, { recursive: true });
-                for (const f of fs.readdirSync(srcP)) {
-                  if (f === "LOCK") continue;
-                  try { fs.copyFileSync(path.join(srcP, f), path.join(dstP, f)); } catch (_) {}
+              const pid = entry.name;
+              const srcP = path.join(sessBase, pid, "Local Storage", "leveldb");
+              const dstP = path.join(SESSIONS_DIR, pid, "Local Storage", "leveldb");
+              if (fs.existsSync(srcP)) {
+                try {
+                  const diskHarvest = extractPelicanStorageFromLevelDb(srcP, pid);
+                  if (diskHarvest && diskHarvest.byProfile && diskHarvest.byProfile[pid]) {
+                    writeOrMergeProfileStorageFile(pid, diskHarvest.byProfile[pid]);
+                  }
+                } catch (_) {}
+                if (!fs.existsSync(dstP)) {
+                  fs.mkdirSync(dstP, { recursive: true });
+                  for (const f of fs.readdirSync(srcP)) {
+                    if (f === "LOCK") continue;
+                    try { fs.copyFileSync(path.join(srcP, f), path.join(dstP, f)); } catch (_) {}
+                  }
                 }
               }
             }
@@ -4619,6 +4721,23 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
               const cur = loadProfiles() || [];
               if (isUntouchedDefaultMockProfiles(cur)) {
                 saveProfiles(arr);
+              } else {
+                let enriched = false;
+                const byId = new Map(arr.filter(x => x && x.id).map(x => [String(x.id), x]));
+                for (const p of cur) {
+                  const donor = p && p.id ? byId.get(String(p.id)) : null;
+                  if (!donor) continue;
+                  if (!p.account && donor.account) {
+                    p.account = String(donor.account).trim();
+                    p.loginSyncPending = true;
+                    enriched = true;
+                  }
+                  if (!p.lastCharName && donor.lastCharName) {
+                    p.lastCharName = String(donor.lastCharName).trim();
+                    enriched = true;
+                  }
+                }
+                if (enriched) saveProfiles(cur);
               }
             }
           } catch (_) {}
@@ -4628,13 +4747,41 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
   } catch (_) {}
 }
 
+function hasProfilesMissingCredentialsOrAccount(list) {
+  return Array.isArray(list) && list.some(p => p && p.id && (!p.account || !credentials.getPassword(p.id)));
+}
+
 async function recoverAndEnrichProfilesFromBrowserAndLocal() {
   try {
     let current = loadProfiles() || [];
-    if (isUntouchedDefaultMockProfiles(current)) {
+    if (isUntouchedDefaultMockProfiles(current) || hasProfilesMissingCredentialsOrAccount(current)) {
       importEvidenceFromOtherManagerDirsOnDisk();
       current = loadProfiles() || [];
     }
+    try {
+      const browserLdbDir = path.join(SESSIONS_DIR, "_browser", "Default", "Local Storage", "leveldb");
+      if (fs.existsSync(browserLdbDir)) {
+        const diskHarvest = extractPelicanStorageFromLevelDb(browserLdbDir);
+        if (diskHarvest && diskHarvest.byProfile) {
+          for (const [pid, entries] of Object.entries(diskHarvest.byProfile)) {
+            writeOrMergeProfileStorageFile(pid, entries);
+          }
+        }
+      }
+      if (fs.existsSync(SESSIONS_DIR)) {
+        for (const entry of fs.readdirSync(SESSIONS_DIR, { withFileTypes: true })) {
+          if (!entry.isDirectory() || !entry.name.startsWith("profile_")) continue;
+          const pid = entry.name;
+          const ldbDir = path.join(SESSIONS_DIR, pid, "Local Storage", "leveldb");
+          if (fs.existsSync(ldbDir)) {
+            const diskHarvest = extractPelicanStorageFromLevelDb(ldbDir, pid);
+            if (diskHarvest && diskHarvest.byProfile && diskHarvest.byProfile[pid]) {
+              writeOrMergeProfileStorageFile(pid, diskHarvest.byProfile[pid]);
+            }
+          }
+        }
+      }
+    } catch (_) {}
     if (typeof browserMode?.harvestAllFromBrowserLevelDb === "function") {
       await browserMode.harvestAllFromBrowserLevelDb().catch(() => {});
     }
@@ -4651,19 +4798,23 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
     if (!isUntouchedDefaultMockProfiles(current)) {
       const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
       let changed = false;
+      let authChanged = false;
       for (const p of current) {
         if (!p || !p.id) continue;
         const f = path.join(bsDir, `${p.id}.json`);
         if (!fs.existsSync(f)) continue;
         try {
           const d = JSON.parse(fs.readFileSync(f, "utf8"));
-          const rawAuth = d[`pelican_${p.id}__auth_cfg`] || d["pelican_auth_cfg"];
+          const pfx = `pelican_${p.id}__`;
+          const rawAuth = d[`${pfx}auth_cfg`] || d["pelican_auth_cfg"];
           if (rawAuth) {
             const auth = JSON.parse(rawAuth);
             if (auth && typeof auth === "object") {
               if (auth.username && String(auth.username).trim() && !p.account) {
                 p.account = String(auth.username).trim();
+                p.loginSyncPending = true;
                 changed = true;
+                authChanged = true;
               }
               if (auth.charName && String(auth.charName).trim() && !p.lastCharName) {
                 p.lastCharName = String(auth.charName).trim();
@@ -4672,14 +4823,24 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
               }
               if (auth.password && String(auth.password).trim() && !credentials.getPassword(p.id)) {
                 credentials.setPassword(p.id, String(auth.password).trim());
+                p.loginSyncPending = true;
                 changed = true;
+                authChanged = true;
               }
             }
+          }
+          const farmMap = d[`${pfx}farm_map`] || d[`${pfx}target_map`] || d[`${pfx}last_farm_map`];
+          if (farmMap && typeof farmMap === "string" && farmMap.trim() && (!p.targetMap || p.targetMap === "ถนนต้นหลิว")) {
+            p.targetMap = farmMap.trim();
+            changed = true;
           }
         } catch (_) {}
       }
       if (changed) {
         saveProfiles(current);
+      }
+      if (authChanged && typeof authSync?.tick === "function") {
+        authSync.tick().catch(() => {});
       }
       await syncProfileBackupToCentral().catch(() => {});
     }
@@ -4692,7 +4853,7 @@ if (!TEST_INSTANCE) {
   }, 5000);
   setInterval(async () => {
     const cur = loadProfiles() || [];
-    if (isUntouchedDefaultMockProfiles(cur)) {
+    if (isUntouchedDefaultMockProfiles(cur) || hasProfilesMissingCredentialsOrAccount(cur)) {
       await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
     } else {
       await syncProfileBackupToCentral().catch(() => {});
@@ -4725,8 +4886,8 @@ async function pollCentralCommands() {
         } else if (cmd.action === 'update_bot' || cmd.action === 'refresh_payload') {
           botAutoUpdater.retryFailed().catch(() => {});
         } else if (cmd.action === 'restore_profiles') {
-          await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
           await restoreProfilesFromCentral().catch(() => {});
+          await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
         }
         ackIds.push(cmd.id);
       }
@@ -5789,13 +5950,17 @@ const server = http.createServer(async (req, res) => {
 
   // POST /api/profiles/recover (Manual / explicit auto-recovery trigger — local evidence first, then central server backup)
   if (req.method === "POST" && pathname === "/api/profiles/recover") {
+    await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
     const recovered = recoverProfilesFromLocalEvidence();
     if (recovered && recovered.length > 0) {
       saveProfiles(recovered);
-      return sendJSON({ success: true, source: "local", recoveredCount: recovered.length, profiles: recovered });
+      await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
+      const enriched = loadProfiles() || recovered;
+      return sendJSON({ success: true, source: "local", recoveredCount: enriched.length, profiles: enriched });
     }
     const cloud = await restoreProfilesFromCentral();
     if (cloud && cloud.success && cloud.restoredProfiles > 0) {
+      await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
       const fresh = loadProfiles();
       return sendJSON({ success: true, source: "cloud", recoveredCount: cloud.restoredProfiles, restoredCredentials: cloud.restoredCredentials, profiles: fresh });
     }

@@ -56,6 +56,255 @@ function getText(url, timeout = 8000) {
   });
 }
 
+function mergeAuthConfigString(existingRaw, incomingRaw) {
+  if (!existingRaw) return incomingRaw;
+  if (!incomingRaw) return existingRaw;
+  try {
+    const a = JSON.parse(existingRaw);
+    const b = JSON.parse(incomingRaw);
+    if (!a || typeof a !== 'object') return incomingRaw;
+    if (!b || typeof b !== 'object') return existingRaw;
+    const out = { ...a, ...b };
+    if (a.username && String(a.username).trim() && !(b.username && String(b.username).trim())) {
+      out.username = a.username;
+      if (a.enabled) out.enabled = true;
+    }
+    if (a.password && String(a.password).trim() && !(b.password && String(b.password).trim())) {
+      out.password = a.password;
+      if (a.enabled) out.enabled = true;
+    }
+    if (a.charName && String(a.charName).trim() && !(b.charName && String(b.charName).trim())) {
+      out.charName = a.charName;
+    }
+    return JSON.stringify(out);
+  } catch (_) {
+    return incomingRaw;
+  }
+}
+
+function readVarint(buf, offset, limit) {
+  let res = 0, shift = 0, pos = offset;
+  const end = limit !== undefined ? limit : buf.length;
+  while (pos < end) {
+    const b = buf[pos++];
+    res += (b & 0x7f) * Math.pow(2, shift);
+    if ((b & 0x80) === 0) return { val: res, next: pos };
+    shift += 7;
+    if (shift > 49) return null;
+  }
+  return null;
+}
+
+function snappyUncompress(comp) {
+  const hdr = readVarint(comp, 0);
+  if (!hdr || hdr.val <= 0 || hdr.val > 8 * 1024 * 1024) return null;
+  const out = Buffer.allocUnsafe(hdr.val);
+  let ip = hdr.next, op = 0;
+  while (ip < comp.length && op < out.length) {
+    const tag = comp[ip++];
+    const type = tag & 0x03;
+    if (type === 0) {
+      let len = (tag >> 2) + 1;
+      if (len > 60) {
+        const extraBytes = len - 60;
+        if (ip + extraBytes > comp.length) return null;
+        len = 0;
+        for (let i = 0; i < extraBytes; i++) len |= comp[ip++] << (8 * i);
+        len += 1;
+      }
+      if (ip + len > comp.length || op + len > out.length) return null;
+      comp.copy(out, op, ip, ip + len);
+      ip += len;
+      op += len;
+    } else {
+      let len = 0, offset = 0;
+      if (type === 1) {
+        len = ((tag >> 2) & 0x07) + 4;
+        if (ip >= comp.length) return null;
+        offset = ((tag & 0xe0) << 3) | comp[ip++];
+      } else if (type === 2) {
+        len = (tag >> 2) + 1;
+        if (ip + 2 > comp.length) return null;
+        offset = comp[ip] | (comp[ip + 1] << 8);
+        ip += 2;
+      } else {
+        len = (tag >> 2) + 1;
+        if (ip + 4 > comp.length) return null;
+        offset = (comp[ip] | (comp[ip + 1] << 8) | (comp[ip + 2] << 16) | (comp[ip + 3] << 24)) >>> 0;
+        ip += 4;
+      }
+      if (offset <= 0 || offset > op || op + len > out.length) return null;
+      for (let i = 0; i < len; i++) {
+        out[op] = out[op - offset];
+        op++;
+      }
+    }
+  }
+  return op === out.length ? out : null;
+}
+
+function decodeChromiumString(buf) {
+  if (!buf || buf.length === 0) return '';
+  if (buf[0] === 0) return buf.subarray(1).toString('utf16le');
+  if (buf[0] === 1) return buf.subarray(1).toString('latin1');
+  return buf.toString('utf8');
+}
+
+function decodeLevelDbKeyAndVal(rawKey, rawVal, isWal) {
+  const userKey = (!isWal && rawKey.length >= 8) ? rawKey.subarray(0, rawKey.length - 8) : rawKey;
+  const sep = userKey.indexOf(0x00);
+  if (sep === -1 || sep + 1 >= userKey.length) return null;
+  const keyPart = userKey.subarray(sep + 1);
+  return { kStr: decodeChromiumString(keyPart), vStr: decodeChromiumString(rawVal) };
+}
+
+function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) {
+  const byProfile = {};
+  const unprefixed = {};
+  let totalKeys = 0;
+  if (!levelDbDir || !fs.existsSync(levelDbDir)) return { byProfile, unprefixed, totalKeys };
+  const recordEntry = (kStr, vStr) => {
+    if (!kStr || typeof vStr !== 'string' || !kStr.startsWith('pelican_')) return;
+    const isAuth = kStr.endsWith('__auth_cfg') || kStr === 'pelican_auth_cfg';
+    const m = kStr.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
+    if (m && m[1]) {
+      const pid = m[1];
+      if (!byProfile[pid]) byProfile[pid] = {};
+      if (isAuth && byProfile[pid][kStr]) {
+        byProfile[pid][kStr] = mergeAuthConfigString(byProfile[pid][kStr], vStr);
+      } else {
+        byProfile[pid][kStr] = vStr;
+      }
+      totalKeys++;
+    } else {
+      if (isAuth && unprefixed[kStr]) {
+        unprefixed[kStr] = mergeAuthConfigString(unprefixed[kStr], vStr);
+      } else {
+        unprefixed[kStr] = vStr;
+      }
+      if (fallbackProfileId) {
+        if (!byProfile[fallbackProfileId]) byProfile[fallbackProfileId] = {};
+        if (isAuth && byProfile[fallbackProfileId][kStr]) {
+          byProfile[fallbackProfileId][kStr] = mergeAuthConfigString(byProfile[fallbackProfileId][kStr], vStr);
+        } else {
+          byProfile[fallbackProfileId][kStr] = vStr;
+        }
+      }
+      totalKeys++;
+    }
+  };
+
+  try {
+    const files = fs.readdirSync(levelDbDir).filter(f => f.endsWith('.ldb') || f.endsWith('.log')).sort();
+    for (const f of files) {
+      try {
+        const buf = fs.readFileSync(path.join(levelDbDir, f));
+        if (f.endsWith('.ldb')) {
+          if (buf.length < 48) continue;
+          const footer = buf.subarray(buf.length - 48);
+          const mhOff = readVarint(footer, 0);
+          const mhSz = mhOff ? readVarint(footer, mhOff.next) : null;
+          const ihOff = mhSz ? readVarint(footer, mhSz.next) : null;
+          const ihSz = ihOff ? readVarint(footer, ihOff.next) : null;
+          if (!ihOff || !ihSz || ihOff.val + ihSz.val + 1 > buf.length) continue;
+          let idxBlock = buf.subarray(ihOff.val, ihOff.val + ihSz.val);
+          if (buf[ihOff.val + ihSz.val] === 1) idxBlock = snappyUncompress(idxBlock) || idxBlock;
+          if (!idxBlock || idxBlock.length < 4) continue;
+          const idxRestarts = idxBlock.readUInt32LE(idxBlock.length - 4);
+          const idxLimit = idxBlock.length - 4 - idxRestarts * 4;
+          let pos = 0;
+          while (pos < idxLimit) {
+            const s = readVarint(idxBlock, pos, idxLimit); if (!s) break;
+            const u = readVarint(idxBlock, s.next, idxLimit); if (!u) break;
+            const v = readVarint(idxBlock, u.next, idxLimit); if (!v) break;
+            pos = v.next;
+            if (pos + u.val + v.val > idxLimit) break;
+            const hBuf = idxBlock.subarray(pos + u.val, pos + u.val + v.val);
+            pos += u.val + v.val;
+            const bOff = readVarint(hBuf, 0);
+            const bSz = bOff ? readVarint(hBuf, bOff.next) : null;
+            if (!bOff || !bSz || bOff.val + bSz.val + 1 > buf.length) continue;
+            let dBlock = buf.subarray(bOff.val, bOff.val + bSz.val);
+            if (buf[bOff.val + bSz.val] === 1) dBlock = snappyUncompress(dBlock);
+            if (!dBlock || dBlock.length < 4) continue;
+            const numRestarts = dBlock.readUInt32LE(dBlock.length - 4);
+            const dLimit = dBlock.length - 4 - numRestarts * 4;
+            let dPos = 0, lastKey = Buffer.alloc(0);
+            while (dPos < dLimit) {
+              const ds = readVarint(dBlock, dPos, dLimit); if (!ds) break;
+              const du = readVarint(dBlock, ds.next, dLimit); if (!du) break;
+              const dv = readVarint(dBlock, du.next, dLimit); if (!dv) break;
+              dPos = dv.next;
+              if (ds.val > lastKey.length || dPos + du.val + dv.val > dLimit) break;
+              const key = Buffer.concat([lastKey.subarray(0, ds.val), dBlock.subarray(dPos, dPos + du.val)]);
+              const val = dBlock.subarray(dPos + du.val, dPos + du.val + dv.val);
+              dPos += du.val + dv.val;
+              lastKey = key;
+              const kv = decodeLevelDbKeyAndVal(key, val, false);
+              if (kv) recordEntry(kv.kStr, kv.vStr);
+            }
+          }
+        } else if (f.endsWith('.log')) {
+          const BLOCK_SIZE = 32768;
+          let blockOffset = 0;
+          let pendingChunks = [];
+          const parseBatch = (batch) => {
+            if (!batch || batch.length < 12) return;
+            let pos = 12;
+            while (pos < batch.length) {
+              const recType = batch[pos++];
+              if (recType === 1) {
+                const kLen = readVarint(batch, pos); if (!kLen) break;
+                pos = kLen.next;
+                if (pos + kLen.val > batch.length) break;
+                const key = batch.subarray(pos, pos + kLen.val);
+                pos += kLen.val;
+                const vLen = readVarint(batch, pos); if (!vLen) break;
+                pos = vLen.next;
+                if (pos + vLen.val > batch.length) break;
+                const val = batch.subarray(pos, pos + vLen.val);
+                pos += vLen.val;
+                const kv = decodeLevelDbKeyAndVal(key, val, true);
+                if (kv) recordEntry(kv.kStr, kv.vStr);
+              } else if (recType === 0) {
+                const kLen = readVarint(batch, pos); if (!kLen) break;
+                pos = kLen.next + kLen.val;
+              } else {
+                break;
+              }
+            }
+          };
+          while (blockOffset < buf.length) {
+            const blockEnd = Math.min(buf.length, blockOffset + BLOCK_SIZE);
+            let pos = blockOffset;
+            while (pos + 7 <= blockEnd) {
+              const len = buf[pos + 4] | (buf[pos + 5] << 8);
+              const type = buf[pos + 6];
+              if (type === 0 || len === 0 || pos + 7 + len > blockEnd) break;
+              const chunk = buf.subarray(pos + 7, pos + 7 + len);
+              pos += 7 + len;
+              if (type === 1) {
+                parseBatch(chunk);
+                pendingChunks = [];
+              } else if (type === 2) {
+                pendingChunks = [chunk];
+              } else if (type === 3 && pendingChunks.length > 0) {
+                pendingChunks.push(chunk);
+              } else if (type === 4 && pendingChunks.length > 0) {
+                pendingChunks.push(chunk);
+                parseBatch(Buffer.concat(pendingChunks));
+                pendingChunks = [];
+              }
+            }
+            blockOffset += BLOCK_SIZE;
+          }
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return { byProfile, unprefixed, totalKeys };
+}
+
 function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, preferLocalBot, cdpPort = DEFAULT_CDP_PORT, browserUserDataDir, gameUrl = GAME_URL, profileScriptSource, screenProxy, assetCache }) {
   if(!Number.isInteger(cdpPort)||cdpPort<1024||cdpPort>65535)throw Error('INVALID_CDP_PORT');
   const CDP_PORT = cdpPort;
@@ -92,7 +341,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const f = path.join(storageDir, `${profileId}.json`);
       const merged = { ...loadProfileStorage(profileId) };
       for (const [k, v] of Object.entries(entries)) {
-        if (v !== null && v !== undefined) merged[k] = v;
+        if (v === null || v === undefined) continue;
+        if ((k.endsWith('__auth_cfg') || k === 'pelican_auth_cfg') && merged[k]) {
+          merged[k] = mergeAuthConfigString(merged[k], v);
+        } else {
+          merged[k] = v;
+        }
       }
       fs.writeFileSync(f + '.tmp', JSON.stringify(merged), 'utf8');
       fs.renameSync(f + '.tmp', f);
@@ -515,7 +769,24 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   async function migrateProfileStorageFromDefaultContext(profileId) {
     if (!storageDir || !profileId) return;
     const existing = loadProfileStorage(profileId);
-    if (existing && Object.keys(existing).length > 0) return;
+    const authKey = `pelican_${profileId}__auth_cfg`;
+    let hasFullAuth = false;
+    if (existing && typeof existing[authKey] === 'string') {
+      try {
+        const parsed = JSON.parse(existing[authKey]);
+        if (parsed && parsed.username && parsed.password) hasFullAuth = true;
+      } catch (_) {}
+    }
+    if (hasFullAuth) return;
+    try {
+      const levelDbDir = path.join(userDataDir, 'Default', 'Local Storage', 'leveldb');
+      const diskHarvest = extractPelicanStorageFromLevelDb(levelDbDir);
+      if (diskHarvest && diskHarvest.byProfile) {
+        for (const [pid, map] of Object.entries(diskHarvest.byProfile)) {
+          saveProfileStorage(pid, map);
+        }
+      }
+    } catch (_) {}
     const donor = Array.from(clients.values()).find(x => !x.browserContextId && x.sessionId);
     if (!donor) return;
     try {
@@ -916,61 +1187,86 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (levelDbHarvestPromise) return levelDbHarvestPromise;
     levelDbHarvestPromise = (async () => {
       let targetId = null;
+      const byProfile = {};
+      let totalKeys = 0;
       try {
         const levelDbDir = path.join(userDataDir, 'Default', 'Local Storage', 'leveldb');
         if (!fs.existsSync(levelDbDir)) return { harvestedProfiles: 0, totalKeys: 0 };
-        await ensureBrowser();
-        const origin = new URL(gameUrl).origin;
-        const recoverUrl = `${origin}/__pmhee_recover__`;
-        const created = await send('Target.createTarget', { url: 'about:blank' }, undefined, 6000);
-        targetId = created && created.targetId;
-        if (!targetId) return { harvestedProfiles: 0, totalKeys: 0 };
-        const attached = await send('Target.attachToTarget', { targetId, flatten: true }, undefined, 6000);
-        const sessionId = attached && attached.sessionId;
-        if (!sessionId) return { harvestedProfiles: 0, totalKeys: 0 };
-        await send('Fetch.enable', { patterns: [{ urlPattern: `${recoverUrl}*` }] }, sessionId, 4000);
-        await send('Page.navigate', { url: recoverUrl }, sessionId, 6000);
-        let allKeys = {};
-        for (let attempt = 0; attempt < 16; attempt++) {
-          await new Promise(r => setTimeout(r, 150));
-          try {
-            const evalRes = await send('Runtime.evaluate', {
-              expression: `(() => {
-                if (!window.location || window.location.origin !== ${JSON.stringify(origin)} || !window.localStorage) return null;
-                const out = {};
-                for (let i = 0; i < window.localStorage.length; i++) {
-                  const k = window.localStorage.key(i);
-                  if (!k || !k.startsWith('pelican_')) continue;
-                  const v = window.localStorage[k];
-                  if (typeof v === 'string') out[k] = v;
-                }
-                return out;
-              })()`,
-              returnByValue: true
-            }, sessionId, 3000);
-            if (evalRes?.result?.value && typeof evalRes.result.value === 'object') {
-              allKeys = evalRes.result.value;
-              break;
+        const diskHarvest = extractPelicanStorageFromLevelDb(levelDbDir);
+        if (diskHarvest && diskHarvest.byProfile) {
+          for (const [pid, map] of Object.entries(diskHarvest.byProfile)) {
+            if (!byProfile[pid]) byProfile[pid] = {};
+            for (const [k, v] of Object.entries(map)) {
+              if (k.endsWith('__auth_cfg') && byProfile[pid][k]) {
+                byProfile[pid][k] = mergeAuthConfigString(byProfile[pid][k], v);
+              } else {
+                byProfile[pid][k] = v;
+              }
+              totalKeys++;
             }
-          } catch (_) {}
-        }
-        const byProfile = {};
-        let totalKeys = 0;
-        for (const [k, v] of Object.entries(allKeys)) {
-          if (typeof v !== 'string') continue;
-          const m = k.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
-          if (m && m[1]) {
-            if (!byProfile[m[1]]) byProfile[m[1]] = {};
-            byProfile[m[1]][k] = v;
-            totalKeys++;
+          }
+          for (const [pid, map] of Object.entries(byProfile)) {
+            saveProfileStorage(pid, map);
           }
         }
-        for (const [pid, map] of Object.entries(byProfile)) {
-          saveProfileStorage(pid, map);
+        if (await browserAlive()) {
+          await connect();
+          const origin = new URL(gameUrl).origin;
+          const recoverUrl = `${origin}/__pmhee_recover__`;
+          const created = await send('Target.createTarget', { url: 'about:blank' }, undefined, 6000);
+          targetId = created && created.targetId;
+          if (targetId) {
+            const attached = await send('Target.attachToTarget', { targetId, flatten: true }, undefined, 6000);
+            const sessionId = attached && attached.sessionId;
+            if (sessionId) {
+              await send('Fetch.enable', { patterns: [{ urlPattern: `${recoverUrl}*` }] }, sessionId, 4000);
+              await send('Page.navigate', { url: recoverUrl }, sessionId, 6000);
+              let allKeys = {};
+              for (let attempt = 0; attempt < 16; attempt++) {
+                await new Promise(r => setTimeout(r, 150));
+                try {
+                  const evalRes = await send('Runtime.evaluate', {
+                    expression: `(() => {
+                      if (!window.location || window.location.origin !== ${JSON.stringify(origin)} || !window.localStorage) return null;
+                      const out = {};
+                      for (let i = 0; i < window.localStorage.length; i++) {
+                        const k = window.localStorage.key(i);
+                        if (!k || !k.startsWith('pelican_')) continue;
+                        const v = window.localStorage[k];
+                        if (typeof v === 'string') out[k] = v;
+                      }
+                      return out;
+                    })()`,
+                    returnByValue: true
+                  }, sessionId, 3000);
+                  if (evalRes?.result?.value && typeof evalRes.result.value === 'object') {
+                    allKeys = evalRes.result.value;
+                    break;
+                  }
+                } catch (_) {}
+              }
+              for (const [k, v] of Object.entries(allKeys)) {
+                if (typeof v !== 'string') continue;
+                const m = k.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
+                if (m && m[1]) {
+                  if (!byProfile[m[1]]) byProfile[m[1]] = {};
+                  if (k.endsWith('__auth_cfg') && byProfile[m[1]][k]) {
+                    byProfile[m[1]][k] = mergeAuthConfigString(byProfile[m[1]][k], v);
+                  } else {
+                    byProfile[m[1]][k] = v;
+                  }
+                  totalKeys++;
+                }
+              }
+              for (const [pid, map] of Object.entries(byProfile)) {
+                saveProfileStorage(pid, map);
+              }
+            }
+          }
         }
         return { harvestedProfiles: Object.keys(byProfile).length, totalKeys };
       } catch (_) {
-        return { harvestedProfiles: 0, totalKeys: 0 };
+        return { harvestedProfiles: Object.keys(byProfile).length, totalKeys };
       } finally {
         if (targetId) await send('Target.closeTarget', { targetId }, undefined, 3000).catch(() => {});
         levelDbHarvestPromise = null;
@@ -995,4 +1291,4 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   return { launch, stop, isOpen, start, dispose, findBrowser, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
 }
 
-module.exports = { createBrowserMode, findBrowser, HEALTH_JS };
+module.exports = { createBrowserMode, findBrowser, HEALTH_JS, extractPelicanStorageFromLevelDb, mergeAuthConfigString };

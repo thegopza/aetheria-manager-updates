@@ -11,11 +11,13 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const GAME_URL = 'https://www.aetheria-online.in.th/play';
 const BOT_URL = 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/bot.js';
 const DEFAULT_CDP_PORT = 9339;
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HEALTH_JS = `(() => {
   const bs = window.__pmScriptBootstrap?.status?.() || null;
   return {
@@ -23,6 +25,7 @@ const HEALTH_JS = `(() => {
     documentId: String(performance.timeOrigin),
     ready: document.readyState,
     profileId: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
+    deviceId: window.__pmDeviceId || null,
     version: window.__pelicanBotVersion || null,
     hud: !!document.getElementById('pelican-hud'),
     liveHook: typeof window.__getClientLiveState === 'function',
@@ -324,6 +327,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   let started = false, reconnectTimer = null, reconnectDelay = 1000, monitorTimer = null;
   const stoppedProfiles = new Set(), knownTargets = new Map(), diagnostics = new Map();
   const knownTargetsFile = (sessionsDir && sessionsDir !== 'fake') ? path.join(sessionsDir, '_browser_targets.json') : null;
+  const profileDeviceIds = new Map();
+  const usedDeviceIds = new Set();
+  let deviceIdsInitialized = false;
 
   function loadProfileStorage(profileId) {
     if (!storageDir || !profileId) return {};
@@ -340,17 +346,99 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       fs.mkdirSync(storageDir, { recursive: true });
       const f = path.join(storageDir, `${profileId}.json`);
       const merged = { ...loadProfileStorage(profileId) };
+      delete merged['aetheria.device'];
       for (const [k, v] of Object.entries(entries)) {
-        if (v === null || v === undefined) continue;
+        if (v === null || v === undefined || k === 'aetheria.device') continue;
         if ((k.endsWith('__auth_cfg') || k === 'pelican_auth_cfg') && merged[k]) {
           merged[k] = mergeAuthConfigString(merged[k], v);
         } else {
           merged[k] = v;
         }
       }
+      if (profileDeviceIds.has(profileId)) {
+        merged[`pelican_${profileId}__aetheria_device`] = profileDeviceIds.get(profileId);
+      }
       fs.writeFileSync(f + '.tmp', JSON.stringify(merged), 'utf8');
       fs.renameSync(f + '.tmp', f);
     } catch (_) {}
+  }
+
+  function mintUniqueDeviceId() {
+    let cand = '';
+    do {
+      cand = crypto.randomUUID();
+    } while (usedDeviceIds.has(cand.toLowerCase()));
+    usedDeviceIds.add(cand.toLowerCase());
+    return cand;
+  }
+
+  function initDeviceIdsFromStorage() {
+    if (deviceIdsInitialized) return;
+    deviceIdsInitialized = true;
+    if (!storageDir) return;
+    try {
+      if (!fs.existsSync(storageDir)) return;
+      const files = fs.readdirSync(storageDir).filter(f => f.endsWith('.json') && !f.endsWith('.tmp'));
+      const rawByProfile = new Map();
+      for (const f of files) {
+        const pid = f.slice(0, -5);
+        const data = loadProfileStorage(pid);
+        rawByProfile.set(pid, data);
+        if (typeof data['aetheria.device'] === 'string' && data['aetheria.device'].trim()) {
+          // Blacklist any unprefixed shared deviceId that leaked from the Default BrowserContext
+          usedDeviceIds.add(data['aetheria.device'].trim().toLowerCase());
+        }
+      }
+      for (const [pid, data] of rawByProfile.entries()) {
+        const devKey = `pelican_${pid}__aetheria_device`;
+        const existing = typeof data[devKey] === 'string' ? data[devKey].trim() : '';
+        let assigned = existing;
+        let dirty = Object.prototype.hasOwnProperty.call(data, 'aetheria.device');
+        if (!UUID_V4_RE.test(assigned) || usedDeviceIds.has(assigned.toLowerCase())) {
+          assigned = mintUniqueDeviceId();
+          dirty = true;
+        } else {
+          usedDeviceIds.add(assigned.toLowerCase());
+        }
+        profileDeviceIds.set(pid, assigned);
+        if (dirty) {
+          saveProfileStorage(pid, { [devKey]: assigned });
+        }
+      }
+    } catch (_) {}
+  }
+
+  function ensureProfileDeviceId(profileId) {
+    initDeviceIdsFromStorage();
+    if (!profileId) return mintUniqueDeviceId();
+    if (profileDeviceIds.has(profileId)) return profileDeviceIds.get(profileId);
+    const devKey = `pelican_${profileId}__aetheria_device`;
+    const saved = loadProfileStorage(profileId);
+    const existing = saved && typeof saved[devKey] === 'string' ? saved[devKey].trim() : '';
+    let assigned = existing;
+    if (!UUID_V4_RE.test(assigned) || usedDeviceIds.has(assigned.toLowerCase())) {
+      assigned = mintUniqueDeviceId();
+    } else {
+      usedDeviceIds.add(assigned.toLowerCase());
+    }
+    profileDeviceIds.set(profileId, assigned);
+    saveProfileStorage(profileId, { [devKey]: assigned });
+    return assigned;
+  }
+
+  async function rotateProfileDeviceId(profileId) {
+    initDeviceIdsFromStorage();
+    if (!profileId) return null;
+    const assigned = mintUniqueDeviceId();
+    const devKey = `pelican_${profileId}__aetheria_device`;
+    profileDeviceIds.set(profileId, assigned);
+    saveProfileStorage(profileId, { [devKey]: assigned });
+    const c = clients.get(profileId);
+    if (c && c.sessionId) {
+      await ensureSessionHooks(c.sessionId, profileId).catch(() => {});
+      await evaluate(c, profileInitScript(profileId), 4500).catch(() => {});
+    }
+    return assigned;
   }
 
   function loadKnownTargets() {
@@ -481,13 +569,69 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   const crashedTargetReloadAt = new Map();
   const profileInitScript = profileId => {
-    const saved = loadProfileStorage(profileId);
+    const deviceId = ensureProfileDeviceId(profileId);
+    const saved = { ...loadProfileStorage(profileId) };
+    delete saved['aetheria.device'];
+    if (profileId && deviceId) {
+      saved[`pelican_${profileId}__aetheria_device`] = deviceId;
+    }
     const hasSaved = saved && Object.keys(saved).length > 0;
     const restoreJs = hasSaved
-      ? `try { const __s = ${JSON.stringify(saved)}; for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && window.sessionStorage.getItem(sk) === null) window.sessionStorage.setItem(sk, v); } else if (window.localStorage && window.localStorage.getItem(k) === null) { window.localStorage.setItem(k, v); } } } catch (_) {}`
+      ? `try { const __s = ${JSON.stringify(saved)}; const __rawGet = (window.__pmRawStorage && window.__pmRawStorage.get) || Storage.prototype.getItem; const __rawSet = (window.__pmRawStorage && window.__pmRawStorage.set) || Storage.prototype.setItem; for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string' || k === 'aetheria.device') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && __rawGet.call(window.sessionStorage, sk) === null) __rawSet.call(window.sessionStorage, sk, v); } else if (window.localStorage && (k.endsWith('__aetheria_device') || __rawGet.call(window.localStorage, k) === null)) { __rawSet.call(window.localStorage, k, v); } } } catch (_) {}`
       : '';
+    const deviceHookJs = `try {
+      if (!window.__pmDeviceIdHookInstalled) {
+        window.__pmDeviceIdHookInstalled = true;
+        const __sp = Storage.prototype;
+        const __rawGet = __sp.getItem;
+        const __rawSet = __sp.setItem;
+        const __rawDel = __sp.removeItem;
+        window.__pmRawStorage = { get: __rawGet, set: __rawSet, del: __rawDel };
+        __sp.getItem = function(k) {
+          if (this === window.localStorage && window.__pmDeviceId && (k === 'aetheria.device' || (window.__pmProfileId && k === 'pelican_' + window.__pmProfileId + '__aetheria_device'))) {
+            return window.__pmDeviceId;
+          }
+          return __rawGet.call(this, k);
+        };
+        __sp.setItem = function(k, v) {
+          if (this === window.localStorage && window.__pmProfileId && (k === 'aetheria.device' || k === 'pelican_' + window.__pmProfileId + '__aetheria_device')) {
+            const dev = window.__pmDeviceId || String(v || '');
+            window.__pmDeviceId = dev;
+            return __rawSet.call(this, 'pelican_' + window.__pmProfileId + '__aetheria_device', dev);
+          }
+          return __rawSet.call(this, k, v);
+        };
+        __sp.removeItem = function(k) {
+          if (this === window.localStorage && window.__pmProfileId && (k === 'aetheria.device' || k === 'pelican_' + window.__pmProfileId + '__aetheria_device')) {
+            return;
+          }
+          return __rawDel.call(this, k);
+        };
+      }
+      if (window.localStorage && window.__pmProfileId && window.__pmDeviceId) {
+        const __rawSet = (window.__pmRawStorage && window.__pmRawStorage.set) || Storage.prototype.setItem;
+        __rawSet.call(window.localStorage, 'pelican_' + window.__pmProfileId + '__aetheria_device', window.__pmDeviceId);
+      }
+      if (!window.__pmEnterWorldDeviceHookInstalled && typeof window.fetch === 'function') {
+        window.__pmEnterWorldDeviceHookInstalled = true;
+        const __origFetch = window.fetch;
+        window.fetch = function(input, init) {
+          try {
+            const urlStr = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : '');
+            if (window.__pmDeviceId && init && typeof init.body === 'string' && (urlStr === '/world/enter' || urlStr.endsWith('/world/enter'))) {
+              const parsed = JSON.parse(init.body);
+              if (parsed && typeof parsed === 'object') {
+                parsed.deviceId = window.__pmDeviceId;
+                init = Object.assign({}, init, { body: JSON.stringify(parsed) });
+              }
+            }
+          } catch (_) {}
+          return __origFetch.call(this, input, init);
+        };
+      }
+    } catch (_) {}`;
     const cacheFlag = Boolean(effectiveAssetCache && effectiveAssetCache.isEnabled());
-    return `window.__pmProfileId = ${JSON.stringify(profileId)}; window.__pmLocalAssetCacheEnabled = ${cacheFlag}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {} ${restoreJs}`;
+    return `window.__pmProfileId = ${JSON.stringify(profileId)}; window.__pmDeviceId = ${JSON.stringify(deviceId)}; window.__pmLocalAssetCacheEnabled = ${cacheFlag}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {} ${deviceHookJs} ${restoreJs}`;
   };
 
   async function configureSessionAssetCache(sessionId) {
@@ -514,10 +658,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         if (window.localStorage) {
           const pfx = ${JSON.stringify(prefix)};
           const doHarvest = ${Boolean(harvestAll)};
-          const extraKeys = new Set(['aetheria.device', 'ui.windows', 'partyFrameFolded', 'skip-anim:refine', 'hudMenuOpen', 'webgame.camera']);
+          const extraKeys = new Set(['ui.windows', 'partyFrameFolded', 'skip-anim:refine', 'hudMenuOpen', 'webgame.camera']);
           for (let i = 0; i < window.localStorage.length; i++) {
             const k = window.localStorage.key(i);
-            if (!k) continue;
+            if (!k || k === 'aetheria.device') continue;
             const rawVal = window.localStorage[k];
             if (typeof rawVal !== 'string') continue;
             if (k.startsWith(pfx) || (k.startsWith('pelican_') && !k.includes('__')) || extraKeys.has(k)) {
@@ -571,8 +715,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
   const current=(c,token)=>clients.get(c.profileId)===c&&!stoppedProfiles.has(c.profileId)&&c.generation===token.generation&&c.sessionId===token.sessionId;
   function classify(c,h) {
-    if(h.version&&h.hud&&h.liveHook){c.crashReloadCount=0;c.stateFailCount=0;diagnostic(c,'ready',{version:h.version,documentId:h.documentId,hud:h.hud,liveHook:h.liveHook});return true;}
-    if(h.version||h.hud||h.liveHook||(h.initialized&&h.bootstrapPhase!=='waiting')){c.stateFailCount=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,hud:h.hud,liveHook:h.liveHook});return true;}
+    const devId = ensureProfileDeviceId(c.profileId);
+    if(h.version&&h.hud&&h.liveHook){c.crashReloadCount=0;c.stateFailCount=0;diagnostic(c,'ready',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
+    if(h.version||h.hud||h.liveHook||(h.initialized&&h.bootstrapPhase!=='waiting')){c.stateFailCount=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
     return false;
   }
 
@@ -636,9 +781,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     let token;
     try {
       const before=await health(c);token={generation:c.generation,sessionId:c.sessionId};
-      if(before.profileId!==c.profileId){
+      const expectedDeviceId = ensureProfileDeviceId(c.profileId);
+      if(before.profileId!==c.profileId || before.deviceId!==expectedDeviceId){
         await ensureSessionHooks(c.sessionId,c.profileId);
         await evaluate(c,profileInitScript(c.profileId),4500).catch(()=>{});
+        before.deviceId = expectedDeviceId;
       }
       if(classify(c,before))return;
       if(!isGameUrl(before.href)||new URL(before.href).pathname!=='/play'||before.ready!=='complete'){
@@ -660,7 +807,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       await evaluate(c,MSGPACK,8000);
       if(!current(c,token))return;
       // Atomic document/runtime guard closes the race with a delayed legacy loader response.
-      const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') return {skipped:true,reason:'INITIALIZATION_FAILED'}; window.__pmBrowserInjectionAttempted=true; const evalResult = await (0,eval)(${JSON.stringify(code)}); return {attempted:true, evalResult}; })()`;
+      const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; if(!window.__pmDeviceId) window.__pmDeviceId=${JSON.stringify(expectedDeviceId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') return {skipped:true,reason:'INITIALIZATION_FAILED'}; window.__pmBrowserInjectionAttempted=true; const evalResult = await (0,eval)(${JSON.stringify(code)}); return {attempted:true, evalResult}; })()`;
       await evaluate(c,expression);
       if(!current(c,token))return;
       const result=await health(c);if(!classify(c,result))diagnostic(c,'partial-runtime',{code:'POSTCONDITION_MISSING'});
@@ -960,7 +1107,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             return reply(500, { success: false, error: e.message });
           }
         }
-        if(url.pathname==='/api/browser-status')return reply(200,{success:true,profileId:c.profileId,browserContextId:c.browserContextId||null,...diagnostics.get(c.profileId)});
+        if(url.pathname==='/api/browser-status')return reply(200,{success:true,profileId:c.profileId,deviceId:ensureProfileDeviceId(c.profileId),browserContextId:c.browserContextId||null,...diagnostics.get(c.profileId)});
         if (url.pathname === '/api/window') {
           await windowAction(c, url.searchParams.get('action'), url.searchParams);
           return reply(200, { success: true });
@@ -1277,6 +1424,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   function start() {
     if(started)return;started=true;
+    try {
+      initDeviceIdsFromStorage();
+      const all = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+      for (const p of all) {
+        if (p && p.id) ensureProfileDeviceId(p.id);
+      }
+    } catch (_) {}
     // reconnect to a browser left open by a previous Manager run
     setTimeout(() => {if(started)rediscover().catch(() => {});}, 3000);
     monitorTimer=setInterval(()=>rediscover().catch(()=>scheduleReconnect()),15000);monitorTimer.unref?.();
@@ -1288,7 +1442,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if(ws){const socket=ws;ws=null;socket.close();}
     for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(Error('BROWSER_MODE_DISPOSED'));}pending.clear();
   }
-  return { launch, stop, isOpen, start, dispose, findBrowser, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
+  return { launch, stop, isOpen, start, dispose, findBrowser, ensureProfileDeviceId, rotateProfileDeviceId, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
 }
 
 module.exports = { createBrowserMode, findBrowser, HEALTH_JS, extractPelicanStorageFromLevelDb, mergeAuthConfigString };

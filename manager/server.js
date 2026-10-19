@@ -5539,8 +5539,42 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
+        const assignedDeviceId = typeof browserMode.ensureProfileDeviceId === "function"
+          ? browserMode.ensureProfileDeviceId(p.id)
+          : null;
+
+        if (alive && p.debugPort && assignedDeviceId && !browserMode.isOpen(p.id)) {
+          if (!windowStates[p.id]) windowStates[p.id] = {};
+          if (windowStates[p.id].syncedDeviceId !== assignedDeviceId) {
+            windowStates[p.id].syncedDeviceId = assignedDeviceId;
+            evalProfilePort(p.debugPort, `(() => {
+              window.__pmDeviceId = ${JSON.stringify(assignedDeviceId)};
+              try { if (window.localStorage) window.localStorage.setItem('aetheria.device', window.__pmDeviceId); } catch (_) {}
+              if (!window.__pmEnterWorldDeviceHookInstalled && typeof window.fetch === 'function') {
+                window.__pmEnterWorldDeviceHookInstalled = true;
+                const __origFetch = window.fetch;
+                window.fetch = function(input, init) {
+                  try {
+                    const urlStr = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : '');
+                    if (window.__pmDeviceId && init && typeof init.body === 'string' && (urlStr === '/world/enter' || urlStr.endsWith('/world/enter'))) {
+                      const parsed = JSON.parse(init.body);
+                      if (parsed && typeof parsed === 'object') {
+                        parsed.deviceId = window.__pmDeviceId;
+                        init = Object.assign({}, init, { body: JSON.stringify(parsed) });
+                      }
+                    }
+                  } catch (_) {}
+                  return __origFetch.call(this, input, init);
+                };
+              }
+              return { success: true, deviceId: window.__pmDeviceId };
+            })()`, 2500).catch(() => {});
+          }
+        }
+
         return {
           ...p,
+          deviceId: assignedDeviceId,
           hasLoginPassword: !!credentials.getPassword(p.id),
           isRunning: alive,
           pid: alive ? (proc ? proc.pid : null) : null,
@@ -5682,6 +5716,32 @@ const server = http.createServer(async (req, res) => {
     const id = pathname.split("/")[3];
     resetBandwidthTracker(id);
     return sendJSON({ success: true });
+  }
+
+  // POST /api/profiles/:id/rotate-device-id
+  if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/rotate-device-id$/)) {
+    const id = pathname.split("/")[3];
+    const profiles = loadProfiles();
+    const profile = profiles.find(p => p.id === id);
+    if (!profile) return sendJSON({ success: false, error: "Profile not found" }, 404);
+    const newDeviceId = typeof browserMode.rotateProfileDeviceId === "function"
+      ? await browserMode.rotateProfileDeviceId(id)
+      : null;
+    if (windowStates[id]) delete windowStates[id].syncedDeviceId;
+    return sendJSON({ success: true, profileId: id, deviceId: newDeviceId });
+  }
+
+  // POST /api/profiles/rotate-all-device-ids
+  if (req.method === "POST" && pathname === "/api/profiles/rotate-all-device-ids") {
+    const profiles = loadProfiles();
+    const rotated = {};
+    for (const p of profiles) {
+      if (p && p.id && typeof browserMode.rotateProfileDeviceId === "function") {
+        rotated[p.id] = await browserMode.rotateProfileDeviceId(p.id);
+        if (windowStates[p.id]) delete windowStates[p.id].syncedDeviceId;
+      }
+    }
+    return sendJSON({ success: true, count: Object.keys(rotated).length, deviceIds: rotated });
   }
 
   // GET /api/portrait?src=/art/classes/hunter-face.webp — cached character portrait

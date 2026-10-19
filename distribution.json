@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "fda51978e56840905cb6318976c944b9ec22872d",
+  "sourceCommit": "58b4416a2058bd09ef1a047222a722add0552c93",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "43966e876f0ce97e3df8815c2d10a8be670588a1c5fcf681c0025d2b6f476fcb"
+      "sha256": "95371c5f47f9a70dfa2c0e7bf05767752392700cf26653dc4f9f348b325204d3"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -240,7 +240,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "2930859280c3945fd34d9c41cb53b7d9baa0db052690555ce1b88effd124170c"
+      "sha256": "b40beafc2562c5491e3c20e7a12aef01b48027a7fd6a15e41d070389b25706cb"
     },
     {
       "path": "manager/test_isolation.js",

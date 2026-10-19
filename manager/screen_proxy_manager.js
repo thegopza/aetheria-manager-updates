@@ -154,6 +154,7 @@ function connectViaHttpProxy({ proxyHost, proxyPort, proxyUser, proxyPass, targe
       clearTimeout(timer);
       socket.setTimeout(0);
       socket.setNoDelay(true);
+      try { socket.setKeepAlive(true, 15000); } catch (_) {}
       resolve({ socket, head });
     });
     req.on('timeout', () => fail(new Error('UPSTREAM_PROXY_TIMEOUT')));
@@ -196,6 +197,7 @@ function connectViaSocks5Proxy({ proxyHost, proxyPort, proxyUser, proxyPass, tar
 
     socket.once('connect', () => {
       socket.setNoDelay(true);
+      try { socket.setKeepAlive(true, 15000); } catch (_) {}
       if (hasAuth) {
         socket.write(Buffer.from([0x05, 0x02, 0x00, 0x02]));
       } else {
@@ -260,27 +262,40 @@ function connectViaSocks5Proxy({ proxyHost, proxyPort, proxyUser, proxyPass, tar
   });
 }
 
-function connectUpstream({ lease, targetHost, targetPort, timeoutMs = 12000 }) {
-  if (lease.scheme === 'socks5') {
-    return connectViaSocks5Proxy({
-      proxyHost: lease.proxyHost,
-      proxyPort: lease.proxyPort,
-      proxyUser: lease.proxyUser,
-      proxyPass: lease.proxyPass,
-      targetHost,
-      targetPort,
-      timeoutMs
-    });
+async function connectUpstream({ lease, targetHost, targetPort, timeoutMs = 12000, maxAttempts = 3 }) {
+  const attempts = Math.max(1, Number(maxAttempts) || 1);
+  const perAttemptTimeout = attempts > 1 ? Math.max(3500, Math.min(timeoutMs, 5500)) : timeoutMs;
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      if (lease.scheme === 'socks5') {
+        return await connectViaSocks5Proxy({
+          proxyHost: lease.proxyHost,
+          proxyPort: lease.proxyPort,
+          proxyUser: lease.proxyUser,
+          proxyPass: lease.proxyPass,
+          targetHost,
+          targetPort,
+          timeoutMs: perAttemptTimeout
+        });
+      }
+      return await connectViaHttpProxy({
+        proxyHost: lease.proxyHost,
+        proxyPort: lease.proxyPort,
+        proxyUser: lease.proxyUser,
+        proxyPass: lease.proxyPass,
+        targetHost,
+        targetPort,
+        timeoutMs: perAttemptTimeout
+      });
+    } catch (err) {
+      lastErr = err;
+      if (i + 1 < attempts) {
+        await new Promise(r => setTimeout(r, 250 * (i + 1)));
+      }
+    }
   }
-  return connectViaHttpProxy({
-    proxyHost: lease.proxyHost,
-    proxyPort: lease.proxyPort,
-    proxyUser: lease.proxyUser,
-    proxyPass: lease.proxyPass,
-    targetHost,
-    targetPort,
-    timeoutMs
-  });
+  throw lastErr || new Error('UPSTREAM_PROXY_FAILED');
 }
 
 function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: providedAssetCache, now = Date.now } = {}) {
@@ -613,10 +628,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           if (hasAnyAssigned || (!allEmpty && loadPool().proxies.length === 0)) {
             for (const l of res.leases) {
               if (l.assigned) {
-                const prev = activeLeases.get(l.profileId);
                 activeLeases.set(l.profileId, { ...l, source: 'owner-queue' });
                 stickyHistory.set(l.profileId, l.proxyId);
-                if (prev && prev.proxyId !== l.proxyId) resetProfileSockets(l.profileId);
               }
             }
             saveStickyHistory();
@@ -624,7 +637,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           }
         }
       } catch (_) {
-        // Fallback to local pool if owner-host is unreachable or route not restarted yet
+        // If owner-host has a brief hiccup, keep existing active leases alive rather than dropping to empty local pool
+        if (loadPool().proxies.length === 0) {
+          const cached = ids.map(pid => activeLeases.get(pid)).filter(Boolean);
+          if (cached.length > 0) return cached;
+        }
       }
     }
 
@@ -715,6 +732,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     server.on('connect', async (req, clientSocket, head) => {
       trackSocket(clientSocket);
       clientSocket.setNoDelay(true);
+      try { clientSocket.setKeepAlive(true, 15000); } catch (_) {}
       const [rawHost, rawPort] = String(req.url || '').split(':');
       const targetHost = (rawHost || '').trim();
       const targetPort = Number(rawPort) || 443;
@@ -743,6 +761,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         const upstream = net.connect({ host: targetHost, port: targetPort }, () => {
           if (clientSocket.destroyed) { upstream.destroy(); return; }
           upstream.setNoDelay(true);
+          try { upstream.setKeepAlive(true, 15000); } catch (_) {}
           clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
           if (head && head.length) {
             recordTraffic(profileId, 0, head.length, false);
@@ -759,13 +778,14 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         return;
       }
 
-      // Connect through assigned upstream proxy (1 IP : 3 screens)
+      // Connect through assigned upstream proxy (1 IP : 3 screens) with automatic fast retries
       try {
         const { socket: upstream, head: upstreamHead } = await connectUpstream({
           lease,
           targetHost,
           targetPort,
-          timeoutMs: 12000
+          timeoutMs: 12000,
+          maxAttempts: 3
         });
         if (clientSocket.destroyed) {
           upstream.destroy();
@@ -788,9 +808,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         upstream.on('error', () => clientSocket.destroy());
         clientSocket.on('error', () => upstream.destroy());
       } catch (err) {
-        try {
-          clientSocket.write('HTTP/1.1 502 Bad Gateway\r\n\r\n');
-        } catch (_) {}
+        // Do NOT send HTTP/1.1 502 Bad Gateway on CONNECT, because Chromium caches 502 proxy responses
+        // in BadProxyList for 10-20s and blocks subsequent page refreshes with ERR_TUNNEL_CONNECTION_FAILED.
         clientSocket.destroy();
       }
     });

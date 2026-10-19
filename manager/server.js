@@ -3958,13 +3958,21 @@ const isBrowserMode = () => {
 async function syncScreenProxyForOpenProfiles() {
   if (!screenProxy.isEnabled()) return [];
   const profiles = loadProfiles() || [];
-  const results = [];
+  const openProfiles = [];
   for (const p of profiles) {
     const isOpen = browserMode.isOpen(p.id) || (runningProcesses[p.id] && isProcessAlive(runningProcesses[p.id].pid)) || (p.debugPort && await portAnswers(p.debugPort));
-    if (!isOpen) continue;
+    if (isOpen) openProfiles.push(p);
+  }
+  if (openProfiles.length === 0) return [];
+  try {
+    await screenProxy.acquireLeasesForProfiles(openProfiles.map(p => p.id));
+  } catch (_) {}
+  const results = [];
+  for (const p of openProfiles) {
     try {
-      const t = await screenProxy.acquireForProfile(p.id, { debugPort: p.debugPort });
-      results.push({ profileId: p.id, name: p.name, lease: t?.lease || null, proxyServerUrl: t?.proxyServerUrl || null });
+      const tunnel = await screenProxy.ensureProfileTunnel(p.id, p.debugPort);
+      const lease = screenProxy.getProfileLeaseSnapshot(p.id);
+      results.push({ profileId: p.id, name: p.name, lease, proxyServerUrl: tunnel?.proxyUrl || null });
     } catch (e) {
       results.push({ profileId: p.id, name: p.name, error: e.message });
     }

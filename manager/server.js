@@ -610,13 +610,34 @@ function recoverProfilesFromLocalEvidence() {
       for (const entry of fs.readdirSync(SESSIONS_DIR, { withFileTypes: true })) {
         if (!entry.isDirectory() || !entry.name.startsWith("profile_")) continue;
         const id = entry.name;
+        const ldbDir = path.join(SESSIONS_DIR, id, "Local Storage", "leveldb");
         const hasLevelDb = fs.existsSync(path.join(SESSIONS_DIR, id, "Local Storage"));
+        let p = null;
         if (id !== "profile_1" && id !== "profile_2") {
-          const p = ensure(id);
+          p = ensure(id);
           if (p) p.hasRealEvidence = true;
         } else if (hasLevelDb) {
-          const p = ensure(id);
+          p = ensure(id);
           if (p) p.hasRealEvidence = true;
+        }
+        if (p && fs.existsSync(ldbDir)) {
+          try {
+            let foundCred = null;
+            for (const f of fs.readdirSync(ldbDir)) {
+              if (!f.endsWith(".ldb") && !f.endsWith(".log")) continue;
+              const str = fs.readFileSync(path.join(ldbDir, f)).toString("latin1");
+              const re = /username\x22:\x22([a-zA-Z0-9_.-]{3,32})\x22,\x22password\x22:\x22([^\x22\x00-\x1f]{3,64})\x22/g;
+              let m;
+              while ((m = re.exec(str)) !== null) {
+                foundCred = { username: m[1], password: m[2] };
+              }
+            }
+            if (foundCred) {
+              if (!p.account) p.account = foundCred.username;
+              if (!credentials.getPassword(id)) credentials.setPassword(id, foundCred.password);
+              p.hasRealEvidence = true;
+            }
+          } catch (_) {}
         }
       }
     }
@@ -4462,12 +4483,153 @@ async function restoreProfilesFromCentral() {
   }
 }
 
+function importEvidenceFromOtherManagerDirsOnDisk() {
+  try {
+    const home = os.homedir();
+    const currentMgrDir = path.resolve(__dirname).toLowerCase();
+    const currentRootDir = path.resolve(__dirname, "..").toLowerCase();
+    const searchRoots = new Set([
+      path.resolve(__dirname, ".."),
+      path.resolve(__dirname, "../.."),
+      path.resolve(__dirname, "../../.."),
+      path.join(home, "Desktop"),
+      path.join(home, "Downloads"),
+      path.join(home, "Documents"),
+      path.join(home, "OneDrive", "Desktop"),
+      path.join(home, "OneDrive", "Documents"),
+      path.join(home, "AppData", "Local", "Temp"),
+      "C:\\",
+      "D:\\",
+      "E:\\"
+    ]);
+    const candidateMgrDirs = [];
+    const seenDirs = new Set();
+    const checkDir = (dir, depth = 0) => {
+      if (!dir || depth > 2) return;
+      let norm;
+      try { norm = path.resolve(dir).toLowerCase(); } catch (_) { return; }
+      if (seenDirs.has(norm)) return;
+      seenDirs.add(norm);
+      if (!fs.existsSync(dir)) return;
+      try {
+        const hasServerJs = fs.existsSync(path.join(dir, "server.js"));
+        const hasSubMgr = fs.existsSync(path.join(dir, "manager", "server.js"));
+        if (hasServerJs && norm !== currentMgrDir) {
+          candidateMgrDirs.push(dir);
+        }
+        if (hasSubMgr && path.resolve(dir, "manager").toLowerCase() !== currentMgrDir) {
+          candidateMgrDirs.push(path.join(dir, "manager"));
+        }
+        if (depth < 2) {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const e of entries) {
+            if (!e.isDirectory()) continue;
+            if (/^(windows|program files|program files \(x86\)|programdata|\$recycle\.bin|system volume information|node_modules|\.git|appdata)$/i.test(e.name)) continue;
+            if (depth === 0 || /pelican|pmhee|aetheria|bot|manager|release|rar\$|7z/i.test(e.name)) {
+              checkDir(path.join(dir, e.name), depth + 1);
+            }
+          }
+        }
+      } catch (_) {}
+    };
+    for (const r of searchRoots) checkDir(r, 0);
+
+    for (const mgrDir of candidateMgrDirs) {
+      try {
+        const otherRoot = path.resolve(mgrDir, "..");
+        // 1. Copy credentials.json entries if missing locally
+        const otherCredsFile = path.join(mgrDir, "data", "credentials.json");
+        if (fs.existsSync(otherCredsFile)) {
+          try {
+            const raw = JSON.parse(fs.readFileSync(otherCredsFile, "utf8"));
+            if (raw && typeof raw === "object") {
+              for (const [pid, val] of Object.entries(raw)) {
+                if (!pid.startsWith("profile_") || credentials.getPassword(pid)) continue;
+                const pw = typeof val === "string" ? val : (val && val.password ? String(val.password) : "");
+                if (pw) credentials.setPassword(pid, pw);
+              }
+            }
+          } catch (_) {}
+        }
+        // 2. Copy _browser_storage/*.json if missing locally
+        for (const sessBase of [path.join(otherRoot, "sessions"), path.join(mgrDir, "sessions")]) {
+          const otherBs = path.join(sessBase, "_browser_storage");
+          if (fs.existsSync(otherBs)) {
+            const localBs = path.join(SESSIONS_DIR, "_browser_storage");
+            fs.mkdirSync(localBs, { recursive: true });
+            for (const f of fs.readdirSync(otherBs)) {
+              if (!f.endsWith(".json")) continue;
+              const src = path.join(otherBs, f);
+              const dst = path.join(localBs, f);
+              if (!fs.existsSync(dst)) {
+                try { fs.copyFileSync(src, dst); } catch (_) {}
+              }
+            }
+          }
+          // 3. Copy _browser/Default/Local Storage/leveldb if missing or richer than local
+          const otherLdb = path.join(sessBase, "_browser", "Default", "Local Storage", "leveldb");
+          const localLdb = path.join(SESSIONS_DIR, "_browser", "Default", "Local Storage", "leveldb");
+          if (fs.existsSync(otherLdb)) {
+            const sumBytes = d => {
+              if (!fs.existsSync(d)) return 0;
+              try {
+                return fs.readdirSync(d).reduce((s, f) => {
+                  try { return s + fs.statSync(path.join(d, f)).size; } catch (_) { return s; }
+                }, 0);
+              } catch (_) { return 0; }
+            };
+            if (sumBytes(otherLdb) > sumBytes(localLdb)) {
+              fs.mkdirSync(localLdb, { recursive: true });
+              for (const f of fs.readdirSync(otherLdb)) {
+                if (f === "LOCK") continue;
+                try { fs.copyFileSync(path.join(otherLdb, f), path.join(localLdb, f)); } catch (_) {}
+              }
+            }
+          }
+          // 3b. Copy Electron sessions/profile_*/Local Storage/leveldb if missing locally
+          if (fs.existsSync(sessBase)) {
+            for (const entry of fs.readdirSync(sessBase, { withFileTypes: true })) {
+              if (!entry.isDirectory() || !entry.name.startsWith("profile_")) continue;
+              const srcP = path.join(sessBase, entry.name, "Local Storage", "leveldb");
+              const dstP = path.join(SESSIONS_DIR, entry.name, "Local Storage", "leveldb");
+              if (fs.existsSync(srcP) && !fs.existsSync(dstP)) {
+                fs.mkdirSync(dstP, { recursive: true });
+                for (const f of fs.readdirSync(srcP)) {
+                  if (f === "LOCK") continue;
+                  try { fs.copyFileSync(path.join(srcP, f), path.join(dstP, f)); } catch (_) {}
+                }
+              }
+            }
+          }
+        }
+        // 4. Check profiles.backup.json or profiles.json in other folder
+        for (const pf of [path.join(mgrDir, "data", "profiles.backup.json"), path.join(mgrDir, "profiles.json")]) {
+          if (!fs.existsSync(pf)) continue;
+          try {
+            const arr = JSON.parse(fs.readFileSync(pf, "utf8"));
+            if (Array.isArray(arr) && arr.length > 0 && !isUntouchedDefaultMockProfiles(arr)) {
+              const cur = loadProfiles() || [];
+              if (isUntouchedDefaultMockProfiles(cur)) {
+                saveProfiles(arr);
+              }
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
 async function recoverAndEnrichProfilesFromBrowserAndLocal() {
   try {
+    let current = loadProfiles() || [];
+    if (isUntouchedDefaultMockProfiles(current)) {
+      importEvidenceFromOtherManagerDirsOnDisk();
+      current = loadProfiles() || [];
+    }
     if (typeof browserMode?.harvestAllFromBrowserLevelDb === "function") {
       await browserMode.harvestAllFromBrowserLevelDb().catch(() => {});
     }
-    let current = loadProfiles() || [];
     if (isUntouchedDefaultMockProfiles(current)) {
       const localRec = recoverProfilesFromLocalEvidence();
       if (localRec && localRec.length > 0) {
@@ -4520,8 +4682,13 @@ if (!TEST_INSTANCE) {
   setTimeout(() => {
     recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
   }, 5000);
-  setInterval(() => {
-    syncProfileBackupToCentral().catch(() => {});
+  setInterval(async () => {
+    const cur = loadProfiles() || [];
+    if (isUntouchedDefaultMockProfiles(cur)) {
+      await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
+    } else {
+      await syncProfileBackupToCentral().catch(() => {});
+    }
   }, 120000);
 }
 

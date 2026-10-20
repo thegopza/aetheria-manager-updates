@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "f5efa3bf5ac494f92b6f3afb8a5aadf268f16e55",
+  "sourceCommit": "e6998e380d997418356bb252e95b58a9eb5fcade",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "8fd8cd5d706d8ba30a56ae4a8ebb5834c7c07e5c12708897c142f57faeb9edf8"
+      "sha256": "8118657a5ba2d57b0006c1ab06e5ba27f97ff283c8cd59ac672a630a9ac28fbc"
     },
     {
       "path": "manager/captcha_stats.js",

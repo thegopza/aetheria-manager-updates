@@ -213,6 +213,9 @@
             <button id="btn-export-profile-global" class="btn btn-ghost btn-sm" title="ส่งออกโปรไฟล์ทั้งหมด (Export All Profiles)">
               <span class="icon">📤</span> Export
             </button>
+            <button id="btn-export-credentials-txt" class="btn btn-ghost btn-sm" title="ดาวน์โหลดรายการ ID / Password ของทุกโปรไฟล์เก็บเป็นไฟล์ .txt" style="border: 1px solid rgba(52, 211, 153, 0.45); background: rgba(16, 185, 129, 0.12); color: #6ee7b7; font-weight: 700;">
+              <span class="icon">🔑</span> Export รหัส (.txt)
+            </button>
           </div>
         </div>
       </div>
@@ -856,10 +859,10 @@
 
         <div class="form-group">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <label style="margin: 0;">โค้ด JSON การตั้งค่า (วาง JSON ที่นี่):</label>
+            <label style="margin: 0;">โค้ด JSON หรือไฟล์รหัส .txt (วางที่นี่):</label>
             <label class="btn btn-secondary btn-sm" style="padding: 2px 8px; font-size: 10px; cursor: pointer;">
-              📂 เลือกไฟล์ .json
-              <input type="file" id="import-file-input" accept=".json,application/json" style="display: none;">
+              📂 เลือกไฟล์ .json / .txt
+              <input type="file" id="import-file-input" accept=".json,.txt,application/json,text/plain" style="display: none;">
             </label>
           </div>
           <textarea id="import-json-textarea" required placeholder="วางโค้ด JSON จากการ Export ที่นี่ (รองรับทั้ง Object เดี่ยว หรือ Array หลายโปรไฟล์)..." style="width: 100%; height: 200px; box-sizing: border-box; background: #0f172a; border: 1px solid #475569; border-radius: 6px; color: #38bdf8; font-family: 'JetBrains Mono', 'Consolas', monospace; font-size: 11px; padding: 10px; resize: vertical; line-height: 1.4; outline: none;"></textarea>
@@ -1142,7 +1145,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4381"></script>
-  <script src="app.js?v=44302"></script>
+  <script src="app.js?v=44303"></script>
   <script src="patcher_module.js?v=41744"></script>
   <script src="builder_module.js?v=44009"></script>
   <script src="gear_builder.js?v=42900"></script>

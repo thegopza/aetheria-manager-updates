@@ -20,15 +20,46 @@ const genPassword = () => pick('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxy
 const READ_JS = `(() => {
   const c = window.__authConfig;
   if (!c || typeof window.executeAutoLogin !== 'function') return null;
-  return { username: c.username || '', password: c.password || '', enabled: !!c.enabled, register: !!c.register, registerDone: !!c.registerDone, registerError: c.registerError || '' };
+  const inGame = Boolean(
+    document.querySelector('.char-card:not(.empty)') ||
+    (typeof window.getCurrentMapName === 'function' && window.getCurrentMapName() && window.getCurrentMapName() !== 'ไม่ทราบ') ||
+    window.__charName
+  );
+  let charName = '';
+  try {
+    const live = typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null;
+    charName = String((live && (live.name || live.characterName)) || window.__charName || '').trim();
+  } catch (_) {}
+  return {
+    username: c.username || '',
+    password: c.password || '',
+    enabled: !!c.enabled,
+    register: !!c.register,
+    registerDone: !!c.registerDone,
+    registerError: c.registerError || '',
+    generatedUser: !!c.generatedUser,
+    userEditedAt: Number(c.userEditedAt) || 0,
+    verifiedLoginAt: Number(c.verifiedLoginAt) || 0,
+    userToggledAt: Number(c.userToggledAt) || 0,
+    inGame,
+    charName
+  };
 })()`;
 
 const pushJs = cfg => `(() => {
   const c = window.__authConfig || (window.__authConfig = {});
-  Object.assign(c, ${JSON.stringify(cfg)});
+  const patch = ${JSON.stringify(cfg)};
+  if (patch.preserveUserToggle && c.userToggledAt && typeof c.enabled === 'boolean') {
+    delete patch.enabled;
+  }
+  delete patch.preserveUserToggle;
+  Object.assign(c, patch);
+  c.lastManagerPushAt = Date.now();
   try { localStorage.setItem('pelican_auth_cfg', JSON.stringify(c)); } catch (e) {}
   const set = (id, v) => { const el = document.getElementById(id); if (el && document.activeElement !== el) { if (el.type === 'checkbox') el.checked = !!v; else el.value = v; } };
-  set('p-auth-enabled', c.enabled); set('p-auth-user', c.username || ''); set('p-auth-pass', c.password || '');
+  if (c.enabled !== undefined) set('p-auth-enabled', c.enabled);
+  set('p-auth-user', c.username || '');
+  set('p-auth-pass', c.password || '');
   return { success: true };
 })()`;
 
@@ -77,7 +108,8 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
       registeredAt: Date.now(),
       proxyRegistrationState: 'done',
       registerError: '',
-      loginSyncPending: true
+      loginSyncPending: true,
+      lastAuthSyncPushAt: Date.now()
     });
     pendingCreds.delete(profile.id);
     return updated || profile;
@@ -101,7 +133,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
           if (!delivered?.success || delivered.result?.success !== true) {
             updateProfile(profile.id, { registerError: 'สมัครสำเร็จแล้ว แต่ยังส่งค่าล็อกอินเข้าจอไม่ได้ รอซิงค์อีกครั้ง' });
           } else {
-            updateProfile(profile.id, { loginSyncPending: false });
+            updateProfile(profile.id, { loginSyncPending: false, lastAuthSyncPushAt: Date.now() });
           }
         }
         console.log(`[AuthSync] ✅ ${profile.name}: สมัครบัญชีผ่าน Proxy สำเร็จ ("${cred.username}")${clientOnline ? ' -> ส่งคำสั่งล็อกอินเข้าเกม' : ' -> รอส่งค่าล็อกอินเมื่อเปิดจอ'}`);
@@ -153,14 +185,63 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     const r = profile.debugPort ? await evalProfilePort(profile.debugPort, READ_JS, 2500) : null;
     const cur = r && r.success ? r.result : null;
     if (!cur) {
-      // Allow Proxy registration to proceed even before the game client window is online
-      if (profile.autoRegister && (proxyRegister?.hasPending?.(profile.id) || proxyAvailable)) {
+      // Allow Proxy registration to proceed even before the game client window is online,
+      // ONLY if this profile does not already have a character!
+      if (profile.autoRegister && !profile.lastCharName && (proxyRegister?.hasPending?.(profile.id) || proxyAvailable)) {
         await syncProxyRegistration(profile, { clientOnline: false });
       }
       return;
     }
 
+    // 1. If the user manually edited ID/Password in the in-game Bot HUD or logged in manually on the game screen,
+    // adopt the user's credentials into the Manager profile instead of overwriting them with a bot account!
+    const clientEditStamp = Math.max(Number(cur.userEditedAt) || 0, Number(cur.verifiedLoginAt) || 0);
+    const lastManagerPushAt = Number(profile.lastAuthSyncPushAt) || 0;
+    if (cur.username && cur.password && !cur.register && !cur.registerError && clientEditStamp > lastManagerPushAt) {
+      if (cur.username !== profile.account || cur.password !== pw(profile) || profile.autoRegister) {
+        credentials.setPassword(profile.id, cur.password);
+        updateProfile(profile.id, {
+          account: cur.username,
+          autoRegister: false,
+          generatedAccount: !!cur.generatedUser,
+          registerError: '',
+          loginSyncPending: false,
+          lastAuthSyncPushAt: Date.now(),
+          ...(cur.charName && !profile.lastCharName ? { lastCharName: cur.charName } : {})
+        });
+        pendingCreds.delete(profile.id);
+        console.log(`[AuthSync] 🔄 ${profile.name}: ซิงค์ไอดี/รหัสที่ผู้ใช้ใช้งานในเกม ("${cur.username}") เข้าโปรไฟล์ Manager อัตโนมัติ`);
+      } else {
+        updateProfile(profile.id, { lastAuthSyncPushAt: Date.now() });
+      }
+      return;
+    }
+
     if (profile.autoRegister) {
+      // NEVER auto-register over a profile that already has a character or manual credentials in HUD!
+      if (cur.username && cur.password && !cur.register && !cur.registerError && !cur.generatedUser) {
+        credentials.setPassword(profile.id, cur.password);
+        updateProfile(profile.id, {
+          account: cur.username,
+          autoRegister: false,
+          generatedAccount: false,
+          registerError: '',
+          loginSyncPending: false,
+          lastAuthSyncPushAt: Date.now()
+        });
+        pendingCreds.delete(profile.id);
+        console.log(`[AuthSync] 🔄 ${profile.name}: พบไอดี/รหัสเดิมในหน้าเกม ("${cur.username}") -> บันทึกเข้าโปรไฟล์โดยไม่สร้างไอดีบอททับ`);
+        return;
+      }
+      if (profile.lastCharName || ((cur.inGame || cur.charName) && !cur.registerDone)) {
+        updateProfile(profile.id, {
+          autoRegister: false,
+          ...(cur.charName && !profile.lastCharName ? { lastCharName: cur.charName } : {})
+        });
+        pendingCreds.delete(profile.id);
+        console.log(`[AuthSync] 🛡️ ${profile.name}: พบตัวละครในเกมแล้ว ("${profile.lastCharName || cur.charName || 'in-game'}") -> ปิด Auto-Register เพื่อไม่ให้เปลี่ยนรหัสทับ`);
+        return;
+      }
       if (proxyRegister?.hasPending?.(profile.id)) {
         await syncProxyRegistration(profile, { clientOnline: true });
         return;
@@ -193,16 +274,23 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
         enabled: true, autoResumeBot: true, username: cred.username, password: cred.password,
         register: true, registerDone: false, autoCreateChar: true, generatedUser: !!cred.generatedUser
       }), 3000);
+      updateProfile(profile.id, { lastAuthSyncPushAt: Date.now() });
       console.log(`[AuthSync] 📝 ${profile.name}: ส่งคำสั่งสมัครบัญชี "${cred.username}" ไปที่จอ`);
       return;
     }
 
     if (profile.loginSyncPending || cur.username !== profile.account || cur.password !== pw(profile)) {
       const delivered = await evalProfilePort(profile.debugPort, pushJs({
-        enabled: true, username: profile.account, password: pw(profile), register: false,
+        enabled: true,
+        preserveUserToggle: !profile.loginSyncPending,
+        username: profile.account,
+        password: pw(profile),
+        register: false,
         ...(profile.loginSyncPending ? { registerDone: true, autoCreateChar: true, autoResumeBot: true } : {})
       }), 3000);
-      if (delivered?.success && delivered.result?.success === true) updateProfile(profile.id, { loginSyncPending: false, registerError: '' });
+      if (delivered?.success && delivered.result?.success === true) {
+        updateProfile(profile.id, { loginSyncPending: false, registerError: '', lastAuthSyncPushAt: Date.now() });
+      }
     }
   }
 

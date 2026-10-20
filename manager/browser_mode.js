@@ -59,6 +59,14 @@ function getText(url, timeout = 8000) {
   });
 }
 
+function isUnverifiedCandidateAuth(cfg) {
+  if (!cfg || typeof cfg !== 'object') return false;
+  if (cfg.register === true) return true;
+  if (cfg.registerError && String(cfg.registerError).trim() && !cfg.registerDone && !cfg.verifiedLoginAt && !cfg.userEditedAt) return true;
+  if (cfg.generatedUser && !cfg.registerDone && !cfg.verifiedLoginAt && !cfg.userEditedAt) return true;
+  return false;
+}
+
 function mergeAuthConfigString(existingRaw, incomingRaw) {
   if (!existingRaw) return incomingRaw;
   if (!incomingRaw) return existingRaw;
@@ -67,6 +75,22 @@ function mergeAuthConfigString(existingRaw, incomingRaw) {
     const b = JSON.parse(incomingRaw);
     if (!a || typeof a !== 'object') return incomingRaw;
     if (!b || typeof b !== 'object') return existingRaw;
+    const aHasCreds = Boolean(a.username && String(a.username).trim() && a.password && String(a.password).trim());
+    const bHasCreds = Boolean(b.username && String(b.username).trim() && b.password && String(b.password).trim());
+    const aUnverified = isUnverifiedCandidateAuth(a);
+    const bUnverified = isUnverifiedCandidateAuth(b);
+    if (aHasCreds && !aUnverified && bUnverified) {
+      const keep = { ...b, ...a };
+      if (!keep.charName && b.charName) keep.charName = b.charName;
+      return JSON.stringify(keep);
+    }
+    const aStamp = Math.max(Number(a.userEditedAt) || 0, Number(a.verifiedLoginAt) || 0);
+    const bStamp = Math.max(Number(b.userEditedAt) || 0, Number(b.verifiedLoginAt) || 0);
+    if (aHasCreds && aStamp > 0 && bHasCreds && bStamp < aStamp && (b.generatedUser || Number(b.lastManagerPushAt) > 0)) {
+      const keep = { ...b, ...a };
+      if (!keep.charName && b.charName) keep.charName = b.charName;
+      return JSON.stringify(keep);
+    }
     const out = { ...a, ...b };
     if (a.username && String(a.username).trim() && !(b.username && String(b.username).trim())) {
       out.username = a.username;
@@ -164,8 +188,42 @@ function decodeLevelDbKeyAndVal(rawKey, rawVal, isWal) {
 function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) {
   const byProfile = {};
   const unprefixed = {};
+  const authHistoryByProfile = {};
+  const unprefixedAuthHistory = [];
   let totalKeys = 0;
-  if (!levelDbDir || !fs.existsSync(levelDbDir)) return { byProfile, unprefixed, totalKeys };
+  if (!levelDbDir || !fs.existsSync(levelDbDir)) return { byProfile, unprefixed, authHistoryByProfile, unprefixedAuthHistory, totalKeys };
+  const recordAuthHistory = (pid, vStr) => {
+    try {
+      const parsed = JSON.parse(vStr);
+      if (!parsed || typeof parsed !== 'object') return;
+      const username = String(parsed.username || '').trim();
+      const password = String(parsed.password || '').trim();
+      const charName = String(parsed.charName || '').trim();
+      if (!username && !password) return;
+      const item = {
+        username,
+        password,
+        charName,
+        generatedUser: Boolean(parsed.generatedUser),
+        register: Boolean(parsed.register),
+        registerDone: Boolean(parsed.registerDone),
+        registerError: String(parsed.registerError || ''),
+        verifiedLoginAt: Number(parsed.verifiedLoginAt) || 0,
+        userEditedAt: Number(parsed.userEditedAt) || 0
+      };
+      const sig = username + ':' + password;
+      if (pid) {
+        if (!authHistoryByProfile[pid]) authHistoryByProfile[pid] = [];
+        const existingIdx = authHistoryByProfile[pid].findIndex(x => (x.username + ':' + x.password) === sig);
+        if (existingIdx === -1) authHistoryByProfile[pid].push(item);
+        else authHistoryByProfile[pid][existingIdx] = { ...authHistoryByProfile[pid][existingIdx], ...item };
+      } else {
+        const existingIdx = unprefixedAuthHistory.findIndex(x => (x.username + ':' + x.password) === sig);
+        if (existingIdx === -1) unprefixedAuthHistory.push(item);
+        else unprefixedAuthHistory[existingIdx] = { ...unprefixedAuthHistory[existingIdx], ...item };
+      }
+    } catch (_) {}
+  };
   const recordEntry = (kStr, vStr) => {
     if (!kStr || typeof vStr !== 'string' || !kStr.startsWith('pelican_')) return;
     const isAuth = kStr.endsWith('__auth_cfg') || kStr === 'pelican_auth_cfg';
@@ -173,6 +231,7 @@ function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) 
     if (m && m[1]) {
       const pid = m[1];
       if (!byProfile[pid]) byProfile[pid] = {};
+      if (isAuth) recordAuthHistory(pid, vStr);
       if (isAuth && byProfile[pid][kStr]) {
         byProfile[pid][kStr] = mergeAuthConfigString(byProfile[pid][kStr], vStr);
       } else {
@@ -180,6 +239,7 @@ function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) 
       }
       totalKeys++;
     } else {
+      if (isAuth) recordAuthHistory(fallbackProfileId || null, vStr);
       if (isAuth && unprefixed[kStr]) {
         unprefixed[kStr] = mergeAuthConfigString(unprefixed[kStr], vStr);
       } else {
@@ -302,10 +362,18 @@ function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) 
             blockOffset += BLOCK_SIZE;
           }
         }
+        try {
+          const textAscii = buf.toString('utf8');
+          const re = /\{[^{}]{0,400}"username"\s*:\s*"([^"]{1,64})"[^{}]{0,400}"password"\s*:\s*"([^"]{1,64})"[^{}]{0,400}\}/g;
+          let m;
+          while ((m = re.exec(textAscii)) !== null) {
+            recordAuthHistory(fallbackProfileId || null, m[0]);
+          }
+        } catch (_) {}
       } catch (_) {}
     }
   } catch (_) {}
-  return { byProfile, unprefixed, totalKeys };
+  return { byProfile, unprefixed, authHistoryByProfile, unprefixedAuthHistory, totalKeys };
 }
 
 function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, preferLocalBot, cdpPort = DEFAULT_CDP_PORT, browserUserDataDir, gameUrl = GAME_URL, profileScriptSource, screenProxy, assetCache }) {
@@ -616,6 +684,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         window.__pmEnterWorldDeviceHookInstalled = true;
         const __origFetch = window.fetch;
         window.fetch = function(input, init) {
+          let loginCreds = null;
           try {
             const urlStr = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : '');
             if (window.__pmDeviceId && init && typeof init.body === 'string' && (urlStr === '/world/enter' || urlStr.endsWith('/world/enter'))) {
@@ -625,9 +694,73 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 init = Object.assign({}, init, { body: JSON.stringify(parsed) });
               }
             }
+            if (init && typeof init.body === 'string' && /\/auth\/(login|register|upgrade)(?:\?|$)/.test(urlStr)) {
+              const parsedAuth = JSON.parse(init.body);
+              if (parsedAuth && typeof parsedAuth.username === 'string' && typeof parsedAuth.password === 'string' && parsedAuth.username.trim() && parsedAuth.password) {
+                loginCreds = { username: parsedAuth.username.trim(), password: parsedAuth.password, isRegister: urlStr.includes('/auth/register') || urlStr.includes('/auth/upgrade') };
+              }
+            }
           } catch (_) {}
-          return __origFetch.call(this, input, init);
+          const p = __origFetch.call(this, input, init);
+          if (loginCreds && p && typeof p.then === 'function') {
+            p.then(res => {
+              if (res && res.ok) {
+                try {
+                  const now = Date.now();
+                  const cur = (window.__authConfig && typeof window.__authConfig === 'object') ? window.__authConfig : {};
+                  const isSameGen = Boolean(cur.generatedUser && cur.username === loginCreds.username);
+                  const next = Object.assign({}, cur, {
+                    username: loginCreds.username,
+                    password: loginCreds.password,
+                    generatedUser: isSameGen,
+                    register: false,
+                    registerDone: true,
+                    verifiedLoginAt: now,
+                    userEditedAt: isSameGen ? (cur.userEditedAt || 0) : now
+                  });
+                  delete next.registerError;
+                  window.__authConfig = next;
+                  if (window.localStorage) window.localStorage.setItem('pelican_auth_cfg', JSON.stringify(next));
+                  const uEl = document.getElementById('p-auth-user');
+                  const pEl = document.getElementById('p-auth-pass');
+                  if (uEl && document.activeElement !== uEl) uEl.value = next.username;
+                  if (pEl && document.activeElement !== pEl) pEl.value = next.password;
+                } catch (_) {}
+              }
+              return res;
+            }).catch(() => {});
+          }
+          return p;
         };
+      }
+      if (!window.__pmAuthInputGuardInstalled && typeof document !== 'undefined') {
+        window.__pmAuthInputGuardInstalled = true;
+        const onAuthInput = (ev) => {
+          try {
+            const t = ev && ev.target;
+            if (!t || !t.id) return;
+            if (t.id === 'p-auth-user' || t.id === 'p-auth-pass') {
+              const now = Date.now();
+              const cur = (window.__authConfig && typeof window.__authConfig === 'object') ? window.__authConfig : {};
+              if (t.id === 'p-auth-user') cur.username = String(t.value || '').trim();
+              if (t.id === 'p-auth-pass') cur.password = String(t.value || '');
+              cur.userEditedAt = now;
+              cur.generatedUser = false;
+              cur.register = false;
+              delete cur.registerError;
+              window.__authConfig = cur;
+              if (window.localStorage) window.localStorage.setItem('pelican_auth_cfg', JSON.stringify(cur));
+            } else if (t.id === 'p-auth-enabled') {
+              const cur = (window.__authConfig && typeof window.__authConfig === 'object') ? window.__authConfig : {};
+              cur.enabled = Boolean(t.checked);
+              cur.userToggledAt = Date.now();
+              window.__authConfig = cur;
+              if (window.localStorage) window.localStorage.setItem('pelican_auth_cfg', JSON.stringify(cur));
+            }
+          } catch (_) {}
+        };
+        document.addEventListener('input', onAuthInput, true);
+        document.addEventListener('change', onAuthInput, true);
       }
     } catch (_) {}`;
     const cacheFlag = Boolean(effectiveAssetCache && effectiveAssetCache.isEnabled());

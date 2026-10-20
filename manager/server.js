@@ -415,6 +415,17 @@ function recordDeletedProfileId(id) {
   } catch (_) {}
 }
 
+function isVerifiedAuthConfig(auth) {
+  if (!auth || typeof auth !== "object") return false;
+  const u = String(auth.username || "").trim();
+  const pw = String(auth.password || "").trim();
+  if (!u && !pw) return false;
+  if (auth.register === true) return false;
+  if (auth.registerError && String(auth.registerError).trim() && !auth.registerDone && !auth.verifiedLoginAt && !auth.userEditedAt) return false;
+  if (auth.generatedUser && !auth.registerDone && !auth.verifiedLoginAt && !auth.userEditedAt && !(auth.charName && String(auth.charName).trim())) return false;
+  return true;
+}
+
 function writeOrMergeProfileStorageFile(pid, incomingMap) {
   if (!pid || !incomingMap || typeof incomingMap !== "object") return false;
   try {
@@ -439,7 +450,7 @@ function writeOrMergeProfileStorageFile(pid, incomingMap) {
         }
         try {
           const auth = JSON.parse(cur[k]);
-          if (auth && auth.password && String(auth.password).trim() && !credentials.getPassword(pid)) {
+          if (isVerifiedAuthConfig(auth) && auth.password && String(auth.password).trim() && !credentials.getPassword(pid)) {
             credentials.setPassword(pid, String(auth.password).trim());
           }
         } catch (_) {}
@@ -513,7 +524,8 @@ function recoverProfilesFromLocalEvidence() {
             try {
               const auth = JSON.parse(rawAuth);
               if (auth && typeof auth === "object") {
-                if (auth.username && String(auth.username).trim()) {
+                const verified = isVerifiedAuthConfig(auth);
+                if (verified && auth.username && String(auth.username).trim()) {
                   p.account = String(auth.username).trim();
                   p.hasRealEvidence = true;
                 }
@@ -521,7 +533,7 @@ function recoverProfilesFromLocalEvidence() {
                   p.lastCharName = String(auth.charName).trim();
                   p.hasRealEvidence = true;
                 }
-                if (auth.password && String(auth.password).trim() && !credentials.getPassword(id)) {
+                if (verified && auth.password && String(auth.password).trim() && !credentials.getPassword(id)) {
                   credentials.setPassword(id, String(auth.password).trim());
                   p.hasRealEvidence = true;
                 }
@@ -4758,6 +4770,18 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
       importEvidenceFromOtherManagerDirsOnDisk();
       current = loadProfiles() || [];
     }
+    const harvestedAuthHistory = {};
+    const mergeHistoryList = (pid, list) => {
+      if (!pid || !Array.isArray(list) || list.length === 0) return;
+      if (!harvestedAuthHistory[pid]) harvestedAuthHistory[pid] = [];
+      for (const item of list) {
+        if (!item || (!item.username && !item.password)) continue;
+        const sig = (item.username || "") + ":" + (item.password || "");
+        if (!harvestedAuthHistory[pid].some(x => ((x.username || "") + ":" + (x.password || "")) === sig)) {
+          harvestedAuthHistory[pid].push(item);
+        }
+      }
+    };
     try {
       const browserLdbDir = path.join(SESSIONS_DIR, "_browser", "Default", "Local Storage", "leveldb");
       if (fs.existsSync(browserLdbDir)) {
@@ -4765,6 +4789,11 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
         if (diskHarvest && diskHarvest.byProfile) {
           for (const [pid, entries] of Object.entries(diskHarvest.byProfile)) {
             writeOrMergeProfileStorageFile(pid, entries);
+          }
+        }
+        if (diskHarvest && diskHarvest.authHistoryByProfile) {
+          for (const [pid, list] of Object.entries(diskHarvest.authHistoryByProfile)) {
+            mergeHistoryList(pid, list);
           }
         }
       }
@@ -4777,6 +4806,9 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
             const diskHarvest = extractPelicanStorageFromLevelDb(ldbDir, pid);
             if (diskHarvest && diskHarvest.byProfile && diskHarvest.byProfile[pid]) {
               writeOrMergeProfileStorageFile(pid, diskHarvest.byProfile[pid]);
+            }
+            if (diskHarvest && diskHarvest.authHistoryByProfile && diskHarvest.authHistoryByProfile[pid]) {
+              mergeHistoryList(pid, diskHarvest.authHistoryByProfile[pid]);
             }
           }
         }
@@ -4807,25 +4839,45 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
           const d = JSON.parse(fs.readFileSync(f, "utf8"));
           const pfx = `pelican_${p.id}__`;
           const rawAuth = d[`${pfx}auth_cfg`] || d["pelican_auth_cfg"];
+          if (harvestedAuthHistory[p.id] && harvestedAuthHistory[p.id].length > 0) {
+            const prevJson = JSON.stringify(p.authHistory || []);
+            const nextJson = JSON.stringify(harvestedAuthHistory[p.id]);
+            if (prevJson !== nextJson) {
+              p.authHistory = harvestedAuthHistory[p.id];
+              changed = true;
+            }
+          }
           if (rawAuth) {
             const auth = JSON.parse(rawAuth);
             if (auth && typeof auth === "object") {
-              if (auth.username && String(auth.username).trim() && !p.account) {
-                p.account = String(auth.username).trim();
-                p.loginSyncPending = true;
-                changed = true;
-                authChanged = true;
+              const verified = isVerifiedAuthConfig(auth);
+              const clientEditStamp = Math.max(Number(auth.userEditedAt) || 0, Number(auth.verifiedLoginAt) || 0);
+              const managerPushStamp = Number(auth.lastManagerPushAt) || 0;
+              const isNewerUserCred = verified && !auth.generatedUser && clientEditStamp > 0 && clientEditStamp > managerPushStamp;
+              if (verified && auth.username && String(auth.username).trim() && (!p.account || isNewerUserCred)) {
+                const nextU = String(auth.username).trim();
+                if (p.account !== nextU) {
+                  p.account = nextU;
+                  p.autoRegister = false;
+                  p.generatedAccount = Boolean(auth.generatedUser);
+                  p.loginSyncPending = true;
+                  changed = true;
+                  authChanged = true;
+                }
               }
               if (auth.charName && String(auth.charName).trim() && !p.lastCharName) {
                 p.lastCharName = String(auth.charName).trim();
                 if (/^Client \d+$/.test(p.name || "")) p.name = p.lastCharName;
                 changed = true;
               }
-              if (auth.password && String(auth.password).trim() && !credentials.getPassword(p.id)) {
-                credentials.setPassword(p.id, String(auth.password).trim());
-                p.loginSyncPending = true;
-                changed = true;
-                authChanged = true;
+              if (verified && auth.password && String(auth.password).trim() && (!credentials.getPassword(p.id) || isNewerUserCred)) {
+                const nextPw = String(auth.password).trim();
+                if (credentials.getPassword(p.id) !== nextPw) {
+                  credentials.setPassword(p.id, nextPw);
+                  p.loginSyncPending = true;
+                  changed = true;
+                  authChanged = true;
+                }
               }
             }
           }
@@ -5759,6 +5811,53 @@ const server = http.createServer(async (req, res) => {
     return fs.createReadStream(file).pipe(res);
   }
 
+  // GET /api/profiles/export-credentials-txt (Download all profiles' ID/Password as a human-readable .txt file)
+  if (req.method === "GET" && pathname === "/api/profiles/export-credentials-txt") {
+    const profiles = loadProfiles() || [];
+    const deviceName = getEffectiveDeviceNickname() || os.hostname() || "PC";
+    const nowStr = new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" });
+    const lines = [
+      "================================================================================",
+      `📋 รายการไอดีและรหัสผ่านบอท PmheeAether — เครื่อง: ${deviceName}`,
+      `📅 ส่งออกเมื่อ: ${nowStr} (ทั้งหมด ${profiles.length} โปรไฟล์)`,
+      "================================================================================",
+      "ลำดับ | ชื่อโปรไฟล์ | ตัวละคร | อาชีพ | พอร์ต | ID (Username) | Password",
+      "--------------------------------------------------------------------------------"
+    ];
+    profiles.forEach((p, idx) => {
+      if (!p || !p.id) return;
+      const num = String(idx + 1).padStart(2, "0");
+      const name = String(p.name || p.id).trim();
+      const charName = String((p.liveState && p.liveState.charName) || p.lastCharName || "-").trim();
+      const cls = String((p.liveState && p.liveState.charClass) || p.charClass || "-").trim();
+      const port = p.debugPort || "-";
+      const user = String(p.account || p.username || "").trim() || "(ยังไม่มี ID)";
+      const pass = String(credentials.getPassword(p.id) || "").trim() || "(ยังไม่มีรหัส)";
+      lines.push(`${num} | ${name} | ${charName} | ${cls} | ${port} | ${user} | ${pass}`);
+    });
+    lines.push("--------------------------------------------------------------------------------");
+    lines.push("");
+    lines.push("=== รูปแบบย่อ (ID:Password) สำหรับคัดลอกใช้งาน ===");
+    profiles.forEach((p) => {
+      if (!p || !p.id) return;
+      const user = String(p.account || p.username || "").trim();
+      const pass = String(credentials.getPassword(p.id) || "").trim();
+      const charName = String((p.liveState && p.liveState.charName) || p.lastCharName || p.name || p.id).trim();
+      if (user || pass) {
+        lines.push(`${user}:${pass}   # ${p.name || p.id} (${charName})`);
+      }
+    });
+    lines.push("");
+    const safeDev = String(deviceName).replace(/[^a-zA-Z0-9ก-๙_-]/g, "_") || "PC";
+    const dateTag = new Date().toISOString().slice(0, 10);
+    const filename = `PmheeAether_ID_Pass_${safeDev}_${dateTag}.txt`;
+    res.writeHead(200, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`
+    });
+    return res.end("\uFEFF" + lines.join("\r\n"));
+  }
+
   // 2. POST /api/profiles (Create)
   if (req.method === "POST" && pathname === "/api/profiles") {
     let body = "";
@@ -5815,11 +5914,17 @@ const server = http.createServer(async (req, res) => {
         if (idx === -1) return sendJSON({ success: false, error: "Profile not found" }, 404);
         const nextAccount = data.account !== undefined ? data.account.trim() : (profiles[idx].account || "");
         const nextPassword = (data.loginPassword || "").trim();
+        const existingPassword = credentials.getPassword(id) || "";
+        const hasExistingCharacter = Boolean(profiles[idx].lastCharName && String(profiles[idx].lastCharName).trim());
         const accountChanged = data.account !== undefined && nextAccount !== (profiles[idx].account || "");
-        const wantsNewAutoRegister = !nextPassword && (
-          data.autoRegister === true ||
-          (data.account !== undefined && nextAccount === "") ||
-          (accountChanged && nextAccount !== "")
+        const wantsNewAutoRegister = data.autoRegister === true || (
+          data.autoRegister !== false &&
+          !nextPassword &&
+          !existingPassword &&
+          !hasExistingCharacter &&
+          data.account !== undefined &&
+          nextAccount === "" &&
+          accountChanged
         );
         const changesIdentity = accountChanged || !!nextPassword || wantsNewAutoRegister;
         if (changesIdentity) await scriptCoordinator.prepareCredentialChange(profiles[idx]);

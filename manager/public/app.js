@@ -8284,11 +8284,15 @@ async function handleImportProfileSubmit(e) {
   }
 
   let parsed = null;
+  const rawInput = textarea.value.trim();
   try {
-    parsed = JSON.parse(textarea.value.trim());
+    parsed = JSON.parse(rawInput);
   } catch (err) {
-    alert('รูปแบบ JSON ไม่ถูกต้อง: ' + err.message);
-    return;
+    parsed = parseCredentialsTxtToBackup(rawInput);
+    if (!parsed) {
+      alert('รูปแบบ JSON หรือไฟล์รหัส .txt ไม่ถูกต้อง: ' + err.message);
+      return;
+    }
   }
 
   const presetName = nameInput && nameInput.value.trim() ? nameInput.value.trim() : 'โปรไฟล์นำเข้าส่วนกลาง';
@@ -8432,6 +8436,52 @@ function exportAllPresets() {
   window.location.href = `${API_BASE}/api/presets/export`;
 }
 
+function exportCredentialsTxt() {
+  window.location.href = `${API_BASE}/api/profiles/export-credentials-txt`;
+}
+
+function parseCredentialsTxtToBackup(rawText) {
+  if (!rawText || typeof rawText !== 'string') return null;
+  const lines = rawText.replace(/^\uFEFF/, '').split(/\r?\n/);
+  const profiles = [];
+  const existingList = Array.isArray(currentProfiles) ? currentProfiles : [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (!t || t.startsWith('=') || t.startsWith('-') || t.startsWith('📋') || t.startsWith('📅') || t.startsWith('ลำดับ')) continue;
+    const parts = t.split('|').map(s => s.trim());
+    if (parts.length >= 7 && /^\d+$/.test(parts[0])) {
+      const [, profName, charName, charClass, portStr, userRaw, passRaw] = parts;
+      const username = userRaw === '(ยังไม่มี ID)' ? '' : userRaw;
+      const password = passRaw === '(ยังไม่มีรหัส)' ? '' : passRaw;
+      const port = parseInt(portStr, 10) || 0;
+      const match = existingList.find(p => p && ((port && Number(p.debugPort) === port) || p.name === profName || (charName !== '-' && p.lastCharName === charName)));
+      const id = match ? match.id : `profile_txt_${port || (profiles.length + 1)}`;
+      profiles.push({
+        id,
+        name: profName || id,
+        characterName: charName !== '-' ? charName : '',
+        username,
+        account: username,
+        password,
+        profile: {
+          ...(match || {}),
+          id,
+          name: profName || id,
+          account: username,
+          lastCharName: charName !== '-' ? charName : (match?.lastCharName || ''),
+          charClass: charClass !== '-' ? charClass : (match?.charClass || 'Archer'),
+          ...(port ? { debugPort: port } : {})
+        }
+      });
+    }
+  }
+  if (profiles.length === 0) return null;
+  return {
+    format: 'pmhee-aetheria-profile-backup-v1',
+    profiles
+  };
+}
+
 function exportSinglePreset(presetId) {
   const preset = currentPresets.find(p => p.id === presetId);
   if (!preset) return;
@@ -8480,6 +8530,9 @@ function setupPresetsEventListeners() {
 
   const btnExportGlobal = document.getElementById('btn-export-profile-global');
   if (btnExportGlobal) btnExportGlobal.onclick = exportAllPresets;
+
+  const btnExportCredsTxt = document.getElementById('btn-export-credentials-txt');
+  if (btnExportCredsTxt) btnExportCredsTxt.onclick = exportCredentialsTxt;
 
   // Presets modal buttons
   const btnPresetsClose = document.getElementById('presets-modal-close-btn');
@@ -8552,10 +8605,16 @@ function setupPresetsEventListeners() {
             } else if (parsed.name) {
               nameInput.value = parsed.name;
             } else {
-              nameInput.value = file.name.replace(/\.json$/i, '');
+              nameInput.value = file.name.replace(/\.(json|txt)$/i, '');
             }
           }
-        } catch(err) {}
+        } catch(err) {
+          const txtBackup = parseCredentialsTxtToBackup(text);
+          const nameInput = document.getElementById('import-preset-name');
+          if (txtBackup && nameInput) {
+            nameInput.value = `ไฟล์สำรองรหัส .txt (${txtBackup.profiles.length} จอ)`;
+          }
+        }
       };
       reader.readAsText(file);
     };

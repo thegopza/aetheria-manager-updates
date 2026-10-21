@@ -171,7 +171,7 @@ const READ_JS = `(() => {
     party: party ? {
       leader: party.leader, expMode: party.expMode, lootMode: party.lootMode,
       evenShareAllowed: party.evenShareAllowed !== false, levelRange: party.levelRange, maxMembers: party.maxMembers || 6,
-      members: (party.members || []).map(m => ({ name: m.name, online: m.online !== false, mapId: m.mapId, mapName: m.mapName, channel: m.channel, level: m.level }))
+      members: (party.members || []).map(m => ({ name: m.name, online: m.online !== false, classId: m.classId || null, mapId: m.mapId, mapName: m.mapName, channel: m.channel, level: m.level, buffs: Array.isArray(m.buffs) ? m.buffs.map(b => ({ skillId: b.skillId, endsAt: b.endsAt })) : undefined }))
     } : null,
     invite: invite && invite.kind === 'party' && (!invite.expiresAt || invite.expiresAt > Date.now()) ? { from: invite.from, expiresAt: invite.expiresAt } : null,
     helpers: {
@@ -805,16 +805,17 @@ function createPartyService(opts) {
     else leaderMap = L.targetMap || L.mapName;
     if (leaderMap && !isCityMapName(leaderMap)) rt.lastLeaderFarmMap = leaderMap;
 
-    if (party.syncMap) {
-      let anchorId = party.leaderId;
-      let anchorSnap = L;
-      if (priest && priest.snap && priest.snap.ok && priest.snap.mapId && !isCityMapName(priest.snap.mapName)) {
-        const onFarmMap = !leaderMap || (priest.snap.mapName && priest.snap.mapName.includes(leaderMap)) || priest.snap.mapId === L.mapId;
-        if (onFarmMap) {
-          anchorId = priest.id;
-          anchorSnap = priest.snap;
-        }
+    let anchorId = party.leaderId;
+    let anchorSnap = L;
+    if (priest && priest.snap && priest.snap.ok && priest.snap.mapId && !isCityMapName(priest.snap.mapName)) {
+      const onFarmMap = !leaderMap || (priest.snap.mapName && priest.snap.mapName.includes(leaderMap)) || priest.snap.mapId === L.mapId;
+      if (onFarmMap) {
+        anchorId = priest.id;
+        anchorSnap = priest.snap;
       }
+    }
+
+    if (party.syncMap) {
 
       const chMode = typeof getChannelCheckMode === 'function' ? (getChannelCheckMode() || 'all') : 'all';
       const partyChannelCheckEnabled = (chMode === 'all' || chMode === 'party_only' || chMode === 'always');

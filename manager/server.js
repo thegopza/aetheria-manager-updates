@@ -1832,6 +1832,15 @@ function buildClientActionEvalCode(payload) {
       if (!window.__authConfig) window.__authConfig = {};
       const patch = ${JSON.stringify(cfg)};
       Object.assign(window.__authConfig, patch);
+      if (patch.username !== undefined || patch.password !== undefined) {
+        window.__authConfig.userEditedAt = Date.now();
+        window.__authConfig.generatedUser = false;
+        window.__authConfig.register = false;
+        delete window.__authConfig.registerError;
+      }
+      if (patch.enabled !== undefined) {
+        window.__authConfig.userToggledAt = Date.now();
+      }
       try { localStorage.setItem('pelican_auth_cfg', JSON.stringify(window.__authConfig)); } catch(e){}
       const authEn = document.getElementById('p-auth-enabled');
       if (authEn && patch.enabled !== undefined) authEn.checked = !!window.__authConfig.enabled;
@@ -5555,10 +5564,53 @@ const server = http.createServer(async (req, res) => {
         let liveState = null;
 
         // Auto-detect online state if debugPort is responding
+        let adoptedAuthFromClient = null;
         if (p.debugPort) {
           liveState = await queryClientState(p.debugPort);
           if (liveState && !liveState.error) {
             alive = true;
+            if (liveState.authConfig && typeof liveState.authConfig === 'object') {
+              const ca = liveState.authConfig;
+              const cUser = String(ca.username || '').trim();
+              const cPass = String(ca.password || '');
+              const cChar = String(ca.charName || '').trim();
+              // Never expose plaintext password over GET /api/profiles
+              delete liveState.authConfig.password;
+              liveState.authConfig.hasPassword = Boolean(cPass);
+              const hasClientCreds = Boolean(cUser && cPass && !ca.register && !ca.registerError);
+              if (hasClientCreds) {
+                const curProfPass = credentials.getPassword(p.id);
+                const clientEditStamp = Math.max(Number(ca.userEditedAt) || 0, Number(ca.verifiedLoginAt) || 0);
+                const lastManagerPushAt = Number(p.lastAuthSyncPushAt) || 0;
+                const managerMissingCreds = !p.account || !curProfPass;
+                const isCustomClientUser = Boolean(!ca.generatedUser && !/^pm[a-z0-9]{8}$/.test(cUser));
+                const shouldAdopt = (
+                  clientEditStamp > lastManagerPushAt ||
+                  managerMissingCreds ||
+                  (!ca.generatedUser && (p.autoRegister || p.generatedAccount)) ||
+                  (isCustomClientUser && (cUser !== p.account || cPass !== curProfPass))
+                );
+                if (shouldAdopt && (cUser !== p.account || cPass !== curProfPass || p.autoRegister || (p.generatedAccount && !ca.generatedUser))) {
+                  credentials.setPassword(p.id, cPass);
+                  p.account = cUser;
+                  p.autoRegister = false;
+                  p.generatedAccount = !!ca.generatedUser;
+                  p.registerError = '';
+                  p.loginSyncPending = false;
+                  p.lastAuthSyncPushAt = Date.now();
+                  if (cChar && !p.lastCharName) p.lastCharName = cChar;
+                  adoptedAuthFromClient = {
+                    account: cUser,
+                    autoRegister: false,
+                    generatedAccount: !!ca.generatedUser,
+                    registerError: '',
+                    loginSyncPending: false,
+                    lastAuthSyncPushAt: p.lastAuthSyncPushAt,
+                    ...(cChar && !p.lastCharName ? { lastCharName: cChar } : {})
+                  };
+                }
+              }
+            }
           }
         }
 
@@ -5636,6 +5688,7 @@ const server = http.createServer(async (req, res) => {
 
         return {
           ...p,
+          _adoptedAuthFromClient: adoptedAuthFromClient,
           deviceId: assignedDeviceId,
           hasLoginPassword: !!credentials.getPassword(p.id),
           isRunning: alive,
@@ -5655,6 +5708,7 @@ const server = http.createServer(async (req, res) => {
     // Remember last-seen portrait / character / premiumUntil so offline cards still show them.
     // Re-read the file here: other requests may have saved profiles while we awaited.
     const changed = enriched.filter(p => {
+      if (p._adoptedAuthFromClient) return true;
       const s = p.liveState;
       if (!s || s.error) return false;
       const hasChar = Boolean(s.charName);
@@ -5668,19 +5722,25 @@ const server = http.createServer(async (req, res) => {
       changed.forEach(p => {
         const target = fresh.find(f => f.id === p.id);
         if (!target) return;
-        const hasChar = Boolean(p.liveState.charName);
-        const portrait = hasChar && p.liveState.portrait && portraitPathFromSrc(p.liveState.portrait);
-        if (portrait) target.lastPortrait = p.lastPortrait = portrait;
-        if (hasChar) target.lastCharName = p.lastCharName = p.liveState.charName;
-        if (hasChar && p.liveState.charClass) target.lastCharClass = p.lastCharClass = p.liveState.charClass;
-        if (Number(p.liveState.premiumUntil) > 0) {
-          target.lastPremiumUntil = p.lastPremiumUntil = Number(p.liveState.premiumUntil);
-        } else if (hasChar && p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
-          target.lastPremiumUntil = p.lastPremiumUntil = 0;
+        if (p._adoptedAuthFromClient) {
+          Object.assign(target, p._adoptedAuthFromClient);
+        }
+        if (p.liveState && !p.liveState.error) {
+          const hasChar = Boolean(p.liveState.charName);
+          const portrait = hasChar && p.liveState.portrait && portraitPathFromSrc(p.liveState.portrait);
+          if (portrait) target.lastPortrait = p.lastPortrait = portrait;
+          if (hasChar) target.lastCharName = p.lastCharName = p.liveState.charName;
+          if (hasChar && p.liveState.charClass) target.lastCharClass = p.lastCharClass = p.liveState.charClass;
+          if (Number(p.liveState.premiumUntil) > 0) {
+            target.lastPremiumUntil = p.lastPremiumUntil = Number(p.liveState.premiumUntil);
+          } else if (hasChar && p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
+            target.lastPremiumUntil = p.lastPremiumUntil = 0;
+          }
         }
       });
       saveProfiles(fresh);
     }
+    enriched.forEach(p => { delete p._adoptedAuthFromClient; });
 
     const bandwidthSummary = enriched.reduce((acc, p) => {
       const bw = p.bandwidth || {};
@@ -6916,6 +6976,29 @@ public class PmFocus {
 
         const profile = profiles.find(p => p.id === id);
         if (!profile || !profile.debugPort) return sendJSON({ success: false, error: "Profile offline" }, 400);
+
+        if (payload.type === 'update-auth' && payload.config && typeof payload.config === 'object') {
+          const cfg = payload.config;
+          const nextUser = cfg.username !== undefined ? String(cfg.username || '').trim() : undefined;
+          const nextPass = cfg.password !== undefined ? String(cfg.password || '') : undefined;
+          if (nextPass) {
+            credentials.setPassword(profile.id, nextPass);
+          }
+          if (nextUser || nextPass) {
+            const fresh = loadProfiles();
+            const target = fresh.find(f => f.id === profile.id);
+            if (target) {
+              if (nextUser) target.account = nextUser;
+              target.autoRegister = false;
+              target.generatedAccount = false;
+              target.registerError = '';
+              target.loginSyncPending = false;
+              target.lastAuthSyncPushAt = Date.now();
+              if (cfg.charName && !target.lastCharName) target.lastCharName = String(cfg.charName).trim();
+              saveProfiles(fresh);
+            }
+          }
+        }
 
         // POST: configs (import-config, whitelists, rules) are far too long for a URL once Thai text is encoded
         const r = await enqueueProfileClientAction(profile.id, () => evalProfilePort(profile.debugPort, codeToRun, 15000));

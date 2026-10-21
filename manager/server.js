@@ -4047,7 +4047,6 @@ const isBrowserMode = () => {
 };
 
 async function syncScreenProxyForOpenProfiles() {
-  if (!screenProxy.isEnabled()) return [];
   const profiles = loadProfiles() || [];
   const openProfiles = [];
   for (const p of profiles) {
@@ -4055,6 +4054,13 @@ async function syncScreenProxyForOpenProfiles() {
     if (isOpen) openProfiles.push(p);
   }
   if (openProfiles.length === 0) return [];
+  if (!screenProxy.isEnabled()) {
+    await screenProxy.releaseAll().catch(() => {});
+    for (const p of openProfiles) {
+      try { await screenProxy.ensureProfileTunnel(p.id, p.debugPort); } catch (_) {}
+    }
+    return [];
+  }
   try {
     await screenProxy.acquireLeasesForProfiles(openProfiles.map(p => p.id));
   } catch (_) {}
@@ -7893,21 +7899,22 @@ server.listen(PORT, "127.0.0.1", () => {
   if(!TEST_INSTANCE)managerUpdater.start();
   planSync.start();
   if(!TEST_INSTANCE)authSync.start();
-  browserMode.start();
   if (!TEST_INSTANCE) {
     try {
       const spSettings = screenProxy.loadSettings();
-      if (spSettings && spSettings.updatedAt == null) {
-        screenProxy.saveSettings({ enabled: true, mode: "owner-queue" });
+      if (spSettings.enabled || spSettings.forceDisableRev !== "2026-10-21-off") {
+        screenProxy.saveSettings({ enabled: false, forceDisableRev: "2026-10-21-off" });
       }
+      screenProxy.releaseAll().catch(() => {});
     } catch (_) {}
+  }
+  browserMode.start();
+  if (!TEST_INSTANCE) {
     setTimeout(() => {
       if (isBrowserMode() && typeof browserMode.syncAssetCacheToOpenWindows === "function") {
         browserMode.syncAssetCacheToOpenWindows().catch(() => {});
       }
-      if (screenProxy.isEnabled()) {
-        syncScreenProxyForOpenProfiles().catch(() => {});
-      }
+      syncScreenProxyForOpenProfiles().catch(() => {});
     }, 2800);
     setInterval(() => {
       if (screenProxy.isEnabled()) {

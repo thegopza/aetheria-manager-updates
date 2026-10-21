@@ -13,6 +13,7 @@ const { createAssetCache } = require('./asset_cache');
 
 const DEFAULT_MAX_SCREENS_PER_IP = 3;
 const LEASE_TTL_MS = 180000;
+const FORCE_DISABLE_REVISION = '2026-10-21-off';
 
 
 function isGameOrIpCheckHost(hostname) {
@@ -432,6 +433,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       maxScreensPerIp,
       onlyGameTraffic: raw.onlyGameTraffic !== false,
       localAssetCache,
+      forceDisableRev: raw.forceDisableRev || null,
       lastTestedIp: raw.lastTestedIp || null,
       lastTestedAt: raw.lastTestedAt || null,
       updatedAt: raw.updatedAt || null
@@ -447,6 +449,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       ...(patch.maxScreensPerIp !== undefined ? { maxScreensPerIp: Math.max(1, Math.min(10, parseInt(patch.maxScreensPerIp, 10) || DEFAULT_MAX_SCREENS_PER_IP)) } : {}),
       ...(typeof patch.onlyGameTraffic === 'boolean' ? { onlyGameTraffic: patch.onlyGameTraffic } : {}),
       ...(typeof patch.localAssetCache === 'boolean' ? { localAssetCache: patch.localAssetCache } : {}),
+      ...(patch.forceDisableRev !== undefined ? { forceDisableRev: patch.forceDisableRev } : {}),
       ...(patch.lastTestedIp !== undefined ? { lastTestedIp: patch.lastTestedIp } : {}),
       ...(patch.lastTestedAt !== undefined ? { lastTestedAt: patch.lastTestedAt } : {}),
       updatedAt: now()
@@ -458,8 +461,19 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     return loadSettings();
   }
 
-  // Sync initial localAssetCache flag to assetCache
+  // Force-disable previously auto-enabled proxy settings and sync localAssetCache flag
   try {
+    if (fs.existsSync(settingsFile)) {
+      const initRaw = readJson(settingsFile, null);
+      if (initRaw && initRaw.forceDisableRev !== FORCE_DISABLE_REVISION) {
+        writeJson(settingsFile, {
+          ...initRaw,
+          enabled: false,
+          forceDisableRev: FORCE_DISABLE_REVISION,
+          updatedAt: now()
+        });
+      }
+    }
     const initSt = loadSettings();
     if (assetCache && typeof assetCache.setEnabled === 'function') {
       assetCache.setEnabled(initSt.localAssetCache !== false);
@@ -922,7 +936,6 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const updated = saveSettings({ enabled: Boolean(enabled) });
     if (!updated.enabled) {
       await releaseAll();
-      await stopAllTunnels();
     } else if (openProfileIds.length > 0) {
       await acquireLeasesForProfiles(openProfileIds);
       for (const pid of openProfileIds) resetProfileSockets(pid);

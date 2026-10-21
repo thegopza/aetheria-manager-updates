@@ -1439,7 +1439,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         const isCustomCtx = Boolean(t.browserContextId && customContexts.has(t.browserContextId));
         if (profile) {
           if (screenProxy && (screenProxy.isEnabled() || isCustomCtx)) {
-            await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort }).catch(() => {});
+            if (screenProxy.isEnabled()) {
+              await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort }).catch(() => {});
+            } else if (typeof screenProxy.ensureProfileTunnel === 'function') {
+              await screenProxy.ensureProfileTunnel(profile.id, profile.debugPort).catch(() => {});
+            }
           }
           const c = await attach(profile.id, t.targetId, probeFailed, isCustomCtx ? t.browserContextId : null);
           startProxy(c, profile.debugPort);

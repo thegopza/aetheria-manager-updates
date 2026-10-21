@@ -48,10 +48,11 @@ body.pt-open .pt-scrim { opacity: 1; pointer-events: auto; }
   width: min(440px, 94vw); display: flex; flex-direction: column;
   background: var(--pt-panel); border-right: 1px solid var(--pt-line);
   box-shadow: 24px 0 60px rgba(0, 0, 0, 0.55);
-  transform: translateX(-104%); transition: transform 0.42s var(--pt-ease);
+  overflow: hidden; visibility: hidden; pointer-events: none;
+  transform: translateX(-104%); transition: transform 0.42s var(--pt-ease), visibility 0.42s;
   color: var(--text-main, #eef3fc); font-family: var(--font-sans, sans-serif);
 }
-body.pt-open .pt-drawer { transform: translateX(0); }
+body.pt-open .pt-drawer { transform: translateX(0); visibility: visible; pointer-events: auto; }
 .pt-head {
   display: flex; align-items: center; gap: 12px; padding: 18px 18px 14px;
   border-bottom: 1px solid var(--pt-line);

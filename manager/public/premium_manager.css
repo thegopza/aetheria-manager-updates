@@ -45,10 +45,11 @@ body.pm-open .pm-scrim { opacity: 1; pointer-events: auto; }
   width: min(460px, 94vw); display: flex; flex-direction: column;
   background: linear-gradient(165deg, rgba(20, 18, 46, 0.97), rgba(7, 10, 24, 0.98));
   border-right: 1px solid var(--pm-line); box-shadow: 24px 0 60px rgba(0, 0, 0, 0.55);
-  transform: translateX(-104%); transition: transform 0.42s var(--pm-ease);
+  overflow: hidden; visibility: hidden; pointer-events: none;
+  transform: translateX(-104%); transition: transform 0.42s var(--pm-ease), visibility 0.42s;
   color: var(--text-main, #eef3fc); font-family: var(--font-sans, sans-serif);
 }
-body.pm-open .pm-drawer { transform: translateX(0); }
+body.pm-open .pm-drawer { transform: translateX(0); visibility: visible; pointer-events: auto; }
 .pm-head {
   display: flex; align-items: center; gap: 12px; padding: 18px 18px 14px; border-bottom: 1px solid var(--pm-line);
   background: radial-gradient(120% 140% at 0% 0%, rgba(167, 139, 250, 0.16), transparent 60%);

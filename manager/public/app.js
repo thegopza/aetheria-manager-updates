@@ -1787,10 +1787,6 @@ function syncChannelCheckModeUI(mode) {
   if (selMain && document.activeElement !== selMain && selMain.value !== norm) {
     selMain.value = norm;
   }
-  const selParty = document.getElementById('pt-channel-check-mode');
-  if (selParty && document.activeElement !== selParty && selParty.value !== norm) {
-    selParty.value = norm;
-  }
 }
 
 window.setChannelCheckMode = async function (mode) {

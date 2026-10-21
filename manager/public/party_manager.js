@@ -35,7 +35,8 @@
       </header>
       <div class="pt-ch-mode-bar" style="padding:8px 14px; background:rgba(15,23,42,0.75); border-bottom:1px solid rgba(255,255,255,0.08); display:flex; align-items:center; gap:8px; font-size:11.5px;">
         <label for="pt-channel-check-mode" style="color:#94a3b8; white-space:nowrap; font-weight:600;">📡 โหมดเช็ค CH:</label>
-        <select id="pt-channel-check-mode" style="flex:1; background:#0f172a; color:#e2e8f0; border:1px solid rgba(56,189,248,0.35); border-radius:6px; padding:4px 8px; font-size:11.5px; outline:none; cursor:pointer;" title="เมื่อมีคนในตี้ขายของเสร็จแล้วกลับมาแมพฟาร์ม ระบบจะเลือก CH คนน้อยสุดให้ และดึงคนในตี้ที่เหลือย้ายตาม">
+        <select id="pt-channel-check-mode" style="flex:1; background:#0f172a; color:#e2e8f0; border:1px solid rgba(56,189,248,0.35); border-radius:6px; padding:4px 8px; font-size:11.5px; outline:none; cursor:pointer;" title="เมื่อมีคนในตี้กลับมาแมพฟาร์ม ระบบจะเลือก CH คนน้อยสุดให้ (โดยไม่ทับ CH ตี้อื่นของเรา) และดึงคนในตี้ที่เหลือย้ายตาม">
+          <option value="always">⚡ ทุกครั้งที่เข้าแมพฟาร์ม: ย้าย CH คนน้อยสุด + ดึงตี้ตาม (ขายของ/ตาย/กลับจากเมือง)</option>
           <option value="all">🔄 หลังขายของ: ย้าย CH คนน้อยสุด + ดึงตี้ตาม (ทุกจอ)</option>
           <option value="party_only">👑 เฉพาะปาร์ตี้: หลังขายของย้าย CH คนน้อยสุด + ดึงตี้ตาม</option>
           <option value="solo_only">👤 เฉพาะฟาร์มเดี่ยว: เช็ค CH คนน้อยสุดหลังขายของ</option>

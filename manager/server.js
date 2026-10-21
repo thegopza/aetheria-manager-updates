@@ -4078,7 +4078,7 @@ const managerUpdater = createManagerSelfUpdater({
   isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
 });
 
-const VALID_CHANNEL_CHECK_MODES = ["all", "party_only", "solo_only", "off"];
+const VALID_CHANNEL_CHECK_MODES = ["always", "all", "party_only", "solo_only", "off"];
 
 function getEffectiveChannelCheckMode() {
   const st = installer.loadSettings() || {};

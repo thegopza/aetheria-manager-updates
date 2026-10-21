@@ -1775,6 +1775,10 @@ function buildClientActionEvalCode(payload) {
       if (oreEl && patch.sellRefineOres !== undefined) {
         oreEl.value = window.__sellConfig.sellRefineOres ? 'unlisted' : 'keep';
       }
+      const consEl = document.getElementById('p-sell-consumables');
+      if (consEl && patch.sellConsumables !== undefined) {
+        consEl.value = window.__sellConfig.sellConsumables ? 'unlisted' : 'keep';
+      }
       const refEl = document.getElementById('p-sell-keep-refined');
       if (refEl && patch.keepRefined !== undefined) refEl.checked = !!window.__sellConfig.keepRefined;
       const specEl = document.getElementById('p-sell-keep-special');

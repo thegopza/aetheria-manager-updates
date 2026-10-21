@@ -4795,6 +4795,15 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                                 <option value="unlisted" ${sell.sellRefineOres ? 'selected' : ''}>💰 ขายที่ไม่อยู่ใน Whitelist</option>
                             </select>
                         </div>
+
+                        <!-- 6. ของใช้ / ขวดยา -->
+                        <div class="p-row" title="ขวดยา / ของใช้ในแท็บใช้ได้ — ยกเว้น Butterfly Wing, Fly Wing, ยาบัพที่เปิดใช้ และรายการใน Whitelist">
+                            <span style="font-size: 10px; color: #e2e8f0; font-weight: 500;">🧪 ของใช้ / ขวดยา:</span>
+                            <select id="p-sell-consumables" class="p-select" style="width: 142px; padding: 2px 4px; font-size: 9.5px; background: #0b1329; border: 1px solid rgba(56, 189, 248, 0.35);">
+                                <option value="keep" ${!sell.sellConsumables ? 'selected' : ''}>🔒 เก็บทั้งหมด</option>
+                                <option value="unlisted" ${sell.sellConsumables ? 'selected' : ''}>💰 ขายที่ไม่อยู่ใน Whitelist</option>
+                            </select>
+                        </div>
                     </div>
 
                     <!-- Safety Locks Card -->
@@ -4932,7 +4941,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                                     <b>เปิดใช้งาน Auto Sell</b>
                                 </label>
                                 <span id="p-autosell-quota-badge-hud" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 0 4px; border-radius: 3px; font-size: 9px; font-weight: bold;">
-                                    โควตา: ${clientData?.myMarketActiveCount ?? 0}/10
+                                    โควตา: ${clientData?.myMarketActiveCount ?? 0}/${clientData?.hasPremium ? 20 : 3}
                                 </span>
                             </div>
                             <div style="display: flex; justify-content: space-between; align-items: center; font-size: 8.5px; color: #d8b4fe; margin-bottom: 4px;">
@@ -5651,6 +5660,7 @@ async function openWebBotHUD(profileId) {
   bindSellField('#p-sell-rarity-acc', el => ({ accRarity: el.value }));
   bindSellField('#p-sell-rarity-mat', el => ({ sellMaterials: el.value !== 'none', materialMode: el.value === 'common' ? 'common' : 'all' }));
   bindSellField('#p-sell-refine-ores', el => ({ sellRefineOres: el.value === 'unlisted' }));
+  bindSellField('#p-sell-consumables', el => ({ sellConsumables: el.value === 'unlisted' }));
   bindSellField('#p-sell-keep-refined', el => ({ keepRefined: !!el.checked }));
   bindSellField('#p-sell-keep-special', el => ({ keepSpecial: !!el.checked }));
   bindSellField('#p-sell-keep-sockets', el => ({ keepSockets: !!el.checked }));
@@ -6260,6 +6270,7 @@ function populateWebHudData(profileId, data) {
   syncSel('#p-sell-rarity-acc', sell.accRarity);
   syncSel('#p-sell-rarity-mat', !sell.sellMaterials ? 'none' : (sell.materialMode === 'common' ? 'common' : 'all'));
   syncSel('#p-sell-refine-ores', sell.sellRefineOres ? 'unlisted' : 'keep');
+  syncSel('#p-sell-consumables', sell.sellConsumables ? 'unlisted' : 'keep');
 
   const keepRef = hud.querySelector('#p-sell-keep-refined');
   if (keepRef && document.activeElement !== keepRef) keepRef.checked = sell.keepRefined !== false;

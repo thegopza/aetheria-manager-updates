@@ -890,12 +890,18 @@ function validStatement(data) {
   return data?.success===true&&data.schemaVersion===2&&data.unitScale===100&&['balanceUnits','rateUnits','estimatedUnits','usedSlotsToday','billableSlotsToday'].every(k=>Number.isSafeInteger(data[k]))&&data.rateUnits>=0&&data.estimatedUnits>=0&&data.usedSlotsToday>=0&&data.billableSlotsToday>=0&&['shadow','deferred'].includes(data.billingMode)&&Array.isArray(data.usage)&&Array.isArray(data.ledger);
 }
 function updateUsageStatementDisplay() {
-  const pill=document.getElementById('btn-open-usage-statement'),text=document.getElementById('online-expense-text');if(!pill)return;
-  if(!validStatement(lastStatementData)){if(text)text.textContent='ยังไม่มีใบสรุป';pill.title='ไม่คำนวณค่าใช้จ่ายจากจำนวนจอออนไลน์';pill.classList.remove('has-debt');return;}
-  const data=lastStatementData,balance=data.balanceUnits/100,today=data.estimatedUnits/100;
+  const pill=document.getElementById('btn-open-usage-statement'),text=document.getElementById('online-expense-text'),rateBadge=document.getElementById('header-merit-rate-badge'),rateTextNode=document.getElementById('header-merit-rate-text'),hcRateNode=document.getElementById('hc-merit-rate-text');if(!pill)return;
+  if(!validStatement(lastStatementData)){if(text)text.textContent='ยังไม่มีใบสรุป';if(rateTextNode)rateTextNode.textContent='เก็บค่าส่วนบุญวันนี้ = — บุญ ต่อจอ';pill.title='ไม่คำนวณค่าใช้จ่ายจากจำนวนจอออนไลน์';pill.classList.remove('has-debt');return;}
+  const data=lastStatementData,balance=data.balanceUnits/100,today=data.estimatedUnits/100,rate=data.rateUnits/100;
+  const rateLabel=`เก็บค่าส่วนบุญวันนี้ = ${rate.toLocaleString()} บุญ ต่อจอ`;
+  if(rateTextNode)rateTextNode.textContent=rateLabel;
+  if(rateBadge)rateBadge.title=`${rateLabel} (คิดเฉพาะจอที่เปิดใช้งานบอทจริงในวันนี้ • คลิกเพื่อดูใบสรุปส่วนบุญ)`;
+  if(hcRateNode)hcRateNode.textContent=`📌 ${rateLabel} • ดูรายละเอียดและยอดรอสรุปได้ในหน้าใบสรุป`;
+  const banner=document.getElementById('us-daily-rate-banner');
+  if(banner)banner.innerText=`📌 ${rateLabel} (ประจำวันที่ ${data.bangkokDay} • คิดเฉพาะจอที่เปิดใช้งานบอทจริง)`;
   pill.classList.toggle('has-debt',balance<0);
-  if(text)text.textContent=balance<0?`ส่วนบุญ ${balance.toLocaleString()} • รอสรุปวันนี้ ${today.toLocaleString()}`:`รอสรุปวันนี้ ${today.toLocaleString()} ส่วนบุญ`;
-  pill.title=`ยอดส่วนบุญปัจจุบัน: ${balance.toLocaleString()} ส่วนบุญ • ${data.billingMode==='shadow'?'โหมดทดลอง ไม่หักจริง':'คิดจาก slot ที่ใช้สคริปต์จริง'} • ${data.usedSlotsToday} slot วันนี้`;
+  if(text)text.textContent=balance<0?`ส่วนบุญ ${balance.toLocaleString()} • ${rateLabel} • วันนี้ ${today.toLocaleString()} ส่วนบุญ`:`${rateLabel} • วันนี้ ${today.toLocaleString()} ส่วนบุญ`;
+  pill.title=`${rateLabel} • ยอดส่วนบุญปัจจุบัน: ${balance.toLocaleString()} ส่วนบุญ • ${data.billingMode==='shadow'?'โหมดทดลอง ไม่หักจริง':'คิดจาก slot ที่ใช้สคริปต์จริง'} • ${data.usedSlotsToday} slot วันนี้`;
 }
 function renderUsageStatementModal(data) {
   const container=document.getElementById('usage-statement-content');
@@ -903,7 +909,8 @@ function renderUsageStatementModal(data) {
   const set=(id,value)=>{const node=document.getElementById(id);if(node)node.innerText=value;},balance=data.balanceUnits/100,today=data.estimatedUnits/100;
   set('us-stat-balance-icon',balance<0?'🚨':'🟢');set('us-stat-balance-title',balance<0?'ส่วนบุญติดลบ':'ส่วนบุญคงเหลือ');set('us-stat-balance-val',balance.toLocaleString());set('us-stat-balance-sub',balance<0?'ยอดส่วนบุญติดลบ':'ยอดส่วนบุญปัจจุบัน');
   set('us-stat-today-val',today.toLocaleString());set('us-stat-today-sub',`วันที่ ${data.bangkokDay} • ${data.billingMode==='shadow'?'ไม่มีการหักจริง':data.billingMode==='deferred'?'คิดตาม slot ที่ใช้จริง':'หักตามรอบ'}`);
-  set('us-stat-slots-val',String(data.usedSlotsToday));set('us-stat-slots-sub',`คิดจริง ${data.billableSlotsToday} slot • เรท ${data.rateUnits/100} ส่วนบุญ/slot/วัน`);
+  set('us-daily-rate-banner',`📌 เก็บค่าส่วนบุญวันนี้ = ${data.rateUnits/100} บุญ ต่อจอ (ประจำวันที่ ${data.bangkokDay} • คิดเฉพาะจอที่เปิดใช้งานบอทจริง)`);
+  set('us-stat-slots-val',String(data.usedSlotsToday));set('us-stat-slots-sub',`เก็บค่าส่วนบุญวันนี้ = ${data.rateUnits/100} บุญ ต่อจอ • คิดจริง ${data.billableSlotsToday} slot • เรท ${data.rateUnits/100} ส่วนบุญ/slot/วัน`);
   set('us-stat-mode-val',data.billingMode==='shadow'?'โหมดทดลอง ไม่หักจริง':'คิดตามการใช้จริง');set('us-stat-mode-sub',Number.isSafeInteger(data.shadowEstimatedUnits)?`ตัวอย่างจาก slot ที่สังเกต ${data.shadowEstimatedUnits/100} ส่วนบุญ (แยกจากยอดรอสรุปจริง)`:'ยอดตาม slot ที่ใช้สคริปต์จริง');
   const balanceNode=document.getElementById('us-stat-balance-val');if(balanceNode)balanceNode.style.color=balance<0?'#f87171':'#34d399';
   if(container){if(currentStatementTab==='usage')renderDailyUsageTab(container,data,today,data.usedSlotsToday,data.rateUnits/100);else renderLedgerTab(container,data);}
@@ -953,6 +960,16 @@ function initUsageStatementModal() {
   if (pill) {
     pill.onclick = openUsageStatementModal;
     pill.onkeydown = (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openUsageStatementModal();
+      }
+    };
+  }
+  const rateBadge = document.getElementById("header-merit-rate-badge");
+  if (rateBadge) {
+    rateBadge.onclick = openUsageStatementModal;
+    rateBadge.onkeydown = (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         openUsageStatementModal();

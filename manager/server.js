@@ -1319,7 +1319,7 @@ function queryClientState(port) {
         'Content-Type': 'application/json',
         'Content-Length': Buffer.byteLength(payload)
       },
-      timeout: 1200
+      timeout: 4500
     }, (res) => {
       let data = "";
       res.setEncoding('utf8');
@@ -1355,7 +1355,7 @@ function queryClientState(port) {
 
 function queryStandardState(port) {
   return new Promise((resolve) => {
-    const req = http.get(`http://127.0.0.1:${port}/api/state`, { timeout: 700 }, (res) => {
+    const req = http.get(`http://127.0.0.1:${port}/api/state`, { timeout: 3500 }, (res) => {
       let data = "";
       res.setEncoding('utf8');
       res.on("data", chunk => data += chunk);
@@ -1364,6 +1364,10 @@ function queryStandardState(port) {
       });
     });
     req.on("error", () => resolve(null));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(null);
+    });
   });
 }
 
@@ -5560,13 +5564,20 @@ const server = http.createServer(async (req, res) => {
     const enriched = await Promise.all(
       profiles.map(async (p) => {
         const proc = runningProcesses[p.id];
-        let alive = proc && isProcessAlive(proc.pid);
+        const isBrowserOpen = Boolean(browserMode && typeof browserMode.isOpen === 'function' && browserMode.isOpen(p.id));
+        let alive = Boolean((proc && isProcessAlive(proc.pid)) || isBrowserOpen);
         let liveState = null;
 
         // Auto-detect online state if debugPort is responding
         let adoptedAuthFromClient = null;
         if (p.debugPort) {
           liveState = await queryClientState(p.debugPort);
+          if ((!liveState || liveState.error) && alive) {
+            const recentCached = clientStateCacheByPort.get(p.debugPort);
+            if (recentCached && recentCached.state && (Date.now() - recentCached.ts < 45000)) {
+              liveState = JSON.parse(JSON.stringify(recentCached.state));
+            }
+          }
           if (liveState && !liveState.error) {
             alive = true;
             if (liveState.authConfig && typeof liveState.authConfig === 'object') {

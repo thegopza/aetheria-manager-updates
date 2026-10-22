@@ -421,15 +421,41 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     try {
       fs.mkdirSync(storageDir, { recursive: true });
       const f = path.join(storageDir, `${profileId}.json`);
-      const merged = { ...loadProfileStorage(profileId) };
-      delete merged['aetheria.device'];
-      delete merged['aetheria.machine'];
-      for (const [k, v] of Object.entries(entries)) {
+      const pfx = `pelican_${profileId}__`;
+      const rawExisting = loadProfileStorage(profileId);
+      const merged = {};
+      for (const [k, v] of Object.entries(rawExisting || {})) {
         if (v === null || v === undefined || k === 'aetheria.device' || k === 'aetheria.machine') continue;
-        if ((k.endsWith('__auth_cfg') || k === 'pelican_auth_cfg') && merged[k]) {
-          merged[k] = mergeAuthConfigString(merged[k], v);
+        if (k.startsWith('pelican_')) {
+          if (k.startsWith(pfx)) {
+            merged[k] = v;
+          } else if (!k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
+            const mapped = pfx + k.slice(8);
+            if (rawExisting[mapped] === undefined && merged[mapped] === undefined) merged[mapped] = v;
+          }
         } else {
           merged[k] = v;
+        }
+      }
+      for (const [k, v] of Object.entries(entries)) {
+        if (v === null || v === undefined || k === 'aetheria.device' || k === 'aetheria.machine') continue;
+        let targetKey = k;
+        if (k.startsWith('pelican_')) {
+          if (k.startsWith(pfx)) {
+            targetKey = k;
+          } else if (!k.includes('__')) {
+            if (k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_script_plan' || k === 'pelican_plan_script_enabled') continue;
+            const mapped = pfx + k.slice(8);
+            if (entries[mapped] !== undefined || merged[mapped] !== undefined) continue;
+            targetKey = mapped;
+          } else {
+            continue;
+          }
+        }
+        if (targetKey.endsWith('__auth_cfg') && merged[targetKey]) {
+          merged[targetKey] = mergeAuthConfigString(merged[targetKey], v);
+        } else {
+          merged[targetKey] = v;
         }
       }
       const devKey = `pelican_${profileId}__aetheria_device`;
@@ -700,6 +726,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   const MSGPACK = `(function(){ if (!window.msgpack && !window.__pmMsgpackLoading) { window.__pmMsgpackLoading=true; const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/msgpack-lite/0.1.26/msgpack.min.js'; s.onerror=()=>{window.__pmMsgpackLoading=false;}; document.head.appendChild(s); } })(); void 0;`;
 
   const crashedTargetReloadAt = new Map();
+  const crashedTargetFailCount = new Map();
   const profileInitScript = profileId => {
     const deviceId = ensureProfileDeviceId(profileId);
     const machineId = ensureProfileMachineId(profileId);
@@ -708,10 +735,15 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const pfx = profileId ? `pelican_${profileId}__` : 'pelican_';
     for (const [k, v] of Object.entries(rawSaved || {})) {
       if (typeof v !== 'string' || k === 'aetheria.device' || k === 'aetheria.machine') continue;
-      saved[k] = v;
-      if (profileId && k.startsWith('pelican_') && !k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog') {
-        const mappedKey = pfx + k.slice(8);
-        if (rawSaved[mappedKey] === undefined) saved[mappedKey] = v;
+      if (profileId && k.startsWith('pelican_')) {
+        if (k.startsWith(pfx)) {
+          saved[k] = v;
+        } else if (!k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
+          const mappedKey = pfx + k.slice(8);
+          if (rawSaved[mappedKey] === undefined && saved[mappedKey] === undefined) saved[mappedKey] = v;
+        }
+      } else {
+        saved[k] = v;
       }
     }
     if (profileId && deviceId) {
@@ -722,7 +754,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
     const hasSaved = Object.keys(saved).length > 0;
     const restoreJs = hasSaved
-      ? `try { const __s = ${JSON.stringify(saved)}; const __rawGet = (window.__pmRawStorage && window.__pmRawStorage.get) || Storage.prototype.getItem; const __rawSet = (window.__pmRawStorage && window.__pmRawStorage.set) || Storage.prototype.setItem; const __forceOverwrite = !window.__pmStorageRestored && !window.__pelicanBotVersion; for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string' || k === 'aetheria.device' || k === 'aetheria.machine') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && (__forceOverwrite || __rawGet.call(window.sessionStorage, sk) === null)) __rawSet.call(window.sessionStorage, sk, v); } else if (window.localStorage && (k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine') || __forceOverwrite || __rawGet.call(window.localStorage, k) === null)) { __rawSet.call(window.localStorage, k, v); } } window.__pmStorageRestored = true; if (typeof window.reloadBotConfigsFromLocalStorage === 'function') { try { window.reloadBotConfigsFromLocalStorage(); } catch (_) {} } } catch (_) { window.__pmStorageRestored = true; }`
+      ? `try { const __s = ${JSON.stringify(saved)}; const __rawGet = (window.__pmRawStorage && window.__pmRawStorage.get) || Storage.prototype.getItem; const __rawSet = (window.__pmRawStorage && window.__pmRawStorage.set) || Storage.prototype.setItem; const __rawDel = (window.__pmRawStorage && window.__pmRawStorage.del) || Storage.prototype.removeItem; if (window.localStorage && window.__pmProfileId) { const __rm = []; for (let i = 0; i < window.localStorage.length; i++) { const lk = window.localStorage.key(i); if (lk && lk.startsWith('pelican_') && lk.indexOf('__') === -1 && lk !== 'pelican_icon_manifest' && lk !== 'pelican_item_catalog') __rm.push(lk); } for (const lk of __rm) { try { __rawDel.call(window.localStorage, lk); } catch (_) {} } } for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string' || k === 'aetheria.device' || k === 'aetheria.machine') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && __rawGet.call(window.sessionStorage, sk) === null) __rawSet.call(window.sessionStorage, sk, v); } else if (window.localStorage && (k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine') || __rawGet.call(window.localStorage, k) === null)) { __rawSet.call(window.localStorage, k, v); } } window.__pmStorageRestored = true; if (typeof window.reloadBotConfigsFromLocalStorage === 'function') { try { window.reloadBotConfigsFromLocalStorage(); } catch (_) {} } } catch (_) { window.__pmStorageRestored = true; }`
       : `window.__pmStorageRestored = true;`;
     // IMPORTANT: Do NOT use regex literals (/.../) inside this template string, because \/ unescapes to / and // becomes a JS line comment!
     const deviceHookJs = `try {
@@ -809,6 +841,16 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         const __rawSet = __sp.setItem;
         const __rawDel = __sp.removeItem;
         window.__pmRawStorage = { get: __rawGet, set: __rawSet, del: __rawDel };
+        const __mapKey = function(st, k) {
+          if (st !== window.localStorage || !window.__pmProfileId || typeof k !== 'string') return k;
+          const pfx = 'pelican_' + window.__pmProfileId + '__';
+          if (k === 'aetheria.device') return pfx + 'aetheria_device';
+          if (k === 'aetheria.machine') return pfx + 'aetheria_machine';
+          if (k.startsWith('pelican_') && !k.startsWith(pfx) && k.indexOf('__') === -1 && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog') {
+            return pfx + k.slice(8);
+          }
+          return k;
+        };
         __sp.getItem = function(k) {
           if (this === window.localStorage) {
             if (window.__pmDeviceId && (k === 'aetheria.device' || (window.__pmProfileId && k === 'pelican_' + window.__pmProfileId + '__aetheria_device'))) {
@@ -818,7 +860,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               return window.__pmMachineId;
             }
           }
-          return __rawGet.call(this, k);
+          return __rawGet.call(this, __mapKey(this, k));
         };
         __sp.setItem = function(k, v) {
           if (this === window.localStorage && window.__pmProfileId) {
@@ -847,6 +889,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 try { return __rawSet.call(this, targetKey, mach); } catch (__) { return; }
               }
             }
+            const mk = __mapKey(this, k);
+            try {
+              return __rawSet.call(this, mk, v);
+            } catch (_) {
+              __freeStorageQuota(this, __rawDel);
+              try { return __rawSet.call(this, mk, v); } catch (__) { return; }
+            }
           }
           return __rawSet.call(this, k, v);
         };
@@ -854,7 +903,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           if (this === window.localStorage && window.__pmProfileId && (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_' + window.__pmProfileId + '__aetheria_device' || k === 'pelican_' + window.__pmProfileId + '__aetheria_machine')) {
             return;
           }
-          return __rawDel.call(this, k);
+          return __rawDel.call(this, __mapKey(this, k));
         };
       }
       try {
@@ -1038,7 +1087,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             if (!k || k === 'aetheria.device' || k === 'aetheria.machine') continue;
             const rawVal = __rawGet.call(window.localStorage, k);
             if (typeof rawVal !== 'string') continue;
-            if (k.startsWith(pfx) || (k.startsWith('pelican_') && !k.includes('__')) || extraKeys.has(k)) {
+            if (k.startsWith(pfx) || extraKeys.has(k)) {
               out[k] = rawVal;
             } else if (doHarvest && k.startsWith('pelican_profile_')) {
               const rest = k.slice(8);
@@ -1056,7 +1105,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           if (ssVal) out['__ss:aetheria.session'] = ssVal;
         }
         return { restored: true, dirtyAt: window.__pmStorageDirtyAt || 0, out, other };
-      })()`, 3000);
+      })()`, 5000);
       if (res && res.restored === false) return;
       const entries = res && res.out ? res.out : res;
       if (entries && typeof entries === 'object' && Object.keys(entries).length > 0) {
@@ -1086,16 +1135,25 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     await send('Runtime.enable', {}, sessionId, 5000).catch(() => {});
     await configureSessionAssetCache(sessionId);
     const c = clientObj || clients.get(profileId) || null;
-    if (c && c.initScriptId) {
-      await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: c.initScriptId }, sessionId, 2000).catch(() => {});
+    if (c) {
+      const oldIds = Array.isArray(c.initScriptIds) ? c.initScriptIds.slice() : [];
+      if (c.initScriptId && !oldIds.includes(c.initScriptId)) oldIds.push(c.initScriptId);
+      c.initScriptIds = [];
       c.initScriptId = null;
+      for (const id of oldIds) {
+        if (id) await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: id }, sessionId, 2000).catch(() => {});
+      }
     }
     const added = await send('Page.addScriptToEvaluateOnNewDocument', { source: profileInitScript(profileId) }, sessionId, 5000).catch(() => null);
-    if (c && added && added.identifier) c.initScriptId = added.identifier;
+    if (c && added && added.identifier) {
+      c.initScriptId = added.identifier;
+      if (!Array.isArray(c.initScriptIds)) c.initScriptIds = [];
+      c.initScriptIds.push(added.identifier);
+    }
   }
 
   async function health(c) {
-    const value=await evaluate(c,HEALTH_JS,4500);
+    const value=await evaluate(c,HEALTH_JS,8000);
     if(!value || typeof value.documentId!=='string')throw Error('INVALID_DOCUMENT_PROBE');
     if(c.documentId!==value.documentId) {c.documentId=value.documentId;c.generation++;c.attempts=0;clearTimeout(c.retryTimer);c.retryTimer=null;}
     return value;
@@ -1103,8 +1161,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   const current=(c,token)=>clients.get(c.profileId)===c&&!stoppedProfiles.has(c.profileId)&&c.generation===token.generation&&c.sessionId===token.sessionId;
   function classify(c,h) {
     const devId = ensureProfileDeviceId(c.profileId);
-    if(h.version&&h.hud&&h.liveHook){c.crashReloadCount=0;c.stateFailCount=0;diagnostic(c,'ready',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
-    if(h.version||h.hud||h.liveHook||(h.initialized&&h.bootstrapPhase!=='waiting')){c.stateFailCount=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
+    if(h.version&&h.hud&&h.liveHook){
+      if (Date.now() - (c.lastCrashReloadAt || 0) > 120000) c.crashReloadCount=0;
+      c.stateFailCount=0;c.firstStateFailAt=0;
+      diagnostic(c,'ready',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});
+      return true;
+    }
+    if(h.version||h.hud||h.liveHook||(h.initialized&&h.bootstrapPhase!=='waiting')){c.stateFailCount=0;c.firstStateFailAt=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
     return false;
   }
 
@@ -1114,12 +1177,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (c.crashReloadInFlight) return false;
     if (!force) {
       if ((c.crashReloadCount || 0) >= 3) return false;
-      if (now - (c.lastCrashReloadAt || 0) < 20000) return false;
+      if (now - (c.lastCrashReloadAt || 0) < 90000) return false;
     }
     c.crashReloadInFlight = true;
     c.lastCrashReloadAt = now;
     c.crashReloadCount = (c.crashReloadCount || 0) + 1;
     c.stateFailCount = 0;
+    c.firstStateFailAt = 0;
     c.generation++;
     c.documentId = null;
     c.attempts = 0;
@@ -1129,12 +1193,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     console.warn(`[BrowserMode] 🔄 จอ ${c.profileId} ค้างหรือแรมเต็ม (${reason}) -> สั่ง Refresh หน้าเกมอัตโนมัติ (ครั้งที่ ${c.crashReloadCount})`);
     const schedulePostReloadInject = () => {
       const t = setTimeout(() => {
-        ensureSessionHooks(c.sessionId, c.profileId).finally(() => injectBot(c).catch(() => {}));
+        ensureSessionHooks(c.sessionId, c.profileId, c).finally(() => injectBot(c).catch(() => {}));
       }, 1800);
       t.unref?.();
     };
     try {
-      await ensureSessionHooks(c.sessionId, c.profileId);
+      await ensureSessionHooks(c.sessionId, c.profileId, c);
       await send('Page.reload', { ignoreCache: false }, c.sessionId, 8000);
       schedulePostReloadInject();
       return true;
@@ -1147,7 +1211,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         try {
           const { sessionId } = await send('Target.attachToTarget', { targetId: c.targetId, flatten: true }, undefined, 5000);
           c.sessionId = sessionId;
-          await ensureSessionHooks(sessionId, c.profileId);
+          await ensureSessionHooks(sessionId, c.profileId, c);
           await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000));
           schedulePostReloadInject();
           return true;
@@ -1186,7 +1250,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       }
       if (before.profileId !== c.profileId || before.deviceId !== expectedDeviceId || before.machineId !== expectedMachineId || !before.storageRestored) {
         await ensureSessionHooks(c.sessionId, c.profileId, c);
-        await evaluate(c, profileInitScript(c.profileId), 4500).catch(() => {});
+        await evaluate(c, profileInitScript(c.profileId), 6000).catch(() => {});
         before.deviceId = expectedDeviceId;
         before.machineId = expectedMachineId;
         before.storageRestored = true;
@@ -1219,8 +1283,14 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if(isGoneError(e)){diagnostic(c,'transport-disconnected',{gameAlive:null});drop(c);scheduleReconnect();return;}
       if(!token){
         if(clients.get(c.profileId)===c){
-          diagnostic(c,'probe-unavailable',{code:'DOCUMENT_PROBE_FAILED'});
-          reloadCrashedClient(c,'DOCUMENT_PROBE_FAILED').catch(()=>{});
+          const curDiag = diagnostics.get(c.profileId);
+          if (!curDiag || curDiag.state !== 'ready') {
+            diagnostic(c,'probe-unavailable',{code:'DOCUMENT_PROBE_FAILED'});
+            if (c.attempts < 5 && !c.retryTimer) {
+              c.retryTimer=setTimeout(()=>{c.retryTimer=null;injectBot(c);},2500);
+              c.retryTimer.unref?.();
+            }
+          }
         }
         return;
       }
@@ -1305,14 +1375,15 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     await send('Runtime.enable', {}, sessionId);
     await configureSessionAssetCache(sessionId);
     const initScript = profileInitScript(profileId);
-    await send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId);
+    const addedInit = await send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId).catch(() => null);
     if (!skipIdentityProbe) {
-      const identity=await evaluate({sessionId},`(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`,4500);
+      const identity=await evaluate({sessionId},`(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`,6000);
       if(identity!==profileId)throw Error('PROFILE_ID_CONFLICT');
-      await evaluate({sessionId}, initScript, 4500).catch(() => {});
+      await evaluate({sessionId}, initScript, 6000).catch(() => {});
     }
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
-    const c = { profileId, targetId, sessionId, browserContextId: browserContextId || null, generation:0,documentId:null,attempts:0,injectionInFlight:null,retryTimer:null,crashReloadCount:0,lastCrashReloadAt:0,crashReloadInFlight:false,stateFailCount:0,lastStorageSyncAt:0 };
+    const initScriptId = (addedInit && addedInit.identifier) ? addedInit.identifier : null;
+    const c = { profileId, targetId, sessionId, browserContextId: browserContextId || null, generation:0,documentId:null,attempts:0,injectionInFlight:null,retryTimer:null,crashReloadCount:0,lastCrashReloadAt:0,crashReloadInFlight:false,stateFailCount:0,firstStateFailAt:0,lastStorageSyncAt:0,initScriptId,initScriptIds:initScriptId?[initScriptId]:[],stateEvalPromise:null,lastGoodState:null,lastGoodStateAt:0 };
     clients.set(profileId, c);
     knownTargets.set(profileId,targetId);saveKnownTargets();diagnostic(c,'document-pending');
     return c;
@@ -1398,8 +1469,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               bodyText: (typeof document !== 'undefined' && document.body && typeof document.body.innerText === 'string') ? document.body.innerText.slice(0, 1500) : ''
             }))()`,
             returnByValue: true
-          }, sessionId, 4500);
+          }, sessionId, 8000);
           if(r.exceptionDetails)throw Error('PROFILE_PROBE_FAILED');
+          crashedTargetFailCount.delete(t.targetId);
           const val = r && r.result && r.result.value;
           if (val && typeof val === 'object') {
             pid = val.pid || null;
@@ -1410,9 +1482,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           }
         } catch (_) {
           probeFailed = true;
+          const fails = (crashedTargetFailCount.get(t.targetId) || 0) + 1;
+          crashedTargetFailCount.set(t.targetId, fails);
           const lastAt = crashedTargetReloadAt.get(t.targetId) || 0;
-          if (Date.now() - lastAt > 20000) {
+          if (fails >= 4 && Date.now() - lastAt > 90000) {
             crashedTargetReloadAt.set(t.targetId, Date.now());
+            crashedTargetFailCount.set(t.targetId, 0);
             await send('Page.enable', {}, sessionId, 5000).catch(() => {});
             await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000).catch(() => {}));
           }
@@ -1447,11 +1522,16 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           }
           const c = await attach(profile.id, t.targetId, probeFailed, isCustomCtx ? t.browserContextId : null);
           startProxy(c, profile.debugPort);
-          if (probeFailed) await reloadCrashedClient(c, 'rediscover-crashed', true);
+          await injectBot(c);
         }
       } catch (e) {}
     }
-    for(const c of clients.values())await injectBot(c);
+    for (const c of clients.values()) {
+      const diag = diagnostics.get(c.profileId);
+      if (!diag || diag.state !== 'ready') {
+        await injectBot(c);
+      }
+    }
   }
 
   // ---------- per-profile HTTP API (same as the Electron loader's) ----------
@@ -1496,24 +1576,47 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             try { code = JSON.parse(body).code || body; } catch (e) { code = body; }
           }
           if (!code) return reply(400, { error: 'Missing code' });
-          try { return reply(200, { success: true, result: await evaluate(c, code) }); }
-          catch (e) { if (isGoneError(e)) drop(c); return reply(500, { success: false, error: e.message }); }
+          try {
+            const evalRes = await evaluate(c, code);
+            if (/applyScriptPlan|applyPelicanSettings|importAllBotSettings|setItem\s*\(\s*['"]pelican_/.test(code)) {
+              c.lastStorageSyncAt = Date.now();
+              syncClientStorage(c).catch(() => {});
+            }
+            return reply(200, { success: true, result: evalRes });
+          } catch (e) { if (isGoneError(e)) drop(c); return reply(500, { success: false, error: e.message }); }
         }
         if (url.pathname === '/api/state') {
           try {
-            const st = await evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`, 4500);
+            if (!c.stateEvalPromise) {
+              c.stateEvalPromise = evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`, 8000).finally(() => {
+                c.stateEvalPromise = null;
+              });
+            }
+            const st = await c.stateEvalPromise;
             c.stateFailCount = 0;
+            c.firstStateFailAt = 0;
+            if (st) {
+              c.lastGoodState = st;
+              c.lastGoodStateAt = Date.now();
+            }
             if (st === null && !c.injectionInFlight && !c.retryTimer) {
               injectBot(c).catch(() => {});
-            } else if (st && Date.now() - (c.lastStorageSyncAt || 0) > 2500) {
+            } else if (st && Date.now() - (c.lastStorageSyncAt || 0) > 6000) {
               c.lastStorageSyncAt = Date.now();
               syncClientStorage(c).catch(() => {});
             }
             return reply(200, st);
           } catch (e) {
             if (isGoneError(e)) { drop(c); return reply(500, { success: false, error: e.message }); }
+            const now = Date.now();
+            if (!c.firstStateFailAt) c.firstStateFailAt = now;
             c.stateFailCount = (c.stateFailCount || 0) + 1;
-            if (c.stateFailCount >= 2) reloadCrashedClient(c, 'state-probe-timeout').catch(() => {});
+            if (c.stateFailCount >= 10 && (now - c.firstStateFailAt) >= 60000) {
+              reloadCrashedClient(c, 'state-probe-timeout').catch(() => {});
+            }
+            if (c.lastGoodState && (now - (c.lastGoodStateAt || 0)) < 45000) {
+              return reply(200, c.lastGoodState);
+            }
             return reply(500, { success: false, error: e.message });
           }
         }
@@ -1843,7 +1946,16 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     } catch (_) {}
     // reconnect to a browser left open by a previous Manager run
     setTimeout(() => {if(started)rediscover().catch(() => {});}, 3000);
-    monitorTimer=setInterval(()=>{ for (const c of clients.values()) syncClientStorage(c).catch(() => {}); rediscover().catch(()=>scheduleReconnect()); },5000);monitorTimer.unref?.();
+    monitorTimer=setInterval(()=>{
+      const now = Date.now();
+      for (const c of clients.values()) {
+        if (!c.stateEvalPromise && !c.injectionInFlight && (now - (c.lastStorageSyncAt || 0) > 15000)) {
+          c.lastStorageSyncAt = now;
+          syncClientStorage(c).catch(() => {});
+        }
+      }
+      rediscover().catch(()=>scheduleReconnect());
+    },5000);monitorTimer.unref?.();
   }
 
   function dispose(){

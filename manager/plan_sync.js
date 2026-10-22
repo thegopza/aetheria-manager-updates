@@ -39,17 +39,23 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
     await Promise.all(profiles.map(p => push(p, null, false)));
   }
 
-  // Bring online clients in line with their assignment (plan id + updatedAt)
+  // Bring online clients in line with their assignment (plan id + updatedAt, or clear unassigned)
   async function reconcile() {
     const data = loadPlans();
     const assignments = data.assignments || {};
-    const profiles = loadProfiles().filter(p => p.debugPort && assignments[p.id]);
+    const profiles = loadProfiles().filter(p => p.debugPort);
     for (const p of profiles) {
-      const plan = (data.profiles || []).find(x => x.id === assignments[p.id]);
-      if (!plan) continue;
-      const r = await evalProfilePort(p.debugPort, `(() => { const c = window.__currentScriptPlan; return typeof window.__applyScriptPlan === 'function' ? { id: c ? c.id : null, u: c ? c.updatedAt || null : null } : null; })()`, 3000);
+      const assignedId = assignments[p.id] || null;
+      const plan = assignedId ? (data.profiles || []).find(x => x.id === assignedId) : null;
+      const r = await evalProfilePort(p.debugPort, `(() => { const c = window.__currentScriptPlan; return typeof window.__applyScriptPlan === 'function' ? { id: c ? c.id : null, u: c ? c.updatedAt || null : null, en: !!window.__planScriptEnabled } : null; })()`, 4000);
       const cur = r && r.success ? r.result : null;
       if (!cur) continue;   // offline or bot not loaded yet
+      if (!plan) {
+        if (cur.id || cur.en) {
+          await push(p, null, false);
+        }
+        continue;
+      }
       const enablePending = Boolean(data.pendingEnable && data.pendingEnable[p.id]);
       if (cur.id !== plan.id || (cur.u || null) !== (plan.updatedAt || null) || enablePending) {
         // Assigned while this client was offline -> switch Plan Script on now that it got the plan

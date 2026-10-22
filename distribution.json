@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "4e3d127173bb24523d438c890d1f668b6776d263",
+  "sourceCommit": "07d7e1b3a7ece3cc95176163d8a4eb653463014e",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -160,7 +160,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "4481cebf59dc8cddbba3352999fe8bf6580320291d94e2dcbbfcf0a65f6be76b"
+      "sha256": "18b124139b86fbe4cd3be86b412f6e43b933e333e91ed6e05e2ffec82f4667da"
     },
     {
       "path": "manager/public/inventory_market.css",

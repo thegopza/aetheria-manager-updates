@@ -66,10 +66,32 @@
         </div>
       </header>
       <div class="gd-master-bar" id="gd-master-bar">
-        <label class="gd-switch-label" title="เมื่อเปิด ลูกกิลด์และหัวกิลด์ทุกจอที่มีไอเทมบริจาครายวันครบจะส่งบริจาคเข้ากิลด์ให้อัตโนมัติวันละ 1 ครั้ง">
-          <input type="checkbox" id="gd-global-autodonate" checked>
-          <span>🎁 บริจาคไอเทมกิลด์รายวันออโต้ทุกจอ (เมื่อมีของในกระเป๋า)</span>
-        </label>
+        <div class="gd-master-row">
+          <label class="gd-switch-label" title="เมื่อเปิด ตัวละครทุกจอที่มีกิลด์ในเกม (ทั้งกิลด์ที่สร้างใน Manager และกิลด์คนอื่น) ที่เปิดติ๊กบริจาคไว้จะบริจาคของรายวันให้อัตโนมัติ">
+            <input type="checkbox" id="gd-global-autodonate" checked>
+            <span>🎁 บริจาคไอเทมกิลด์รายวันออโต้ทุกจอ (รวมกิลด์คนอื่นที่ตัวละครสังกัด)</span>
+          </label>
+          <button type="button" class="gd-mini-btn gd-mini-btn-gold" id="gd-donate-all-items-btn" title="สั่งเช็กและบังคับบริจาคไอเทมรายวันทุกจอที่มีกิลด์ทันที">🎁 บังคับบริจาคของทุกจอ</button>
+        </div>
+        <div class="gd-zeny-bar" id="gd-zeny-bar">
+          <span class="gd-zeny-title">💰 บังคับบริจาคเงินเข้ากิลด์:</span>
+          <label class="gd-zeny-field" title="จำนวนเงิน Zeny ที่จะสั่งบริจาคต่อจอ (ขั้นต่ำ 10,000z · ทุก 10,000z = 1 EXP/แต้มกิลด์)">
+            <span>จำนวน/จอ</span>
+            <input type="number" id="gd-zeny-amount" class="gd-zeny-input" min="10000" step="10000" value="10000">
+          </label>
+          <div class="gd-zeny-presets">
+            <button type="button" class="gd-preset-btn" data-zeny-preset="10000">10k</button>
+            <button type="button" class="gd-preset-btn" data-zeny-preset="50000">50k</button>
+            <button type="button" class="gd-preset-btn" data-zeny-preset="100000">100k</button>
+            <button type="button" class="gd-preset-btn" data-zeny-preset="500000">500k</button>
+            <button type="button" class="gd-preset-btn" data-zeny-preset="1000000">1M</button>
+          </div>
+          <label class="gd-zeny-field" title="เก็บเงินสำรองติดตัวไว้ขั้นต่ำ (Zeny) จะไม่ดึงเงินส่วนนี้ไปบริจาค">
+            <span>เหลือติดตัว</span>
+            <input type="number" id="gd-zeny-keep" class="gd-zeny-input gd-zeny-keep" min="0" step="10000" value="0">
+          </label>
+          <button type="button" class="gd-mini-btn gd-mini-btn-gold" id="gd-donate-zeny-all-btn" title="บังคับบริจาคเงินเข้ากิลด์เรียงตัวทุกหน้าจอที่มีกิลด์ในเกม">💰 บริจาคเงินทุกจอ (เรียงตัว)</button>
+        </div>
       </div>
       <div class="gd-body" id="gd-body">
         <div class="gd-empty">กำลังโหลดข้อมูลกิลด์...</div>
@@ -88,6 +110,14 @@
     document.getElementById('gd-sync-now').addEventListener('click', onSyncNow);
     document.getElementById('gd-global-autodonate').addEventListener('change', async (e) => {
       await api('POST', '/api/guilds/settings', { autoDonate: e.target.checked });
+    });
+    document.getElementById('gd-donate-all-items-btn')?.addEventListener('click', onDonateAllItemsNow);
+    document.getElementById('gd-donate-zeny-all-btn')?.addEventListener('click', () => onDonateZenyBatch({ scope: 'all' }, document.getElementById('gd-donate-zeny-all-btn')));
+    drawer.querySelectorAll('[data-zeny-preset]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const inp = document.getElementById('gd-zeny-amount');
+        if (inp) inp.value = String(Number(btn.dataset.zenyPreset || 10000));
+      });
     });
     document.getElementById('gd-picker').addEventListener('click', (e) => {
       if (e.target.id === 'gd-picker') closePicker();
@@ -177,15 +207,80 @@
     return '';
   }
 
-  function renderMemberRow(m, guildId, isLeader) {
+  function getZenyInputs() {
+    const amtEl = document.getElementById('gd-zeny-amount');
+    const keepEl = document.getElementById('gd-zeny-keep');
+    const amount = Math.max(10000, Math.floor((Number(amtEl && amtEl.value) || 10000) / 10000) * 10000);
+    const keepZeny = Math.max(0, Math.floor(Number(keepEl && keepEl.value) || 0));
+    return { amount, keepZeny };
+  }
+
+  async function onDonateAllItemsNow(e) {
+    const btn = e.currentTarget;
+    const orig = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ กำลังบริจาคของ...';
+    try {
+      const res = await api('POST', '/api/guilds/donate-item', { scope: 'all' });
+      if (typeof showToast === 'function') {
+        if (res.donatedNow > 0) {
+          showToast(`🎁 สั่งบริจาคไอเทมรายวันสำเร็จเพิ่ม ${res.donatedNow} จอ`);
+        } else if (res.cooldownCount > 0) {
+          showToast(`🔒 ติดคูลดาวน์สมาชิกใหม่ 24 ชม. (${res.cooldownCount} จอ)`);
+        } else {
+          showToast('ℹ️ ไม่มีจอที่บริจาคของเพิ่มได้ในขณะนี้ (บริจาคแล้ว หรือยังไม่มีของครบ)');
+        }
+      }
+    } catch (err) {
+      if (typeof showToast === 'function') showToast(err.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+
+  async function onDonateZenyBatch(payload, btn) {
+    const { amount, keepZeny } = getZenyInputs();
+    const orig = btn ? btn.textContent : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = '⏳ กำลังบริจาคเงิน...';
+    }
+    try {
+      const res = await api('POST', '/api/guilds/donate-zeny', { ...payload, amount, keepZeny });
+      if (typeof showToast === 'function') {
+        if (res.donatedCount > 0) {
+          showToast(`💰 บริจาคเงินสำเร็จ ${res.donatedCount} จอ · รวม ${Number(res.totalZenyDonated || 0).toLocaleString()}z (+${res.totalExpGained || 0} EXP/แต้มกิลด์)`);
+        } else {
+          const firstReason = (res.results && res.results[0] && res.results[0].reason) || 'ไม่มีจอที่มีเงินเพียงพอ (ขั้นต่ำ 10,000z หลังหักเงินสำรอง)';
+          showToast(`ℹ️ ${firstReason}`, true);
+        }
+      }
+    } catch (err) {
+      if (typeof showToast === 'function') showToast(err.message, true);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = orig;
+      }
+    }
+  }
+
+  function renderMemberRow(m, guildId, isLeader, isExternal = false) {
     const charLabel = m.charName ? esc(m.charName) : `<span class="gd-dim">(ยังไม่เข้าเกม)</span>`;
     const subParts = [esc(m.name)];
     if (m.level) subParts.push(`Lv.${m.level}`);
     if (m.charClass) subParts.push(esc(m.charClass));
-    if (isLeader && m.zeny !== null && m.zeny !== undefined) {
+    if (m.zeny !== null && m.zeny !== undefined) {
       subParts.push(`💰 ${Number(m.zeny).toLocaleString()}z`);
     }
+    if (m.myPoints) {
+      subParts.push(`⭐ ${Number(m.myPoints).toLocaleString()} แต้ม`);
+    }
     const statusText = m.lastAction ? esc(m.lastAction) : (m.online ? 'ออนไลน์' : 'ออฟไลน์');
+    const roleTag = isExternal
+      ? `<span class="gd-ext-guild-badge" title="ตัวละครนี้สังกัดกิลด์ในเกมแล้ว (กิลด์คนอื่น / นอกรายการสร้างกิลด์)">🏰 ${esc(m.inGameGuildName || 'มีกิลด์')}${m.inGameGuildLevel ? ` Lv.${m.inGameGuildLevel}` : ''}</span>`
+      : (isLeader ? '<span class="gd-crown" title="หัวกิลด์">👑 หัวกิลด์</span>' : '<span class="gd-member-tag">ลูกกิลด์</span>');
 
     return `
       <div class="gd-slot ${isLeader ? 'is-leader' : 'is-member'} ${m.online ? 'is-online' : 'is-offline'}">
@@ -194,16 +289,24 @@
           <div class="gd-slot-top">
             <span class="gd-online-dot ${m.online ? 'on' : 'off'}" title="${m.online ? 'ออนไลน์ในเกม' : 'ออฟไลน์'}"></span>
             <span class="gd-char-name">${charLabel}</span>
-            ${isLeader ? '<span class="gd-crown" title="หัวกิลด์">👑 หัวกิลด์</span>' : '<span class="gd-member-tag">ลูกกิลด์</span>'}
+            ${roleTag}
             ${renderDonationBadge(m)}
           </div>
           <div class="gd-slot-sub">${subParts.join(' · ')}</div>
           <div class="gd-slot-status">${statusText}</div>
         </div>
         <div class="gd-slot-actions">
-          ${isLeader
-            ? `<button type="button" class="gd-icon-btn" data-act="change-leader" data-guild="${esc(guildId)}" title="เปลี่ยนหัวกิลด์">🔄</button>`
-            : `<button type="button" class="gd-icon-btn gd-danger" data-act="remove-member" data-guild="${esc(guildId)}" data-profile="${esc(m.id)}" title="เอาออกจากรายการกิลด์">✕</button>`
+          <label class="gd-slot-check" title="ติ๊กเพื่อเปิด/ปิดบริจาคของกิลด์รายวันอัตโนมัติของตัวละครนี้">
+            <input type="checkbox" data-act="toggle-profile-donate" data-profile="${esc(m.id)}" ${m.autoDonate !== false ? 'checked' : ''}>
+            <span>🎁 บริจาคของ</span>
+          </label>
+          <button type="button" class="gd-mini-btn" data-act="donate-item-profile" data-profile="${esc(m.id)}" ${(!m.online || !m.inGameGuildName || m.donatedToday) ? 'disabled' : ''} title="สั่งบริจาคของรายวันเฉพาะตัวละครนี้ทันที">🎁</button>
+          <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-zeny-profile" data-profile="${esc(m.id)}" ${(!m.online || !m.inGameGuildName || (m.zeny || 0) < 10000) ? 'disabled' : ''} title="สั่งบริจาคเงินเข้ากิลด์เฉพาะตัวละครนี้ทันที (ตามจำนวนเงินด้านบน)">💰 บริจาคเงิน</button>
+          ${!isExternal
+            ? (isLeader
+              ? `<button type="button" class="gd-icon-btn" data-act="change-leader" data-guild="${esc(guildId)}" title="เปลี่ยนหัวกิลด์">🔄</button>`
+              : `<button type="button" class="gd-icon-btn gd-danger" data-act="remove-member" data-guild="${esc(guildId)}" data-profile="${esc(m.id)}" title="เอาออกจากรายการกิลด์">✕</button>`)
+            : ''
           }
         </div>
       </div>
@@ -213,9 +316,11 @@
   function render() {
     const countEl = document.getElementById('gd-tab-count');
     const guilds = lastData.guilds || [];
+    const externalProfiles = lastData.externalGuildProfiles || [];
+    const badgeCount = guilds.length > 0 ? guilds.length : externalProfiles.length;
     if (countEl) {
-      countEl.textContent = String(guilds.length);
-      countEl.classList.toggle('has-guilds', guilds.length > 0);
+      countEl.textContent = String(badgeCount);
+      countEl.classList.toggle('has-guilds', badgeCount > 0);
     }
 
     const globalAutoDonateEl = document.getElementById('gd-global-autodonate');
@@ -226,13 +331,13 @@
     const body = document.getElementById('gd-body');
     if (!body) return;
 
-    if (guilds.length === 0) {
+    if (guilds.length === 0 && externalProfiles.length === 0) {
       body.innerHTML = `
         <div class="gd-empty">
           <div class="gd-empty-icon">🏰</div>
           <h3>ยังไม่ได้ตั้งค่ากิลด์</h3>
           <p>กด <b>"+ สร้าง / ตั้งกิลด์"</b> ด้านบน → เลือก<b>หัวกิลด์</b> → ตั้ง<b>ชื่อกิลด์</b> แล้วกด<b>ตกลง</b><br>
-          หัวกิลด์จะเข้ามาอยู่ในกล่อง ระบบจะดึงตัวละครที่ว่างเข้ากิลด์ให้ออโต้ และบริจาคไอเทมรายวันอัตโนมัติ</p>
+          หรือหากตัวละครเข้ากิลด์คนอื่นในเกมไว้แล้ว เมื่อออนไลน์จะแสดงรายชื่อให้ติ๊กบริจาคของและบริจาคเงินอัตโนมัติที่นี่</p>
           <button type="button" class="gd-btn gd-btn-primary" id="gd-empty-create">+ สร้าง / ตั้งกิลด์แรก</button>
         </div>
       `;
@@ -240,7 +345,7 @@
       return;
     }
 
-    body.innerHTML = guilds.map(g => {
+    const guildsHtml = guilds.map(g => {
       const displayName = g.inGameName || g.desiredName || g.name || 'กิลด์ใหม่';
       const lvBadge = g.guildLevel
         ? `<span class="gd-lv-badge" title="เลเวลกิลด์ในเกม (EXP ${g.guildExp || 0}/${g.guildExpToNext || 0})">Lv.${g.guildLevel} (${g.guildExp || 0}/${g.guildExpToNext || 0} EXP)</span>`
@@ -249,7 +354,7 @@
       const donateProgressBadge = `<span class="gd-donate-summary" title="จำนวนตัวละครที่บริจาครายวันแล้ววันนี้">🎁 บริจาคแล้ว ${g.donatedCount}/${g.totalAssigned}</span>`;
 
       const membersHtml = g.members.length > 0
-        ? g.members.map(m => renderMemberRow(m, g.id, false)).join('')
+        ? g.members.map(m => renderMemberRow(m, g.id, false, false)).join('')
         : `<div class="gd-no-members">ยังไม่มีลูกกิลด์ในกล่องนี้ — ระบบจะดึงตัวละครที่ออนไลน์และยังไม่มีกิลด์เข้าให้อัตโนมัติ หรือกด "+ เพิ่มสมาชิกเอง" ด้านล่าง</div>`;
 
       return `
@@ -274,12 +379,13 @@
                 <span>🎁 บริจาครายวันออโต้</span>
               </label>
               <button type="button" class="gd-mini-btn" data-act="trigger-autofill" data-guild="${esc(g.id)}" title="ดึงตัวละครที่ว่างทุกจอเข้ากิลด์นี้ทันที">⚡ ดึงคนว่างเข้ากิลด์</button>
-              <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="trigger-donate" data-guild="${esc(g.id)}" title="สั่งเช็กและบริจาคไอเทมรายวันทันที">🎁 บริจาคตอนนี้</button>
+              <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="trigger-donate" data-guild="${esc(g.id)}" title="สั่งเช็กและบริจาคไอเทมรายวันทันที">🎁 บริจาคของกิลด์นี้</button>
+              <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-zeny-guild" data-guild="${esc(g.id)}" title="บังคับบริจาคเงินเข้ากิลด์นี้เรียงตัวทุกจอ">💰 บริจาคเงินกิลด์นี้ (เรียงตัว)</button>
             </div>
           </div>
 
           <div class="gd-section-label">หัวกิลด์ (Guild Master)</div>
-          ${renderMemberRow(g.leader, g.id, true)}
+          ${renderMemberRow(g.leader, g.id, true, false)}
 
           <div class="gd-section-label">สมาชิกกิลด์ (${g.members.length} คน) — ระบบเชิญและกดรับเข้ากิลด์ให้อัตโนมัติ</div>
           <div class="gd-members-list">
@@ -292,6 +398,39 @@
         </section>
       `;
     }).join('');
+
+    let externalHtml = '';
+    if (externalProfiles.length > 0) {
+      const extDonated = externalProfiles.filter(m => m.donatedToday).length;
+      const allExtChecked = externalProfiles.every(m => m.autoDonate !== false);
+      const extRows = externalProfiles.map(m => renderMemberRow(m, null, false, true)).join('');
+      externalHtml = `
+        <section class="gd-card gd-external-card">
+          <div class="gd-card-head">
+            <div class="gd-card-title-row">
+              <span class="gd-card-emblem">🛡️</span>
+              <strong class="gd-ext-title">ตัวละครที่มีกิลด์ในเกม (กิลด์คนอื่น / นอกรายการ Manager)</strong>
+              <span class="gd-count-badge">${externalProfiles.length} ตัวละคร</span>
+              <span class="gd-donate-summary">🎁 บริจาคแล้ว ${extDonated}/${externalProfiles.length}</span>
+            </div>
+            <div class="gd-card-toggles">
+              <label class="gd-mini-toggle" title="ติ๊กเพื่อเปิด/ปิดบริจาคของรายวันออโต้ของตัวละครกิลด์นอกทั้งหมด">
+                <input type="checkbox" data-act="toggle-external-all-donate" ${allExtChecked ? 'checked' : ''}>
+                <span>🎁 บริจาคของออโต้ทั้งหมด</span>
+              </label>
+              <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-item-external" title="สั่งบริจาคของรายวันเฉพาะตัวละครที่สังกัดกิลด์นอกทันที">🎁 บริจาคของกิลด์นอกตอนนี้</button>
+              <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-zeny-external" title="บังคับบริจาคเงินเรียงตัวเฉพาะตัวละครที่สังกัดกิลด์นอก">💰 บริจาคเงินกิลด์นอก (เรียงตัว)</button>
+            </div>
+          </div>
+          <div class="gd-section-label">รายชื่อตัวละครที่มีกิลด์ในเกม — เลือกติ๊กบริจาคของรายตัว หรือกดบังคับบริจาคเงินได้ทันที</div>
+          <div class="gd-members-list">
+            ${extRows}
+          </div>
+        </section>
+      `;
+    }
+
+    body.innerHTML = guildsHtml + externalHtml;
 
     bindCardEvents(body);
   }
@@ -336,6 +475,34 @@
         });
         return;
       }
+      if (act === 'toggle-profile-donate') {
+        el.addEventListener('change', async () => {
+          try {
+            await api('POST', '/api/guilds/profile-donate', { profileId: el.dataset.profile, autoDonate: el.checked });
+            if (typeof showToast === 'function') {
+              showToast(el.checked ? '🎁 เปิดบริจาคของรายวันออโต้สำหรับตัวละครนี้แล้ว' : '⏸️ ปิดบริจาคของรายวันออโต้สำหรับตัวละครนี้แล้ว');
+            }
+          } catch (err) {
+            if (typeof showToast === 'function') showToast(err.message, true);
+          }
+        });
+        return;
+      }
+      if (act === 'toggle-external-all-donate') {
+        el.addEventListener('change', async () => {
+          try {
+            const extIds = (lastData.externalGuildProfiles || []).map(p => p.id);
+            if (extIds.length === 0) return;
+            await api('POST', '/api/guilds/profile-donate', { profileIds: extIds, autoDonate: el.checked });
+            if (typeof showToast === 'function') {
+              showToast(el.checked ? '🎁 เปิดบริจาคของออโต้ให้ตัวละครกิลด์นอกทั้งหมดแล้ว' : '⏸️ ปิดบริจาคของออโต้ให้ตัวละครกิลด์นอกทั้งหมดแล้ว');
+            }
+          } catch (err) {
+            if (typeof showToast === 'function') showToast(err.message, true);
+          }
+        });
+        return;
+      }
       el.addEventListener('click', async () => {
         try {
           if (act === 'add-member') {
@@ -349,6 +516,38 @@
           } else if (act === 'trigger-autofill') {
             await api('POST', `/api/guilds/${encodeURIComponent(guildId)}/auto-fill`);
             if (typeof showToast === 'function') showToast('🤖 ดึงตัวละครที่ว่างเข้ากิลด์เรียบร้อย');
+          } else if (act === 'donate-item-profile') {
+            el.disabled = true;
+            try {
+              const res = await api('POST', '/api/guilds/donate-item', { profileId: el.dataset.profile });
+              if (typeof showToast === 'function') {
+                if (res.donatedNow > 0) showToast('🎁 บริจาคไอเทมรายวันสำเร็จ');
+                else if (res.cooldownCount > 0) showToast('🔒 ติดคูลดาวน์สมาชิกใหม่ 24 ชม.');
+                else showToast('ℹ️ ตัวละครนี้ยังไม่มีไอเทมบริจาครายวันครบตามจำนวน หรือบริจาคไปแล้ว', true);
+              }
+            } finally {
+              el.disabled = false;
+            }
+          } else if (act === 'donate-item-external') {
+            el.disabled = true;
+            const orig = el.textContent;
+            el.textContent = '⏳ กำลังเช็ก...';
+            try {
+              const res = await api('POST', '/api/guilds/donate-item', { scope: 'external' });
+              if (typeof showToast === 'function') {
+                if (res.donatedNow > 0) showToast(`🎁 บริจาคของกิลด์นอกสำเร็จเพิ่ม ${res.donatedNow} จอ`);
+                else showToast('ℹ️ ไม่มีจอกิลด์นอกที่บริจาคของเพิ่มได้ในขณะนี้');
+              }
+            } finally {
+              el.disabled = false;
+              el.textContent = orig;
+            }
+          } else if (act === 'donate-zeny-profile') {
+            await onDonateZenyBatch({ profileId: el.dataset.profile }, el);
+          } else if (act === 'donate-zeny-guild') {
+            await onDonateZenyBatch({ guildId }, el);
+          } else if (act === 'donate-zeny-external') {
+            await onDonateZenyBatch({ scope: 'external' }, el);
           } else if (act === 'trigger-donate') {
             el.disabled = true;
             const origText = el.textContent;

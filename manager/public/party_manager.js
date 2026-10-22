@@ -231,6 +231,7 @@
       <div class="pt-toggles">
         <label class="pt-toggle"><input type="checkbox" data-set="syncMap" data-party="${esc(p.id)}" ${p.syncMap ? 'checked' : ''}>ตามแมพ + CH หัวตี้</label>
         <label class="pt-toggle"><input type="checkbox" data-set="autoFill" data-party="${esc(p.id)}" ${p.autoFill ? 'checked' : ''}>เติมสมาชิกอัตโนมัติ</label>
+        <label class="pt-toggle" title="เปิด/ปิดระบบ Priest เดินบัฟของตี้นี้ (ถ้าปิดจะทำแค่เชิญตี้/ซิงค์ตี้ปกติ ไม่ใช้ Flow พระเดินบัฟ)"><input type="checkbox" data-set="priestFlow" data-party="${esc(p.id)}" ${p.priestFlow !== false ? 'checked' : ''}>ระบบ Priest (บัฟตี้)</label>
       </div>
       <div class="pt-notes" hidden></div>`;
     patchCardEl(el, p);
@@ -339,6 +340,9 @@
     if (syncCb && syncCb.checked !== Boolean(p.syncMap)) syncCb.checked = Boolean(p.syncMap);
     const fillCb = cardEl.querySelector('input[data-set="autoFill"]');
     if (fillCb && fillCb.checked !== Boolean(p.autoFill)) fillCb.checked = Boolean(p.autoFill);
+    const priestFlowCb = cardEl.querySelector('input[data-set="priestFlow"]');
+    const priestFlowVal = p.priestFlow !== false;
+    if (priestFlowCb && priestFlowCb.checked !== priestFlowVal) priestFlowCb.checked = priestFlowVal;
 
     // Notes
     const notesBox = cardEl.querySelector('.pt-notes');
@@ -563,6 +567,8 @@
       if (r.success === false) toast(r.error || 'บันทึกไม่สำเร็จ', 'error');
       else if (t.dataset.set === 'memberFollow') {
         toast(t.value === 'none' ? 'เปลี่ยนเป็นโหมดแยกตีอิสระแล้ว' : 'ตั้งค่าโหมดเดินตามแล้ว', 'success');
+      } else if (t.dataset.set === 'priestFlow') {
+        toast(t.checked ? 'เปิดระบบ Priest (เดินบัฟอัตโนมัติ) แล้ว' : 'ปิดระบบ Priest แล้ว (ทำงานเฉพาะระบบเชิญตี้ปกติ)', 'success');
       }
     } finally { busy = false; t.blur(); }
   }

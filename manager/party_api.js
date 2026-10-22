@@ -288,6 +288,7 @@ function isPriestClass(cls) {
 
 function findPartyPriest(party, profiles, states) {
   if (!party || !states) return null;
+  if (party.priestFlow === false) return null;
   const L = states.get(party.leaderId);
   const inGame = new Set(inGameMemberNames(L));
   const allIds = [party.leaderId].concat(Array.isArray(party.memberIds) ? party.memberIds : []);
@@ -406,6 +407,7 @@ function sanitizeParty(p) {
     lootMode: LOOT_MODES.includes(p.lootMode) ? p.lootMode : 'personal',
     syncMap: p.syncMap !== false,
     autoFill: p.autoFill !== false,
+    priestFlow: p.priestFlow !== false,
     followModes: {},
     createdAt: Number(p.createdAt) || Date.now()
   };
@@ -776,7 +778,7 @@ function createPartyService(opts) {
         ? { mode: 'none', targetId: null, targetName: null, targetSnap: null }
         : resolveFollowTarget(party, id, profiles, states);
       if (ft.mode === 'none' || ft.viaPriest) {
-        if (!S.follow || S.returningToPriest) continue;
+        if (!S.follow || (party.priestFlow !== false && S.returningToPriest)) continue;
         if (now() - (m.unfollowAt || 0) < T.unfollowCooldownMs) continue;
         m.unfollowAt = now();
         const prev = S.follow;
@@ -926,41 +928,44 @@ function createPartyService(opts) {
     }
 
     // Push Priest-centric sync state + priority buffQueue to all clients in the party that support updatePartySyncState
+    const priestFlowEnabled = party.priestFlow !== false;
     const buffQueue = [];
-    for (const id of [party.leaderId].concat(party.memberIds)) {
-      const s = states.get(id);
-      if (!s || !s.ok || !s.name) continue;
-      if (priest && String(priest.id) === String(id)) continue;
-      if (priest && priest.snap && priest.snap.ok) {
-        if (s.mapId !== priest.snap.mapId || s.channel !== priest.snap.channel) continue;
+    if (priestFlowEnabled) {
+      for (const id of [party.leaderId].concat(party.memberIds)) {
+        const s = states.get(id);
+        if (!s || !s.ok || !s.name) continue;
+        if (priest && String(priest.id) === String(id)) continue;
+        if (priest && priest.snap && priest.snap.ok) {
+          if (s.mapId !== priest.snap.mapId || s.channel !== priest.snap.channel) continue;
+        }
+        const bs = s.buffStatus || {};
+        const minCoreBuffMs = typeof bs.minCoreBuffMs === 'number'
+          ? bs.minCoreBuffMs
+          : Math.min(typeof bs.blessingMs === 'number' ? bs.blessingMs : 999999, typeof bs.agiMs === 'number' ? bs.agiMs : 999999);
+        const hpPct = typeof bs.hpPct === 'number' ? bs.hpPct : 1;
+        const needsHeal = Boolean(bs.needsHeal || (hpPct > 0 && hpPct < 0.65));
+        const needsBuff = Boolean(s.needsPriestBuff || s.returningToPriest || bs.needsBuff || minCoreBuffMs < 25000);
+        if (needsHeal || needsBuff) {
+          buffQueue.push({
+            id: String(id),
+            name: s.name,
+            hpPct,
+            minCoreBuffMs,
+            blessingMs: typeof bs.blessingMs === 'number' ? bs.blessingMs : 0,
+            agiMs: typeof bs.agiMs === 'number' ? bs.agiMs : 0,
+            needsHeal,
+            needsBuff,
+            returningToPriest: Boolean(s.returningToPriest)
+          });
+        }
       }
-      const bs = s.buffStatus || {};
-      const minCoreBuffMs = typeof bs.minCoreBuffMs === 'number'
-        ? bs.minCoreBuffMs
-        : Math.min(typeof bs.blessingMs === 'number' ? bs.blessingMs : 999999, typeof bs.agiMs === 'number' ? bs.agiMs : 999999);
-      const hpPct = typeof bs.hpPct === 'number' ? bs.hpPct : 1;
-      const needsHeal = Boolean(bs.needsHeal || (hpPct > 0 && hpPct < 0.65));
-      const needsBuff = Boolean(s.needsPriestBuff || s.returningToPriest || bs.needsBuff || minCoreBuffMs < 25000);
-      if (needsHeal || needsBuff) {
-        buffQueue.push({
-          id: String(id),
-          name: s.name,
-          hpPct,
-          minCoreBuffMs,
-          blessingMs: typeof bs.blessingMs === 'number' ? bs.blessingMs : 0,
-          agiMs: typeof bs.agiMs === 'number' ? bs.agiMs : 0,
-          needsHeal,
-          needsBuff,
-          returningToPriest: Boolean(s.returningToPriest)
-        });
-      }
+      // Sort by priority: 1) Emergency heal (lowest HP% first) -> 2) Lowest remaining core buff time first
+      buffQueue.sort((a, b) => {
+        if (a.needsHeal !== b.needsHeal) return a.needsHeal ? -1 : 1;
+        if (a.needsHeal && b.needsHeal && Math.abs(a.hpPct - b.hpPct) > 0.05) return a.hpPct - b.hpPct;
+        return a.minCoreBuffMs - b.minCoreBuffMs;
+      });
     }
-    // Sort by priority: 1) Emergency heal (lowest HP% first) -> 2) Lowest remaining core buff time first
-    buffQueue.sort((a, b) => {
-      if (a.needsHeal !== b.needsHeal) return a.needsHeal ? -1 : 1;
-      if (a.needsHeal && b.needsHeal && Math.abs(a.hpPct - b.hpPct) > 0.05) return a.hpPct - b.hpPct;
-      return a.minCoreBuffMs - b.minCoreBuffMs;
-    });
 
     const membersNeedingBuff = buffQueue.length;
     const syncAvoidInfo = getAvoidChannelsForParty(
@@ -988,6 +993,7 @@ function createPartyService(opts) {
       await act(P, ACTIONS.syncClientPartyState({
         partyId: party.id,
         leaderName: L.name,
+        priestFlow: priestFlowEnabled,
         priestName: priest ? priest.name : null,
         isAnchorPriest: Boolean(priest && String(priest.id) === String(id)),
         followMode: effMode,
@@ -1190,6 +1196,7 @@ function createPartyService(opts) {
       const rt = prt(p.id);
       return {
         id: p.id, index: i + 1, expMode: p.expMode, lootMode: p.lootMode, syncMap: p.syncMap, autoFill: p.autoFill,
+        priestFlow: p.priestFlow !== false,
         followModes: p.followModes || {},
         leader: Object.assign(memberView(p, p.leaderId, profiles, L), L && L.ok ? { status: 'leader', statusText: L.party && L.party.leader === L.name ? 'หัวตี้' : 'หัวตี้ (ยังไม่มีสมาชิก)' } : {}),
         members: p.memberIds.map(id => memberView(p, id, profiles, L)),
@@ -1251,7 +1258,7 @@ function createPartyService(opts) {
         ? body.memberIds.map(String).filter(id => id && id !== leaderId && profiles.has(id) && !taken.has(id))
         : [];
       const party = sanitizeParty({ id: 'party_' + now().toString(36) + Math.random().toString(36).slice(2, 6), leaderId,
-        memberIds: initialMembers, autoFill: body.autoFill, syncMap: body.syncMap, followModes: body.followModes,
+        memberIds: initialMembers, autoFill: body.autoFill, syncMap: body.syncMap, priestFlow: body.priestFlow, followModes: body.followModes,
         expMode: body.expMode, lootMode: body.lootMode, createdAt: now() });
       parties.push(party);
       save();
@@ -1269,6 +1276,7 @@ function createPartyService(opts) {
       if (body.lootMode !== undefined) { if (!LOOT_MODES.includes(body.lootMode)) { sendJSON({ success: false, error: 'โหมดไอเทมไม่ถูกต้อง' }, 400); return true; } party.lootMode = body.lootMode; }
       if (body.syncMap !== undefined) party.syncMap = !!body.syncMap;
       if (body.autoFill !== undefined) party.autoFill = !!body.autoFill;
+      if (body.priestFlow !== undefined) party.priestFlow = !!body.priestFlow;
       if (body.followModes && typeof body.followModes === 'object') {
         party.followModes = Object.assign({}, party.followModes || {}, body.followModes);
         party.followModes = sanitizeFollowModes(party);

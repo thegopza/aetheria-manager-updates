@@ -134,12 +134,114 @@ body.gd-open #gd-drawer {
 }
 
 .gd-master-bar {
-  padding: 9px 16px;
+  padding: 10px 16px;
   background: rgba(16, 185, 129, 0.12);
   border-bottom: 1px solid rgba(16, 185, 129, 0.25);
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.gd-master-row {
+  display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.gd-zeny-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.gd-zeny-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #fde047;
+  white-space: nowrap;
+}
+.gd-zeny-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(250, 204, 21, 0.3);
+  border-radius: 7px;
+  padding: 3px 8px;
+}
+.gd-zeny-input {
+  width: 92px;
+  background: transparent;
+  border: none;
+  color: #fef08a;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+  outline: none;
+}
+.gd-zeny-presets {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.gd-preset-btn {
+  background: rgba(30, 41, 59, 0.8);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.gd-preset-btn:hover {
+  border-color: #facc15;
+  color: #fef08a;
+  background: rgba(234, 179, 8, 0.16);
+}
+.gd-slot-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: #e2e8f0;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  border-radius: 7px;
+  padding: 4px 8px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.gd-slot-check input[type="checkbox"] {
+  accent-color: #10b981;
+  cursor: pointer;
+}
+.gd-ext-guild-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(56, 189, 248, 0.16);
+  color: #7dd3fc;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.gd-external-card {
+  border-color: rgba(56, 189, 248, 0.38) !important;
+}
+.gd-ext-title {
+  font-size: 14px;
+  color: #e0f2fe;
 }
 .gd-switch-label {
   display: inline-flex;

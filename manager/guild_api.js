@@ -297,6 +297,8 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         if (raw && Array.isArray(raw.guilds)) {
           return {
             autoDonate: raw.autoDonate !== false,
+            profileDonate: (raw.profileDonate && typeof raw.profileDonate === 'object') ? raw.profileDonate : {},
+            lastDonatedDateByProfile: (raw.lastDonatedDateByProfile && typeof raw.lastDonatedDateByProfile === 'object') ? raw.lastDonatedDateByProfile : {},
             guilds: raw.guilds.map(g => ({
               id: String(g.id),
               name: String(g.name || '').trim(),
@@ -314,7 +316,16 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     } catch (e) {
       console.error('[Guild] Failed to load guilds.json:', e.message);
     }
-    return { autoDonate: true, guilds: [] };
+    return { autoDonate: true, profileDonate: {}, lastDonatedDateByProfile: {}, guilds: [] };
+  }
+
+  function isProfileDonateEnabled(profileId) {
+    const id = String(profileId || '');
+    if (!id) return false;
+    if (state.profileDonate && typeof state.profileDonate[id] === 'boolean') {
+      return state.profileDonate[id];
+    }
+    return true;
   }
 
   function saveState() {
@@ -439,30 +450,42 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
   }
 
   async function tryAutoDonateForProfile(g, profileId, profile, probe, force = false) {
-    if (!force && (state.autoDonate === false || g.autoDonate === false)) return false;
+    const pid = String(profileId);
+    if (!force) {
+      if (state.autoDonate === false) return false;
+      if (g && g.autoDonate === false) return false;
+      if (!isProfileDonateEnabled(pid)) return false;
+    }
     if (!profile || !profile.debugPort || !probe || !probe.inWorld) return false;
     const ig = probe.inGameGuild;
     if (!ig || !ig.id) return false;
+    if (!state.lastDonatedDateByProfile) state.lastDonatedDateByProfile = {};
     if (ig.donatedToday) {
-      delete donateBackoffUntil[profileId];
-      delete donateBackoffNote[profileId];
+      delete donateBackoffUntil[pid];
+      delete donateBackoffNote[pid];
       const today = getThaiDateKey();
-      if (g.lastDonatedDateByProfile[profileId] !== today) {
-        g.lastDonatedDateByProfile[profileId] = today;
-        saveState();
+      let dirty = false;
+      if (g && g.lastDonatedDateByProfile && g.lastDonatedDateByProfile[pid] !== today) {
+        g.lastDonatedDateByProfile[pid] = today;
+        dirty = true;
       }
+      if (state.lastDonatedDateByProfile[pid] !== today) {
+        state.lastDonatedDateByProfile[pid] = today;
+        dirty = true;
+      }
+      if (dirty) saveState();
       return false;
     }
     if (!force && probe.newMemberCooldownNote) {
-      donateBackoffUntil[profileId] = probe.newMemberUnlockAt && probe.newMemberUnlockAt > Date.now()
+      donateBackoffUntil[pid] = probe.newMemberUnlockAt && probe.newMemberUnlockAt > Date.now()
         ? Math.min(probe.newMemberUnlockAt, Date.now() + 15 * 60 * 1000)
         : (Date.now() + 15 * 60 * 1000);
-      donateBackoffNote[profileId] = probe.newMemberCooldownNote;
-      setActionNote(profileId, probe.newMemberCooldownNote);
+      donateBackoffNote[pid] = probe.newMemberCooldownNote;
+      setActionNote(pid, probe.newMemberCooldownNote);
       return false;
     }
-    if (!force && donateBackoffUntil[profileId] && donateBackoffUntil[profileId] > Date.now()) {
-      setActionNote(profileId, donateBackoffNote[profileId] || 'รอครบ 24 ชม. จึงบริจาคได้');
+    if (!force && donateBackoffUntil[pid] && donateBackoffUntil[pid] > Date.now()) {
+      setActionNote(pid, donateBackoffNote[pid] || 'รอครบ 24 ชม. จึงบริจาคได้');
       return false;
     }
     const tiers = Array.isArray(probe.donatableTiers) ? probe.donatableTiers : [];
@@ -473,10 +496,11 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     await new Promise(r => setTimeout(r, 550));
     const after = await probeClient(profile.debugPort);
     if (after && after.inWorld) {
-      liveStatus[profileId] = {
-        ...(liveStatus[profileId] || {}),
+      liveStatus[pid] = {
+        ...(liveStatus[pid] || {}),
         online: true,
         charName: after.charName,
+        zeny: after.zeny,
         inGameGuild: after.inGameGuild,
         donatedToday: !!(after.inGameGuild && after.inGameGuild.donatedToday),
         myPoints: after.inGameGuild ? after.inGameGuild.myPoints : 0,
@@ -484,23 +508,85 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         cooldownNote: after.newMemberCooldownNote || null
       };
       if (after.inGameGuild && after.inGameGuild.donatedToday) {
-        delete donateBackoffUntil[profileId];
-        delete donateBackoffNote[profileId];
+        delete donateBackoffUntil[pid];
+        delete donateBackoffNote[pid];
         const today = getThaiDateKey();
-        g.lastDonatedDateByProfile[profileId] = today;
+        if (g && g.lastDonatedDateByProfile) g.lastDonatedDateByProfile[pid] = today;
+        state.lastDonatedDateByProfile[pid] = today;
         saveState();
-        setActionNote(profileId, `บริจาครายวัน Tier ${chosen.tier} (+${chosen.exp} EXP)`);
+        setActionNote(pid, `บริจาคของรายวัน Tier ${chosen.tier} (+${chosen.exp} EXP)`);
         return true;
       }
       const note = after.newMemberCooldownNote || 'รอครบ 24 ชม. จึงบริจาคได้';
-      donateBackoffUntil[profileId] = after.newMemberUnlockAt && after.newMemberUnlockAt > Date.now()
+      donateBackoffUntil[pid] = after.newMemberUnlockAt && after.newMemberUnlockAt > Date.now()
         ? Math.min(after.newMemberUnlockAt, Date.now() + 15 * 60 * 1000)
         : (Date.now() + 15 * 60 * 1000);
-      donateBackoffNote[profileId] = note;
-      setActionNote(profileId, note);
+      donateBackoffNote[pid] = note;
+      setActionNote(pid, note);
       return false;
     }
     return false;
+  }
+
+  async function donateZenyForProfile(profileId, profile, amount, keepZeny = 0) {
+    const pid = String(profileId || '');
+    if (!profile || !profile.debugPort) {
+      return { ok: false, profileId: pid, reason: 'โปรไฟล์ไม่ได้เปิดจอเกม' };
+    }
+    const probe = await probeClient(profile.debugPort);
+    if (!probe || !probe.inWorld || !probe.roomOpen) {
+      return { ok: false, profileId: pid, reason: 'ตัวละครไม่ได้ออนไลน์ในเกม' };
+    }
+    const ig = probe.inGameGuild;
+    if (!ig || !ig.id) {
+      return { ok: false, profileId: pid, charName: probe.charName, reason: 'ตัวละครยังไม่มีกิลด์ในเกม' };
+    }
+    const curZeny = Math.max(0, Math.floor(Number(probe.zeny || 0)));
+    const reserve = Math.max(0, Math.floor(Number(keepZeny || 0)));
+    const spendable = Math.max(0, curZeny - reserve);
+    const reqAmount = (amount === 'all' || Number(amount) <= 0)
+      ? spendable
+      : Math.min(Math.floor(Number(amount || 0)), spendable);
+    const finalAmount = Math.floor(reqAmount / 10000) * 10000;
+    if (finalAmount < 10000) {
+      const reason = curZeny < 10000
+        ? `เงินไม่พอ (${curZeny.toLocaleString()}z < 10,000z)`
+        : (spendable < 10000
+          ? `เงินหลังหักสำรองไม่ถึง 10,000z (มี ${curZeny.toLocaleString()}z, เก็บไว้ ${reserve.toLocaleString()}z)`
+          : 'จำนวนเงินบริจาคต้องอย่างน้อย 10,000z (ทวีคูณละ 10,000z)');
+      setActionNote(pid, reason);
+      return { ok: false, skipped: true, profileId: pid, charName: probe.charName, guildName: ig.name, zeny: curZeny, reason };
+    }
+
+    await evalProfilePort(profile.debugPort, sendGuildActionJs({ action: 'donateZeny', amount: finalAmount }), 3500);
+    await new Promise(r => setTimeout(r, 600));
+    const after = await probeClient(profile.debugPort);
+    const zenyAfter = (after && after.inWorld && typeof after.zeny === 'number') ? after.zeny : Math.max(0, curZeny - finalAmount);
+    const actualDonated = Math.max(0, curZeny - zenyAfter) || finalAmount;
+    const expGained = Math.floor(actualDonated / 10000);
+    if (after && after.inWorld) {
+      liveStatus[pid] = {
+        ...(liveStatus[pid] || {}),
+        online: true,
+        charName: after.charName,
+        zeny: after.zeny,
+        inGameGuild: after.inGameGuild,
+        donatedToday: !!(after.inGameGuild && after.inGameGuild.donatedToday),
+        myPoints: after.inGameGuild ? after.inGameGuild.myPoints : 0,
+        donatableTiers: after.donatableTiers || []
+      };
+    }
+    setActionNote(pid, `บริจาคเงิน ${actualDonated.toLocaleString()}z (+${expGained} EXP/แต้ม)`);
+    return {
+      ok: true,
+      profileId: pid,
+      charName: probe.charName,
+      guildName: ig.name,
+      donatedAmount: actualDonated,
+      expGained,
+      zenyBefore: curZeny,
+      zenyAfter
+    };
   }
 
   async function syncSingleGuild(g, byId, probes) {
@@ -718,7 +804,6 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
   async function syncAllGuilds() {
     if (syncInFlight) return { skipped: 'in-flight' };
     if (typeof isBusy === 'function' && isBusy()) return { skipped: 'busy' };
-    if (state.guilds.length === 0) return { ok: true, count: 0 };
 
     syncInFlight = true;
     try {
@@ -730,6 +815,30 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
           console.error(`[Guild] sync error on ${g.id}:`, e.message);
         }
       }
+
+      // Sync daily item auto-donation for characters in external guilds (not in any Manager guild card)
+      const assigned = new Set();
+      for (const g of state.guilds) {
+        assigned.add(String(g.leaderId));
+        for (const m of g.memberIds) assigned.add(String(m));
+      }
+      for (const [pid, p] of byId.entries()) {
+        if (assigned.has(pid)) continue;
+        const pr = probes.get(pid);
+        if (!p || !pr || !pr.inWorld || !pr.inGameGuild) continue;
+        try {
+          const donated = await tryAutoDonateForProfile(null, pid, p, pr, false);
+          if (!donated) {
+            const isDonated = !!(pr.inGameGuild && pr.inGameGuild.donatedToday);
+            const cooldownNote = pr.newMemberCooldownNote || (donateBackoffUntil[pid] > Date.now() ? donateBackoffNote[pid] : null);
+            const donateOff = !isProfileDonateEnabled(pid) || state.autoDonate === false;
+            setActionNote(pid, isDonated ? 'บริจาครายวันแล้ว' : (donateOff ? 'ปิดบริจาคของออโต้ไว้' : (cooldownNote || `สังกัดกิลด์ ${pr.inGameGuild.name}`)));
+          }
+        } catch (e) {
+          console.error(`[Guild] external donate error on ${pid}:`, e.message);
+        }
+      }
+
       return { ok: true, count: state.guilds.length };
     } finally {
       syncInFlight = false;
@@ -772,6 +881,10 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         online: !!ls.online,
         inGameGuildName: ig ? ig.name : null,
         inGameGuildLevel: ig ? ig.level : null,
+        inGameGuildExp: ig ? ig.exp : null,
+        inGameGuildExpToNext: ig ? ig.expToNext : null,
+        tierSummaries: ig ? (ig.tierSummaries || []) : [],
+        autoDonate: isProfileDonateEnabled(id),
         donatedToday: !!(ig && ig.donatedToday),
         myPoints: ig ? ig.myPoints : 0,
         canDonateCount: Array.isArray(ls.donatableTiers) ? ls.donatableTiers.length : 0,
@@ -836,9 +949,13 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       .filter(p => !assigned.has(String(p.id)))
       .map(p => decorateProfile(p.id));
 
+    const externalGuildProfiles = availableProfiles.filter(p => Boolean(p.inGameGuildName));
+
     return {
       autoDonate: state.autoDonate !== false,
+      profileDonate: state.profileDonate || {},
       guilds,
+      externalGuildProfiles,
       availableProfiles,
       allProfiles: profiles.map(p => ({
         ...decorateProfile(p.id),
@@ -884,8 +1001,159 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         if (typeof body.autoDonate === 'boolean') {
           state.autoDonate = body.autoDonate;
           saveState();
+          if (body.autoDonate) syncAllGuilds().catch(() => {});
         }
         return sendJSON({ success: true, ...buildPublicView() }), true;
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400), true;
+      }
+    }
+
+    // POST /api/guilds/profile-donate — toggle per-character item autoDonate (works for both managed & external guilds)
+    if (req.method === 'POST' && pathname === '/api/guilds/profile-donate') {
+      try {
+        const body = await readBody(req);
+        if (!state.profileDonate || typeof state.profileDonate !== 'object') state.profileDonate = {};
+        const enabled = !!body.autoDonate;
+        const ids = Array.isArray(body.profileIds)
+          ? body.profileIds.map(String).filter(Boolean)
+          : (body.profileId ? [String(body.profileId)] : []);
+        if (ids.length === 0) {
+          return sendJSON({ success: false, error: 'กรุณาระบุตัวละคร' }, 400), true;
+        }
+        for (const id of ids) {
+          state.profileDonate[id] = enabled;
+        }
+        saveState();
+        if (enabled) syncAllGuilds().catch(() => {});
+        return sendJSON({ success: true, ...buildPublicView() }), true;
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400), true;
+      }
+    }
+
+    // POST /api/guilds/donate-item — force immediate daily material donation (single profile, external guilds, or all guilded profiles)
+    if (req.method === 'POST' && pathname === '/api/guilds/donate-item') {
+      try {
+        const body = await readBody(req);
+        const { byId, results: probes } = await probeAllConfigured();
+        const assigned = new Set();
+        for (const g of state.guilds) {
+          assigned.add(String(g.leaderId));
+          for (const m of g.memberIds) assigned.add(String(m));
+        }
+        let targetIds = [];
+        if (body.profileId) {
+          targetIds = [String(body.profileId)];
+        } else if (Array.isArray(body.profileIds) && body.profileIds.length > 0) {
+          targetIds = body.profileIds.map(String);
+        } else if (body.scope === 'external') {
+          targetIds = Array.from(byId.keys()).filter(pid => !assigned.has(pid));
+        } else {
+          targetIds = Array.from(byId.keys());
+        }
+
+        let donatedNow = 0;
+        let cooldownCount = 0;
+        let missingItemsCount = 0;
+        let alreadyDonatedCount = 0;
+        for (const pid of targetIds) {
+          const p = byId.get(pid);
+          const pr = probes.get(pid);
+          if (!p || !pr || !pr.inWorld || !pr.inGameGuild) continue;
+          if (pr.inGameGuild.donatedToday) {
+            alreadyDonatedCount++;
+            continue;
+          }
+          const tiers = Array.isArray(pr.donatableTiers) ? pr.donatableTiers : [];
+          if (tiers.length === 0) {
+            missingItemsCount++;
+            continue;
+          }
+          const gCard = findGuildOfProfile(pid);
+          const ok = await tryAutoDonateForProfile(gCard, pid, p, pr, true);
+          if (ok) donatedNow++;
+          else cooldownCount++;
+        }
+        await probeAllConfigured().catch(() => {});
+        return sendJSON({ success: true, donatedNow, cooldownCount, missingItemsCount, alreadyDonatedCount, ...buildPublicView() }), true;
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400), true;
+      }
+    }
+
+    // POST /api/guilds/donate-zeny — force donate Zeny to guild (single character or sequential across guild/external/all screens)
+    if (req.method === 'POST' && pathname === '/api/guilds/donate-zeny') {
+      try {
+        const body = await readBody(req);
+        const amount = body.amount === 'all' ? 'all' : Math.floor(Number(body.amount || 0));
+        const keepZeny = Math.max(0, Math.floor(Number(body.keepZeny || 0)));
+        if (amount !== 'all' && amount < 10000) {
+          return sendJSON({ success: false, error: 'จำนวนเงินบริจาคต้องอย่างน้อย 10,000 Zeny (10,000z = 1 EXP กิลด์)' }, 400), true;
+        }
+        const { byId, results: probes } = await probeAllConfigured();
+        const assigned = new Set();
+        for (const g of state.guilds) {
+          assigned.add(String(g.leaderId));
+          for (const m of g.memberIds) assigned.add(String(m));
+        }
+
+        let targetIds = [];
+        if (body.profileId) {
+          targetIds = [String(body.profileId)];
+        } else if (Array.isArray(body.profileIds) && body.profileIds.length > 0) {
+          targetIds = body.profileIds.map(String);
+        } else if (body.guildId) {
+          const g = state.guilds.find(x => x.id === String(body.guildId));
+          if (!g) return sendJSON({ success: false, error: 'ไม่พบกิลด์ที่ระบุ' }, 404), true;
+          targetIds = [String(g.leaderId), ...g.memberIds.map(String)];
+        } else if (body.scope === 'external') {
+          targetIds = Array.from(byId.keys()).filter(pid => !assigned.has(pid));
+        } else {
+          // scope === 'all': all profiles that have an in-game guild
+          targetIds = Array.from(byId.keys());
+        }
+
+        const results = [];
+        let donatedCount = 0;
+        let totalZenyDonated = 0;
+        let totalExpGained = 0;
+        let skippedCount = 0;
+
+        for (const pid of targetIds) {
+          const p = byId.get(pid);
+          const pr = probes.get(pid);
+          if (!p || !p.debugPort || !pr || !pr.inWorld || !pr.inGameGuild) {
+            if (targetIds.length === 1) {
+              results.push({ ok: false, profileId: pid, reason: !pr || !pr.inWorld ? 'ตัวละครไม่ได้ออนไลน์ในเกม' : 'ตัวละครยังไม่มีกิลด์ในเกม' });
+              skippedCount++;
+            }
+            continue;
+          }
+          const r = await donateZenyForProfile(pid, p, amount, keepZeny);
+          results.push(r);
+          if (r.ok) {
+            donatedCount++;
+            totalZenyDonated += Number(r.donatedAmount || 0);
+            totalExpGained += Number(r.expGained || 0);
+            if (targetIds.length > 1) {
+              await new Promise(resDelay => setTimeout(resDelay, 450));
+            }
+          } else {
+            skippedCount++;
+          }
+        }
+
+        await probeAllConfigured().catch(() => {});
+        return sendJSON({
+          success: true,
+          donatedCount,
+          totalZenyDonated,
+          totalExpGained,
+          skippedCount,
+          results,
+          ...buildPublicView()
+        }), true;
       } catch (e) {
         return sendJSON({ success: false, error: e.message }, 400), true;
       }

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "ffe4d05d148f25db47c481f7fa860e47ffa1d817",
+  "sourceCommit": "eb2d462830f0272124daf2f92946dc7f1ff0c270",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -100,7 +100,7 @@
     },
     {
       "path": "manager/party_api.js",
-      "sha256": "b0fb8407083dad4f6a8da4b566e039b422283c2ab067e31634cc024a16f143d0"
+      "sha256": "004581bdc31ac44983b17a250fe8b2322ae1e54e5adddba86711b93dcfcbab26"
     },
     {
       "path": "manager/plan_sync.js",
@@ -112,7 +112,7 @@
     },
     {
       "path": "manager/guild_api.js",
-      "sha256": "5e1addeaab48158b17df682044b5b0a787426047ddc216ca5c58a19bad23cea6"
+      "sha256": "60d5ad2ed66dfab8a6f0cec0205830b5367850e36703532f2f1ddc239e242e17"
     },
     {
       "path": "manager/proxy_register.js",
@@ -148,11 +148,11 @@
     },
     {
       "path": "manager/public/guild_manager.css",
-      "sha256": "48c2410e0d81843e2cad4d1bfd99196846e6831460370226a4834dd2ffbc342f"
+      "sha256": "b63bc550e50114a66e7a742fcfba4e7f1e795a5c45320b0a0ab7135fc6e651db"
     },
     {
       "path": "manager/public/guild_manager.js",
-      "sha256": "00175bc7c2c832a3f355129f0e90dcc05c9c26f34e7b8fb6c238690593dfa6c7"
+      "sha256": "4ae4fd7686127963daf453ed65ed955761b68fe7658ac2ca292f912a78843b7d"
     },
     {
       "path": "manager/public/image_board_solver.js",
@@ -160,7 +160,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "da97eb6973b9f16ecf1b14068cd231ba697b114669ace19268cfc4b7979d6e14"
+      "sha256": "b51238363d9eb61bc207b579bd897b7776c64e3c66a5962e68fc793cf61d1e89"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -184,7 +184,7 @@
     },
     {
       "path": "manager/public/party_manager.js",
-      "sha256": "63907b53a785d1b3de4f819143a9d8c4228b02921cb1866811a47e7ca938d196"
+      "sha256": "82c28d23d01678742ad14ee449d5ae4f8c372362744ff11a2fe668d497fd5e1d"
     },
     {
       "path": "manager/public/patcher_module.js",
@@ -212,7 +212,7 @@
     },
     {
       "path": "manager/public/style.css",
-      "sha256": "2d32ecf8ae2ad8e490f82018be8c4c395746bbed08a3677b94a2f4a0ee8a33fd"
+      "sha256": "8c49c3cba6db2b7206422ef0f25ef320d413c91db1250bf4c9e2db6abccc27a0"
     },
     {
       "path": "manager/screen_proxy_manager.js",

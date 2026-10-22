@@ -155,6 +155,7 @@ const READ_JS = `(() => {
     mapId: room.state.mapId || null,
     mapName: room.state.displayName || null,
     channel: typeof room.state.channel === 'number' ? room.state.channel : null,
+    pkChannel: Boolean(room.state.pk || (typeof window.isCurrentChannelPk === 'function' && window.isCurrentChannelPk())),
     targetMap: window.__targetFarmMap || (live && live.targetMap) || null,
     keptFarmMap: window.__keptFarmMap || null,
     botRunning: window.__isBotRunning === true,
@@ -840,6 +841,7 @@ function createPartyService(opts) {
           if (!onPartyFarmMap) continue;
           const sw = S.lastPostSellChannelSwitch;
           if (!sw || typeof sw.channel !== 'number' || typeof sw.at !== 'number') continue;
+          if (S.pkChannel) continue;
           if (sw.at <= (rt.lastPostSellFollowAt || 0)) continue;
           if (now() - sw.at > 180000) continue;
           if (S.channel !== sw.channel) continue;
@@ -863,18 +865,21 @@ function createPartyService(opts) {
       }
 
       const anchorOnFarm = Boolean(anchorSnap && anchorSnap.mapId && !isCityMapName(anchorSnap.mapName));
-      const desiredCh = (anchorOnFarm && rt.settledMapId === anchorSnap.mapId && typeof rt.settledChannel === 'number')
+      const anchorInPk = Boolean(anchorOnFarm && anchorSnap && anchorSnap.pkChannel);
+      const desiredCh = (anchorOnFarm && !anchorInPk && rt.settledMapId === anchorSnap.mapId && typeof rt.settledChannel === 'number')
         ? rt.settledChannel
-        : (anchorSnap ? anchorSnap.channel : L.channel);
+        : (anchorSnap && !anchorSnap.pkChannel ? anchorSnap.channel : (!L.pkChannel ? L.channel : null));
       const channelOverlapsOtherParty = Boolean(
-        chMode !== 'off' &&
-        anchorOnFarm &&
-        typeof desiredCh === 'number' &&
-        avoidChannels.includes(desiredCh) &&
-        anchorSnap.helpers &&
-        (anchorSnap.helpers.evaluateAnchorChannel || anchorSnap.helpers.findLeast)
+        anchorInPk ||
+        (chMode !== 'off' &&
+          anchorOnFarm &&
+          typeof desiredCh === 'number' &&
+          avoidChannels.includes(desiredCh) &&
+          anchorSnap.helpers &&
+          (anchorSnap.helpers.evaluateAnchorChannel || anchorSnap.helpers.findLeast))
       );
       const needsInitialChannelCheck = Boolean(
+        anchorInPk ||
         channelOverlapsOtherParty ||
         (partyChannelCheckEnabled &&
           anchorOnFarm &&
@@ -885,8 +890,8 @@ function createPartyService(opts) {
 
       const movers = [];
       // If Priest or another returning member is the Channel Anchor (or settledChannel is locked on this map) and the Leader is on a different CH on the same map, Leader moves too!
-      if (anchorOnFarm && L.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && L.channel !== desiredCh && !(L.busy && L.busy.length) && L.helpers && L.helpers.moveToChannel) {
-        if (anchorId !== party.leaderId || rt.settledMapId === anchorSnap.mapId) {
+      if (anchorOnFarm && !anchorInPk && L.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && (L.channel !== desiredCh || L.pkChannel) && !(L.busy && L.busy.length) && L.helpers && L.helpers.moveToChannel) {
+        if (anchorId !== party.leaderId || rt.settledMapId === anchorSnap.mapId || L.pkChannel) {
           movers.push(party.leaderId);
         }
       }
@@ -909,7 +914,7 @@ function createPartyService(opts) {
           m.mapAt = now();
           await act(P, ACTIONS.setMap(leaderMap, S.botRunning), 'set-map');
         }
-        if (anchorSnap && S.mapId && S.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && S.channel !== desiredCh && S.helpers && S.helpers.moveToChannel) {
+        if (anchorSnap && !anchorInPk && S.mapId && S.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && (S.channel !== desiredCh || S.pkChannel) && S.helpers && S.helpers.moveToChannel) {
           movers.push(id);
         }
       }
@@ -967,7 +972,7 @@ function createPartyService(opts) {
     const ownPartyCountByCh = {};
     for (const mid of [party.leaderId].concat(party.memberIds)) {
       const ms = states.get(mid);
-      if (!ms || !ms.ok || !ms.mapId || isCityMapName(ms.mapName)) continue;
+      if (!ms || !ms.ok || !ms.mapId || isCityMapName(ms.mapName) || ms.pkChannel) continue;
       if (anchorSnap && ms.mapId === anchorSnap.mapId && typeof ms.channel === 'number') {
         ownPartyCountByCh[ms.channel] = (ownPartyCountByCh[ms.channel] || 0) + 1;
       }
@@ -1037,23 +1042,24 @@ function createPartyService(opts) {
         let wantCh = null;
         if (anchorSnap.helpers && anchorSnap.helpers.evaluateAnchorChannel) {
           const ev = await act(anchorP, ACTIONS.evaluateAnchorChannel(1 + party.memberIds.length, allPartyNames || [], avoidList), 'eval-anchor-ch', 12000);
-          if (ev.ok && ev.result && ev.result.shouldSwitch && typeof ev.result.channel === 'number' && ev.result.channel !== anchorSnap.channel && !avoidList.includes(ev.result.channel)) {
+          if (ev.ok && ev.result && ev.result.shouldSwitch && typeof ev.result.channel === 'number' && (ev.result.channel !== anchorSnap.channel || anchorSnap.pkChannel) && !avoidList.includes(ev.result.channel)) {
             wantCh = ev.result.channel;
           }
         }
-        if (wantCh == null && avoidList.includes(anchorSnap.channel) && anchorSnap.helpers && anchorSnap.helpers.findLeast) {
+        if (wantCh == null && (avoidList.includes(anchorSnap.channel) || anchorSnap.pkChannel) && anchorSnap.helpers && anchorSnap.helpers.findLeast) {
           const least = await act(anchorP, ACTIONS.leastChannel(avoidList), 'least-ch-avoid-overlap', 15000);
           const lch = least.ok && least.result ? least.result.channel : null;
-          if (typeof lch === 'number' && lch !== anchorSnap.channel && !avoidList.includes(lch)) {
+          if (typeof lch === 'number' && (lch !== anchorSnap.channel || anchorSnap.pkChannel) && !avoidList.includes(lch)) {
             wantCh = lch;
           }
         }
-        if (typeof wantCh === 'number' && wantCh !== anchorSnap.channel) {
+        if (typeof wantCh === 'number' && (wantCh !== anchorSnap.channel || anchorSnap.pkChannel)) {
           rt.gatherNote = anchorLabel + ' กำลังย้ายไป CH ' + wantCh + ' (คนน้อยสุด / ไม่ทับตี้อื่น)';
           const am = await act(anchorP, ACTIONS.moveChannelWait(wantCh, T.leaderMoveWaitMs), 'anchor-move-ch', T.leaderMoveWaitMs + 10000);
           const realCh = (am.result && typeof am.result.channel === 'number') ? am.result.channel : anchorSnap.channel;
           targetCh = realCh;
           anchorSnap.channel = realCh;
+          anchorSnap.pkChannel = false;
         } else {
           targetCh = anchorSnap.channel;
         }

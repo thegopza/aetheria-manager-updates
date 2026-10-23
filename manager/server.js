@@ -876,19 +876,34 @@ const LIVE_STATE_EVAL = `(() => {
   const s = (typeof window.__getClientLiveState === 'function') ? window.__getClientLiveState() : null;
   if (!s) return null;
   try {
+    const isBadMap = (t) => !t || t === 'ไม่ทราบแมพ' || /^(?:\\d+|[-—–]+)\\s*ms$/i.test(t) || /\\b\\d+\\s*ms\\b/i.test(t) || /^CH\\b/i.test(t) || /▾/.test(t);
+    if (isBadMap(String(s.map || '').trim())) {
+      const mapEl = document.querySelector('.minimap-name, .minimap-title, [class*="map-name"], [class*="map-title"]');
+      const directMap = mapEl ? String(mapEl.textContent || mapEl.innerText || '').replace(/\\s+/g, ' ').trim() : '';
+      if (directMap && !isBadMap(directMap)) {
+        s.map = directMap;
+      } else {
+        const roomState = window.__gameRoom?.state || (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom()?.state : null);
+        const roomMap = String(roomState?.displayName || roomState?.mapName || '').replace(/\\s+/g, ' ').trim();
+        if (roomMap && !isBadMap(roomMap)) s.map = roomMap;
+      }
+    }
     const hud = document.querySelector('.hud-status');
     if (hud) {
       const img = hud.querySelector('img.portrait');
       if (img && img.src) s.portrait = img.src;
-      const lv = Array.from(hud.querySelectorAll('.hud-levels span')).map(e => e.innerText || '');
+      const lv = Array.from(hud.querySelectorAll('.hud-levels span')).map(e => (e.textContent || e.innerText || '').trim());
       const num = t => { const m = String(t || '').match(/(\\d+)/); return m ? Number(m[1]) : null; };
-      s.baseLv = num(lv[0]);
-      s.jobLv = num(lv[1]);
-      const exp = Array.from(hud.querySelectorAll('.bar-exp .bar-num')).map(e => (e.innerText || '').trim());
+      const bLv = num(lv[0]);
+      const jLv = num(lv[1]);
+      if (bLv != null) s.baseLv = bLv;
+      if (jLv != null) s.jobLv = jLv;
+      if (!s.levels && lv.filter(Boolean).length) s.levels = lv.filter(Boolean).join('\\n');
+      const exp = Array.from(hud.querySelectorAll('.bar-exp .bar-num')).map(e => (e.textContent || e.innerText || '').trim());
       s.baseExp = exp[0] || null;
       s.jobExp = exp[1] || null;
       Array.from(hud.querySelectorAll('.hud-alerts button')).forEach(b => {
-        const t = b.innerText || '';
+        const t = (b.textContent || b.innerText || '').trim();
         if (t.includes('สถานะ')) s.statPoints = num(t);
         else if (t.includes('สกิล')) s.skillPoints = num(t);
       });
@@ -1343,7 +1358,13 @@ function queryClientState(port) {
     req.end();
   }).then((state) => {
     clientStateInFlightByPort.delete(port);
-    if (state) clientStateCacheByPort.set(port, { ts: Date.now(), state });
+    if (state) {
+      const m = String(state.map || '').trim();
+      if (/^(?:\d+|[-—–]+)\s*ms$/i.test(m) || /\b\d+\s*ms\b/i.test(m) || /^CH\b/i.test(m) || /▾/.test(m)) {
+        state.map = state.targetMap || 'ไม่ทราบแมพ';
+      }
+      clientStateCacheByPort.set(port, { ts: Date.now(), state });
+    }
     return state;
   }).catch(() => {
     clientStateInFlightByPort.delete(port);

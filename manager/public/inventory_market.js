@@ -1,4 +1,4 @@
-// manager/public/inventory_market.js — Bag panel (next to the character window) + floating market window.
+// manager/public/inventory_market.js — Left Halloween Exchange panel + Right Bag panel + Tab 4 Market Hub + Floating Market fallback.
 // Depends on app.js globals: API_BASE, escapeHTML, gameAssetUrl, getRarityColor, formatItemDisplayName,
 // renderItemStatGroups, getItemStatLabel, loadCharacterDetail, currentCharProfileId.
 (function () {
@@ -7,7 +7,6 @@
   // ==========================================================================
   // OPTION QUERY: "dex, matk>=5, melee dmg, atk%" -> random-option terms (affixes only)
   // ==========================================================================
-  // Stats that are percentages even in "base" mode (mirrors the game's own formatter)
   const PERCENT_TYPES = new Set(['MOVE_SPEED', 'CRIT_DAMAGE', 'MELEE_DAMAGE_PERCENT', 'RANGED_DAMAGE_PERCENT',
     'MAGIC_DAMAGE_PERCENT', 'DAMAGE_REDUCTION', 'BLOCK_CHANCE', 'HEAL_POWER']);
 
@@ -76,7 +75,6 @@
 
   const isPercentOption = o => o.mode !== 'base' || PERCENT_TYPES.has(o.type);
 
-  // Split on commas; each token may carry a minimum ("dex>=5", "dex 5") and a "%" (percent rolls only).
   function parseOptionQuery(text) {
     const terms = [], names = [];
     String(text || '').split(/[,;]+/).map(s => s.trim()).filter(Boolean).forEach(tok => {
@@ -128,7 +126,26 @@
   const BAG_TABS = [['all', 'ทั้งหมด'], ['weapon', 'อาวุธ'], ['armor', 'ชุดเกราะ'], ['accessory', 'ประดับ/เจม'],
     ['usable', 'ใช้ได้'], ['card', 'การ์ด'], ['refine', 'แร่/ตีบวก'], ['material', 'วัตถุดิบ'], ['other', 'อื่นๆ']];
 
-  // Same grouping as the game's bag tabs
+  const CANDY_ICON_PATH = '/art/icons/items/halloween-candy.webp';
+  const PUMPKIN_ICON_PATH = '/art/icons/items/golden-pumpkin.webp';
+
+  const DEFAULT_WITCH_HAZEL_ITEMS = [
+    { itemId: 90888, name: 'Halloween Box', type: 'Consumable', rarity: 'epic', icon: '/art/icons/items/halloween-box.webp', price: 0, bound: false, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 200, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 1, icon: PUMPKIN_ICON_PATH }], limit: { max: 10, perAccount: true, reset: 'Daily' }, desc: 'กล่องสุ่มฮาโลวีน (แลกเปลี่ยน/ตั้งขายตลาดกลางได้)' },
+    { itemId: 90340, name: 'Enchant Rune', type: 'Enchantment', rarity: 'rare', icon: '/art/icons/items/greater-enchant-rune.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 150, icon: CANDY_ICON_PATH }], limit: { max: 100, perAccount: true, reset: 'Weekly' }, desc: 'รูนสุ่มออปชั่นอุปกรณ์' },
+    { itemId: 90341, name: 'Accessory Enchant Rune', type: 'Enchantment', rarity: 'epic', icon: '/art/icons/items/accessory-enchant-rune.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 1000, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 1, icon: PUMPKIN_ICON_PATH }], limit: { max: 10, perAccount: true, reset: 'Weekly' }, desc: 'รูนสุ่มออปชั่นเครื่องประดับ' },
+    { itemId: 90889, name: 'Socket Charm', type: 'Enchantment', rarity: 'legendary', icon: '/art/icons/items/socket-charm.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 5000, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 30, icon: PUMPKIN_ICON_PATH }], limit: { max: 2, perAccount: true, reset: 'Weekly' }, desc: 'ยันต์เจาะรูอุปกรณ์การันตีสำเร็จ 100%' },
+    { itemId: 90206, name: 'Enriched Elunium', type: 'Enchantment', rarity: 'epic', icon: '/art/icons/items/enriched-elunium.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 300, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'None' }, desc: 'แร่อีลูเนียมบริสุทธิ์ เพิ่มโอกาสตีบวกชุดเกราะ' },
+    { itemId: 90886, name: 'Halloween Pecopeco Hairband', type: 'Equipment', equipType: 'Helmet', rarity: 'epic', icon: '/art/icons/items/pecopeco-hairband.webp', price: 5000000, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 2000, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 15, icon: PUMPKIN_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'หมวกคาดผมเปโกะฮาโลวีน (Move Speed +5%)' },
+    { itemId: 90887, name: 'Halloween Snake Head', type: 'Equipment', equipType: 'Helmet', rarity: 'epic', icon: '/art/icons/items/coiled-snake-hat.webp', price: 5000000, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 2000, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 15, icon: PUMPKIN_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'หมวกงูฮาโลวีน (Double Attack +10%)' },
+    { itemId: 90882, name: 'Pumpkin Head Hat', type: 'Equipment', equipType: 'CostumeHeadTop', rarity: 'rare', icon: '/art/icons/items/pumpkin-head-hat.webp', price: 0, bound: true, cost: [], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'คอสตูมหมวกหัวฟักทองฮาโลวีน (รับฟรี)' },
+    { itemId: 90885, name: 'Pumpkin Imp Egg', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/pumpkin-imp-egg.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 200, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 2, icon: PUMPKIN_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'ไข่สัตว์เลี้ยงภูตฟักทองฮาโลวีน' },
+    { itemId: 90203, name: 'Oridecon', type: 'Enchantment', rarity: 'uncommon', icon: '/art/icons/items/oridecon.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 30, icon: CANDY_ICON_PATH }], limit: { max: 500, perAccount: true, reset: 'Weekly' }, desc: 'แร่ตีบวกอาวุธ' },
+    { itemId: 90205, name: 'Elunium', type: 'Enchantment', rarity: 'uncommon', icon: '/art/icons/items/elunium.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 30, icon: CANDY_ICON_PATH }], limit: { max: 500, perAccount: true, reset: 'Weekly' }, desc: 'แร่ตีบวกชุดเกราะ' },
+    { itemId: 90351, name: 'Fury Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/fury-potion.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 40, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มพลังโจมตีกายภาพ (ATK +25, Melee DMG +5%)' },
+    { itemId: 90352, name: 'Arcane Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/arcane-potion.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 40, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มพลังโจมตีเวท (MATK +25, Magic DMG +5%)' },
+    { itemId: 90353, name: 'Keen Eye Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/keen-eye-potion.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 40, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มความแม่นยำและระยะไกล (HIT +20, Ranged DMG +5%)' }
+  ];
+
   function bagCategory(it) {
     const t = it.type, e = it.equipType;
     if (t === 'Card') return 'card';
@@ -150,6 +167,7 @@
     return h >= 1 ? `${h} ชม.` : `${Math.max(1, Math.floor(ms / 60000))} นาที`;
   }
   function timeAgo(ts) {
+    if (!ts) return '--';
     const ms = Date.now() - Number(ts);
     const h = Math.floor(ms / 3600000);
     if (h >= 24) return `${Math.floor(h / 24)} วันที่แล้ว`;
@@ -200,7 +218,455 @@
   }
 
   // ==========================================================================
-  // BAG PANEL (docked beside the character window)
+  // LEFT PANEL: HALLOWEEN EXCHANGE (NPC WITCH HAZEL)
+  // ==========================================================================
+  const hw = {
+    profileId: null,
+    enabled: true,
+    rules: {},          // itemId -> { enabled: boolean, minQty: number }
+    catalog: DEFAULT_WITCH_HAZEL_ITEMS,
+    quotaState: {},
+    bagCounts: { 90880: 0, 90881: 0 },
+    zeny: 0,
+    filter: 'all',      // 'all' | 'selected' | 'ready'
+    loading: false,
+    saving: false,
+    el: null
+  };
+
+  function getHwLimitLabel(limit) {
+    if (!limit || !limit.max) return 'ไม่จำกัด';
+    const rs = String(limit.reset || '').toLowerCase();
+    const r = rs === 'daily' ? '/วัน' : rs === 'weekly' ? '/สัปดาห์' : ' ครั้ง (ถาวร)';
+    return `จำกัด ${limit.max}${r}`;
+  }
+
+  function calcHwMaxExchangeable(item) {
+    let maxByMat = 9999;
+    const costs = Array.isArray(item.cost) ? item.cost : [];
+    for (const c of costs) {
+      const have = Number(hw.bagCounts[c.itemId] || 0);
+      const need = Math.max(1, Number(c.qty ?? c.amount) || 1);
+      maxByMat = Math.min(maxByMat, Math.floor(have / need));
+    }
+    const price = Number(item.price) || 0;
+    const maxByZeny = price > 0 ? Math.floor((Number(hw.zeny) || 0) / price) : 9999;
+    const maxLimit = item.limit && item.limit.max ? Number(item.limit.max) : 9999;
+    const qEntry = hw.quotaState && hw.quotaState[item.itemId];
+    const quotaLeft = (qEntry && typeof qEntry.limitLeft === 'number') ? qEntry.limitLeft : maxLimit;
+    const rawAffordable = Math.max(0, Math.min(maxByMat, maxByZeny, maxLimit));
+    const cappedByQuota = Math.max(0, Math.min(rawAffordable, quotaLeft));
+    return { rawAffordable, cappedByQuota, quotaLeft, maxLimit };
+  }
+
+  function syncHwBagCountsFromInventory() {
+    if (!bag.data || !Array.isArray(bag.data.items)) return;
+    let candy = 0, pumpkin = 0;
+    for (const it of bag.data.items) {
+      const id = Number(it.itemId);
+      const nm = String(it.name || '').trim().toLowerCase();
+      if (id === 90880 || nm === 'halloween candy') candy += (Number(it.qty) || 0);
+      else if (id === 90881 || nm === 'golden pumpkin') pumpkin += (Number(it.qty) || 0);
+    }
+    hw.bagCounts[90880] = candy;
+    hw.bagCounts[90881] = pumpkin;
+    if (typeof bag.data.zeny === 'number') hw.zeny = bag.data.zeny;
+  }
+
+  function ensureHalloweenPanel() {
+    const overlay = document.getElementById('char-detail-modal');
+    if (!overlay) return null;
+    if (hw.el && hw.el.isConnected) return hw.el;
+    const el = document.createElement('aside');
+    el.className = 'im-hw-panel';
+    el.innerHTML = `
+      <div class="im-hw-head">
+        <div class="im-hw-title-wrap">
+          <div class="im-hw-title">🎃 แลกของ Halloween</div>
+          <div class="im-hw-sub">NPC Witch Hazel · เมืองหลวงโซลเฮเวน</div>
+        </div>
+        <div class="im-hw-head-right">
+          <label class="im-hw-master-toggle" title="เปิด/ปิด ให้บอทเดินไปแลกของกับ Witch Hazel อัตโนมัติเมื่อของในตัวครบตามจำนวนที่ตั้ง">
+            <input type="checkbox" data-hw="master-toggle" checked>
+            <span>ออโต้แลก</span>
+          </label>
+          <button type="button" class="im-icon-btn" data-hw="refresh" title="รีเฟรชข้อมูลแลกของ">⟳</button>
+        </div>
+      </div>
+
+      <div class="im-hw-mats" data-role="hw-mats">
+        <div class="im-hw-mat">
+          <img src="${esc(gameAssetUrl(CANDY_ICON_PATH))}" alt="">
+          <div><small>Candy</small><b data-role="hw-candy">0</b></div>
+        </div>
+        <div class="im-hw-mat">
+          <img src="${esc(gameAssetUrl(PUMPKIN_ICON_PATH))}" alt="">
+          <div><small>Pumpkin</small><b data-role="hw-pumpkin">0</b></div>
+        </div>
+        <div class="im-hw-mat zeny">
+          <span>💰</span>
+          <div><small>Zeny</small><b data-role="hw-zeny">0</b></div>
+        </div>
+      </div>
+
+      <div class="im-hw-wl-banner">
+        🛡️ <b>กันขาย NPC อัตโนมัติ:</b> รายการที่ติ๊กเลือก (รวม Candy & Pumpkin) จะอยู่ใน <b>WL ห้ามขายลง NPC</b> แต่สามารถตั้งขายลง<b>ตลาดกลาง</b>ได้ตามปกติ
+      </div>
+
+      <div class="im-hw-actions-bar">
+        <button type="button" class="im-btn hw-go" data-hw="exchange-now" title="สั่งบอทเดินไปหา Witch Hazel เพื่อแลกของที่ครบเงื่อนไขทันที">⚡ เดินไปแลกทันที</button>
+        <button type="button" class="im-btn ghost sm" data-hw="apply-all" title="คัดลอกรายการที่เลือกและจำนวนขั้นต่ำไปใช้กับทุกจอทันที">📋 ใช้กับทุกจอ</button>
+      </div>
+
+      <div class="im-hw-tabs" data-role="hw-tabs"></div>
+      <div class="im-hw-list" data-role="hw-list"></div>`;
+
+    // Insert as the FIRST child of #char-detail-modal so it sits on the LEFT of .char-modal-card
+    overlay.insertBefore(el, overlay.firstChild);
+    overlay.classList.add('has-hw');
+
+    el.addEventListener('click', onHwClick);
+    el.addEventListener('change', onHwChange);
+    hw.el = el;
+    syncSidePanelHeights();
+    return el;
+  }
+
+  async function refreshHalloween() {
+    if (!hw.profileId || hw.loading) return;
+    hw.loading = true;
+    try {
+      const data = await api(`/api/profiles/${encodeURIComponent(hw.profileId)}/halloween`);
+      if (data && data.success) {
+        if (Array.isArray(data.catalog) && data.catalog.length) hw.catalog = data.catalog;
+        const cfg = data.config || {};
+        hw.enabled = cfg.enabled !== false;
+        hw.rules = cfg.rules && typeof cfg.rules === 'object' ? cfg.rules : {};
+        if (data.live && typeof data.live === 'object') {
+          if (data.live.bagCounts) hw.bagCounts = Object.assign({ 90880: 0, 90881: 0 }, data.live.bagCounts);
+          if (typeof data.live.zeny === 'number') hw.zeny = data.live.zeny;
+          if (data.live.quotaState) hw.quotaState = data.live.quotaState;
+        }
+        syncHwBagCountsFromInventory();
+        renderHalloweenPanel();
+      }
+    } finally {
+      hw.loading = false;
+    }
+  }
+
+  let hwSaveTimer = null;
+  function scheduleSaveHalloween(immediate = false) {
+    clearTimeout(hwSaveTimer);
+    if (immediate) return saveHalloweenConfig();
+    hwSaveTimer = setTimeout(saveHalloweenConfig, 280);
+  }
+
+  async function saveHalloweenConfig() {
+    if (!hw.profileId) return;
+    hw.saving = true;
+    try {
+      const r = await api(`/api/profiles/${encodeURIComponent(hw.profileId)}/halloween`, {
+        op: 'save',
+        enabled: hw.enabled,
+        rules: hw.rules
+      });
+      if (r && r.success) {
+        if (r.live && r.live.quotaState) hw.quotaState = r.live.quotaState;
+      } else {
+        toast(`❌ บันทึกตั้งค่า Halloween ไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+      }
+    } finally {
+      hw.saving = false;
+    }
+  }
+
+  function renderHalloweenPanel() {
+    const el = hw.el;
+    if (!el) return;
+    syncHwBagCountsFromInventory();
+
+    const masterCb = el.querySelector('[data-hw="master-toggle"]');
+    if (masterCb && document.activeElement !== masterCb) masterCb.checked = hw.enabled !== false;
+
+    const candyEl = el.querySelector('[data-role="hw-candy"]');
+    const pumpEl = el.querySelector('[data-role="hw-pumpkin"]');
+    const zenyEl = el.querySelector('[data-role="hw-zeny"]');
+    if (candyEl) candyEl.textContent = Number(hw.bagCounts[90880] || 0).toLocaleString();
+    if (pumpEl) pumpEl.textContent = Number(hw.bagCounts[90881] || 0).toLocaleString();
+    if (zenyEl) zenyEl.textContent = fmtShort(hw.zeny || 0);
+
+    const items = hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS;
+    let selectedCount = 0;
+    let readyCount = 0;
+    items.forEach(it => {
+      const r = hw.rules[it.itemId] || {};
+      const calc = calcHwMaxExchangeable(it);
+      const minQty = Math.max(1, Number(r.minQty) || 1);
+      if (r.enabled) selectedCount++;
+      if (calc.cappedByQuota >= minQty) readyCount++;
+    });
+
+    const tabsEl = el.querySelector('[data-role="hw-tabs"]');
+    if (tabsEl) {
+      const tabs = [
+        ['all', `ทั้งหมด (${items.length})`],
+        ['selected', `เลือกแลก (${selectedCount})`],
+        ['ready', `ของพอแลก (${readyCount})`]
+      ];
+      tabsEl.innerHTML = tabs.map(([k, lbl]) =>
+        `<button type="button" class="im-hw-tab ${hw.filter === k ? 'active' : ''}" data-hw-tab="${k}">${lbl}</button>`
+      ).join('');
+    }
+
+    const visible = items.filter(it => {
+      const r = hw.rules[it.itemId] || {};
+      const calc = calcHwMaxExchangeable(it);
+      const minQty = Math.max(1, Number(r.minQty) || 1);
+      if (hw.filter === 'selected') return Boolean(r.enabled);
+      if (hw.filter === 'ready') return calc.cappedByQuota >= minQty;
+      return true;
+    });
+
+    const listEl = el.querySelector('[data-role="hw-list"]');
+    if (!listEl) return;
+
+    if (visible.length === 0) {
+      listEl.innerHTML = `<div class="im-empty">${hw.filter === 'selected' ? '🎃 ยังไม่ได้ติ๊กเลือกไอเทมที่จะแลก — คลิกติ๊กหน้าไอเทมที่ต้องการด้านล่างได้เลย' : '🔍 ไม่มีรายการในหมวดนี้'}</div>`;
+      return;
+    }
+
+    listEl.innerHTML = visible.map(it => {
+      const rule = hw.rules[it.itemId] || { enabled: false, minQty: 1 };
+      const isSelected = Boolean(rule.enabled);
+      const minQty = Math.max(1, Number(rule.minQty) || 1);
+      const calc = calcHwMaxExchangeable(it);
+      const isReady = calc.cappedByQuota >= minQty && calc.quotaLeft > 0;
+      const quotaExhausted = calc.quotaLeft <= 0;
+
+      // Render cost chips
+      const costChips = [];
+      (it.cost || []).forEach(c => {
+        const have = Number(hw.bagCounts[c.itemId] || 0);
+        const unitNeed = Math.max(1, Number(c.qty ?? c.amount) || 1);
+        const totalNeed = unitNeed * minQty;
+        const enough = have >= totalNeed;
+        const shortName = c.itemId === 90880 ? 'Candy' : c.itemId === 90881 ? 'Pumpkin' : c.name;
+        const iconUrl = c.icon || (c.itemId === 90880 ? CANDY_ICON_PATH : c.itemId === 90881 ? PUMPKIN_ICON_PATH : '');
+        costChips.push(`
+          <span class="im-hw-cost ${enough ? 'ok' : 'lack'}" title="ใช้ ${c.name} ${unitNeed} ชิ้นต่อการแลก 1 ครั้ง (มีในกระเป๋า ${have.toLocaleString()} ชิ้น)">
+            ${iconUrl ? `<img src="${esc(gameAssetUrl(iconUrl))}" alt="">` : ''}
+            <b>${unitNeed.toLocaleString()}</b> ${esc(shortName)}
+          </span>`);
+      });
+      if (Number(it.price) > 0) {
+        const enoughZ = (Number(hw.zeny) || 0) >= Number(it.price) * minQty;
+        costChips.push(`<span class="im-hw-cost ${enoughZ ? 'ok' : 'lack'}" title="ใช้เงิน ${Number(it.price).toLocaleString()} z ต่อชิ้น">💰 <b>${fmtShort(it.price)}</b> z</span>`);
+      }
+      if (costChips.length === 0) {
+        costChips.push(`<span class="im-hw-cost ok">🎁 <b>รับฟรี (0 z)</b></span>`);
+      }
+
+      let statusHtml = '';
+      if (quotaExhausted) {
+        statusHtml = `<span class="im-hw-state full">🔴 โควต้าเต็ม (0/${calc.maxLimit})</span>`;
+      } else if (isReady) {
+        statusHtml = `<span class="im-hw-state ready">🟢 แลกได้ ${calc.cappedByQuota} ชิ้น</span>`;
+      } else {
+        statusHtml = `<span class="im-hw-state wait">⏳ พอแลก ${calc.cappedByQuota}/${minQty}</span>`;
+      }
+
+      const quotaBadge = (hw.quotaState && hw.quotaState[it.itemId] && typeof hw.quotaState[it.itemId].limitLeft === 'number')
+        ? `${getHwLimitLabel(it.limit)} · เหลือ ${hw.quotaState[it.itemId].limitLeft}/${calc.maxLimit}`
+        : getHwLimitLabel(it.limit);
+
+      return `
+        <div class="im-hw-card ${isSelected ? 'selected' : ''} ${isReady && isSelected ? 'ready-glow' : ''}" data-item-id="${it.itemId}">
+          <div class="im-hw-card-top">
+            <label class="im-hw-check-wrap" title="คลิกเพื่อเลือก/ยกเลิกการแลกอัตโนมัติ (เมื่อเลือกจะเพิ่มเข้า WL ห้ามขาย NPC อัตโนมัติ)">
+              <input type="checkbox" data-hw-check="${it.itemId}" ${isSelected ? 'checked' : ''}>
+            </label>
+            <div class="im-hw-icon-box" style="--rc: ${getRarityColor(it.rarity)};" data-hw-toggle-card="${it.itemId}">
+              <img src="${esc(gameAssetUrl(it.icon))}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+            </div>
+            <div class="im-hw-info" data-hw-toggle-card="${it.itemId}">
+              <div class="im-hw-name-row">
+                <span class="im-hw-name" style="color: ${getRarityColor(it.rarity)};">${esc(it.name)}</span>
+                ${!it.bound
+                  ? `<span class="im-hw-tag tradable" title="แลกมาแล้วไม่ติดตัว สามารถตั้งขายลงตลาดกลางได้">🏪 ขายตลาดได้</span>`
+                  : `<span class="im-hw-tag bound" title="ไอเทมผูกมัดตัวละคร">🔒 ติดตัว</span>`}
+                ${isSelected ? `<span class="im-hw-tag wl" title="อยู่ใน Whitelist ห้ามขายให้ NPC">🛡️ WL</span>` : ''}
+              </div>
+              <div class="im-hw-desc">${esc(it.desc || '')}</div>
+              <div class="im-hw-costs-row">
+                ${costChips.join('')}
+                <span class="im-hw-limit">${esc(quotaBadge)}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="im-hw-cond-row">
+            <div class="im-hw-cond-left">
+              <span>แลกครบ ≥</span>
+              <div class="im-hw-qty-box">
+                <button type="button" class="im-hw-step" data-hw-step="-1" data-item-id="${it.itemId}">−</button>
+                <input type="number" class="im-hw-qty-input" data-hw-minqty="${it.itemId}" min="1" max="${it.limit?.max || 500}" value="${minQty}">
+                <button type="button" class="im-hw-step" data-hw-step="1" data-item-id="${it.itemId}">+</button>
+              </div>
+              <span>ชิ้น</span>
+            </div>
+            <div class="im-hw-cond-right">
+              ${statusHtml}
+              ${!it.bound ? `<button type="button" class="im-btn ghost xs" data-hw-autosell="${esc(it.name)}" title="ตั้งให้บอทนำ ${esc(it.name)} ไปลงขายตลาดกลางอัตโนมัติ">🏷️ Auto-Sell</button>` : ''}
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  function ensureHwRule(itemId) {
+    if (!hw.rules[itemId]) hw.rules[itemId] = { enabled: false, minQty: 1 };
+    return hw.rules[itemId];
+  }
+
+  async function onHwClick(e) {
+    const tabBtn = e.target.closest('[data-hw-tab]');
+    if (tabBtn) {
+      hw.filter = tabBtn.dataset.hwTab;
+      renderHalloweenPanel();
+      return;
+    }
+
+    const toggleCard = e.target.closest('[data-hw-toggle-card]');
+    if (toggleCard && !e.target.closest('button, input, label')) {
+      const id = Number(toggleCard.dataset.hwToggleCard);
+      const r = ensureHwRule(id);
+      r.enabled = !r.enabled;
+      if (r.enabled && (!r.minQty || r.minQty < 1)) r.minQty = 1;
+      renderHalloweenPanel();
+      scheduleSaveHalloween(true);
+      const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
+      if (it) {
+        toast(r.enabled
+          ? `🎃 เลือกแลก "${it.name}" (ครบ ≥ ${r.minQty} ชิ้น) + เพิ่มเข้า WL กันขาย NPC แล้ว`
+          : `ยกเลิกแลก "${it.name}" อัตโนมัติแล้ว`);
+      }
+      return;
+    }
+
+    const stepBtn = e.target.closest('[data-hw-step]');
+    if (stepBtn) {
+      const id = Number(stepBtn.dataset.itemId);
+      const delta = Number(stepBtn.dataset.hwStep) || 0;
+      const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
+      const maxLim = (it && it.limit && it.limit.max) ? it.limit.max : 500;
+      const r = ensureHwRule(id);
+      r.minQty = Math.max(1, Math.min(maxLim, (Number(r.minQty) || 1) + delta));
+      r.enabled = true; // stepping quantity automatically enables the item
+      renderHalloweenPanel();
+      scheduleSaveHalloween();
+      return;
+    }
+
+    const autoSellBtn = e.target.closest('[data-hw-autosell]');
+    if (autoSellBtn) {
+      const name = autoSellBtn.dataset.hwAutosell;
+      if (name) await addToAutoSell({ name });
+      return;
+    }
+
+    const actBtn = e.target.closest('[data-hw]');
+    if (!actBtn) return;
+    const act = actBtn.dataset.hw;
+    if (act === 'refresh') {
+      await Promise.all([refreshBag(), refreshHalloween()]);
+      toast('🎃 รีเฟรชข้อมูลกิจกรรม Halloween แล้ว');
+      return;
+    }
+    if (act === 'exchange-now') {
+      const activeCount = Object.values(hw.rules).filter(r => r && r.enabled).length;
+      if (activeCount === 0) {
+        toast('⚠️ กรุณาติ๊กเลือกรายการของรางวัล Halloween ที่ต้องการแลกอย่างน้อย 1 รายการก่อนครับ', 'warn');
+        return;
+      }
+      actBtn.disabled = true;
+      const origTxt = actBtn.textContent;
+      actBtn.textContent = '⏳ กำลังสั่งแลก...';
+      try {
+        const r = await api(`/api/profiles/${encodeURIComponent(hw.profileId)}/halloween`, {
+          op: 'exchange_now',
+          enabled: true,
+          rules: hw.rules
+        });
+        if (r && r.success) {
+          toast('🎃 สั่งบอทเดินไปแลกของกับ Witch Hazel แล้ว!');
+          setTimeout(() => { refreshBag(); refreshHalloween(); }, 2500);
+        } else {
+          toast(`❌ สั่งแลกไม่สำเร็จ: ${(r && r.error) || 'จอเกมไม่ตอบ'}`, 'err');
+        }
+      } finally {
+        actBtn.disabled = false;
+        actBtn.textContent = origTxt;
+      }
+      return;
+    }
+    if (act === 'apply-all') {
+      if (!confirm('คัดลอกการตั้งค่าแลกของ Halloween นี้ (พร้อมเพิ่ม WL กันขาย NPC) ไปใช้กับทุกจอเกมใช่หรือไม่?')) return;
+      actBtn.disabled = true;
+      try {
+        const r = await api(`/api/profiles/${encodeURIComponent(hw.profileId)}/halloween`, {
+          op: 'apply_all',
+          enabled: hw.enabled,
+          rules: hw.rules
+        });
+        if (r && r.success) {
+          toast(`📋 คัดลอกตั้งค่า Halloween ไปยังทุกโปรไฟล์แล้ว (อัปเดตออนไลน์ ${r.appliedOnline || 0} จอ)`);
+        } else {
+          toast(`❌ คัดลอกไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+        }
+      } finally {
+        actBtn.disabled = false;
+      }
+    }
+  }
+
+  function onHwChange(e) {
+    if (e.target.dataset.hw === 'master-toggle') {
+      hw.enabled = Boolean(e.target.checked);
+      scheduleSaveHalloween(true);
+      toast(hw.enabled ? '🎃 เปิดระบบเดินไปแลกของ Halloween อัตโนมัติแล้ว' : '⏸️ ปิดระบบแลกของ Halloween อัตโนมัติชั่วคราว');
+      return;
+    }
+    if (e.target.dataset.hwCheck) {
+      const id = Number(e.target.dataset.hwCheck);
+      const r = ensureHwRule(id);
+      r.enabled = Boolean(e.target.checked);
+      if (r.enabled && (!r.minQty || r.minQty < 1)) r.minQty = 1;
+      renderHalloweenPanel();
+      scheduleSaveHalloween(true);
+      const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
+      if (it) {
+        toast(r.enabled
+          ? `🎃 เลือกแลก "${it.name}" (ครบ ≥ ${r.minQty} ชิ้น) + เพิ่มเข้า WL กันขาย NPC แล้ว`
+          : `ยกเลิกแลก "${it.name}" อัตโนมัติแล้ว`);
+      }
+      return;
+    }
+    if (e.target.dataset.hwMinqty) {
+      const id = Number(e.target.dataset.hwMinqty);
+      const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
+      const maxLim = (it && it.limit && it.limit.max) ? it.limit.max : 500;
+      const r = ensureHwRule(id);
+      r.minQty = Math.max(1, Math.min(maxLim, parseInt(e.target.value, 10) || 1));
+      r.enabled = true;
+      e.target.value = r.minQty;
+      renderHalloweenPanel();
+      scheduleSaveHalloween(true);
+    }
+  }
+
+  // ==========================================================================
+  // BAG PANEL (docked on the RIGHT side of the character window)
   // ==========================================================================
   const bag = {
     profileId: null,
@@ -253,16 +719,22 @@
     });
     el.addEventListener('click', onBagClick);
     bag.el = el;
-    syncBagHeight();
+    syncSidePanelHeights();
     return el;
   }
 
-  // Keep the bag panel as tall as the character card next to it
+  // Keep both Left (Halloween) and Right (Bag) panels as tall as the center character card
   let resizeObs = null;
-  function syncBagHeight() {
+  function syncSidePanelHeights() {
     const card = document.querySelector('#char-detail-modal .char-modal-card');
-    if (!card || !bag.el) return;
-    const apply = () => { if (bag.el) bag.el.style.height = `${card.offsetHeight}px`; };
+    if (!card) return;
+    const apply = () => {
+      const h = card.offsetHeight;
+      if (h > 200) {
+        if (bag.el) bag.el.style.height = `${h}px`;
+        if (hw.el) hw.el.style.height = `${h}px`;
+      }
+    };
     apply();
     if (resizeObs) resizeObs.disconnect();
     if (typeof ResizeObserver === 'function') {
@@ -279,6 +751,10 @@
       if (data && data.success) {
         bag.data = data;
         renderBag();
+        if (hw.el) renderHalloweenPanel();
+        if (hub.el && isMarketTabActive() && hub.subTab === 'sell') {
+          renderHubSellStrip();
+        }
       } else if (!bag.data) {
         const grid = bag.el && bag.el.querySelector('[data-role="grid"]');
         if (grid) grid.innerHTML = `<div class="im-empty">⚠️ ${esc(data && data.error || 'อ่านกระเป๋าไม่สำเร็จ')}</div>`;
@@ -307,7 +783,6 @@
       `<button type="button" class="im-tab ${bag.tab === key ? 'active' : ''} ${counts[key] ? '' : 'empty'}" data-tab="${key}">${label} <small>${counts[key] || 0}</small></button>`
     ).join('');
 
-    // Query hint: recognised options vs plain name words
     const hint = el.querySelector('[data-role="hint"]');
     if (parsed.terms.length || parsed.names.length) {
       hint.innerHTML = [
@@ -342,8 +817,8 @@
     el.querySelector('[data-role="weight"]').textContent = wl > 0 ? `${w.toLocaleString()}/${wl.toLocaleString()}` : '--';
 
     renderBagDetail(sel, parsed);
-    if (market.open && sel && market.item && market.item.slot === sel.slot && market.item.itemId === sel.itemId) {
-      market.item = sel;  // keep qty/lock state fresh in the market window
+    if ((market.open || isMarketTabActive()) && sel && market.item && market.item.slot === sel.slot && market.item.itemId === sel.itemId) {
+      market.item = sel;
       renderMarketSellForm();
     }
   }
@@ -368,7 +843,7 @@
       <div class="im-detail-top">
         ${item.icon ? `<img src="${esc(gameAssetUrl(item.icon))}" class="im-detail-icon" alt="">` : ''}
         <div class="im-detail-name-wrap">
-          <div class="im-detail-name" style="color: ${getRarityColor(item.rarity)};">${esc(formatItemDisplayName(item))}${item.locked ? ' 🔒' : ''}</div>
+          <div class="im-detail-name" style="color: ${getRarityColor(item.rarity)};">${esc(formatItemDisplayName(item))}${item.locked ? ' 🔒' : ''}${item.bound ? ' <small class="im-bound-lbl">(ติดตัว)</small>' : ''}</div>
           <div class="im-detail-meta">${esc(meta)}</div>
           ${item.jobs && item.jobs.length ? `<div class="im-detail-meta">ใช้ได้: ${esc(item.jobs.join(', '))}</div>` : ''}
         </div>
@@ -412,8 +887,6 @@
     toast(r && r.success !== false ? `🛡️ เพิ่ม "${name}" เข้า Whitelist แล้ว` : '❌ บันทึก Whitelist ไม่สำเร็จ', r && r.success !== false ? 'ok' : 'err');
   }
 
-  // "🏷️ เพิ่ม Auto Sell": a rule added inside the game (read + add there, so a list changed in the game meanwhile
-  // is never overwritten by an older copy from this page)
   async function addToAutoSell(item) {
     const name = String(item.name || '').trim();
     if (!name) return;
@@ -437,6 +910,11 @@
     toast(`🏷️ เพิ่ม "${name}" เข้า Auto Sell แล้ว (ครบ ≥ ${minQty} ชิ้น)${out.enabled ? '' : ' — ระบบ Auto Sell ยังปิดอยู่ เปิดได้ที่เมนูบอท > ตลาด'}`);
   }
 
+  function isMarketTabActive() {
+    const view = document.getElementById('char-market-view');
+    return Boolean(view && view.style.display !== 'none');
+  }
+
   async function onBagClick(e) {
     const tabBtn = e.target.closest('.im-tab');
     if (tabBtn) { bag.tab = tabBtn.dataset.tab; renderBag(); return; }
@@ -446,7 +924,9 @@
       bag.selected = { slot: Number(cell.dataset.slot), itemId: Number(cell.dataset.item) };
       renderBag();
       const item = selectedBagItem();
-      if (market.open && item) openMarketFor(item);
+      if (item && (market.open || (isMarketTabActive() && hub.subTab === 'sell'))) {
+        openMarketFor(item, { preferTab: isMarketTabActive() });
+      }
       return;
     }
 
@@ -472,11 +952,11 @@
     }
     if (act === 'wl') return addToWhitelist(item.name);
     if (act === 'autosell') return addToAutoSell(item);
-    if (act === 'market') return openMarketFor(item);
+    if (act === 'market') return openMarketFor(item, { preferTab: true });
   }
 
   // ==========================================================================
-  // FLOATING MARKET WINDOW (follows the selected bag item)
+  // TAB 4: MARKETPLACE HUB (INSIDE #char-market-view) + FLOATING WINDOW
   // ==========================================================================
   const market = {
     open: false,
@@ -487,20 +967,750 @@
     range: '7d',
     sort: 'similar',
     sameRefine: true,
-    optText: '',           // option filter for other sellers' listings, e.g. "dex>=5, matk%"
+    optText: '',
     reqToken: 0,
     cache: new Map(),
     form: { qty: 1, unit: '', hours: 24 }
   };
 
-  // The game's market search filters one option server-side (affix + affixMin, ATK also matches ATK%).
-  // Use the most restrictive typed term there; the rest are applied client-side in visibleListings().
+  const hub = {
+    el: null,
+    subTab: 'sell',        // 'sell' | 'active' | 'deliveries' | 'browse'
+    mine: null,            // { active: [], closed: [], deliveries: [], activeLimit: 8 }
+    mineLoading: false,
+    browse: {
+      q: '',
+      category: 'all',
+      optText: '',
+      sort: 'price_asc',
+      loading: false,
+      results: null
+    }
+  };
+
+  function marketHostEl() {
+    if (isMarketTabActive() && hub.el) {
+      const sellPane = hub.el.querySelector('[data-hub-pane="sell"]');
+      if (sellPane) return sellPane;
+    }
+    return market.el;
+  }
+
   function marketOptQuery() {
     const parsed = parseOptionQuery(market.optText);
     const lead = parsed.terms.slice().sort((a, b) => b.min - a.min)[0] || null;
     return { terms: parsed.terms, lead };
   }
 
+  function ensureMarketHub() {
+    const container = document.getElementById('char-market-view');
+    if (!container) return null;
+    if (hub.el && hub.el.isConnected && container.contains(hub.el)) return hub.el;
+
+    container.innerHTML = `
+      <div class="im-hub">
+        <!-- SUB-TABS BAR -->
+        <div class="im-hub-nav">
+          <div class="im-hub-tabs">
+            <button type="button" class="im-hub-tab active" data-hub-tab="sell">
+              <span>🏷️</span> ลงขายไอเทม
+            </button>
+            <button type="button" class="im-hub-tab" data-hub-tab="active">
+              <span>📦</span> ของที่ลงขายอยู่ <span class="im-hub-pill" data-role="hub-active-count">0</span>
+            </button>
+            <button type="button" class="im-hub-tab" data-hub-tab="deliveries">
+              <span>📬</span> รับของ / รับเงิน <span class="im-hub-pill warn" data-role="hub-deliv-count" style="display:none;">0</span>
+            </button>
+            <button type="button" class="im-hub-tab" data-hub-tab="browse">
+              <span>🔍</span> ค้นหา / ซื้อของ
+            </button>
+          </div>
+          <div class="im-hub-nav-right">
+            <span class="im-hub-slot-info" data-role="hub-slot-info">ช่องวางขาย: --/--</span>
+            <button type="button" class="im-btn ghost sm" data-hub-act="refresh-all" title="โหลดข้อมูลตลาดใหม่">⟳ รีเฟรชตลาด</button>
+          </div>
+        </div>
+
+        <!-- PANE 1: SELL ITEM -->
+        <div class="im-hub-pane" data-hub-pane="sell">
+          <div class="im-hub-sell-strip-wrap">
+            <span class="im-hub-strip-lbl">🎒 เลือกไอเทมจากกระเป๋าที่จะขาย:</span>
+            <div class="im-hub-sell-strip" data-role="sell-strip"></div>
+          </div>
+
+          <div class="im-mk-selected-bar" data-role="title-bar">
+            <div class="im-mk-title" data-role="title">🏪 คลิกเลือกไอเทมจากแถบด้านบน หรือจากกระเป๋าด้านขวาเพื่อดูราคาและลงขาย</div>
+            <div class="im-mk-mine" data-role="mine"></div>
+          </div>
+
+          <div class="im-mk-cols">
+            <section class="im-mk-col">
+              <div class="im-mk-col-head">
+                <span>🏷️ คนอื่นตั้งขายอยู่</span>
+                <div class="im-mk-tools">
+                  <label class="im-check"><input type="checkbox" data-mk="same-refine" checked> ตีบวกเท่ากัน</label>
+                  <select class="im-select" data-mk="sort">
+                    <option value="similar">ออฟใกล้เคียงของฉัน</option>
+                    <option value="price">ราคาต่ำ → สูง</option>
+                  </select>
+                </div>
+              </div>
+              <div class="im-mk-optrow">
+                <input type="text" class="im-input" data-mk="opt" placeholder="หาคนขายที่มีออฟ เช่น dex, matk>=5, melee dmg" autocomplete="off">
+                <button type="button" class="im-btn ghost sm" data-mk="opt-go" title="ค้นหาในตลาดตามออฟที่พิมพ์">ค้นหา</button>
+              </div>
+              <div class="im-query-hint" data-role="opt-hint"></div>
+              <div class="im-mk-summary" data-role="list-summary"></div>
+              <div class="im-mk-list" data-role="listings"></div>
+            </section>
+            <section class="im-mk-col">
+              <div class="im-mk-col-head">
+                <span>📈 ราคาที่ขายได้จริง</span>
+                <div class="im-seg" data-role="range">
+                  <button type="button" data-range="24h">24 ชม.</button>
+                  <button type="button" data-range="7d" class="active">7 วัน</button>
+                  <button type="button" data-range="30d">1 เดือน</button>
+                </div>
+              </div>
+              <div data-role="history"></div>
+            </section>
+          </div>
+          <form class="im-mk-sell" data-role="sell"></form>
+        </div>
+
+        <!-- PANE 2: MY ACTIVE & CLOSED LISTINGS -->
+        <div class="im-hub-pane" data-hub-pane="active" style="display:none;">
+          <div class="im-hub-summary-bar" data-role="active-summary"></div>
+          <div class="im-hub-sec-title">📦 รายการที่กำลังวางขายอยู่ในตลาด</div>
+          <div class="im-hub-table-wrap" data-role="active-list"></div>
+          <div class="im-hub-sec-title" style="margin-top: 10px;">📜 ประวัติรายการที่ขายออก / หมดเวลาล่าสุด</div>
+          <div class="im-hub-table-wrap" data-role="closed-list"></div>
+        </div>
+
+        <!-- PANE 3: DELIVERIES (CLAIM ITEMS & ZENY) -->
+        <div class="im-hub-pane" data-hub-pane="deliveries" style="display:none;">
+          <div class="im-hub-claim-banner" data-role="deliveries-banner"></div>
+          <div class="im-hub-table-wrap" data-role="deliveries-list"></div>
+        </div>
+
+        <!-- PANE 4: BROWSE & BUY MARKET -->
+        <div class="im-hub-pane" data-hub-pane="browse" style="display:none;">
+          <div class="im-hub-browse-bar">
+            <input type="text" class="im-input" data-browse="q" placeholder="พิมพ์ชื่อไอเทม เช่น Halloween Box, Elunium, Gakkung Bow..." autocomplete="off">
+            <select class="im-select" data-browse="cat">
+              <option value="all">หมวด: ทั้งหมด</option>
+              <option value="Weapon">อาวุธ (Weapon)</option>
+              <option value="Armor">ชุดเกราะ (Armor)</option>
+              <option value="Accessory">เครื่องประดับ (Accessory)</option>
+              <option value="Gem">เจม (Gem)</option>
+              <option value="Card">การ์ด (Card)</option>
+              <option value="Consumable">ของใช้ (Consumable)</option>
+              <option value="Enchantment">แร่/รูนตีบวก (Refine)</option>
+              <option value="Miscellaneous">วัตถุดิบ (Material)</option>
+            </select>
+            <input type="text" class="im-input" data-browse="opt" placeholder="กรองออฟชั่น เช่น dex>=5, atk%, crit" autocomplete="off">
+            <select class="im-select" data-browse="sort">
+              <option value="price_asc">ราคา/ชิ้น: ต่ำ → สูง</option>
+              <option value="price_desc">ราคา/ชิ้น: สูง → ต่ำ</option>
+              <option value="newest">เพิ่งลงขายล่าสุด</option>
+            </select>
+            <button type="button" class="im-btn market" data-browse="go">🔍 ค้นหา</button>
+          </div>
+          <div class="im-query-hint" data-role="browse-opt-hint"></div>
+          <div class="im-hub-table-wrap" data-role="browse-list">
+            <div class="im-empty">🔍 พิมพ์ชื่อไอเทมหรือเลือกหมวดหมู่แล้วกด "ค้นหา" เพื่อดูของในตลาดกลาง</div>
+          </div>
+        </div>
+      </div>`;
+
+    const el = container.firstElementChild;
+    wireMarketSurfaceEvents(el);
+    el.addEventListener('click', onHubClick);
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && (e.target.dataset.browse === 'q' || e.target.dataset.browse === 'opt')) {
+        e.preventDefault();
+        runBrowseSearch();
+      }
+    });
+    el.addEventListener('input', e => {
+      if (e.target.dataset.browse === 'q') hub.browse.q = e.target.value;
+      if (e.target.dataset.browse === 'opt') {
+        hub.browse.optText = e.target.value;
+        renderBrowseOptHint();
+        if (Array.isArray(hub.browse.results)) renderBrowseResults();
+      }
+    });
+    el.addEventListener('change', e => {
+      if (e.target.dataset.browse === 'cat') { hub.browse.category = e.target.value; runBrowseSearch(); }
+      if (e.target.dataset.browse === 'sort') { hub.browse.sort = e.target.value; renderBrowseResults(); }
+    });
+    hub.el = el;
+    return el;
+  }
+
+  function wireMarketSurfaceEvents(el) {
+    el.addEventListener('click', e => {
+      const b = e.target.closest('[data-mk], [data-range], [data-quick]');
+      if (!b) return;
+      if (b.dataset.mk === 'close') return closeMarket();
+      if (b.dataset.mk === 'collapse') { el.classList.toggle('collapsed'); b.textContent = el.classList.contains('collapsed') ? '+' : '−'; return; }
+      if (b.dataset.mk === 'reload') { market.cache.clear(); return loadMarketData(true); }
+      if (b.dataset.mk === 'opt-go') { clearTimeout(market.optTimer); return loadMarketData(false); }
+      if (b.dataset.range) { market.range = b.dataset.range; return loadHistory(); }
+      if (b.dataset.quick) { e.preventDefault(); applyQuickPrice(b.dataset.quick); }
+    });
+    el.addEventListener('change', e => {
+      if (e.target.dataset.mk === 'sort') { market.sort = e.target.value; renderListings(); }
+      if (e.target.dataset.mk === 'same-refine') { market.sameRefine = e.target.checked; renderListings(); }
+    });
+    el.addEventListener('input', e => {
+      if (e.target.dataset.mk === 'opt') {
+        market.optText = e.target.value;
+        renderOptHint();
+        renderListings();
+        clearTimeout(market.optTimer);
+        market.optTimer = setTimeout(() => loadMarketData(false), 800);
+        return;
+      }
+      const f = e.target.dataset.form;
+      if (!f) return;
+      if (f === 'hours') market.form.hours = Number(e.target.value);
+      else market.form[f] = e.target.value.replace(/[^\d]/g, '');
+      if (f !== 'hours' && e.target.value !== market.form[f]) e.target.value = market.form[f];
+      renderSellSummary();
+    });
+    el.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.target.dataset.mk === 'opt') {
+        e.preventDefault();
+        clearTimeout(market.optTimer);
+        loadMarketData(false);
+      }
+    });
+    el.addEventListener('submit', e => {
+      if (e.target.matches('[data-role="sell"]')) {
+        e.preventDefault();
+        submitListing();
+      }
+    });
+  }
+
+  function switchHubSubTab(subTab) {
+    hub.subTab = subTab || 'sell';
+    if (!hub.el) return;
+    hub.el.querySelectorAll('[data-hub-tab]').forEach(b => b.classList.toggle('active', b.dataset.hubTab === hub.subTab));
+    hub.el.querySelectorAll('[data-hub-pane]').forEach(p => {
+      p.style.display = p.dataset.hubPane === hub.subTab ? '' : 'none';
+    });
+    if (hub.subTab === 'sell') {
+      renderHubSellStrip();
+      if (!market.item) {
+        const sel = selectedBagItem();
+        const firstTradable = sel && !sel.bound ? sel : (bag.data && Array.isArray(bag.data.items) ? bag.data.items.find(i => !i.bound) : null);
+        if (firstTradable) {
+          bag.selected = { slot: firstTradable.slot, itemId: firstTradable.itemId };
+          renderBag();
+          openMarketFor(firstTradable, { preferTab: true });
+        } else {
+          renderMarketHeader();
+          renderListings();
+          renderHistory();
+          renderMarketSellForm();
+        }
+      } else {
+        renderMarketHeader();
+        renderListings();
+        renderHistory();
+        renderMarketSellForm();
+      }
+    } else if (hub.subTab === 'active' || hub.subTab === 'deliveries') {
+      refreshMineMarket();
+    } else if (hub.subTab === 'browse') {
+      if (hub.browse.results === null) runBrowseSearch();
+    }
+    setTimeout(syncSidePanelHeights, 50);
+  }
+
+  function renderHubSellStrip() {
+    if (!hub.el) return;
+    const strip = hub.el.querySelector('[data-role="sell-strip"]');
+    if (!strip) return;
+    const items = (bag.data && Array.isArray(bag.data.items))
+      ? bag.data.items.filter(i => !i.bound).sort((a, b) => a.slot - b.slot)
+      : [];
+    if (items.length === 0) {
+      strip.innerHTML = `<span class="im-muted">ไม่มีไอเทมที่แลกเปลี่ยนได้ในกระเป๋า</span>`;
+      return;
+    }
+    const cur = market.item;
+    strip.innerHTML = items.map(i => `
+      <button type="button" class="im-strip-item ${cur && cur.slot === i.slot && cur.itemId === i.itemId ? 'active' : ''}"
+        data-strip-slot="${i.slot}" data-strip-item="${i.itemId}" title="${esc(formatItemDisplayName(i))} x${i.qty}">
+        ${i.icon ? `<img src="${esc(gameAssetUrl(i.icon))}" alt="">` : ''}
+        <span class="im-strip-name" style="color:${getRarityColor(i.rarity)};">${esc(formatItemDisplayName(i))}</span>
+        ${i.qty > 1 ? `<small>x${i.qty}</small>` : ''}
+      </button>`).join('');
+  }
+
+  async function refreshMineMarket() {
+    if (!bag.profileId || hub.mineLoading) return;
+    hub.mineLoading = true;
+    renderMineViews();
+    try {
+      const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/market`, { op: 'mine' });
+      if (r && r.success) {
+        hub.mine = {
+          active: Array.isArray(r.active) ? r.active : [],
+          closed: Array.isArray(r.closed) ? r.closed : [],
+          deliveries: Array.isArray(r.deliveries) ? r.deliveries : [],
+          activeLimit: Number(r.activeLimit) || 8
+        };
+      } else if (!hub.mine) {
+        hub.mine = { error: (r && r.error) || 'โหลดข้อมูลตลาดของฉันไม่สำเร็จ', active: [], closed: [], deliveries: [], activeLimit: 8 };
+      }
+    } finally {
+      hub.mineLoading = false;
+      updateMarketBadges();
+      renderMineViews();
+    }
+  }
+
+  function updateMarketBadges() {
+    const m = hub.mine;
+    const delivCount = m && Array.isArray(m.deliveries) ? m.deliveries.length : 0;
+    const activeCount = m && Array.isArray(m.active) ? m.active.length : 0;
+    const limit = m && m.activeLimit ? m.activeLimit : 8;
+
+    const topBadge = document.getElementById('char-modal-market-badge');
+    if (topBadge) {
+      if (delivCount > 0) {
+        topBadge.style.display = 'inline-block';
+        topBadge.textContent = `${delivCount}`;
+        topBadge.title = `มีของ/เงินรอรับในตลาดกลาง ${delivCount} รายการ`;
+      } else {
+        topBadge.style.display = 'none';
+      }
+    }
+
+    if (hub.el) {
+      const actPill = hub.el.querySelector('[data-role="hub-active-count"]');
+      if (actPill) actPill.textContent = `${activeCount}/${limit}`;
+      const delPill = hub.el.querySelector('[data-role="hub-deliv-count"]');
+      if (delPill) {
+        delPill.style.display = delivCount > 0 ? 'inline-block' : 'none';
+        delPill.textContent = String(delivCount);
+      }
+      const slotInfo = hub.el.querySelector('[data-role="hub-slot-info"]');
+      if (slotInfo) slotInfo.textContent = `วางขายอยู่: ${activeCount}/${limit} ช่อง`;
+    }
+  }
+
+  function renderMineViews() {
+    if (!hub.el) return;
+    const m = hub.mine;
+    const actSumEl = hub.el.querySelector('[data-role="active-summary"]');
+    const actListEl = hub.el.querySelector('[data-role="active-list"]');
+    const closedListEl = hub.el.querySelector('[data-role="closed-list"]');
+    const delivBannerEl = hub.el.querySelector('[data-role="deliveries-banner"]');
+    const delivListEl = hub.el.querySelector('[data-role="deliveries-list"]');
+
+    if (!m && hub.mineLoading) {
+      const waitHtml = '<div class="im-empty">⏳ กำลังดึงข้อมูลตลาดกลางของตัวละคร...</div>';
+      if (actListEl) actListEl.innerHTML = waitHtml;
+      if (delivListEl) delivListEl.innerHTML = waitHtml;
+      return;
+    }
+    if (!m) return;
+
+    // 1. Active & Closed Listings
+    const active = m.active || [];
+    const closed = m.closed || [];
+    const totalActiveVal = active.reduce((s, l) => s + (Number(l.price) || 0), 0);
+
+    if (actSumEl) {
+      actSumEl.innerHTML = `
+        <div class="im-tile"><small>กำลังวางขาย</small><b>${active.length} / ${m.activeLimit || 8} ช่อง</b></div>
+        <div class="im-tile hl"><small>มูลค่าที่ตั้งขายรวม</small><b>${fmtZ(totalActiveVal)}</b></div>
+        <div class="im-tile"><small>ประวัติปิดการขาย</small><b>${closed.length} รายการ</b></div>
+        <div class="im-tile"><small>รอรับในหน้ารับของ</small><b style="color:${(m.deliveries || []).length ? '#4ade80' : '#94a3b8'};">${(m.deliveries || []).length} รายการ</b></div>`;
+    }
+
+    if (actListEl) {
+      if (active.length === 0) {
+        actListEl.innerHTML = `<div class="im-empty">📦 ตอนนี้ยังไม่มีไอเทมที่กำลังวางขายอยู่ — ไปที่แท็บ "🏷️ ลงขายไอเทม" เพื่อตั้งขายได้เลย</div>`;
+      } else {
+        actListEl.innerHTML = `<div class="im-hub-rows">${active.map(l => {
+          const it = l.item || {};
+          const unit = Math.round((Number(l.price) || 0) / Math.max(1, Number(l.qty) || 1));
+          return `
+            <div class="im-hub-item-row">
+              <div class="im-hub-item-left">
+                <div class="im-hub-icon" style="--rc:${getRarityColor(it.rarity)};">
+                  ${it.icon ? `<img src="${esc(gameAssetUrl(it.icon))}" alt="">` : '📦'}
+                </div>
+                <div class="im-hub-meta">
+                  <div class="im-hub-name">
+                    <span style="color:${getRarityColor(it.rarity)};">${esc(formatItemDisplayName(it))}</span>
+                    ${l.qty > 1 ? `<span class="im-hub-qty">x${Number(l.qty).toLocaleString()}</span>` : ''}
+                  </div>
+                  ${it.affixes && it.affixes.length ? renderItemStatGroups({ affixes: it.affixes }) : '<span class="im-muted">ไม่มีออฟชั่นสุ่ม</span>'}
+                </div>
+              </div>
+              <div class="im-hub-item-right">
+                <div class="im-hub-price">
+                  <b>${fmtZ(l.price)}</b>
+                  ${l.qty > 1 ? `<small>${fmtZ(unit)} / ชิ้น</small>` : ''}
+                </div>
+                <span class="im-hub-time">⏳ ${timeLeft(l.expiresAt)}</span>
+                <button type="button" class="im-btn danger sm" data-hub-cancel="${esc(l.id)}">❌ ยกเลิกขาย</button>
+              </div>
+            </div>`;
+        }).join('')}</div>`;
+      }
+    }
+
+    if (closedListEl) {
+      if (closed.length === 0) {
+        closedListEl.innerHTML = `<div class="im-empty sm">ยังไม่มีประวัติรายการที่ปิดการขาย</div>`;
+      } else {
+        closedListEl.innerHTML = `<div class="im-hub-rows">${closed.slice(0, 30).map(l => {
+          const it = l.item || {};
+          const st = String(l.status || '').toLowerCase();
+          const stBadge = st === 'sold'
+            ? `<span class="im-st-badge sold">✅ ขายสำเร็จ</span>`
+            : st === 'cancelled'
+            ? `<span class="im-st-badge cancel">🚫 ยกเลิก</span>`
+            : `<span class="im-st-badge exp">⏰ หมดเวลา</span>`;
+          return `
+            <div class="im-hub-item-row compact">
+              <div class="im-hub-item-left">
+                <div class="im-hub-icon sm" style="--rc:${getRarityColor(it.rarity)};">
+                  ${it.icon ? `<img src="${esc(gameAssetUrl(it.icon))}" alt="">` : '📦'}
+                </div>
+                <div class="im-hub-meta">
+                  <div class="im-hub-name">
+                    ${stBadge}
+                    <span style="color:${getRarityColor(it.rarity)};">${esc(formatItemDisplayName(it))}</span>
+                    ${l.qty > 1 ? `<span class="im-hub-qty">x${Number(l.qty).toLocaleString()}</span>` : ''}
+                  </div>
+                  <div class="im-muted">
+                    ${l.buyerName ? `ผู้ซื้อ: <b>${esc(l.buyerName)}</b> · ` : ''}${timeAgo(l.closedAt || l.createdAt)}
+                  </div>
+                </div>
+              </div>
+              <div class="im-hub-item-right">
+                <div class="im-hub-price">
+                  <b>${fmtZ(l.price)}</b>
+                  ${l.netPayout ? `<small style="color:#4ade80;">รับสุทธิ ${fmtZ(l.netPayout)}</small>` : ''}
+                </div>
+              </div>
+            </div>`;
+        }).join('')}</div>`;
+      }
+    }
+
+    // 2. Deliveries (Claim box)
+    const delivs = m.deliveries || [];
+    const totalPendingZeny = delivs.reduce((s, d) => s + (Number(d.zeny) || 0), 0);
+    const totalPendingItems = delivs.filter(d => d && d.item).length;
+
+    if (delivBannerEl) {
+      delivBannerEl.innerHTML = `
+        <div class="im-claim-stats">
+          <div class="im-claim-stat">
+            <span>💰 เงินรอรับจากการขาย</span>
+            <b class="zeny">+${fmtZ(totalPendingZeny)}</b>
+          </div>
+          <div class="im-claim-stat">
+            <span>📦 ไอเทมรอรับเข้ากระเป๋า</span>
+            <b>${totalPendingItems.toLocaleString()} รายการ</b>
+          </div>
+        </div>
+        <button type="button" class="im-btn primary lg" data-hub-act="collect-all" ${delivs.length ? '' : 'disabled'}>
+          📥 รับของและเงินทั้งหมด (${delivs.length})
+        </button>`;
+    }
+
+    if (delivListEl) {
+      if (delivs.length === 0) {
+        delivListEl.innerHTML = `<div class="im-empty">✨ ไม่มีไอเทมหรือเงินค้างรับในตลาดกลาง</div>`;
+      } else {
+        delivListEl.innerHTML = `<div class="im-hub-rows">${delivs.map(d => {
+          const it = d.item || null;
+          const r = String(d.reason || '').toLowerCase();
+          const reasonBadge = r.includes('sale') || (d.zeny > 0 && !it)
+            ? `<span class="im-st-badge sold">💰 เงินจากการขาย</span>`
+            : r.includes('purchase') || r.includes('won')
+            ? `<span class="im-st-badge buy">🛒 ซื้อสำเร็จ</span>`
+            : r.includes('cancel')
+            ? `<span class="im-st-badge cancel">🚫 ของที่ยกเลิกขาย</span>`
+            : r.includes('expire')
+            ? `<span class="im-st-badge exp">⏰ ของหมดเวลาขาย</span>`
+            : `<span class="im-st-badge">📬 พัสดุตลาด</span>`;
+          return `
+            <div class="im-hub-item-row">
+              <div class="im-hub-item-left">
+                <div class="im-hub-icon" style="--rc:${it ? getRarityColor(it.rarity) : '#fbbf24'};">
+                  ${it && it.icon ? `<img src="${esc(gameAssetUrl(it.icon))}" alt="">` : '💰'}
+                </div>
+                <div class="im-hub-meta">
+                  <div class="im-hub-name">
+                    ${reasonBadge}
+                    ${it ? `<span style="color:${getRarityColor(it.rarity)};">${esc(formatItemDisplayName(it))}</span>` : ''}
+                    ${it && it.qty > 1 ? `<span class="im-hub-qty">x${Number(it.qty).toLocaleString()}</span>` : ''}
+                    ${d.zeny > 0 ? `<b style="color:#fde047; font-family:var(--font-mono);">+${fmtZ(d.zeny)}</b>` : ''}
+                  </div>
+                  <div class="im-muted">${esc(d.note || '')} ${d.createdAt ? `· ${timeAgo(d.createdAt)}` : ''}</div>
+                  ${it && it.affixes && it.affixes.length ? renderItemStatGroups({ affixes: it.affixes }) : ''}
+                </div>
+              </div>
+              <div class="im-hub-item-right">
+                <button type="button" class="im-btn primary sm" data-hub-collect="${esc(d.id)}">📥 กดรับ</button>
+              </div>
+            </div>`;
+        }).join('')}</div>`;
+      }
+    }
+  }
+
+  function renderBrowseOptHint() {
+    if (!hub.el) return;
+    const box = hub.el.querySelector('[data-role="browse-opt-hint"]');
+    if (!box) return;
+    const parsed = parseOptionQuery(hub.browse.optText);
+    box.innerHTML = [
+      ...parsed.terms.map(t => `<span class="im-qchip opt">✓ ${esc(describeTerm(t))}</span>`),
+      ...parsed.names.map(n => `<span class="im-qchip bad">? ${esc(n)}</span>`)
+    ].join('');
+  }
+
+  async function runBrowseSearch() {
+    if (!bag.profileId || !hub.el) return;
+    const listEl = hub.el.querySelector('[data-role="browse-list"]');
+    if (listEl) listEl.innerHTML = `<div class="im-empty">⏳ กำลังค้นหาไอเทมในตลาดกลาง...</div>`;
+    hub.browse.loading = true;
+    try {
+      const parsed = parseOptionQuery(hub.browse.optText);
+      const lead = parsed.terms.slice().sort((a, b) => b.min - a.min)[0] || null;
+      const body = {
+        op: 'search',
+        q: hub.browse.q.trim(),
+        category: hub.browse.category,
+        pages: lead ? 5 : 3
+      };
+      if (lead) { body.affix = lead.type; if (lead.min) body.affixMin = lead.min; }
+      const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/market`, body);
+      hub.browse.results = (r && r.success) ? (r.listings || []) : { error: (r && r.error) || 'ค้นหาตลาดไม่สำเร็จ' };
+    } finally {
+      hub.browse.loading = false;
+      renderBrowseResults();
+    }
+  }
+
+  function renderBrowseResults() {
+    if (!hub.el) return;
+    const listEl = hub.el.querySelector('[data-role="browse-list"]');
+    if (!listEl) return;
+    const res = hub.browse.results;
+    if (!res) return;
+    if (res.error) {
+      listEl.innerHTML = `<div class="im-empty">⚠️ ${esc(res.error)}</div>`;
+      return;
+    }
+    const parsed = parseOptionQuery(hub.browse.optText);
+    const optFilter = { terms: parsed.terms, names: [] };
+    const hiTypes = parsed.terms.map(t => t.type);
+
+    let rows = res
+      .filter(l => l && l.item && (parsed.terms.length === 0 || itemMatchesOptionQuery(l.item, optFilter, 'all')))
+      .map(l => ({ l, unit: Math.round((Number(l.price) || 0) / Math.max(1, Number(l.qty) || 1)) }));
+
+    if (hub.browse.sort === 'price_asc') rows.sort((a, b) => a.unit - b.unit);
+    else if (hub.browse.sort === 'price_desc') rows.sort((a, b) => b.unit - a.unit);
+    else rows.sort((a, b) => (Number(b.l.createdAt) || 0) - (Number(a.l.createdAt) || 0));
+
+    if (rows.length === 0) {
+      listEl.innerHTML = `<div class="im-empty">🔍 ไม่พบไอเทมที่ค้นหาในตลาดกลางตอนนี้</div>`;
+      return;
+    }
+
+    listEl.innerHTML = `<div class="im-hub-rows">${rows.slice(0, 80).map(({ l, unit }) => {
+      const it = l.item || {};
+      const auction = l.auctionEndsAt && l.auctionEndsAt > Date.now();
+      return `
+        <div class="im-hub-item-row ${l.mine ? 'mine' : ''}">
+          <div class="im-hub-item-left">
+            <div class="im-hub-icon" style="--rc:${getRarityColor(it.rarity)};">
+              ${it.icon ? `<img src="${esc(gameAssetUrl(it.icon))}" alt="">` : '📦'}
+            </div>
+            <div class="im-hub-meta">
+              <div class="im-hub-name">
+                <span style="color:${getRarityColor(it.rarity)};">${esc(formatItemDisplayName(it))}</span>
+                ${l.qty > 1 ? `<span class="im-hub-qty">x${Number(l.qty).toLocaleString()}</span>` : ''}
+                ${auction ? '<span class="im-auction">ประมูล</span>' : ''}
+                ${l.mine ? '<span class="im-auction mine">ของฉัน</span>' : ''}
+              </div>
+              ${it.affixes && it.affixes.length ? renderItemStatGroups({ affixes: it.affixes }, hiTypes) : '<span class="im-muted">ไม่มีออฟชั่นสุ่ม</span>'}
+              <div class="im-muted">ผู้ขาย: ${esc(l.sellerName || '-')} · เหลือเวลา ${timeLeft(l.expiresAt)}</div>
+            </div>
+          </div>
+          <div class="im-hub-item-right">
+            <div class="im-hub-price">
+              <b>${fmtZ(unit)} <small>/ ชิ้น</small></b>
+              ${l.qty > 1 ? `<small>รวม ${fmtZ(l.price)} (x${l.qty})</small>` : ''}
+            </div>
+            ${l.mine
+              ? `<button type="button" class="im-btn danger sm" data-hub-cancel="${esc(l.id)}">❌ ยกเลิก</button>`
+              : `<button type="button" class="im-btn primary sm" data-hub-buy="${esc(l.id)}" data-buy-name="${esc(formatItemDisplayName(it))}" data-buy-qty="${l.qty || 1}" data-buy-price="${l.price || 0}" data-buy-unit="${unit}">🛒 ซื้อ</button>`}
+          </div>
+        </div>`;
+    }).join('')}</div>`;
+  }
+
+  async function onHubClick(e) {
+    const tabBtn = e.target.closest('[data-hub-tab]');
+    if (tabBtn) {
+      switchHubSubTab(tabBtn.dataset.hubTab);
+      return;
+    }
+
+    const stripBtn = e.target.closest('[data-strip-slot]');
+    if (stripBtn && bag.data) {
+      const slot = Number(stripBtn.dataset.stripSlot);
+      const itemId = Number(stripBtn.dataset.stripItem);
+      bag.selected = { slot, itemId };
+      renderBag();
+      const it = selectedBagItem();
+      if (it) openMarketFor(it, { preferTab: true });
+      return;
+    }
+
+    const browseGo = e.target.closest('[data-browse="go"]');
+    if (browseGo) {
+      runBrowseSearch();
+      return;
+    }
+
+    const actBtn = e.target.closest('[data-hub-act]');
+    if (actBtn) {
+      const act = actBtn.dataset.hubAct;
+      if (act === 'refresh-all') {
+        market.cache.clear();
+        await Promise.all([refreshBag(), refreshMineMarket()]);
+        if (hub.subTab === 'sell' && market.item) loadMarketData(true);
+        if (hub.subTab === 'browse') runBrowseSearch();
+        toast('🏪 รีเฟรชข้อมูลตลาดกลางแล้ว');
+        return;
+      }
+      if (act === 'collect-all') {
+        actBtn.disabled = true;
+        const orig = actBtn.textContent;
+        actBtn.textContent = '⏳ กำลังรับทั้งหมด...';
+        try {
+          const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/market`, { op: 'collect_all' });
+          if (r && r.success) {
+            toast('📥 รับของและเงินทั้งหมดจากตลาดกลางเรียบร้อยแล้ว!');
+            hub.mine = {
+              active: r.active || [],
+              closed: r.closed || [],
+              deliveries: r.deliveries || [],
+              activeLimit: r.activeLimit || 8
+            };
+            updateMarketBadges();
+            renderMineViews();
+            setTimeout(refreshBag, 400);
+            if (typeof loadCharacterDetail === 'function' && currentCharProfileId) {
+              setTimeout(() => loadCharacterDetail(currentCharProfileId, true), 600);
+            }
+          } else {
+            toast(`❌ รับทั้งหมดไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+          }
+        } finally {
+          actBtn.disabled = false;
+          actBtn.textContent = orig;
+        }
+        return;
+      }
+    }
+
+    const collectBtn = e.target.closest('[data-hub-collect]');
+    if (collectBtn) {
+      const deliveryId = collectBtn.dataset.hubCollect;
+      collectBtn.disabled = true;
+      collectBtn.textContent = '⏳...';
+      const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/market`, { op: 'collect', deliveryId });
+      if (r && r.success) {
+        toast('📥 รับรายการเข้ากระเป๋าแล้ว');
+        hub.mine = {
+          active: r.active || [],
+          closed: r.closed || [],
+          deliveries: r.deliveries || [],
+          activeLimit: r.activeLimit || 8
+        };
+        updateMarketBadges();
+        renderMineViews();
+        setTimeout(refreshBag, 400);
+      } else {
+        toast(`❌ รับไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+        collectBtn.disabled = false;
+        collectBtn.textContent = '📥 กดรับ';
+      }
+      return;
+    }
+
+    const cancelBtn = e.target.closest('[data-hub-cancel]');
+    if (cancelBtn) {
+      const listingId = cancelBtn.dataset.hubCancel;
+      if (!confirm('ยกเลิกการวางขายรายการนี้? (ไอเทมจะถูกส่งไปที่แท็บ "📬 รับของ / รับเงิน")')) return;
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = '⏳...';
+      const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/market`, { op: 'cancel', listingId });
+      if (r && r.success) {
+        toast('🚫 ยกเลิกรายการขายแล้ว — กดรับไอเทมคืนได้ที่แท็บ "📬 รับของ / รับเงิน"');
+        hub.mine = {
+          active: r.active || [],
+          closed: r.closed || [],
+          deliveries: r.deliveries || [],
+          activeLimit: r.activeLimit || 8
+        };
+        updateMarketBadges();
+        renderMineViews();
+        if (hub.subTab === 'browse') runBrowseSearch();
+      } else {
+        toast(`❌ ยกเลิกไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = '❌ ยกเลิกขาย';
+      }
+      return;
+    }
+
+    const buyBtn = e.target.closest('[data-hub-buy]');
+    if (buyBtn) {
+      const listingId = buyBtn.dataset.hubBuy;
+      const name = buyBtn.dataset.buyName || 'Item';
+      const maxQty = Math.max(1, Number(buyBtn.dataset.buyQty) || 1);
+      const totalPrice = Number(buyBtn.dataset.buyPrice) || 0;
+      const unitPrice = Number(buyBtn.dataset.buyUnit) || totalPrice;
+      const msg = maxQty > 1
+        ? `ยืนยันซื้อ "${name}" x${maxQty} ชิ้น\nราคารวม ${fmtZ(totalPrice)} (เฉลี่ยชิ้นละ ${fmtZ(unitPrice)}) ?`
+        : `ยืนยันซื้อ "${name}" ราคา ${fmtZ(totalPrice)} ?`;
+      if (!confirm(msg)) return;
+      buyBtn.disabled = true;
+      buyBtn.textContent = '⏳...';
+      const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/market`, { op: 'buy', listingId, price: totalPrice, qty: maxQty });
+      if (r && r.success) {
+        toast(`🛒 ซื้อ ${name} x${maxQty} สำเร็จ! (รับของได้ที่แท็บ "📬 รับของ / รับเงิน")`);
+        refreshMineMarket();
+        runBrowseSearch();
+        if (hub.subTab === 'sell') { market.cache.clear(); loadMarketData(true); }
+      } else {
+        toast(`❌ ซื้อไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+        buyBtn.disabled = false;
+        buyBtn.textContent = '🛒 ซื้อ';
+      }
+    }
+  }
+
+  // Floating market window (fallback if #char-market-view is not present)
   function ensureMarketWindow() {
     if (market.el && market.el.isConnected) return market.el;
     const el = document.createElement('div');
@@ -551,52 +1761,12 @@
         <form class="im-mk-sell" data-role="sell"></form>
       </div>`;
     document.body.appendChild(el);
-    // Open beside the bag panel (to its left) so the grid stays clickable
     const bagRect = bag.el && bag.el.getBoundingClientRect();
     const left = bagRect && bagRect.width ? bagRect.left - el.offsetWidth - 10 : window.innerWidth - el.offsetWidth - 20;
     el.style.left = `${Math.max(12, left)}px`;
     el.style.top = `${Math.max(12, bagRect && bagRect.width ? bagRect.top : 70)}px`;
     makeDraggable(el, el.querySelector('[data-role="drag"]'));
-
-    el.addEventListener('click', e => {
-      const b = e.target.closest('[data-mk], [data-range], [data-quick]');
-      if (!b) return;
-      if (b.dataset.mk === 'close') return closeMarket();
-      if (b.dataset.mk === 'collapse') { el.classList.toggle('collapsed'); b.textContent = el.classList.contains('collapsed') ? '+' : '−'; return; }
-      if (b.dataset.mk === 'reload') { market.cache.clear(); return loadMarketData(true); }
-      if (b.dataset.mk === 'opt-go') { clearTimeout(market.optTimer); return loadMarketData(false); }
-      if (b.dataset.range) { market.range = b.dataset.range; return loadHistory(); }
-      if (b.dataset.quick) { e.preventDefault(); applyQuickPrice(b.dataset.quick); }
-    });
-    el.addEventListener('change', e => {
-      if (e.target.dataset.mk === 'sort') { market.sort = e.target.value; renderListings(); }
-      if (e.target.dataset.mk === 'same-refine') { market.sameRefine = e.target.checked; renderListings(); }
-    });
-    el.addEventListener('input', e => {
-      if (e.target.dataset.mk === 'opt') {
-        market.optText = e.target.value;
-        renderOptHint();
-        renderListings();
-        // Re-query the market once typing settles (the server needs the leading option)
-        clearTimeout(market.optTimer);
-        market.optTimer = setTimeout(() => loadMarketData(false), 800);
-        return;
-      }
-      const f = e.target.dataset.form;
-      if (!f) return;
-      if (f === 'hours') market.form.hours = Number(e.target.value);
-      else market.form[f] = e.target.value.replace(/[^\d]/g, '');
-      if (f !== 'hours' && e.target.value !== market.form[f]) e.target.value = market.form[f];
-      renderSellSummary();
-    });
-    el.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && e.target.dataset.mk === 'opt') {
-        e.preventDefault();
-        clearTimeout(market.optTimer);
-        loadMarketData(false);
-      }
-    });
-    el.addEventListener('submit', e => { e.preventDefault(); submitListing(); });
+    wireMarketSurfaceEvents(el);
     market.el = el;
     return el;
   }
@@ -608,23 +1778,41 @@
     market.el = null;
   }
 
-  function openMarketFor(item) {
-    const el = ensureMarketWindow();
-    el.classList.remove('collapsed');
+  function openMarketFor(item, opts = {}) {
+    const hasTab4 = Boolean(document.getElementById('char-market-view'));
+    if (hasTab4 && (opts.preferTab || isMarketTabActive())) {
+      closeMarket();
+      if (!isMarketTabActive() && typeof window.switchCharModalTab === 'function') {
+        window.switchCharModalTab('market');
+      }
+      ensureMarketHub();
+      if (hub.subTab !== 'sell') {
+        hub.subTab = 'sell';
+        hub.el.querySelectorAll('[data-hub-tab]').forEach(b => b.classList.toggle('active', b.dataset.hubTab === 'sell'));
+        hub.el.querySelectorAll('[data-hub-pane]').forEach(p => { p.style.display = p.dataset.hubPane === 'sell' ? '' : 'none'; });
+      }
+    } else {
+      const el = ensureMarketWindow();
+      el.classList.remove('collapsed');
+      market.open = true;
+    }
+
+    const host = marketHostEl();
+    if (!host) return;
+
     const changed = !market.item || market.item.itemId !== item.itemId || market.item.slot !== item.slot;
-    market.open = true;
     market.item = item;
     if (changed) {
       market.form = { qty: item.qty > 1 ? String(item.qty) : '1', unit: '', hours: market.form.hours || 24 };
       market.listings = null;
       market.history = null;
     }
-    // Carry over options typed in the bag search ("dex, matk") so the market searches the same thing
     if (!market.optText.trim()) {
       market.optText = parseOptionQuery(bag.query).terms.map(t => t.raw).join(', ');
     }
-    const optInput = el.querySelector('[data-mk="opt"]');
+    const optInput = host.querySelector('[data-mk="opt"]');
     if (optInput && optInput.value !== market.optText) optInput.value = market.optText;
+    renderHubSellStrip();
     renderOptHint();
     renderMarketHeader();
     renderListings();
@@ -634,16 +1822,29 @@
   }
 
   function renderMarketHeader() {
+    const host = marketHostEl();
+    if (!host) return;
     const it = market.item;
-    const el = market.el;
-    el.querySelector('[data-role="title"]').innerHTML = `
-      ${it.icon ? `<img src="${esc(gameAssetUrl(it.icon))}" alt="">` : '🏪'}
-      <span style="color: ${getRarityColor(it.rarity)};">${esc(formatItemDisplayName(it))}</span>`;
+    const titleEl = host.querySelector('[data-role="title"]');
+    const mineEl = host.querySelector('[data-role="mine"]');
+    if (!it) {
+      if (titleEl) titleEl.innerHTML = `🏪 คลิกไอเทมจากแถบด้านบน หรือจากกระเป๋าด้านขวาเพื่อดูราคาและลงขาย`;
+      if (mineEl) mineEl.innerHTML = '';
+      return;
+    }
+    if (titleEl) {
+      titleEl.innerHTML = `
+        ${it.icon ? `<img src="${esc(gameAssetUrl(it.icon))}" alt="">` : '🏪'}
+        <span style="color: ${getRarityColor(it.rarity)};">${esc(formatItemDisplayName(it))}</span>
+        <small class="im-muted" style="margin-left:6px;">(ในกระเป๋า x${Number(it.qty || 1).toLocaleString()} · ช่อง #${it.slot})</small>`;
+    }
     const opts = Array.isArray(it.affixes) ? it.affixes : [];
-    el.querySelector('[data-role="mine"]').innerHTML = `
-      <span class="im-mk-mine-lbl">ออฟชั่นของชิ้นนี้</span>
-      ${opts.length ? renderItemStatGroups({ affixes: opts }) : '<span class="im-muted">ไม่มีออฟชั่นสุ่ม</span>'}`;
-    el.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === market.range));
+    if (mineEl) {
+      mineEl.innerHTML = `
+        <span class="im-mk-mine-lbl">ออฟชั่นของชิ้นนี้</span>
+        ${opts.length ? renderItemStatGroups({ affixes: opts }) : '<span class="im-muted">ไม่มีออฟชั่นสุ่ม</span>'}`;
+    }
+    host.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === market.range));
   }
 
   async function loadMarketData(force) {
@@ -667,7 +1868,6 @@
     const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/market`, body);
     if (token !== market.reqToken) return;
     if (r.success) {
-      // Search is "contains"; keep only the exact item (Slayer must not include Doom Slayer)
       market.listings = (r.listings || []).filter(l => l.item && Number(l.item.itemId) === Number(it.itemId));
       market.cache.set(key, { at: Date.now(), listings: market.listings });
     } else {
@@ -675,13 +1875,14 @@
     }
     renderListings();
     renderMarketSellForm();
-    if (market.history && !market.history.error) return;  // sold-price history doesn't depend on the option filter
-    await new Promise(res => setTimeout(res, 400));  // the game server ignores back-to-back market requests
+    if (market.history && !market.history.error) return;
+    await new Promise(res => setTimeout(res, 400));
     if (token === market.reqToken) loadHistory();
   }
 
   function renderOptHint() {
-    const box = market.el && market.el.querySelector('[data-role="opt-hint"]');
+    const host = marketHostEl();
+    const box = host && host.querySelector('[data-role="opt-hint"]');
     if (!box) return;
     const parsed = parseOptionQuery(market.optText);
     box.innerHTML = [
@@ -704,8 +1905,8 @@
     renderMarketSellForm();
   }
 
-  // How many of my item's random options a listing also has (type match, value-weighted)
   function similarity(listing) {
+    if (!market.item) return { score: 0, hits: 0, total: 0 };
     const mine = Array.isArray(market.item.affixes) ? market.item.affixes : [];
     if (mine.length === 0) return { score: 0, hits: 0, total: 0 };
     const theirs = Array.isArray(listing.item.affixes) ? listing.item.affixes : [];
@@ -718,7 +1919,7 @@
   }
 
   function visibleListings() {
-    if (!Array.isArray(market.listings)) return [];
+    if (!market.item || !Array.isArray(market.listings)) return [];
     const refine = market.item.refine || 0;
     const { terms } = marketOptQuery();
     const optFilter = { terms, names: [] };
@@ -730,12 +1931,19 @@
   }
 
   function renderListings() {
-    const el = market.el;
-    if (!el) return;
-    const box = el.querySelector('[data-role="listings"]');
-    const sum = el.querySelector('[data-role="list-summary"]');
-    el.querySelector('[data-mk="sort"]').value = market.sort;
-    el.querySelector('[data-mk="same-refine"]').checked = market.sameRefine;
+    const host = marketHostEl();
+    if (!host) return;
+    const box = host.querySelector('[data-role="listings"]');
+    const sum = host.querySelector('[data-role="list-summary"]');
+    const sortEl = host.querySelector('[data-mk="sort"]');
+    const refEl = host.querySelector('[data-mk="same-refine"]');
+    if (sortEl) sortEl.value = market.sort;
+    if (refEl) refEl.checked = market.sameRefine;
+    if (!market.item) {
+      if (sum) sum.innerHTML = '';
+      if (box) box.innerHTML = '<div class="im-empty">เลือกไอเทมจากกระเป๋าเพื่อดูราคาตลาด</div>';
+      return;
+    }
     if (market.listings === null) {
       sum.innerHTML = '';
       box.innerHTML = '<div class="im-empty">⏳ กำลังค้นหาในตลาด...</div>';
@@ -786,7 +1994,6 @@
     }).join('');
   }
 
-  // Sold-price stats. Note: the game records sales per item + refine only (not per option).
   function historyStats(h) {
     const pts = (h.points || []).filter(p => p && p.pieces > 0);
     const pieces = pts.reduce((s, p) => s + p.pieces, 0);
@@ -794,7 +2001,7 @@
     const low = pts.length ? Math.min(...pts.map(p => p.low)) : null;
     const high = pts.length ? Math.max(...pts.map(p => p.high)) : null;
     let units = (h.recent || []).map(r => Math.round(r.price / Math.max(1, r.qty))).filter(u => u > 0).sort((a, b) => a - b);
-    if (units.length >= 4) {  // IQR outlier rejection (one-off 500,000 z sales skew everything)
+    if (units.length >= 4) {
       const q1 = units[Math.floor(units.length * 0.25)], q3 = units[Math.floor(units.length * 0.75)];
       const lo = q1 - 1.5 * (q3 - q1), hi = q3 + 1.5 * (q3 - q1);
       const kept = units.filter(u => u >= lo && u <= hi);
@@ -810,7 +2017,6 @@
     const W = 340, H = 96, P = 4;
     const valid = pts.filter(p => p && p.pieces > 0);
     if (valid.length < 2) return '<div class="im-empty sm">ข้อมูลน้อยเกินไปสำหรับกราฟ</div>';
-    // Clip the y-axis at the 90th percentile so a single extreme sale doesn't flatten the line
     const highs = valid.map(p => p.high).sort((a, b) => a - b);
     const yMax = Math.max(1, highs[Math.floor(highs.length * 0.9)] || highs[highs.length - 1]);
     const n = Math.max(2, h.buckets || pts.length);
@@ -836,10 +2042,14 @@
   }
 
   function renderHistory() {
-    const el = market.el;
-    if (!el) return;
-    const box = el.querySelector('[data-role="history"]');
-    el.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === market.range));
+    const host = marketHostEl();
+    if (!host) return;
+    const box = host.querySelector('[data-role="history"]');
+    host.querySelectorAll('[data-range]').forEach(b => b.classList.toggle('active', b.dataset.range === market.range));
+    if (!market.item) {
+      if (box) box.innerHTML = '<div class="im-empty">เลือกไอเทมจากกระเป๋าเพื่อดูสถิติการขาย</div>';
+      return;
+    }
     const h = market.history;
     if (h === null) { box.innerHTML = '<div class="im-empty">⏳ กำลังโหลดประวัติราคา...</div>'; return; }
     if (h.error) { box.innerHTML = `<div class="im-empty">⚠️ ${esc(h.error)}</div>`; return; }
@@ -868,7 +2078,11 @@
       const s = historyStats(market.history);
       if (s.median) q.median = s.median;
     }
-    if (rows.length) q.undercut = Math.max(1, Math.min(...rows.map(r => r.unit)) - 1);
+    if (rows.length) {
+      const minU = Math.min(...rows.map(r => r.unit));
+      q.undercut = Math.max(1, minU - 1);
+      q.cheapest = minU;
+    }
     const best = rows.filter(r => r.sim.total > 0).sort((a, b) => b.sim.score - a.sim.score || a.unit - b.unit)[0];
     if (best) q.similar = best.unit;
     return q;
@@ -883,35 +2097,45 @@
   }
 
   function renderMarketSellForm() {
-    const el = market.el;
+    const host = marketHostEl();
+    if (!host) return;
+    const form = host.querySelector('[data-role="sell"]');
+    if (!form) return;
     const it = market.item;
-    if (!el || !it) return;
-    const form = el.querySelector('[data-role="sell"]');
+    if (!it) {
+      form.innerHTML = `<div class="im-muted" style="text-align:center; padding:6px;">คลิกเลือกไอเทมจากกระเป๋าด้านขวา หรือแถบด้านบนเพื่อตั้งราคาขาย</div>`;
+      return;
+    }
     const q = quickPrices();
     const stackable = it.maxStack !== 1 && it.qty > 1;
-    const blocked = it.locked ? 'ไอเทมถูกล็อคอยู่ — ปลดล็อคในกระเป๋าก่อนลงขาย' : '';
+    const blocked = it.bound
+      ? 'ไอเทมนี้ติดตัวละคร (Bound) ไม่สามารถลงขายตลาดกลางได้'
+      : it.locked
+      ? 'ไอเทมถูกล็อคอยู่ — ปลดล็อคในกระเป๋าก่อนลงขาย'
+      : '';
     const active = document.activeElement && form.contains(document.activeElement) ? document.activeElement.dataset.form : null;
     form.innerHTML = `
       <div class="im-sell-grid">
-        <label>จำนวน
+        <label>จำนวนที่จะขาย
           <div class="im-inline"><input class="im-input" data-form="qty" inputmode="numeric" value="${esc(market.form.qty)}" ${stackable ? '' : 'disabled'}><small>/ ${it.qty}</small></div>
         </label>
         <label>ราคาต่อชิ้น (z)
           <input class="im-input" data-form="unit" inputmode="numeric" placeholder="เช่น 5000" value="${esc(market.form.unit)}">
         </label>
-        <label>ระยะเวลา
+        <label>ระยะเวลาวางขาย
           <select class="im-select" data-form="hours">${MARKET_RULES.durations.map(h => `<option value="${h}" ${Number(market.form.hours) === h ? 'selected' : ''}>${h} ชั่วโมง</option>`).join('')}</select>
         </label>
       </div>
       <div class="im-quick">
         <span>ตั้งราคาเร็ว:</span>
-        <button type="button" class="im-btn ghost sm" data-quick="median" ${q.median ? '' : 'disabled'}>ราคากลาง${q.median ? ` ${fmtZ(q.median)}` : ''}</button>
-        <button type="button" class="im-btn ghost sm" data-quick="undercut" ${q.undercut ? '' : 'disabled'}>ถูกกว่าคนอื่น 1z${q.undercut ? ` ${fmtZ(q.undercut)}` : ''}</button>
-        <button type="button" class="im-btn ghost sm" data-quick="similar" ${q.similar ? '' : 'disabled'}>เท่าออฟใกล้เคียง${q.similar ? ` ${fmtZ(q.similar)}` : ''}</button>
+        <button type="button" class="im-btn ghost sm" data-quick="undercut" ${q.undercut ? '' : 'disabled'}>⚡ ถูกกว่าคนอื่น 1z${q.undercut ? ` (${fmtZ(q.undercut)})` : ''}</button>
+        <button type="button" class="im-btn ghost sm" data-quick="cheapest" ${q.cheapest ? '' : 'disabled'}>🏷️ เท่าถูกสุด${q.cheapest ? ` (${fmtZ(q.cheapest)})` : ''}</button>
+        <button type="button" class="im-btn ghost sm" data-quick="median" ${q.median ? '' : 'disabled'}>📊 ราคากลาง${q.median ? ` (${fmtZ(q.median)})` : ''}</button>
+        <button type="button" class="im-btn ghost sm" data-quick="similar" ${q.similar ? '' : 'disabled'}>✨ เท่าออฟใกล้เคียง${q.similar ? ` (${fmtZ(q.similar)})` : ''}</button>
       </div>
       <div class="im-sell-foot">
         <div class="im-sell-summary" data-role="sell-summary"></div>
-        <button type="submit" class="im-btn market lg" ${blocked ? 'disabled' : ''}>ลงขาย</button>
+        <button type="submit" class="im-btn market lg" ${blocked ? 'disabled' : ''}>🏪 ลงขายในตลาดกลาง</button>
       </div>
       ${blocked ? `<div class="im-warn">🔒 ${blocked}</div>` : ''}`;
     if (active) {
@@ -923,6 +2147,7 @@
 
   function sellNumbers() {
     const it = market.item;
+    if (!it) return { qty: 1, unit: 0, total: 0, taxPct: 8, deposit: 0, receive: 0 };
     const qty = it.maxStack === 1 ? 1 : Math.min(it.qty, Math.max(1, Number(market.form.qty) || 1));
     const unit = Number(market.form.unit) || 0;
     const total = unit * qty;
@@ -934,36 +2159,53 @@
   }
 
   function renderSellSummary() {
-    const box = market.el && market.el.querySelector('[data-role="sell-summary"]');
+    const host = marketHostEl();
+    const box = host && host.querySelector('[data-role="sell-summary"]');
     if (!box) return;
     const n = sellNumbers();
     box.innerHTML = n.total > 0
       ? `<span>ราคารวม <b>${fmtZ(n.total)}</b></span><span>มัดจำ ${fmtZ(n.deposit)} (คืนเมื่อขายได้)</span><span>ขายได้รับ <b class="ok">${fmtZ(n.receive)}</b> (หักภาษี ${n.taxPct}%)</span>`
-      : '<span class="im-muted">ใส่ราคาต่อชิ้น หรือกดปุ่มตั้งราคาเร็ว</span>';
+      : '<span class="im-muted">ใส่ราคาต่อชิ้น หรือกดปุ่มตั้งราคาเร็วด้านบน</span>';
   }
 
   async function submitListing() {
     const it = market.item;
+    if (!it) return;
     const n = sellNumbers();
     if (!(n.unit > 0)) { toast('ใส่ราคาต่อชิ้นก่อน', 'err'); return; }
     const ok = confirm(`ลงขาย ${formatItemDisplayName(it)} x${n.qty}\nราคารวม ${fmtZ(n.total)} (${fmtZ(n.unit)}/ชิ้น) · ${market.form.hours} ชั่วโมง\nมัดจำ ${fmtZ(n.deposit)} · ขายได้รับ ${fmtZ(n.receive)}\n\nยืนยัน?`);
     if (!ok) return;
-    const btn = market.el.querySelector('.im-mk-sell button[type="submit"]');
+    const host = marketHostEl();
+    const btn = host && host.querySelector('.im-mk-sell button[type="submit"]');
     if (btn) { btn.disabled = true; btn.textContent = '⏳ กำลังลงขาย...'; }
     const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/market`, {
       op: 'list', slot: it.slot, itemId: it.itemId, qty: n.qty, price: n.total, hours: Number(market.form.hours)
     });
     if (!r.success) toast(`❌ ${r.error || 'ลงขายไม่สำเร็จ'}`, 'err');
     else if (r.confirmed) toast(`✅ ลงขาย ${it.name} x${n.qty} ราคา ${fmtZ(n.total)} แล้ว`);
-    else toast('ส่งคำสั่งลงขายแล้ว แต่ยังไม่เห็นไอเทมออกจากกระเป๋า — ตรวจที่ "ของที่ฉันขาย" ในเกม', 'warn');
-    if (r.success) { bag.selected = null; market.cache.clear(); }
-    await refreshBag();
-    if (r.success) closeMarket();
-    else renderMarketSellForm();
+    else toast('ส่งคำสั่งลงขายแล้ว แต่ยังไม่เห็นไอเทมออกจากกระเป๋า — ตรวจที่ "ของที่ลงขายอยู่"', 'warn');
+    if (r.success) {
+      bag.selected = null;
+      market.item = null;
+      market.cache.clear();
+    }
+    await Promise.all([refreshBag(), refreshMineMarket()]);
+    if (r.success) {
+      if (market.open) closeMarket();
+      else {
+        renderHubSellStrip();
+        renderMarketHeader();
+        renderListings();
+        renderHistory();
+        renderMarketSellForm();
+      }
+    } else {
+      renderMarketSellForm();
+    }
   }
 
   // ==========================================================================
-  // PUBLIC API (called from app.js when the character window opens/closes)
+  // PUBLIC API (called from app.js when the character window opens/closes/switches tab)
   // ==========================================================================
   window.InvMarket = {
     open(profileId) {
@@ -971,18 +2213,49 @@
         bag.data = null;
         bag.selected = null;
         bag.query = '';
+        hw.rules = {};
+        hw.quotaState = {};
+        hub.mine = null;
+        hub.browse.results = null;
+        market.item = null;
         closeMarket();
       }
       bag.profileId = profileId;
-      const el = ensureBagPanel();
-      if (!el) return;
-      el.querySelector('[data-role="query"]').value = bag.query;
-      el.querySelector('[data-role="grid"]').innerHTML = bag.data ? '' : '<div class="im-empty">⏳ กำลังโหลดกระเป๋า...</div>';
-      if (bag.data) renderBag();
+      hw.profileId = profileId;
+
+      const hwEl = ensureHalloweenPanel();
+      const bagEl = ensureBagPanel();
+      ensureMarketHub();
+
+      if (bagEl) {
+        bagEl.querySelector('[data-role="query"]').value = bag.query;
+        bagEl.querySelector('[data-role="grid"]').innerHTML = bag.data ? '' : '<div class="im-empty">⏳ กำลังโหลดกระเป๋า...</div>';
+        if (bag.data) renderBag();
+      }
+      if (hwEl) {
+        renderHalloweenPanel();
+      }
+
       refreshBag();
+      refreshHalloween();
+      refreshMineMarket(); // preloads delivery count badge on Tab 4
+
       clearInterval(bag.timer);
-      bag.timer = setInterval(() => { if (!document.hidden) refreshBag(); }, 4000);
-      setTimeout(syncBagHeight, 50);
+      bag.timer = setInterval(() => {
+        if (!document.hidden) {
+          refreshBag();
+        }
+      }, 4000);
+      setTimeout(syncSidePanelHeights, 50);
+    },
+    openMarketTab(profileId, subTab) {
+      if (profileId && bag.profileId !== profileId) {
+        this.open(profileId);
+      }
+      if (subTab) hub.subTab = subTab;
+      ensureMarketHub();
+      switchHubSubTab(hub.subTab || 'sell');
+      refreshMineMarket();
     },
     close() {
       clearInterval(bag.timer);

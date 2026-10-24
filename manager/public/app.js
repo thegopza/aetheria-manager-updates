@@ -9807,6 +9807,23 @@ function renderCharacterModal(data) {
   const gemCountEl = document.getElementById('char-modal-gem-count');
   if (gemCountEl) gemCountEl.innerText = `(${gemCount})`;
 
+  const charBodyEl = document.querySelector('#char-detail-modal .char-modal-body');
+  const marketViewEl = document.getElementById('char-market-view');
+  const tabHintEl = document.getElementById('char-modal-tab-hint');
+  if (currentCharTab === 'market') {
+    if (charBodyEl) charBodyEl.style.display = 'none';
+    if (marketViewEl) marketViewEl.style.display = 'flex';
+    if (tabHintEl) tabHintEl.textContent = '🏪 ลงขายไอเทม ดูของที่ลงขายอยู่ รับของ/รับเงินค้าง และค้นหาซื้อของในตลาดกลาง';
+    if (window.InvMarket && typeof window.InvMarket.openMarketTab === 'function') {
+      window.InvMarket.openMarketTab(currentCharProfileId, subTab);
+    }
+    return;
+  } else {
+    if (charBodyEl) charBodyEl.style.display = '';
+    if (marketViewEl) marketViewEl.style.display = 'none';
+    if (tabHintEl) tabHintEl.textContent = '💡 คลิกที่ช่องอุปกรณ์เพื่อดูรายละเอียด ถอด หรือสแกนไอเทมในกระเป๋าเพื่อสลับใส่';
+  }
+
   // Render Slots based on active subtab
   if (currentCharTab === 'gem') {
     renderSlotColumn('char-slots-left', CHAR_GEM_SLOTS.slice(0, 2), data.equipment);
@@ -9926,16 +9943,37 @@ function initCharacterModalEvents() {
   }
 
   // Subtabs switching
+  const switchCharModalTab = (tabName, subTab) => {
+    currentCharTab = tabName || 'equip';
+    selectedSlotDef = null;
+    const scanView = document.getElementById('char-scanner-view');
+    const statsView = document.getElementById('char-stats-view');
+    if (scanView) scanView.style.display = 'none';
+    if (statsView) statsView.style.display = 'flex';
+    if (currentCharData) {
+      renderCharacterModal(currentCharData);
+      if (currentCharTab === 'market' && subTab && window.InvMarket && typeof window.InvMarket.openMarketTab === 'function') window.InvMarket.openMarketTab(currentCharProfileId, subTab);
+    } else {
+      document.querySelectorAll('.char-tab-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.charTab === currentCharTab);
+      });
+      const charBodyEl = document.querySelector('#char-detail-modal .char-modal-body');
+      const marketViewEl = document.getElementById('char-market-view');
+      if (currentCharTab === 'market') {
+        if (charBodyEl) charBodyEl.style.display = 'none';
+        if (marketViewEl) marketViewEl.style.display = 'flex';
+        if (window.InvMarket && typeof window.InvMarket.openMarketTab === 'function') {
+          window.InvMarket.openMarketTab(currentCharProfileId);
+        }
+      } else {
+        if (charBodyEl) charBodyEl.style.display = '';
+        if (marketViewEl) marketViewEl.style.display = 'none';
+      }
+    }
+  };
+  window.switchCharModalTab = switchCharModalTab;
   document.querySelectorAll('.char-tab-btn').forEach(btn => {
-    btn.onclick = () => {
-      currentCharTab = btn.dataset.charTab;
-      selectedSlotDef = null;
-      const scanView = document.getElementById('char-scanner-view');
-      const statsView = document.getElementById('char-stats-view');
-      if (scanView) scanView.style.display = 'none';
-      if (statsView) statsView.style.display = 'flex';
-      if (currentCharData) renderCharacterModal(currentCharData);
-    };
+    btn.onclick = () => switchCharModalTab(btn.dataset.charTab);
   });
 
   window.addEventListener('keydown', (e) => {

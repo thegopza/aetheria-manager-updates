@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css?v=44416">
-  <link rel="stylesheet" href="inventory_market.css?v=4360">
+  <link rel="stylesheet" href="inventory_market.css?v=4.44.20">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=42900">
   <link rel="stylesheet" href="party_manager.css?v=44416">
@@ -477,11 +477,12 @@
         </div>
       </div>
 
-      <!-- MAIN TABS: 1 อุปกรณ์, 2 คอสตูม, 3 เจม -->
+      <!-- MAIN TABS: 1 อุปกรณ์, 2 คอสตูม, 3 เจม, 4 ตลาดกลาง -->
       <div class="char-subtabs">
         <button type="button" class="char-tab-btn active" data-char-tab="equip">1 อุปกรณ์</button>
         <button type="button" class="char-tab-btn" data-char-tab="costume">2 คอสตูม</button>
         <button type="button" class="char-tab-btn" data-char-tab="gem">3 เจม <span id="char-modal-gem-count">(0)</span></button>
+        <button type="button" class="char-tab-btn char-tab-market" data-char-tab="market">🏪 4 ตลาดกลาง <span id="char-modal-market-badge" class="char-mk-badge" style="display:none;">0</span></button>
         <span class="char-tab-hint" id="char-modal-tab-hint">💡 คลิกที่ช่องอุปกรณ์เพื่อดูรายละเอียด ถอด หรือสแกนไอเทมในกระเป๋าเพื่อสลับใส่</span>
       </div>
 
@@ -552,6 +553,9 @@
           </div>
         </div>
       </div>
+
+      <!-- TAB 4: MARKETPLACE HUB (ตลาดกลาง: ลงขาย / ของที่ขายอยู่ / รับของ-รับเงิน / ค้นหา-ซื้อของ) -->
+      <div class="char-market-view" id="char-market-view" style="display: none;"></div>
     </div>
   </div>
 
@@ -1152,18 +1156,18 @@
   </div>
 
   <script src="image_board_solver.js?v=4381"></script>
-  <script src="app.js?v=44410"></script>
+  <script src="app.js?v=4.44.20"></script>
   <script src="patcher_module.js?v=41744"></script>
   <script src="builder_module.js?v=44009"></script>
   <script src="gear_builder.js?v=42900"></script>
-  <script src="inventory_market.js?v=4370"></script>
+  <script src="inventory_market.js?v=4.44.20"></script>
   <script src="bot_update.js?v=44002"></script>
   <script src="config_copy.js?v=4400"></script>
   <script src="party_manager.js?v=44416"></script>
   <script src="premium_manager.js?v=4.44.19"></script>
   <script src="guild_manager.js?v=44416"></script>
   <script src="jail_manager.js?v=44004"></script>
-  <script src="update_log.js?v=4.44.19"></script>
+  <script src="update_log.js?v=4.44.20"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

@@ -47,6 +47,7 @@ const CLIENT_PROBE_JS = `(() => {
   if (window.__isCheckingPostSellChannel) busy.push('กำลังเช็ค/ย้าย Channel ที่คนน้อยสุด');
   if (window.__senderTradeBusy) busy.push('กำลังส่งของ/เงินผ่านเทรด');
   if (window.__priestBusyBuffing && (Date.now() - (window.__priestBusyBuffingAt || 0) < 25000)) busy.push('พระกำลังเดินไปบัฟสมาชิกปาร์ตี้');
+  if (window.__isHalloweenExchanging) busy.push('กำลังแลกของกิจกรรม Halloween');
   const nameEl = document.querySelector('.hud-name');
   let map = '';
   try { map = (typeof window.__getClientLiveState === 'function' && window.__getClientLiveState().map) || ''; } catch (e) {}

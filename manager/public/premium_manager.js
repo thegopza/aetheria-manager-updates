@@ -23,6 +23,9 @@
   let open = false, pollTimer = null, busy = false, filter = 'all', pointerDown = false, pendingRender = false;
   let lastPlansSig = '';
   let openForceId = null;
+  let openSellId = null;
+  let openSellAll = false;
+  let scannedOnOpen = false;
 
   function build() {
     const tab = document.createElement('button');
@@ -35,9 +38,32 @@
     drawer.innerHTML = `
       <header class="pm-head">
         <div class="pm-head-icon">${GEM}</div>
-        <div><h2>Premium อัตโนมัติ</h2><p>ซื้อ Token ด้วย zeny แล้วปลดล็อค / ต่อ Premium ให้เอง</p></div>
+        <div><h2>Premium อัตโนมัติ</h2><p>ซื้อ/ขาย Token และปลดล็อค Premium อัตโนมัติ</p></div>
+        <button class="pm-sell-all-top-btn" id="pm-sell-all-open" type="button" title="ตั้งขาย Token ของทุกตัวละครในราคาตั้งขายที่ถูกสุด">💰 ขายทุกตัว</button>
         <button class="pm-close" id="pm-close" type="button" aria-label="ปิด">✕</button>
       </header>
+      <div class="pm-sell-all-box" id="pm-sell-all-box" hidden>
+        <div class="pm-s-head">
+          <span>💰 ตั้งขาย Token ทุกตัวละคร (ราคาตั้งขายที่ถูกสุด)</span>
+          <button type="button" class="pm-f-close" id="pm-sell-all-close" title="ปิด">✕</button>
+        </div>
+        <div class="pm-s-presets">
+          <button type="button" data-sa-price="ask" class="on">ราคาตั้งขายถูกสุด</button>
+          <button type="button" data-sa-price="undercut">ตัดราคา -1 z</button>
+          <button type="button" id="pm-sa-scan">🔄 เช็ค Token ทุกจอ</button>
+        </div>
+        <div class="pm-f-controls">
+          <label class="pm-f-input-wrap">
+            <span>ราคาตั้งขาย/Token:</span>
+            <input type="number" id="pm-sa-price-inp" class="pm-f-qty" min="1" step="1" placeholder="ราคาขายต่ำสุด">
+          </label>
+          <button type="button" class="pm-s-submit" id="pm-sell-all-exec">💰 ขายทุกตัวทันที</button>
+        </div>
+        <div class="pm-f-opts">
+          <label><input type="checkbox" id="pm-sa-offauto" checked> ปิดสวิตช์ซื้อออโต้ของจอที่สั่งขาย (กันบอทซื้อ Token กลับซ้ำ)</label>
+        </div>
+        <div class="pm-f-est ok" id="pm-sa-est"></div>
+      </div>
       <section class="pm-settings" id="pm-settings">
         <div class="pm-market">
           <div><span>ราคาขายต่ำสุด</span><b id="pm-ask-val">—</b><small>/ Token</small></div>
@@ -112,6 +138,34 @@
     });
     drawer.querySelector('#pm-all-on').addEventListener('click', () => toggle('*', true));
     drawer.querySelector('#pm-all-off').addEventListener('click', () => toggle('*', false));
+    drawer.querySelector('#pm-sell-all-open').addEventListener('click', () => {
+      openSellAll = !openSellAll;
+      const box = document.getElementById('pm-sell-all-box');
+      if (box) {
+        box.hidden = !openSellAll;
+        if (openSellAll) {
+          const inp = document.getElementById('pm-sa-price-inp');
+          const bestAsk = (data.market && data.market.bestAsk) || 0;
+          if (inp && (!inp.value || Number(inp.value) <= 0) && bestAsk > 0) inp.value = String(bestAsk);
+          updateSellAllEstimate();
+          const hasUnscanned = data.clients.some(c => c.hasPort && c.tokens == null);
+          if (hasUnscanned && !busy) {
+            api('/scan', {}).catch(() => {});
+          }
+        }
+      }
+      const btn = document.getElementById('pm-sell-all-open');
+      if (btn) btn.classList.toggle('active', openSellAll);
+    });
+    drawer.querySelector('#pm-sell-all-close').addEventListener('click', () => {
+      openSellAll = false;
+      const box = document.getElementById('pm-sell-all-box');
+      if (box) box.hidden = true;
+      const btn = document.getElementById('pm-sell-all-open');
+      if (btn) btn.classList.remove('active');
+    });
+    drawer.querySelector('#pm-sell-all-box').addEventListener('click', onSellAllBoxClick);
+    drawer.querySelector('#pm-sa-price-inp').addEventListener('input', updateSellAllEstimate);
   }
 
   function setOpen(v) {
@@ -119,8 +173,16 @@
     if (v) document.body.classList.remove('pt-open', 'gd-open');
     document.body.classList.toggle('pm-open', v);
     clearInterval(pollTimer);
-    if (v) { load(); pollTimer = setInterval(load, 5000); }
-    else pollTimer = setInterval(load, 60000);
+    if (v) {
+      load();
+      if (!scannedOnOpen) {
+        scannedOnOpen = true;
+        api('/scan', {}).catch(() => {});
+      }
+      pollTimer = setInterval(load, 5000);
+    } else {
+      pollTimer = setInterval(load, 60000);
+    }
   }
 
   async function api(p, body) {
@@ -292,6 +354,102 @@
     setText(estEl, `✅ ซื้อ ${fmt(wantQty)} Token (ใช้เงินประมาณ ~${fmt(estCost)} z${usableZeny != null ? ` · เงินใช้ได้ ${fmt(usableZeny)} z` : ''})`);
   }
 
+  function updateSellEstimate(row, c) {
+    const box = row.querySelector('.pm-sell-box');
+    if (!box || box.hidden) return;
+    const curTokens = Math.max(0, Math.floor(Number(c.tokens) || 0));
+    const bestAsk = (data.market && Number(data.market.bestAsk)) || 0;
+    const bestBid = (data.market && Number(data.market.bestBid)) || 0;
+    const feePct = (data.market && Number(data.market.feePercent)) || 2;
+    const qtyInp = box.querySelector('.pm-s-qty');
+    const priceInp = box.querySelector('.pm-s-price');
+    const estEl = box.querySelector('.pm-s-est');
+    const allBtn = box.querySelector('[data-s-preset="all"]');
+    const askBtn = box.querySelector('[data-s-price="ask"]');
+    if (allBtn) setText(allBtn, `ทั้งหมด (${fmt(curTokens)})`);
+    if (askBtn) setText(askBtn, bestAsk > 0 ? `ราคาขายถูกสุด (${fmt(bestAsk)})` : 'ราคาขายถูกสุด');
+
+    const wantQty = Math.max(0, Math.floor(Number(qtyInp && qtyInp.value) || curTokens));
+    const sellQty = curTokens > 0 ? Math.min(curTokens, wantQty || curTokens) : wantQty;
+    const sellPrice = Math.max(0, Math.floor(Number(priceInp && priceInp.value) || bestAsk));
+
+    if (!estEl) return;
+    if (!c.hasPort && !c.online) {
+      estEl.className = 'pm-s-est pm-f-est warn';
+      setText(estEl, '⚠️ จอนี้ยังไม่ได้เปิดเกม (ต้องออนไลน์ก่อนจึงจะสั่งขายได้)');
+      return;
+    }
+    if (curTokens <= 0) {
+      const pendingOrders = Array.isArray(c.askOrders) ? c.askOrders : [];
+      if (pendingOrders.length > 0) {
+        const rem = pendingOrders.reduce((s, o) => s + (Number(o.remaining) || Number(o.qty) || 0), 0);
+        const pr = pendingOrders[0].price || bestAsk;
+        estEl.className = 'pm-s-est pm-f-est partial';
+        setText(estEl, `⏳ กำลังตั้งขายอยู่ในตลาด ${fmt(rem)} Token @ ${fmt(pr)} z/Token (รอผู้เล่นซื้อ · เมื่อขายได้จะรับเงินเข้าตัวอัตโนมัติ)`);
+      } else {
+        estEl.className = 'pm-s-est pm-f-est warn';
+        setText(estEl, '⚠️ ตัวละครนี้ไม่มี Token ให้ขาย (0 Token)');
+      }
+      return;
+    }
+    if (sellPrice <= 0) {
+      estEl.className = 'pm-s-est pm-f-est warn';
+      setText(estEl, '⚠️ ยังไม่ทราบราคาตั้งขายต่ำสุดในตลาด กรุณาระบุราคา');
+      return;
+    }
+    const gross = sellQty * sellPrice;
+    const fee = Math.ceil(gross * feePct / 100);
+    const net = Math.max(0, gross - fee);
+    const diffVsBid = bestBid > 0 && sellPrice > bestBid ? ` · ได้มากกว่าขายให้คนรับซื้อ +${fmt((sellPrice - bestBid) * sellQty)} z` : '';
+    estEl.className = 'pm-s-est pm-f-est ok';
+    setText(estEl, `✅ ตั้งขาย ${fmt(sellQty)} Token @ ${fmt(sellPrice)} z/Token → รับสุทธิ ~${fmt(net)} z (หักค่าธรรมเนียม ${feePct}%${diffVsBid})`);
+  }
+
+  function updateSellAllEstimate() {
+    const box = document.getElementById('pm-sell-all-box');
+    const estEl = document.getElementById('pm-sa-est');
+    if (!box || box.hidden || !estEl) return;
+    const bestAsk = (data.market && Number(data.market.bestAsk)) || 0;
+    const bestBid = (data.market && Number(data.market.bestBid)) || 0;
+    const feePct = (data.market && Number(data.market.feePercent)) || 2;
+    const askBtn = box.querySelector('[data-sa-price="ask"]');
+    const underBtn = box.querySelector('[data-sa-price="undercut"]');
+    if (askBtn) setText(askBtn, bestAsk > 0 ? `ราคาตั้งขายถูกสุด (${fmt(bestAsk)} z)` : 'ราคาตั้งขายถูกสุด');
+    if (underBtn) setText(underBtn, bestAsk > 1 ? `ตัดราคา -1 z (${fmt(bestAsk - 1)} z)` : 'ตัดราคา -1 z');
+
+    const inp = document.getElementById('pm-sa-price-inp');
+    const sellPrice = Math.max(0, Math.floor(Number(inp && inp.value) || bestAsk));
+    const onlineClients = data.clients.filter(c => c.hasPort || c.online);
+    const withTokens = onlineClients.filter(c => (Number(c.tokens) || 0) > 0);
+    const totalTokens = withTokens.reduce((s, c) => s + (Number(c.tokens) || 0), 0);
+    const unscanned = onlineClients.filter(c => c.tokens == null).length;
+
+    if (!onlineClients.length) {
+      estEl.className = 'pm-f-est warn';
+      setText(estEl, '⚠️ ไม่มีหน้าจอที่ออนไลน์อยู่ในขณะนี้');
+      return;
+    }
+    if (totalTokens <= 0) {
+      estEl.className = 'pm-f-est ' + (unscanned > 0 ? 'partial' : 'warn');
+      setText(
+        estEl,
+        unscanned > 0
+          ? `⏳ กำลังอ่านจำนวน Token จาก ${unscanned} จอที่ออนไลน์... (หรือกดปุ่ม "ขายทุกตัวทันที" เพื่อให้ระบบเช็กและตั้งขายทุกจอที่มี Token ทันที)`
+          : '⚠️ ไม่มีตัวละครที่ออนไลน์อยู่ที่มี Token คงเหลือให้ขาย (0 Token ทุกจอ)'
+      );
+      return;
+    }
+    const gross = totalTokens * sellPrice;
+    const fee = Math.ceil(gross * feePct / 100);
+    const net = Math.max(0, gross - fee);
+    const diffBid = bestBid > 0 && sellPrice > bestBid ? ` · ได้มากกว่าขายราคาคนรับซื้อ +${fmt((sellPrice - bestBid) * totalTokens)} z` : '';
+    estEl.className = 'pm-f-est ok';
+    setText(
+      estEl,
+      `✅ พบ ${withTokens.length} ตัวละครที่มี Token · รวมทั้งหมด ${fmt(totalTokens)} Token @ ${fmt(sellPrice)} z/Token → รับเงินรวมสุทธิ ~${fmt(net)} z (หักภาษี ${feePct}%${diffBid})`
+    );
+  }
+
   function createRowEl(c) {
     const row = document.createElement('div');
     row.className = 'pm-row';
@@ -311,6 +469,7 @@
           <span></span>
         </div>
         <div class="pm-state" hidden></div>
+        <div class="pm-ask-badge" hidden></div>
         <div class="pm-last" hidden></div>
         <div class="pm-force-box" hidden>
           <div class="pm-f-head">
@@ -337,10 +496,40 @@
           </div>
           <div class="pm-f-est"></div>
         </div>
+        <div class="pm-sell-box" hidden>
+          <div class="pm-s-head">
+            <span>💰 ตั้งขาย Token (ราคาตั้งขายที่ถูกสุด ไม่ขายราคาคนรับซื้อ)</span>
+            <button type="button" class="pm-f-close" data-sell-close="${esc(c.id)}" title="ปิด">✕</button>
+          </div>
+          <div class="pm-s-presets">
+            <button type="button" data-s-preset="all" data-row-id="${esc(c.id)}">ทั้งหมด</button>
+            <button type="button" data-s-preset="100" data-row-id="${esc(c.id)}">100</button>
+            <button type="button" data-s-preset="500" data-row-id="${esc(c.id)}">500</button>
+            <button type="button" data-s-preset="1000" data-row-id="${esc(c.id)}">1,000</button>
+            <button type="button" data-s-price="ask" data-row-id="${esc(c.id)}">ราคาขายถูกสุด</button>
+            <button type="button" data-s-price="undercut" data-row-id="${esc(c.id)}">ตัดราคา -1z</button>
+          </div>
+          <div class="pm-f-controls">
+            <label class="pm-f-input-wrap">
+              <span>จำนวน:</span>
+              <input type="number" class="pm-s-qty pm-f-qty" min="1" max="100000" step="1" value="1000">
+            </label>
+            <label class="pm-f-input-wrap">
+              <span>ราคา/Token:</span>
+              <input type="number" class="pm-s-price pm-f-qty" min="1" step="1" value="">
+            </label>
+            <button type="button" class="pm-s-submit" data-sell-exec="${esc(c.id)}">💰 ตั้งขาย</button>
+          </div>
+          <div class="pm-f-opts">
+            <label><input type="checkbox" class="pm-s-offauto" checked> ปิดสวิตช์ซื้อออโต้ของจอนี้ (กันซื้อ Token กลับซ้ำ)</label>
+          </div>
+          <div class="pm-s-est pm-f-est"></div>
+        </div>
       </div>
       <div class="pm-side-actions">
         <label class="pm-switch"><input type="checkbox" data-id="${esc(c.id)}"><span></span></label>
         <button type="button" class="pm-force-btn" data-force-toggle="${esc(c.id)}" title="บังคับซื้อ Token / Premium ทันที">⚡ ซื้อ</button>
+        <button type="button" class="pm-sell-btn" data-sell-toggle="${esc(c.id)}" title="ตั้งขาย Token ในราคาตั้งขายที่ถูกสุด">💰 ขาย</button>
       </div>`;
     patchRowEl(row, c);
     return row;
@@ -432,6 +621,19 @@
       }
     }
 
+    const askBadgeEl = row.querySelector('.pm-ask-badge');
+    if (askBadgeEl) {
+      const askOrders = Array.isArray(c.askOrders) ? c.askOrders : [];
+      if (askOrders.length > 0) {
+        const rem = askOrders.reduce((s, o) => s + (Number(o.remaining) || Number(o.qty) || 0), 0);
+        const pr = askOrders[0].price || (data.market && data.market.bestAsk) || 0;
+        askBadgeEl.hidden = false;
+        setText(askBadgeEl, `⏳ กำลังตั้งขาย ${fmt(rem)} Token @ ${fmt(pr)} z`);
+      } else {
+        askBadgeEl.hidden = true;
+      }
+    }
+
     const lastEl = row.querySelector('.pm-last');
     if (lastEl) {
       if ((c.enabled || last) && last) {
@@ -469,6 +671,24 @@
         }
       }
       if (isForceOpen) updateForceEstimate(row, c);
+    }
+
+    const sellBtn = row.querySelector('.pm-sell-btn');
+    const isSellOpen = String(openSellId) === String(c.id);
+    if (sellBtn) sellBtn.classList.toggle('active', isSellOpen);
+    const sellBox = row.querySelector('.pm-sell-box');
+    if (sellBox) {
+      const wasSellHidden = sellBox.hidden;
+      sellBox.hidden = !isSellOpen;
+      if (isSellOpen && wasSellHidden) {
+        const curTokens = Math.max(0, Math.floor(Number(c.tokens) || 0));
+        const bestAsk = (data.market && Number(data.market.bestAsk)) || 0;
+        const sQtyInp = sellBox.querySelector('.pm-s-qty');
+        const sPriceInp = sellBox.querySelector('.pm-s-price');
+        if (sQtyInp) sQtyInp.value = String(curTokens > 0 ? curTokens : 100);
+        if (sPriceInp && bestAsk > 0) sPriceInp.value = String(bestAsk);
+      }
+      if (isSellOpen) updateSellEstimate(row, c);
     }
   }
 
@@ -517,6 +737,7 @@
     const n = data.clients.filter(c => c.enabled).length;
     if (badge) setText(badge, n ? String(n) : '');
     renderSettings();
+    if (openSellAll) updateSellAllEstimate();
     renderList();
   }
 
@@ -539,7 +760,10 @@
     const row = t.closest('.pm-row');
     if (row) {
       const c = data.clients.find(x => String(x.id) === String(row.dataset.rowId));
-      if (c) updateForceEstimate(row, c);
+      if (c) {
+        updateForceEstimate(row, c);
+        updateSellEstimate(row, c);
+      }
     }
   }
 
@@ -547,7 +771,74 @@
     const row = e.target.closest('.pm-row');
     if (!row) return;
     const c = data.clients.find(x => String(x.id) === String(row.dataset.rowId));
-    if (c) updateForceEstimate(row, c);
+    if (c) {
+      updateForceEstimate(row, c);
+      updateSellEstimate(row, c);
+    }
+  }
+
+  async function onSellAllBoxClick(e) {
+    const priceBtn = e.target.closest('[data-sa-price]');
+    if (priceBtn) {
+      const bestAsk = (data.market && Number(data.market.bestAsk)) || 0;
+      const inp = document.getElementById('pm-sa-price-inp');
+      const kind = priceBtn.dataset.saPrice;
+      document.querySelectorAll('#pm-sell-all-box [data-sa-price]').forEach(b => b.classList.toggle('on', b === priceBtn));
+      if (inp && bestAsk > 0) {
+        inp.value = String(kind === 'undercut' ? Math.max(1, bestAsk - 1) : bestAsk);
+      }
+      updateSellAllEstimate();
+      return;
+    }
+    const scanBtn = e.target.closest('#pm-sa-scan');
+    if (scanBtn) {
+      if (busy) return;
+      busy = true;
+      scanBtn.disabled = true;
+      const oldTxt = scanBtn.textContent;
+      scanBtn.textContent = '⏳ กำลังเช็ค...';
+      try {
+        await api('/scan', {});
+        toast('อัปเดตจำนวน Token ทุกจอเรียบร้อย', 'success');
+      } finally {
+        busy = false;
+        scanBtn.disabled = false;
+        scanBtn.textContent = oldTxt;
+      }
+      return;
+    }
+    const execBtn = e.target.closest('#pm-sell-all-exec');
+    if (execBtn) {
+      if (busy) return;
+      const inp = document.getElementById('pm-sa-price-inp');
+      const offChk = document.getElementById('pm-sa-offauto');
+      const bestAsk = (data.market && Number(data.market.bestAsk)) || 0;
+      const price = Math.max(0, Math.floor(Number(inp && inp.value) || bestAsk));
+      const disableAuto = Boolean(offChk ? offChk.checked : true);
+      if (!confirm(`ยืนยันตั้งขาย Token ของทุกตัวละครที่ออนไลน์ (ในราคา ${price > 0 ? fmt(price) + ' z/Token' : 'ตั้งขายที่ถูกสุดในตลาด'})?`)) return;
+      busy = true;
+      execBtn.disabled = true;
+      const oldTxt = execBtn.textContent;
+      execBtn.textContent = '⏳ กำลังตั้งขายทุกตัว...';
+      try {
+        const r = await api('/force-sell-all', { price, disableAuto });
+        if (r.success === false) {
+          toast(r.error || 'ตั้งขายทุกตัวไม่สำเร็จ', 'error');
+        } else {
+          toast((r.sellAllResult && r.sellAllResult.message) || 'ตั้งขายทุกตัวสำเร็จ', 'success');
+          openSellAll = false;
+          const box = document.getElementById('pm-sell-all-box');
+          if (box) box.hidden = true;
+          const btn = document.getElementById('pm-sell-all-open');
+          if (btn) btn.classList.remove('active');
+          render();
+        }
+      } finally {
+        busy = false;
+        execBtn.disabled = false;
+        execBtn.textContent = oldTxt;
+      }
+    }
   }
 
   async function onBodyClick(e) {
@@ -555,6 +846,7 @@
     if (toggleBtn) {
       const id = String(toggleBtn.dataset.forceToggle);
       openForceId = String(openForceId) === id ? null : id;
+      if (openForceId) openSellId = null;
       renderList();
       return;
     }
@@ -562,6 +854,80 @@
     if (closeBtn) {
       openForceId = null;
       renderList();
+      return;
+    }
+    const sellToggleBtn = e.target.closest('[data-sell-toggle]');
+    if (sellToggleBtn) {
+      const id = String(sellToggleBtn.dataset.sellToggle);
+      openSellId = String(openSellId) === id ? null : id;
+      if (openSellId) openForceId = null;
+      renderList();
+      return;
+    }
+    const sellCloseBtn = e.target.closest('[data-sell-close]');
+    if (sellCloseBtn) {
+      openSellId = null;
+      renderList();
+      return;
+    }
+    const sellPresetBtn = e.target.closest('[data-s-preset]');
+    if (sellPresetBtn) {
+      const row = sellPresetBtn.closest('.pm-row');
+      const c = row && data.clients.find(x => String(x.id) === String(row.dataset.rowId));
+      if (!row || !c) return;
+      const curTokens = Math.max(0, Math.floor(Number(c.tokens) || 0));
+      const qtyInp = row.querySelector('.pm-s-qty');
+      const kind = sellPresetBtn.dataset.sPreset;
+      if (qtyInp) {
+        if (kind === 'all') qtyInp.value = String(curTokens > 0 ? curTokens : 100);
+        else qtyInp.value = String(curTokens > 0 ? Math.min(curTokens, Number(kind) || curTokens) : (Number(kind) || 100));
+      }
+      updateSellEstimate(row, c);
+      return;
+    }
+    const sellPriceBtn = e.target.closest('[data-s-price]');
+    if (sellPriceBtn) {
+      const row = sellPriceBtn.closest('.pm-row');
+      const c = row && data.clients.find(x => String(x.id) === String(row.dataset.rowId));
+      if (!row || !c) return;
+      const bestAsk = (data.market && Number(data.market.bestAsk)) || 0;
+      const priceInp = row.querySelector('.pm-s-price');
+      const kind = sellPriceBtn.dataset.sPrice;
+      if (priceInp && bestAsk > 0) {
+        priceInp.value = String(kind === 'undercut' ? Math.max(1, bestAsk - 1) : bestAsk);
+      }
+      updateSellEstimate(row, c);
+      return;
+    }
+    const sellExecBtn = e.target.closest('[data-sell-exec]');
+    if (sellExecBtn) {
+      const id = String(sellExecBtn.dataset.sellExec);
+      const row = sellExecBtn.closest('.pm-row');
+      if (!row || busy) return;
+      const qtyInp = row.querySelector('.pm-s-qty');
+      const priceInp = row.querySelector('.pm-s-price');
+      const offChk = row.querySelector('.pm-s-offauto');
+      const qty = Math.max(0, Math.floor(Number(qtyInp && qtyInp.value) || 0));
+      const price = Math.max(0, Math.floor(Number(priceInp && priceInp.value) || 0));
+      const disableAuto = Boolean(offChk ? offChk.checked : true);
+      busy = true;
+      sellExecBtn.disabled = true;
+      const oldTxt = sellExecBtn.textContent;
+      sellExecBtn.textContent = '⏳ กำลังขาย...';
+      try {
+        const r = await api('/force-sell', { profileId: id, qty, price, disableAuto });
+        if (r.success === false) {
+          toast(r.error || 'ตั้งขายไม่สำเร็จ', 'error');
+        } else {
+          toast((r.sellResult && r.sellResult.message) || 'ตั้งขายสำเร็จ', 'success');
+          openSellId = null;
+          render();
+        }
+      } finally {
+        busy = false;
+        sellExecBtn.disabled = false;
+        sellExecBtn.textContent = oldTxt;
+      }
       return;
     }
     const presetBtn = e.target.closest('[data-f-preset]');

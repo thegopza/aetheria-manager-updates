@@ -57,8 +57,19 @@ const READ_JS = `(async () => {
   try { if (typeof window.getLiveCharacterData === 'function') window.getLiveCharacterData(true); } catch (e) {}
   let live = null; try { live = typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null; } catch (e) {}
   ${EXCHANGE_FETCH}
-  const ex = await fetchEx();
-  const zeny = Number((live && live.zeny) != null ? live.zeny : (me && me.zeny)) || 0;
+  let ex = await fetchEx();
+  let claimedZeny = 0;
+  if (ex && Number(ex.claimZeny) > 0) {
+    claimedZeny = Number(ex.claimZeny) || 0;
+    try {
+      room.send('exchange', { type: 'claim' });
+      await new Promise(r => setTimeout(r, 800));
+      const ex2 = await fetchEx();
+      if (ex2) ex = ex2;
+      if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny();
+    } catch (e) {}
+  }
+  const zeny = Number((live && live.zeny) != null ? live.zeny : (me && me.zeny)) + claimedZeny || 0;
   const base = (me && me.level) || (live && live.baseLv) || 0;
   const job = (me && me.jobLevel) || (live && live.jobLv) || 0;
   const cls = String((me && me.classId) || (live && live.classId) || '').toLowerCase();
@@ -164,9 +175,14 @@ const READ_JS = `(async () => {
       tokens: Number(ex.tokens) || 0,
       premiumUntil: ex.premiumUntil || null,
       plans: Array.isArray(ex.premiumPlans) ? ex.premiumPlans.map(x => ({ id: x.id, days: x.days, tokens: x.tokens })) : [],
-      bestAsk: ex.bestAsk || null, feePercent: ex.feePercent,
+      bestAsk: ex.bestAsk || ((ex.book && Array.isArray(ex.book.asks) && ex.book.asks[0] && ex.book.asks[0].price) || null),
+      bestBid: ex.bestBid || ((ex.book && Array.isArray(ex.book.bids) && ex.book.bids[0] && ex.book.bids[0].price) || null),
+      feePercent: ex.feePercent,
+      claimZeny: Number(ex.claimZeny) || 0,
+      claimedZeny,
       asks: ((ex.book && ex.book.asks) || []).slice(0, 40).map(a => ({ price: a.price, qty: a.qty })),
-      openOrders: Array.isArray(ex.orders) ? ex.orders.length : 0
+      openOrders: Array.isArray(ex.orders) ? ex.orders.length : 0,
+      askOrders: Array.isArray(ex.orders) ? ex.orders.filter(o => o && o.side === 'ask').map(o => ({ orderId: o.orderId, price: o.price, qty: o.qty, remaining: o.remaining != null ? o.remaining : o.qty, createdAt: o.createdAt })) : []
     } : null
   };
 })()`;
@@ -187,6 +203,67 @@ const ACTIONS = {
     const after = await fetchEx();
     const b = Number(before.tokens) || 0, a = after ? Number(after.tokens) || 0 : null;
     return { success: a != null && a > b, before: b, after: a, error: a == null ? 'ไม่ได้คำตอบจากตลาด' : (a > b ? null : 'ซื้อไม่ได้ (ไม่มีคนขายในราคานี้ หรือเงินไม่พอ)') };
+  })()`,
+  // List Token for sale at the lowest ask price (ราคาตั้งขายที่ถูกสุด), NOT at the buyer bid price.
+  sell: (qty, price) => `(async () => {
+    const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
+    if (!room) return { success: false, error: 'not-in-game' };
+    ${EXCHANGE_FETCH}
+    const before = await fetchEx();
+    if (!before) return { success: false, error: 'อ่านตลาด Token ไม่ได้' };
+    const avail = Math.floor(Number(before.tokens) || 0);
+    if (avail <= 0) return { success: false, error: 'ไม่มี Token ในตัวละครนี้', tokens: 0, before: 0, after: 0 };
+    const reqQty = Math.floor(Number(${Number(qty) || 0}));
+    const sellQty = reqQty > 0 ? Math.min(avail, reqQty) : avail;
+    if (sellQty <= 0) return { success: false, error: 'จำนวน Token ที่ต้องการขายไม่ถูกต้อง', tokens: avail };
+    const asks = (before.book && Array.isArray(before.book.asks))
+      ? before.book.asks.filter(a => a && a.price > 0 && a.qty > 0).slice().sort((a, b) => a.price - b.price)
+      : [];
+    const lowestAsk = (asks[0] && Number(asks[0].price)) || Number(before.bestAsk) || 0;
+    const reqPrice = Math.floor(Number(${Number(price) || 0}));
+    const sellPrice = reqPrice > 0 ? reqPrice : lowestAsk;
+    if (!sellPrice || sellPrice <= 0) return { success: false, error: 'ไม่พบราคาตั้งขายที่ถูกสุดในตลาดตอนนี้', tokens: avail };
+    const bAskOrders = Array.isArray(before.orders) ? before.orders.filter(o => o && o.side === 'ask').length : 0;
+    const bClaim = Number(before.claimZeny) || 0;
+    room.send('exchange', { type: 'order', side: 'ask', price: sellPrice, qty: sellQty });
+    await new Promise(r => setTimeout(r, 2000));
+    let after = await fetchEx();
+    let claimedNow = 0;
+    if (after && Number(after.claimZeny) > 0) {
+      claimedNow = Number(after.claimZeny) || 0;
+      room.send('exchange', { type: 'claim' });
+      await new Promise(r => setTimeout(r, 800));
+      const afterClaim = await fetchEx();
+      if (afterClaim) after = afterClaim;
+    }
+    try { if (typeof window.getLiveCharacterData === 'function') window.getLiveCharacterData(true); } catch (e) {}
+    try { if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny(); } catch (e) {}
+    const aTokens = after ? (Number(after.tokens) || 0) : null;
+    const askOrdersList = after && Array.isArray(after.orders)
+      ? after.orders.filter(o => o && o.side === 'ask').map(o => ({ orderId: o.orderId, price: o.price, qty: o.qty, remaining: o.remaining != null ? o.remaining : o.qty, createdAt: o.createdAt }))
+      : [];
+    const aClaim = after ? (Number(after.claimZeny) || 0) : 0;
+    const ok = aTokens != null && (aTokens < avail || askOrdersList.length > bAskOrders || aClaim > bClaim || claimedNow > 0);
+    const soldQty = (aTokens != null && aTokens < avail) ? (avail - aTokens) : (ok ? sellQty : 0);
+    const feePct = Number(before.feePercent) || 2;
+    const grossZeny = soldQty * sellPrice;
+    const feeZeny = Math.ceil(grossZeny * feePct / 100);
+    const netZeny = Math.max(0, grossZeny - feeZeny);
+    return {
+      success: ok,
+      before: avail,
+      after: aTokens != null ? aTokens : avail,
+      sold: soldQty,
+      price: sellPrice,
+      lowestAsk,
+      bestBid: Number(before.bestBid) || 0,
+      feePercent: feePct,
+      grossZeny,
+      netZeny,
+      claimedZeny: claimedNow,
+      askOrders: askOrdersList,
+      error: ok ? null : (aTokens == null ? 'ไม่ได้คำตอบจากตลาด' : 'ตั้งขาย Token ไม่สำเร็จ')
+    };
   })()`,
   activate: (planId, cost) => `(async () => {
     const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
@@ -266,6 +343,10 @@ function decide(snap, cfg, gateOpen, nowMs, timing) {
   const prebuy = !cfg || cfg.prebuyNextRound !== false;
   const target = tokenTarget(plan.tokens, plan.days, cfg.leadDays, until, nowMs, prebuy);
   const base = { plan, target, active, premiumUntil: until || null, tokens: ex.tokens };
+  if (Array.isArray(ex.askOrders) && ex.askOrders.length > 0) {
+    const rem = ex.askOrders.reduce((s, o) => s + (Number(o.remaining) || Number(o.qty) || 0), 0);
+    return Object.assign(base, { action: 'wait', text: 'กำลังตั้งขาย ' + rem.toLocaleString() + ' Token รอคนซื้อ' });
+  }
   if (ex.tokens >= plan.tokens && (!active || until - nowMs <= T.renewBeforeMs)) {
     return Object.assign(base, { action: 'activate', text: active ? 'ต่อ Premium ' + plan.days + ' วัน' : 'ปลดล็อค Premium ' + plan.days + ' วัน' });
   }
@@ -389,13 +470,29 @@ function createPremiumService(opts) {
     return { ok: Boolean(r && r.success !== false && res && res.success !== false), result: res, error: (res && res.error) || (r && r.error) || null };
   }
 
-  async function handleClient(p) {
+  async function handleClient(p, readOnly) {
     const R = rt(p.id);
     if (!p.debugPort) { R.snap = null; R.decision = { action: 'offline', text: 'ออฟไลน์' }; return; }
     const r = await evalProfilePort(p.debugPort, READ_JS, T.readTimeoutMs);
     const snap = r && r.success !== false && r.result && typeof r.result === 'object' ? r.result : null;
     R.snap = snap; R.at = now();
-    if (snap && snap.exchange) market = { bestAsk: snap.exchange.bestAsk, plans: snap.exchange.plans, feePercent: snap.exchange.feePercent, at: now() };
+    if (snap && snap.exchange) {
+      market = {
+        bestAsk: snap.exchange.bestAsk,
+        bestBid: snap.exchange.bestBid || null,
+        plans: snap.exchange.plans,
+        feePercent: snap.exchange.feePercent,
+        at: now()
+      };
+      R.hasSellOrder = Array.isArray(snap.exchange.askOrders) && snap.exchange.askOrders.length > 0;
+      if (Number(snap.exchange.claimedZeny) > 0) {
+        remember(p.id, 'รับเงินจากการขาย Token เข้าตัว +' + Number(snap.exchange.claimedZeny).toLocaleString() + ' z', true);
+      }
+    }
+    if (readOnly || !(clients[p.id] && clients[p.id].enabled)) {
+      R.decision = null;
+      return;
+    }
     const d = decide(snap, settings, gateOpen(p.id, snap), now(), T);
     R.decision = d;
     if (snap && snap.busy && snap.busy.length && (d.action === 'buy' || d.action === 'activate')) { d.action = 'wait'; d.text = 'รอบอทว่าง (' + snap.busy[0] + ')'; return; }
@@ -420,13 +517,25 @@ function createPremiumService(opts) {
     try {
       const profiles = loadProfiles();
       const enabled = profiles.filter(p => clients[p.id] && clients[p.id].enabled);
+      const sellWatching = profiles.filter(p => !enabled.includes(p) && p.debugPort && rt(p.id).hasSellOrder);
       for (const p of profiles) if (!enabled.includes(p)) { const R = rt(p.id); R.decision = null; }
-      if (!enabled.length) return;
+      if (!enabled.length && !sellWatching.length) return;
       if (isBusy()) { for (const p of enabled) rt(p.id).decision = { action: 'wait', text: 'Manager กำลังอัปเดต / รวมเงิน — รอก่อน' }; return; }
       for (const p of enabled) {
-        try { await handleClient(p); } catch (e) { log('client', p.name || p.id, e.message); }
+        try { await handleClient(p, false); } catch (e) { log('client', p.name || p.id, e.message); }
+      }
+      for (const p of sellWatching) {
+        try { await handleClient(p, true); } catch (e) { log('client-sell-watch', p.name || p.id, e.message); }
       }
     } finally { ticking = false; }
+  }
+
+  async function scanAllOnline() {
+    const profiles = loadProfiles().filter(p => p && p.debugPort);
+    for (const p of profiles) {
+      const isEn = Boolean(clients[p.id] && clients[p.id].enabled);
+      try { await handleClient(p, !isEn); } catch (e) {}
+    }
   }
 
   async function forceBuy(p, opts) {
@@ -543,6 +652,120 @@ function createPremiumService(opts) {
     };
   }
 
+  async function forceSell(p, opts) {
+    opts = opts || {};
+    if (!p || !p.debugPort) return { ok: false, error: 'จอนี้ไม่ได้ออนไลน์อยู่' };
+    const R = rt(p.id);
+    const wantQty = Math.max(0, Math.min(100000, Math.floor(Number(opts.qty) || 0)));
+    const wantPrice = Math.max(0, Math.floor(Number(opts.price) || 0));
+    const disableAuto = opts.disableAuto !== false;
+
+    const res = await evalOk(p.debugPort, ACTIONS.sell(wantQty, wantPrice), T.actTimeoutMs);
+    const sr = res.result || {};
+    if (!res.ok) {
+      const err = res.error || sr.error || 'ตั้งขาย Token ไม่สำเร็จ';
+      if (opts.silentIfZero && (err === 'ไม่มี Token ในตัวละครนี้' || sr.before === 0)) {
+        if (!R.snap) {
+          try { await handleClient(p, !Boolean(clients[p.id] && clients[p.id].enabled)); } catch (e) {}
+        }
+        return { ok: false, skippedZero: true, profileId: p.id, error: err };
+      }
+      R.lastError = err;
+      remember(p.id, 'ตั้งขาย Token ไม่สำเร็จ: ' + err, false);
+      return { ok: false, profileId: p.id, error: err };
+    }
+
+    const sold = Number(sr.sold) || 0;
+    const price = Number(sr.price) || 0;
+    const netZeny = Number(sr.netZeny) || 0;
+    const tokensNow = sr.after != null ? Number(sr.after) : 0;
+    const claimedNow = Number(sr.claimedZeny) || 0;
+    R.hasSellOrder = Array.isArray(sr.askOrders) && sr.askOrders.length > 0;
+    R.lastError = null;
+
+    if (disableAuto && clients[p.id] && clients[p.id].enabled) {
+      cl(p.id).enabled = false;
+      R.decision = null;
+      save();
+    }
+
+    try { await handleClient(p, !Boolean(clients[p.id] && clients[p.id].enabled)); } catch (e) {
+      if (R.snap && R.snap.exchange) {
+        R.snap.exchange.tokens = tokensNow;
+        if (Array.isArray(sr.askOrders)) R.snap.exchange.askOrders = sr.askOrders;
+      }
+    }
+
+    const note = `ตั้งขาย ${sold.toLocaleString()} Token @ ${price.toLocaleString()} z (~${netZeny.toLocaleString()} z หลังหักภาษี${claimedNow > 0 ? ' · รับทันที +' + claimedNow.toLocaleString() + ' z' : ''})`;
+    remember(p.id, note, true);
+
+    return {
+      ok: true,
+      profileId: p.id,
+      name: p.name,
+      charName: (R.snap && R.snap.name) || p.lastCharName || p.name,
+      sold,
+      price,
+      netZeny,
+      claimedZeny: claimedNow,
+      tokens: tokensNow,
+      message: `ตั้งขายสำเร็จ ${sold.toLocaleString()} Token ราคา ${price.toLocaleString()} z/Token (~${netZeny.toLocaleString()} z)`
+    };
+  }
+
+  async function forceSellAll(opts) {
+    opts = opts || {};
+    const profiles = loadProfiles().filter(p => p && p.debugPort);
+    if (!profiles.length) return { ok: false, error: 'ไม่มีหน้าจอที่ออนไลน์อยู่' };
+    const wantPrice = Math.max(0, Math.floor(Number(opts.price) || 0));
+    const disableAuto = opts.disableAuto !== false;
+
+    let soldClients = 0;
+    let totalSoldTokens = 0;
+    let totalNetZeny = 0;
+    let skippedZero = 0;
+    let priceUsed = wantPrice || (market && market.bestAsk) || 0;
+    const results = [];
+    const errors = [];
+
+    for (const p of profiles) {
+      try {
+        const r = await forceSell(p, { qty: 0, price: wantPrice, disableAuto, silentIfZero: true });
+        results.push(r);
+        if (r.ok) {
+          soldClients++;
+          totalSoldTokens += Number(r.sold) || 0;
+          totalNetZeny += Number(r.netZeny) || 0;
+          if (r.price) priceUsed = r.price;
+        } else if (r.skippedZero) {
+          skippedZero++;
+        } else if (r.error) {
+          errors.push((p.lastCharName || p.name) + ': ' + r.error);
+        }
+      } catch (e) {
+        errors.push((p.lastCharName || p.name) + ': ' + e.message);
+      }
+    }
+
+    if (soldClients === 0) {
+      const errMsg = errors.length
+        ? ('ตั้งขายไม่สำเร็จ: ' + errors.slice(0, 3).join(', '))
+        : 'ไม่มีตัวละครที่ออนไลน์อยู่ที่มี Token ให้ขาย (0 Token ทุกจอ)';
+      return { ok: false, soldClients: 0, totalSoldTokens: 0, totalNetZeny: 0, skippedZero, error: errMsg, results };
+    }
+
+    return {
+      ok: true,
+      soldClients,
+      totalSoldTokens,
+      totalNetZeny,
+      priceUsed,
+      skippedZero,
+      results,
+      message: `ตั้งขายสำเร็จ ${soldClients} ตัวละคร · รวม ${totalSoldTokens.toLocaleString()} Token @ ${Number(priceUsed).toLocaleString()} z (~${totalNetZeny.toLocaleString()} z)`
+    };
+  }
+
   function view() {
     const profiles = loadProfiles();
     const reserve = Math.max(0, Number(settings.reserveZeny) || 0);
@@ -557,11 +780,13 @@ function createPremiumService(opts) {
         const zeny = s && s.ok ? s.zeny : null;
         const maxBuyWithReserve = ex && ex.asks && zeny != null ? walkAsks(ex.asks, 100000, Math.max(0, zeny - reserve)) : null;
         const maxBuyAllZeny = ex && ex.asks && zeny != null ? walkAsks(ex.asks, 100000, Math.max(0, zeny)) : null;
+        const askOrders = ex && Array.isArray(ex.askOrders) ? ex.askOrders : [];
         return {
           id: p.id, name: p.name, charName: (s && s.name) || p.lastCharName || null, charClass: p.lastCharClass || null,
           enabled: !!c.enabled, online: !!(s && s.ok), hasPort: !!p.debugPort,
           zeny, level: s && s.ok ? s.level : null,
           tokens: ex ? ex.tokens : null, premiumUntil: ex ? toMs(ex.premiumUntil) || null : null,
+          askOrders,
           target: d && d.target != null ? d.target : null, cost: d && d.plan ? d.plan.tokens : null,
           maxBuyWithReserve, maxBuyAllZeny,
           status: d ? d.action : (c.enabled ? 'pending' : 'off'), statusText: d ? d.text : (c.enabled ? 'รอรอบตรวจถัดไป' : 'ปิดอยู่'),
@@ -607,6 +832,32 @@ function createPremiumService(opts) {
       sendJSON(Object.assign(view(), { forceResult: fb }));
       return true;
     }
+    if (pathname === '/api/premium/force-sell') {
+      const id = String(body.profileId || '');
+      const p = loadProfiles().find(x => x.id === id);
+      if (!p) { sendJSON({ success: false, error: 'ไม่พบจอนี้' }, 400); return true; }
+      const fsRes = await forceSell(p, body);
+      if (!fsRes.ok) {
+        sendJSON(Object.assign(view(), { success: false, error: fsRes.error, sellResult: fsRes }), 400);
+        return true;
+      }
+      sendJSON(Object.assign(view(), { sellResult: fsRes }));
+      return true;
+    }
+    if (pathname === '/api/premium/force-sell-all') {
+      const fsaRes = await forceSellAll(body);
+      if (!fsaRes.ok) {
+        sendJSON(Object.assign(view(), { success: false, error: fsaRes.error, sellAllResult: fsaRes }), 400);
+        return true;
+      }
+      sendJSON(Object.assign(view(), { sellAllResult: fsaRes }));
+      return true;
+    }
+    if (pathname === '/api/premium/scan') {
+      await scanAllOnline().catch(e => log('scan failed', e.message));
+      sendJSON(view());
+      return true;
+    }
     if (pathname === '/api/premium/refresh') {
       await tick().catch(e => log('tick failed', e.message));
       sendJSON(view());
@@ -624,7 +875,7 @@ function createPremiumService(opts) {
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
-  return { handleRoute, tick, forceBuy, start, stop, view, _settings: () => settings, _clients: () => clients };
+  return { handleRoute, tick, forceBuy, forceSell, forceSellAll, scanAllOnline, start, stop, view, _settings: () => settings, _clients: () => clients };
 }
 
 module.exports = { createPremiumService, decide, walkAsks, tokenTarget, sanitizeSettings, effectivePlan, toMs, READ_JS, ACTIONS, DEFAULTS, TIMING };

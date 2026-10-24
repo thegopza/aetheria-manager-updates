@@ -61,12 +61,29 @@ body.pm-open .pm-drawer { transform: translateX(0); visibility: visible; pointer
 .pm-head-icon svg { width: 22px; height: 22px; }
 .pm-head h2 { margin: 0; font-size: 17px; font-weight: 700; }
 .pm-head p { margin: 2px 0 0; font-size: 12px; color: var(--text-muted, #8d9ab5); }
+.pm-sell-all-top-btn {
+  margin-left: auto; padding: 6px 12px; border-radius: 9px; font: 700 11.5px var(--font-sans, sans-serif);
+  color: #fde68a; background: linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(217, 119, 6, 0.14));
+  border: 1px solid rgba(251, 191, 36, 0.45); cursor: pointer; white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.15); transition: all 0.2s;
+}
+.pm-sell-all-top-btn:hover, .pm-sell-all-top-btn.active {
+  color: #0b0a1c; background: linear-gradient(135deg, #fbbf24, #f59e0b); border-color: transparent;
+  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.35);
+}
 .pm-close {
-  margin-left: auto; width: 34px; height: 34px; border-radius: 10px; border: 1px solid rgba(148, 163, 184, 0.22);
+  width: 34px; height: 34px; border-radius: 10px; border: 1px solid rgba(148, 163, 184, 0.22);
   background: rgba(255, 255, 255, 0.03); color: var(--text-muted, #8d9ab5); cursor: pointer; font-size: 16px;
-  transition: background 0.2s, color 0.2s, transform 0.2s;
+  transition: background 0.2s, color 0.2s, transform 0.2s; flex: none;
 }
 .pm-close:hover { background: rgba(248, 113, 113, 0.12); color: #fca5a5; transform: rotate(90deg); }
+.pm-sell-all-box {
+  margin: 10px 14px 0; padding: 10px 12px; border-radius: 12px;
+  background: linear-gradient(160deg, rgba(30, 22, 10, 0.92), rgba(10, 14, 28, 0.95));
+  border: 1px solid rgba(251, 191, 36, 0.42); display: flex; flex-direction: column; gap: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.pm-sell-all-box[hidden] { display: none !important; }
 
 /* settings + market */
 .pm-settings { padding: 12px 14px; border-bottom: 1px solid var(--pm-line); display: flex; flex-direction: column; gap: 10px; }
@@ -180,6 +197,44 @@ body.pm-open .pm-drawer { transform: translateX(0); visibility: visible; pointer
 .pm-force-btn:hover, .pm-force-btn.active {
   color: #0b0a1c; background: linear-gradient(135deg, #7dd3fc, #c4b5fd); border-color: transparent;
 }
+.pm-sell-btn {
+  padding: 3px 8px; border-radius: 7px; font: 600 10.5px var(--font-sans, sans-serif); cursor: pointer;
+  color: #fcd34d; background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(251, 191, 36, 0.35);
+  transition: all 0.2s; white-space: nowrap;
+}
+.pm-sell-btn:hover, .pm-sell-btn.active {
+  color: #0b0a1c; background: linear-gradient(135deg, #fbbf24, #f59e0b); border-color: transparent;
+}
+.pm-ask-badge {
+  margin-top: 4px; font-size: 11px; font-weight: 600; color: #fde68a;
+  background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(251, 191, 36, 0.28);
+  padding: 2px 7px; border-radius: 6px; display: inline-block;
+}
+.pm-ask-badge[hidden] { display: none !important; }
+.pm-sell-box {
+  margin-top: 8px; padding: 9px 10px; border-radius: 10px;
+  background: rgba(22, 16, 8, 0.88); border: 1px solid rgba(251, 191, 36, 0.38);
+  display: flex; flex-direction: column; gap: 7px;
+}
+.pm-sell-box[hidden] { display: none !important; }
+.pm-s-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 6px;
+  font-size: 11px; font-weight: 700; color: #fcd34d;
+}
+.pm-s-presets { display: flex; flex-wrap: wrap; gap: 5px; }
+.pm-s-presets button {
+  padding: 3px 8px; border-radius: 6px; font: 600 10.5px var(--font-sans, sans-serif); cursor: pointer;
+  color: #fde68a; background: rgba(245, 158, 11, 0.14); border: 1px solid rgba(251, 191, 36, 0.3);
+  transition: all 0.15s;
+}
+.pm-s-presets button:hover, .pm-s-presets button.on { background: rgba(245, 158, 11, 0.32); color: #fff; border-color: rgba(251, 191, 36, 0.6); }
+.pm-s-submit {
+  padding: 6px 12px; border-radius: 8px; font: 700 11.5px var(--font-sans, sans-serif); cursor: pointer;
+  color: #0b0a1c; background: linear-gradient(135deg, #fbbf24, #f59e0b); border: none;
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.25); white-space: nowrap; transition: transform 0.15s, opacity 0.15s;
+}
+.pm-s-submit:hover:not(:disabled) { transform: translateY(-1px); }
+.pm-s-submit:disabled { opacity: 0.6; cursor: wait; }
 .pm-force-box {
   margin-top: 8px; padding: 9px 10px; border-radius: 10px;
   background: rgba(6, 10, 24, 0.85); border: 1px solid rgba(56, 189, 248, 0.32);

@@ -218,19 +218,24 @@
   }
 
   // ==========================================================================
-  // LEFT PANEL: HALLOWEEN EXCHANGE (NPC WITCH HAZEL)
+  // MAIN-SCREEN LEFT DRAWER: HALLOWEEN EXCHANGE (NPC WITCH HAZEL)
   // ==========================================================================
   const hw = {
-    profileId: null,
+    open: false,
+    pollTimer: null,
+    profileId: 'all',   // 'all' or specific profile.id
     enabled: true,
     rules: {},          // itemId -> { enabled: boolean, minQty: number }
     catalog: DEFAULT_WITCH_HAZEL_ITEMS,
+    clients: [],
     quotaState: {},
     bagCounts: { 90880: 0, 90881: 0 },
     zeny: 0,
     filter: 'all',      // 'all' | 'selected' | 'ready'
     loading: false,
     saving: false,
+    tabEl: null,
+    scrimEl: null,
     el: null
   };
 
@@ -259,26 +264,98 @@
     return { rawAffordable, cappedByQuota, quotaLeft, maxLimit };
   }
 
-  function syncHwBagCountsFromInventory() {
-    if (!bag.data || !Array.isArray(bag.data.items)) return;
-    let candy = 0, pumpkin = 0;
-    for (const it of bag.data.items) {
-      const id = Number(it.itemId);
-      const nm = String(it.name || '').trim().toLowerCase();
-      if (id === 90880 || nm === 'halloween candy') candy += (Number(it.qty) || 0);
-      else if (id === 90881 || nm === 'golden pumpkin') pumpkin += (Number(it.qty) || 0);
+  function syncHwDisplayedStats() {
+    const onlineClients = (hw.clients || []).filter(c => c && c.online);
+    const chosen = hw.profileId && hw.profileId !== 'all'
+      ? (hw.clients || []).find(c => c && c.id === hw.profileId)
+      : null;
+
+    if (chosen && chosen.online) {
+      hw.bagCounts[90880] = Number(chosen.candy) || 0;
+      hw.bagCounts[90881] = Number(chosen.pumpkin) || 0;
+      hw.zeny = Number(chosen.zeny) || 0;
+      hw.quotaState = chosen.quotaState || {};
+      return;
     }
-    hw.bagCounts[90880] = candy;
-    hw.bagCounts[90881] = pumpkin;
-    if (typeof bag.data.zeny === 'number') hw.zeny = bag.data.zeny;
+
+    if (onlineClients.length > 0) {
+      // When "all" is selected, sum materials across online screens (or show the active screen if 1)
+      let totalCandy = 0, totalPumpkin = 0, totalZeny = 0;
+      for (const c of onlineClients) {
+        totalCandy += Number(c.candy) || 0;
+        totalPumpkin += Number(c.pumpkin) || 0;
+        totalZeny += Number(c.zeny) || 0;
+      }
+      hw.bagCounts[90880] = totalCandy;
+      hw.bagCounts[90881] = totalPumpkin;
+      hw.zeny = totalZeny;
+      hw.quotaState = onlineClients[0].quotaState || {};
+      return;
+    }
+
+    // Fallback to opened character bag if any
+    if (bag.data && Array.isArray(bag.data.items)) {
+      let candy = 0, pumpkin = 0;
+      for (const it of bag.data.items) {
+        const id = Number(it.itemId);
+        const nm = String(it.name || '').trim().toLowerCase();
+        if (id === 90880 || nm === 'halloween candy') candy += (Number(it.qty) || 0);
+        else if (id === 90881 || nm === 'golden pumpkin') pumpkin += (Number(it.qty) || 0);
+      }
+      hw.bagCounts[90880] = candy;
+      hw.bagCounts[90881] = pumpkin;
+      if (typeof bag.data.zeny === 'number') hw.zeny = bag.data.zeny;
+    }
+  }
+
+  function updateHwTabBadge() {
+    const badge = document.getElementById('hw-tab-badge');
+    if (!badge) return;
+    const selectedCount = Object.values(hw.rules || {}).filter(r => r && r.enabled).length;
+    badge.textContent = selectedCount > 0 ? String(selectedCount) : '';
+  }
+
+  function setHwDrawerOpen(v) {
+    hw.open = Boolean(v);
+    if (hw.open) {
+      document.body.classList.remove('pt-open', 'pm-open', 'gd-open');
+    }
+    document.body.classList.toggle('hw-open', hw.open);
+    clearInterval(hw.pollTimer);
+    if (hw.open) {
+      refreshHalloween();
+      hw.pollTimer = setInterval(() => {
+        if (!document.hidden) refreshHalloween();
+      }, 5000);
+    }
   }
 
   function ensureHalloweenPanel() {
-    const overlay = document.getElementById('char-detail-modal');
-    if (!overlay) return null;
     if (hw.el && hw.el.isConnected) return hw.el;
+
+    // Remove any legacy panel that might have been inside #char-detail-modal
+    const oldModalOverlay = document.getElementById('char-detail-modal');
+    if (oldModalOverlay) {
+      oldModalOverlay.classList.remove('has-hw');
+      oldModalOverlay.querySelectorAll('.im-hw-panel').forEach(n => n.remove());
+    }
+
+    const tab = document.createElement('button');
+    tab.className = 'hw-tab';
+    tab.id = 'hw-tab';
+    tab.type = 'button';
+    tab.title = 'แลกของกิจกรรม Halloween (NPC Witch Hazel · เมืองหลวงโซลเฮเวน)';
+    tab.setAttribute('aria-label', 'เปิดหน้าแลกของกิจกรรม Halloween');
+    tab.innerHTML = `<span class="hw-tab-emoji">🎃</span><span class="hw-tab-badge" id="hw-tab-badge"></span>`;
+
+    const scrim = document.createElement('div');
+    scrim.className = 'hw-scrim';
+    scrim.id = 'hw-scrim';
+
     const el = document.createElement('aside');
-    el.className = 'im-hw-panel';
+    el.className = 'hw-drawer im-hw-panel';
+    el.id = 'hw-drawer';
+    el.setAttribute('aria-label', 'แลกของกิจกรรม Halloween');
     el.innerHTML = `
       <div class="im-hw-head">
         <div class="im-hw-title-wrap">
@@ -291,7 +368,15 @@
             <span>ออโต้แลก</span>
           </label>
           <button type="button" class="im-icon-btn" data-hw="refresh" title="รีเฟรชข้อมูลแลกของ">⟳</button>
+          <button type="button" class="im-icon-btn close" data-hw="close" title="ปิดหน้าต่าง">✕</button>
         </div>
+      </div>
+
+      <div class="im-hw-client-bar">
+        <label class="im-hw-client-lbl" for="hw-client-select">🖥️ จอเป้าหมาย:</label>
+        <select id="hw-client-select" class="im-hw-client-select" data-hw="client-select">
+          <option value="all">🌐 ทุกจอออนไลน์ (ซิงค์พร้อมกัน)</option>
+        </select>
       </div>
 
       <div class="im-hw-mats" data-role="hw-mats">
@@ -321,33 +406,37 @@
       <div class="im-hw-tabs" data-role="hw-tabs"></div>
       <div class="im-hw-list" data-role="hw-list"></div>`;
 
-    // Insert as the FIRST child of #char-detail-modal so it sits on the LEFT of .char-modal-card
-    overlay.insertBefore(el, overlay.firstChild);
-    overlay.classList.add('has-hw');
+    document.body.append(tab, scrim, el);
+
+    tab.addEventListener('click', () => setHwDrawerOpen(!hw.open));
+    scrim.addEventListener('click', () => setHwDrawerOpen(false));
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && hw.open) setHwDrawerOpen(false);
+    });
 
     el.addEventListener('click', onHwClick);
     el.addEventListener('change', onHwChange);
+
+    hw.tabEl = tab;
+    hw.scrimEl = scrim;
     hw.el = el;
-    syncSidePanelHeights();
+    renderHalloweenPanel();
     return el;
   }
 
   async function refreshHalloween() {
-    if (!hw.profileId || hw.loading) return;
+    if (hw.loading) return;
     hw.loading = true;
     try {
-      const data = await api(`/api/profiles/${encodeURIComponent(hw.profileId)}/halloween`);
+      const data = await api('/api/halloween');
       if (data && data.success) {
         if (Array.isArray(data.catalog) && data.catalog.length) hw.catalog = data.catalog;
+        if (Array.isArray(data.clients)) hw.clients = data.clients;
         const cfg = data.config || {};
         hw.enabled = cfg.enabled !== false;
         hw.rules = cfg.rules && typeof cfg.rules === 'object' ? cfg.rules : {};
-        if (data.live && typeof data.live === 'object') {
-          if (data.live.bagCounts) hw.bagCounts = Object.assign({ 90880: 0, 90881: 0 }, data.live.bagCounts);
-          if (typeof data.live.zeny === 'number') hw.zeny = data.live.zeny;
-          if (data.live.quotaState) hw.quotaState = data.live.quotaState;
-        }
-        syncHwBagCountsFromInventory();
+        syncHwDisplayedStats();
+        updateHwTabBadge();
         renderHalloweenPanel();
       }
     } finally {
@@ -363,17 +452,16 @@
   }
 
   async function saveHalloweenConfig() {
-    if (!hw.profileId) return;
     hw.saving = true;
+    updateHwTabBadge();
     try {
-      const r = await api(`/api/profiles/${encodeURIComponent(hw.profileId)}/halloween`, {
+      const r = await api('/api/halloween', {
         op: 'save',
+        profileId: hw.profileId || 'all',
         enabled: hw.enabled,
         rules: hw.rules
       });
-      if (r && r.success) {
-        if (r.live && r.live.quotaState) hw.quotaState = r.live.quotaState;
-      } else {
+      if (!r || !r.success) {
         toast(`❌ บันทึกตั้งค่า Halloween ไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
       }
     } finally {
@@ -384,10 +472,27 @@
   function renderHalloweenPanel() {
     const el = hw.el;
     if (!el) return;
-    syncHwBagCountsFromInventory();
+    syncHwDisplayedStats();
+    updateHwTabBadge();
 
     const masterCb = el.querySelector('[data-hw="master-toggle"]');
     if (masterCb && document.activeElement !== masterCb) masterCb.checked = hw.enabled !== false;
+
+    const selectEl = el.querySelector('[data-hw="client-select"]');
+    if (selectEl && document.activeElement !== selectEl) {
+      const onlineCount = (hw.clients || []).filter(c => c && c.online).length;
+      const opts = [
+        `<option value="all" ${hw.profileId === 'all' ? 'selected' : ''}>🌐 ทุกจอออนไลน์ (${onlineCount} จอ)</option>`
+      ];
+      (hw.clients || []).forEach(c => {
+        const label = c.charName ? `${c.name} (${c.charName})` : c.name;
+        const statusTxt = c.online
+          ? `🍬 ${(c.candy || 0).toLocaleString()} · 🎃 ${(c.pumpkin || 0).toLocaleString()}`
+          : 'ออฟไลน์';
+        opts.push(`<option value="${esc(c.id)}" ${hw.profileId === c.id ? 'selected' : ''}>${esc(label)} — ${esc(statusTxt)}</option>`);
+      });
+      selectEl.innerHTML = opts.join('');
+    }
 
     const candyEl = el.querySelector('[data-role="hw-candy"]');
     const pumpEl = el.querySelector('[data-role="hw-pumpkin"]');
@@ -571,15 +676,33 @@
     const autoSellBtn = e.target.closest('[data-hw-autosell]');
     if (autoSellBtn) {
       const name = autoSellBtn.dataset.hwAutosell;
-      if (name) await addToAutoSell({ name });
+      if (!name) return;
+      const ans = prompt(`ลงขาย "${name}" ในตลาดกลางอัตโนมัติ เมื่อมีในกระเป๋าครบกี่ชิ้น?`, '1');
+      if (ans === null) return;
+      const minQty = Math.max(1, parseInt(ans, 10) || 1);
+      const r = await api('/api/halloween', {
+        op: 'autosell',
+        profileId: hw.profileId || 'all',
+        itemName: name,
+        minQty
+      });
+      if (r && r.success) {
+        toast(`🏷️ ตั้ง Auto-Sell "${name}" (ครบ ≥ ${minQty} ชิ้น) เรียบร้อยแล้ว (${r.appliedOnline || 0} จอ)`);
+      } else {
+        toast(`❌ ตั้ง Auto-Sell ไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+      }
       return;
     }
 
     const actBtn = e.target.closest('[data-hw]');
     if (!actBtn) return;
     const act = actBtn.dataset.hw;
+    if (act === 'close') {
+      setHwDrawerOpen(false);
+      return;
+    }
     if (act === 'refresh') {
-      await Promise.all([refreshBag(), refreshHalloween()]);
+      await refreshHalloween();
       toast('🎃 รีเฟรชข้อมูลกิจกรรม Halloween แล้ว');
       return;
     }
@@ -593,14 +716,15 @@
       const origTxt = actBtn.textContent;
       actBtn.textContent = '⏳ กำลังสั่งแลก...';
       try {
-        const r = await api(`/api/profiles/${encodeURIComponent(hw.profileId)}/halloween`, {
+        const r = await api('/api/halloween', {
           op: 'exchange_now',
+          profileId: hw.profileId || 'all',
           enabled: true,
           rules: hw.rules
         });
         if (r && r.success) {
-          toast('🎃 สั่งบอทเดินไปแลกของกับ Witch Hazel แล้ว!');
-          setTimeout(() => { refreshBag(); refreshHalloween(); }, 2500);
+          toast(`🎃 ${r.summary || 'สั่งบอทเดินไปแลกของกับ Witch Hazel แล้ว!'}`);
+          setTimeout(() => { refreshHalloween(); }, 2500);
         } else {
           toast(`❌ สั่งแลกไม่สำเร็จ: ${(r && r.error) || 'จอเกมไม่ตอบ'}`, 'err');
         }
@@ -611,18 +735,17 @@
       return;
     }
     if (act === 'apply-all') {
-      if (!confirm('คัดลอกการตั้งค่าแลกของ Halloween นี้ (พร้อมเพิ่ม WL กันขาย NPC) ไปใช้กับทุกจอเกมใช่หรือไม่?')) return;
       actBtn.disabled = true;
       try {
-        const r = await api(`/api/profiles/${encodeURIComponent(hw.profileId)}/halloween`, {
+        const r = await api('/api/halloween', {
           op: 'apply_all',
           enabled: hw.enabled,
           rules: hw.rules
         });
         if (r && r.success) {
-          toast(`📋 คัดลอกตั้งค่า Halloween ไปยังทุกโปรไฟล์แล้ว (อัปเดตออนไลน์ ${r.appliedOnline || 0} จอ)`);
+          toast(`📋 ซิงค์ตั้งค่า Halloween + WL กันขาย NPC ไปยังทุกโปรไฟล์แล้ว (อัปเดตออนไลน์ ${r.appliedOnline || 0} จอ)`);
         } else {
-          toast(`❌ คัดลอกไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+          toast(`❌ ซิงค์ไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
         }
       } finally {
         actBtn.disabled = false;
@@ -631,6 +754,11 @@
   }
 
   function onHwChange(e) {
+    if (e.target.dataset.hw === 'client-select') {
+      hw.profileId = e.target.value || 'all';
+      renderHalloweenPanel();
+      return;
+    }
     if (e.target.dataset.hw === 'master-toggle') {
       hw.enabled = Boolean(e.target.checked);
       scheduleSaveHalloween(true);
@@ -723,7 +851,7 @@
     return el;
   }
 
-  // Keep both Left (Halloween) and Right (Bag) panels as tall as the center character card
+  // Keep Right (Bag) panel as tall as the center character card
   let resizeObs = null;
   function syncSidePanelHeights() {
     const card = document.querySelector('#char-detail-modal .char-modal-card');
@@ -732,7 +860,6 @@
       const h = card.offsetHeight;
       if (h > 200) {
         if (bag.el) bag.el.style.height = `${h}px`;
-        if (hw.el) hw.el.style.height = `${h}px`;
       }
     };
     apply();
@@ -2213,17 +2340,14 @@
         bag.data = null;
         bag.selected = null;
         bag.query = '';
-        hw.rules = {};
-        hw.quotaState = {};
         hub.mine = null;
         hub.browse.results = null;
         market.item = null;
         closeMarket();
       }
       bag.profileId = profileId;
-      hw.profileId = profileId;
 
-      const hwEl = ensureHalloweenPanel();
+      ensureHalloweenPanel();
       const bagEl = ensureBagPanel();
       ensureMarketHub();
 
@@ -2232,12 +2356,8 @@
         bagEl.querySelector('[data-role="grid"]').innerHTML = bag.data ? '' : '<div class="im-empty">⏳ กำลังโหลดกระเป๋า...</div>';
         if (bag.data) renderBag();
       }
-      if (hwEl) {
-        renderHalloweenPanel();
-      }
 
       refreshBag();
-      refreshHalloween();
       refreshMineMarket(); // preloads delivery count badge on Tab 4
 
       clearInterval(bag.timer);
@@ -2257,6 +2377,11 @@
       switchHubSubTab(hub.subTab || 'sell');
       refreshMineMarket();
     },
+    openHalloweenDrawer(profileId) {
+      ensureHalloweenPanel();
+      if (profileId) hw.profileId = profileId;
+      setHwDrawerOpen(true);
+    },
     close() {
       clearInterval(bag.timer);
       bag.timer = null;
@@ -2264,4 +2389,17 @@
     },
     refresh: refreshBag
   };
+
+  function initMainPageHalloweenDrawer() {
+    ensureHalloweenPanel();
+    refreshHalloween();
+    setInterval(() => {
+      if (!document.hidden && !hw.open) refreshHalloween();
+    }, 15000);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initMainPageHalloweenDrawer);
+  } else {
+    initMainPageHalloweenDrawer();
+  }
 })();

@@ -129,7 +129,7 @@
   function toggleDrawer(force) {
     isOpen = typeof force === 'boolean' ? force : !isOpen;
     if (isOpen) {
-      document.body.classList.remove('pt-open', 'pm-open');
+      document.body.classList.remove('pt-open', 'pm-open', 'hw-open');
     }
     document.body.classList.toggle('gd-open', isOpen);
     const drawer = document.getElementById('gd-drawer');

@@ -7,6 +7,51 @@
 //   POST /api/profiles/:id/inventory-action   { op: use|equip|lock|destroy|sort, slot, itemId, ... }
 //   POST /api/profiles/:id/market             { op: search|history|list, ... }
 
+const fs = require('fs');
+const path = require('path');
+
+const HALLOWEEN_STORE_PATH = path.join(__dirname, 'data', 'halloween_exchange.json');
+
+function loadGlobalHalloweenStore() {
+  try {
+    if (fs.existsSync(HALLOWEEN_STORE_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(HALLOWEEN_STORE_PATH, 'utf8'));
+      if (parsed && typeof parsed === 'object') {
+        return {
+          enabled: parsed.enabled !== false,
+          rules: (parsed.rules && typeof parsed.rules === 'object') ? parsed.rules : {}
+        };
+      }
+    }
+  } catch (_) {}
+  return { enabled: true, rules: {} };
+}
+
+function saveGlobalHalloweenStore(cfg) {
+  const cleanRules = {};
+  const rawRules = (cfg && cfg.rules && typeof cfg.rules === 'object') ? cfg.rules : {};
+  WITCH_HAZEL_ITEMS.forEach(it => {
+    const k = String(it.itemId);
+    const r = rawRules[k];
+    if (r && typeof r === 'object') {
+      cleanRules[k] = {
+        enabled: !!r.enabled,
+        minQty: Math.max(1, Math.min(9999, parseInt(r.minQty, 10) || 1))
+      };
+    }
+  });
+  const out = {
+    enabled: cfg && cfg.enabled !== undefined ? !!cfg.enabled : true,
+    rules: cleanRules,
+    updatedAt: Date.now()
+  };
+  try {
+    fs.mkdirSync(path.dirname(HALLOWEEN_STORE_PATH), { recursive: true });
+    fs.writeFileSync(HALLOWEEN_STORE_PATH, JSON.stringify(out, null, 2), 'utf8');
+  } catch (_) {}
+  return out;
+}
+
 const ROOM_JS = `((typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom)`;
 
 // Resolve the icon from the game's manifest (by itemId, then name key) as an absolute URL.
@@ -845,10 +890,186 @@ function buildHalloweenExchangeNowCode(payload) {
 }
 
 async function handleInventoryMarketRoute(req, res, pathname, ctx) {
+  const { loadProfiles, evalProfilePort, sendJSON } = ctx;
+
+  // Global Halloween Exchange endpoint for the main-screen left drawer (/api/halloween)
+  if (pathname === '/api/halloween') {
+    const profiles = loadProfiles() || [];
+    let store = loadGlobalHalloweenStore();
+
+    if (req.method === 'GET') {
+      const readCode = buildHalloweenReadCode();
+      const hasGlobalRules = Object.keys(store.rules || {}).length > 0;
+      const clients = await Promise.all(profiles.map(async (p) => {
+        const base = {
+          id: p.id,
+          name: p.name || p.id,
+          charName: p.charName || p.characterName || '',
+          online: false,
+          candy: 0,
+          pumpkin: 0,
+          zeny: 0,
+          exchanging: false,
+          lastLog: '',
+          quotaState: {},
+          readyCount: 0
+        };
+        if (!p.debugPort) return base;
+        try {
+          let r = await evalProfilePort(p.debugPort, readCode, 2800);
+          let st = r && r.result && r.result.success ? r.result : null;
+          if (!st) return base;
+          const clientRules = (st.config && st.config.rules) || {};
+          const clientHasRules = Object.keys(clientRules).some(k => clientRules[k] && clientRules[k].enabled);
+          if (!hasGlobalRules && clientHasRules && Object.keys(store.rules || {}).length === 0) {
+            store = saveGlobalHalloweenStore({ enabled: st.enabled !== false, rules: clientRules });
+          } else if (hasGlobalRules && !clientHasRules) {
+            const syncRes = await evalProfilePort(p.debugPort, buildHalloweenSaveCode(store), 2800);
+            if (syncRes && syncRes.result && syncRes.result.success) st = syncRes.result;
+          }
+          const readyCount = Array.isArray(st.items) ? st.items.filter(it => it && it.ready).length : 0;
+          return {
+            id: p.id,
+            name: p.name || p.id,
+            charName: p.charName || p.characterName || '',
+            online: true,
+            candy: Number(st.candy) || 0,
+            pumpkin: Number(st.pumpkin) || 0,
+            zeny: Number(st.zeny) || 0,
+            exchanging: Boolean(st.exchanging),
+            lastLog: st.lastLog || '',
+            quotaState: (st.live && st.live.quotaState) || {},
+            readyCount,
+            config: st.config || store
+          };
+        } catch (_) {
+          return base;
+        }
+      }));
+      sendJSON({
+        success: true,
+        config: store,
+        catalog: WITCH_HAZEL_ITEMS,
+        clients
+      });
+      return true;
+    }
+
+    if (req.method === 'POST') {
+      const payload = await readBody(req);
+      if (!payload) {
+        sendJSON({ success: false, error: 'Invalid JSON' }, 400);
+        return true;
+      }
+      const op = payload.op || 'save';
+      const targetId = payload.profileId && payload.profileId !== 'all' ? String(payload.profileId) : null;
+
+      if (op === 'save' || op === 'apply_all') {
+        store = saveGlobalHalloweenStore(payload);
+        const code = buildHalloweenSaveCode(store);
+        const targets = (op === 'apply_all' || !targetId)
+          ? profiles.filter(p => p && p.debugPort)
+          : profiles.filter(p => p && p.debugPort && p.id === targetId);
+        let applied = 0;
+        await Promise.all(targets.map(async (p) => {
+          try {
+            const r = await evalProfilePort(p.debugPort, code, 3500);
+            if (r && r.result && r.result.success) applied++;
+          } catch (_) {}
+        }));
+        sendJSON({
+          success: true,
+          config: store,
+          appliedCount: applied,
+          appliedOnline: applied
+        });
+        return true;
+      }
+
+      if (op === 'exchange_now') {
+        if (payload.rules && typeof payload.rules === 'object') {
+          store = saveGlobalHalloweenStore(payload);
+        }
+        const targets = targetId
+          ? profiles.filter(p => p && p.debugPort && p.id === targetId)
+          : profiles.filter(p => p && p.debugPort);
+        if (targets.length === 0) {
+          sendJSON({ success: false, error: 'ไม่มีจอเกมที่ออนไลน์อยู่' }, 400);
+          return true;
+        }
+        const code = buildHalloweenExchangeNowCode({
+          itemId: payload.itemId || null,
+          rules: store.rules
+        });
+        const results = await Promise.all(targets.map(async (p) => {
+          try {
+            const r = await evalProfilePort(p.debugPort, code, 25000);
+            return Object.assign({ profileId: p.id, name: p.name || p.id }, (r && r.result) || { success: false, error: r?.error || 'ไม่ตอบสนอง' });
+          } catch (e) {
+            return { profileId: p.id, name: p.name || p.id, success: false, error: e.message };
+          }
+        }));
+        const okList = results.filter(x => x && x.success);
+        if (okList.length === 0) {
+          const firstErr = (results[0] && results[0].error) || 'วัตถุดิบยังไม่พอแลก หรือจอเกมไม่ตอบสนอง';
+          sendJSON({ success: false, error: firstErr, results });
+          return true;
+        }
+        sendJSON({
+          success: true,
+          triggeredCount: okList.length,
+          summary: okList.map(x => `${x.name}: ${x.summary || x.message || 'กำลังเดินไปแลก'}`).join(' · '),
+          results
+        });
+        return true;
+      }
+
+      if (op === 'autosell') {
+        const itemName = String(payload.itemName || '').trim();
+        const minQty = Math.max(1, Math.min(9999, parseInt(payload.minQty, 10) || 1));
+        if (!itemName) {
+          sendJSON({ success: false, error: 'ไม่ระบุชื่อไอเทม' }, 400);
+          return true;
+        }
+        const targets = targetId
+          ? profiles.filter(p => p && p.debugPort && p.id === targetId)
+          : profiles.filter(p => p && p.debugPort);
+        const code = `(() => {
+          const c = window.__autoMarketSellConfig || (window.__autoMarketSellConfig = { rules: [] });
+          if (!Array.isArray(c.rules)) c.rules = [];
+          const name = ${JSON.stringify(itemName)};
+          const existing = c.rules.find(r => r && String(r.itemName || '').trim().toLowerCase() === name.toLowerCase());
+          if (existing) {
+            existing.minQty = ${minQty};
+            existing.enabled = true;
+          } else {
+            c.rules.push({ id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), itemName: name, minQty: ${minQty}, sellMode: 'all', enabled: true });
+          }
+          c.enabled = true;
+          try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(c)); } catch (e) { return { success: false, error: e.message }; }
+          try { const box = document.getElementById('p-autosell-hud-rules-container'); if (box && typeof window.renderAutoSellHudRulesHtml === 'function') box.innerHTML = window.renderAutoSellHudRulesHtml(); } catch (e) {}
+          return { success: true, count: c.rules.length, enabled: !!c.enabled };
+        })()`;
+        let applied = 0;
+        await Promise.all(targets.map(async (p) => {
+          try {
+            const r = await evalProfilePort(p.debugPort, code, 3500);
+            if (r && r.result && r.result.success) applied++;
+          } catch (_) {}
+        }));
+        sendJSON({ success: true, appliedOnline: applied, itemName, minQty });
+        return true;
+      }
+
+      sendJSON({ success: false, error: 'ไม่รู้จักคำสั่ง halloween: ' + op }, 400);
+      return true;
+    }
+    return false;
+  }
+
   const m = pathname.match(/^\/api\/profiles\/([^/]+)\/(inventory|inventory-action|market|halloween)$/);
   if (!m) return false;
   const [, id, kind] = m;
-  const { loadProfiles, evalProfilePort, sendJSON } = ctx;
   const profiles = loadProfiles();
   const profile = profiles.find(p => p.id === id);
   if (!profile || !profile.debugPort) {
@@ -878,16 +1099,19 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
   if (kind === 'halloween') {
     const op = payload.op || 'save';
     if (op === 'save') {
+      saveGlobalHalloweenStore(payload);
       const r = await evalProfilePort(profile.debugPort, buildHalloweenSaveCode(payload), 5000);
       sendJSON(r && r.result ? r.result : { success: false, error: r?.error || 'บันทึกตั้งค่า Halloween ไม่สำเร็จ' });
       return true;
     }
     if (op === 'exchange_now') {
+      if (payload.rules && typeof payload.rules === 'object') saveGlobalHalloweenStore(payload);
       const r = await evalProfilePort(profile.debugPort, buildHalloweenExchangeNowCode(payload), 25000);
       sendJSON(r && r.result ? r.result : { success: false, error: r?.error || 'สั่งแลกของ Halloween ไม่สำเร็จ' });
       return true;
     }
     if (op === 'apply_all') {
+      saveGlobalHalloweenStore(payload);
       const code = buildHalloweenSaveCode(payload);
       let applied = 0;
       for (const p of profiles) {

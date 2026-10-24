@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "61ee1e2b0f4eb3f69c55b9c0e61ec137bc0a0881",
+  "sourceCommit": "14d6cf15f41d48a6fa242bdb1dda3a2bb61db542",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -68,7 +68,7 @@
     },
     {
       "path": "manager/inventory_market_api.js",
-      "sha256": "528f6f9fc96ebeca7e93cb0f7db59c94482055d8e2fcf13995136a9eff41e6b0"
+      "sha256": "d8f205610161803d5a8f18b52b14762faba76612832ff5b53d7ac2f0008ea290"
     },
     {
       "path": "manager/local_human_check.js",
@@ -152,7 +152,7 @@
     },
     {
       "path": "manager/public/guild_manager.js",
-      "sha256": "4ae4fd7686127963daf453ed65ed955761b68fe7658ac2ca292f912a78843b7d"
+      "sha256": "3ae56efd2b8257505ca9711039035884ccd39e2a9f88c08b4c3bb221010e5967"
     },
     {
       "path": "manager/public/image_board_solver.js",
@@ -160,15 +160,15 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "08a4b0813ef3e3567e2eac20be867ece60515bfad4274590504e442898936304"
+      "sha256": "65010365669b7831c9bb62e03f58e2388a4ae2fab64c2df9410f93df628784d1"
     },
     {
       "path": "manager/public/inventory_market.css",
-      "sha256": "f87287678a68b2d230569bd41af33ecd977caafa82453be9f6b4934192c0b8c5"
+      "sha256": "ce25684f74a81d93f88792c94e0558458de74557902cd0692cac1532801864cc"
     },
     {
       "path": "manager/public/inventory_market.js",
-      "sha256": "96a4d440632bbef1fda562e69636630b619eab7af1e3591125b04fe75fe1acdd"
+      "sha256": "b102e63e9f19a95fbfddd7a281c0d46a0b556e11f5a3d7ce4262e5e55b6d7957"
     },
     {
       "path": "manager/public/jail_manager.css",
@@ -184,7 +184,7 @@
     },
     {
       "path": "manager/public/party_manager.js",
-      "sha256": "82c28d23d01678742ad14ee449d5ae4f8c372362744ff11a2fe668d497fd5e1d"
+      "sha256": "ee93d0b60e2ea8c4e241f5d4d79333195312fffc922237c7d296b65b719ae400"
     },
     {
       "path": "manager/public/patcher_module.js",
@@ -200,7 +200,7 @@
     },
     {
       "path": "manager/public/premium_manager.js",
-      "sha256": "0b86906110a6c5f4e5b97fd0842d607d95696b5939251fca56e1b263fe689e68"
+      "sha256": "73c1d25bd7e1cf900180a018d76141d5de16f85900cf68aa872c99d600574f1e"
     },
     {
       "path": "manager/public/script_status.html",

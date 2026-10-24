@@ -13,6 +13,7 @@ function createCoordinatedScriptCoordinator({
   now = Date.now
 }) {
   const activationFile = dataDir ? path.join(dataDir, 'script_coordinator_activation.json') : null;
+  const activationBackupFile = dataDir ? path.join(dataDir, 'script_coordinator_activation.json.bak') : null;
   let detectedMode = null;
   let timer = null;
   let inFlight = false;
@@ -22,16 +23,25 @@ function createCoordinatedScriptCoordinator({
   function atomicWriteJSON(filePath, data) {
     if (!filePath) return;
     const tmp = `${filePath}.${crypto.randomUUID()}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf8');
+    const payload = JSON.stringify(data, null, 2);
+    const fd = fs.openSync(tmp, 'w', 0o600);
+    try {
+      fs.writeFileSync(fd, payload, 'utf8');
+      try { fs.fsyncSync(fd); } catch (_) {}
+    } finally {
+      try { fs.closeSync(fd); } catch (_) {}
+    }
     fs.renameSync(tmp, filePath);
   }
 
   function loadActivationRecord() {
-    if (!activationFile || !fs.existsSync(activationFile)) return null;
-    try {
-      const parsed = JSON.parse(fs.readFileSync(activationFile, 'utf8'));
-      if (parsed && typeof parsed === 'object') return parsed;
-    } catch (_) {}
+    for (const candidate of [activationFile, activationBackupFile]) {
+      if (!candidate || !fs.existsSync(candidate)) continue;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch (_) {}
+    }
     return null;
   }
 
@@ -40,14 +50,17 @@ function createCoordinatedScriptCoordinator({
     try {
       fs.mkdirSync(path.dirname(activationFile), { recursive: true });
       atomicWriteJSON(activationFile, record);
+      if (activationBackupFile) atomicWriteJSON(activationBackupFile, record);
     } catch (_) {}
   }
 
   function clearActivationRecord() {
-    if (!activationFile) return;
-    try {
-      if (fs.existsSync(activationFile)) fs.unlinkSync(activationFile);
-    } catch (_) {}
+    for (const candidate of [activationFile, activationBackupFile]) {
+      if (!candidate) continue;
+      try {
+        if (fs.existsSync(candidate)) fs.unlinkSync(candidate);
+      } catch (_) {}
+    }
   }
 
   function getEffectiveAccountId() {
@@ -129,12 +142,17 @@ function createCoordinatedScriptCoordinator({
         }
         const accountId = getEffectiveAccountId();
         if (accountId && service?.serviceOrigin) {
-          saveActivationRecord({
-            accountId,
-            serviceOrigin: service.serviceOrigin,
-            schemaVersion: 'owner-v1',
-            activatedAt: now()
-          });
+          const existing = loadActivationRecord();
+          const hasPrimary = activationFile && fs.existsSync(activationFile);
+          const hasBackup = activationBackupFile && fs.existsSync(activationBackupFile);
+          if (!existing || existing.accountId !== accountId || existing.serviceOrigin !== service.serviceOrigin || existing.schemaVersion !== 'owner-v1' || !hasPrimary || !hasBackup) {
+            saveActivationRecord({
+              accountId,
+              serviceOrigin: service.serviceOrigin,
+              schemaVersion: 'owner-v1',
+              activatedAt: now()
+            });
+          }
         }
       }
     } catch (_) {}

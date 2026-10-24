@@ -4,7 +4,7 @@
 // This ownership notice is not an AI safeguard or a claim that memory extraction is impossible.
 (function (host) {
   'use strict';
-  if (host.__pmScriptBootstrap) return;
+  if (host.__pmScriptBootstrap && !(host.__pmScriptBootstrap.status?.()?.protocol === 1 && host.__pmScriptBootstrap.status?.()?.phase === 'waiting' && !host.__pmScriptBootstrap.status?.()?.activated && !host.__pelicanBotVersion)) return;
   // Protected release tooling replaces this exact marker with pinned PUBLIC keys.
   // Never accept trust anchors supplied by a ticket, payload, or an API response.
   const PUBLIC_KEYS = /* PMHEE_PUBLIC_KEYS */ {};

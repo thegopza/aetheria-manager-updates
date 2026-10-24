@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "9b06626083a0bede3b245b094d45541339192dcf",
+  "sourceCommit": "61ee1e2b0f4eb3f69c55b9c0e61ec137bc0a0881",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -28,7 +28,7 @@
     },
     {
       "path": "manager/coordinated_coordinator.js",
-      "sha256": "58d38219d2802e3d756b755297d834b8b14144eeb58565311ebea368cfd94fa5"
+      "sha256": "56c5d17a614d4ba27658119a94c443c65b8b2cdc32eb52d1d4dcf09d7f21618b"
     },
     {
       "path": "manager/credentials.js",
@@ -84,7 +84,7 @@
     },
     {
       "path": "manager/offline_coordinator.js",
-      "sha256": "65e7bf427bec34acba336af6cb8631be167a73d7e0fd48ad0697cab4b457b59a"
+      "sha256": "f18cd1c0119e4da51d2e1930ad09f69c566693bba56a8f2821568b45df797d5a"
     },
     {
       "path": "manager/offline_journal.js",
@@ -96,7 +96,7 @@
     },
     {
       "path": "manager/offline_script_bootstrap.js",
-      "sha256": "42c78920be8746715ddb9d98443510c78383e19d21009536c7da825bcfabc332"
+      "sha256": "2177ce5a3cc481589910bd28ead78bd717c0c79924403a6a5b8e7fce0619ecb9"
     },
     {
       "path": "manager/party_api.js",

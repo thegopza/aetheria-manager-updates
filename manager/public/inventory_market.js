@@ -1034,7 +1034,8 @@
     const out = r && r.result && r.result.result;
     if (!out || out.success === false) return toast('❌ เพิ่มรายการ Auto Sell ไม่สำเร็จ: ' + ((out && out.error) || (r && r.error) || 'จอเกมไม่ตอบ'), 'err');
     if (out.exists) return toast(`ℹ️ "${name}" อยู่ในรายการ Auto Sell แล้ว`);
-    toast(`🏷️ เพิ่ม "${name}" เข้า Auto Sell แล้ว (ครบ ≥ ${minQty} ชิ้น)${out.enabled ? '' : ' — ระบบ Auto Sell ยังปิดอยู่ เปิดได้ที่เมนูบอท > ตลาด'}`);
+    toast(`🏷️ เพิ่ม "${name}" เข้า Auto Sell แล้ว (ครบ ≥ ${minQty} ชิ้น)${out.enabled ? '' : ' — ระบบ Auto Sell ยังปิดอยู่ เปิดได้ที่แท็บ Auto Sell ตลาดกลาง'}`);
+    refreshAutoSellHub();
   }
 
   function isMarketTabActive() {
@@ -1102,9 +1103,30 @@
 
   const hub = {
     el: null,
-    subTab: 'sell',        // 'sell' | 'active' | 'deliveries' | 'browse'
+    subTab: 'sell',        // 'sell' | 'autosell' | 'active' | 'deliveries' | 'browse'
     mine: null,            // { active: [], closed: [], deliveries: [], activeLimit: 8 }
     mineLoading: false,
+    autoSell: {
+      loading: false,
+      saving: false,
+      offline: false,
+      config: { enabled: false, priceStrategy: 'median', rules: [] },
+      ruleStates: {},
+      activeCount: 0,
+      maxListings: 8,
+      bagItemsSummary: [],
+      otherProfiles: [],
+      filterQ: '',
+      filterStatus: 'all', // 'all' | 'ready' | 'inbag' | 'empty'
+      newName: '',
+      newMin: 10,
+      newMode: 'all',
+      copyOpen: false,
+      copyMode: 'replace', // 'replace' | 'merge'
+      copyEnabled: true,
+      copyTargetIds: new Set(),
+      copyFilterQ: ''
+    },
     browse: {
       q: '',
       category: 'all',
@@ -1141,6 +1163,9 @@
           <div class="im-hub-tabs">
             <button type="button" class="im-hub-tab active" data-hub-tab="sell">
               <span>🏷️</span> ลงขายไอเทม
+            </button>
+            <button type="button" class="im-hub-tab" data-hub-tab="autosell">
+              <span>🤖</span> Auto Sell ตลาดกลาง <span class="im-hub-pill" data-role="hub-autosell-count">0</span>
             </button>
             <button type="button" class="im-hub-tab" data-hub-tab="active">
               <span>📦</span> ของที่ลงขายอยู่ <span class="im-hub-pill" data-role="hub-active-count">0</span>
@@ -1205,6 +1230,11 @@
           <form class="im-mk-sell" data-role="sell"></form>
         </div>
 
+        <!-- PANE 1.5: AUTO SELL MARKET LIST & COPY TO OTHER PROFILES -->
+        <div class="im-hub-pane" data-hub-pane="autosell" style="display:none;">
+          <div data-role="autosell-root"></div>
+        </div>
+
         <!-- PANE 2: MY ACTIVE & CLOSED LISTINGS -->
         <div class="im-hub-pane" data-hub-pane="active" style="display:none;">
           <div class="im-hub-summary-bar" data-role="active-summary"></div>
@@ -1258,6 +1288,10 @@
         e.preventDefault();
         runBrowseSearch();
       }
+      if (e.key === 'Enter' && (e.target.dataset.as === 'new-name' || e.target.dataset.as === 'new-min')) {
+        e.preventDefault();
+        addAutoSellRuleFromBar();
+      }
     });
     el.addEventListener('input', e => {
       if (e.target.dataset.browse === 'q') hub.browse.q = e.target.value;
@@ -1266,10 +1300,63 @@
         renderBrowseOptHint();
         if (Array.isArray(hub.browse.results)) renderBrowseResults();
       }
+      if (e.target.dataset.as === 'new-name') hub.autoSell.newName = e.target.value;
+      if (e.target.dataset.as === 'new-min') hub.autoSell.newMin = Math.max(1, parseInt(e.target.value, 10) || 1);
+      if (e.target.dataset.as === 'filter-q') {
+        hub.autoSell.filterQ = e.target.value;
+        renderAutoSellRulesOnly();
+      }
+      if (e.target.dataset.as === 'copy-filter') {
+        hub.autoSell.copyFilterQ = e.target.value;
+        renderAutoSellCopyGridOnly();
+      }
+      if (e.target.dataset.asRuleName) {
+        const rid = e.target.dataset.asRuleName;
+        const rule = (hub.autoSell.config.rules || []).find(r => r.id === rid);
+        if (rule) {
+          rule.itemName = e.target.value;
+          scheduleSaveAutoSellHub();
+        }
+      }
+      if (e.target.dataset.asRuleMin) {
+        const rid = e.target.dataset.asRuleMin;
+        const rule = (hub.autoSell.config.rules || []).find(r => r.id === rid);
+        if (rule) {
+          rule.minQty = Math.max(1, parseInt(e.target.value, 10) || 1);
+          scheduleSaveAutoSellHub();
+        }
+      }
     });
     el.addEventListener('change', e => {
       if (e.target.dataset.browse === 'cat') { hub.browse.category = e.target.value; runBrowseSearch(); }
       if (e.target.dataset.browse === 'sort') { hub.browse.sort = e.target.value; renderBrowseResults(); }
+      if (e.target.dataset.as === 'toggle-enabled') {
+        hub.autoSell.config.enabled = Boolean(e.target.checked);
+        saveAutoSellHub(true);
+      }
+      if (e.target.dataset.as === 'new-mode') {
+        hub.autoSell.newMode = e.target.value === 'min' ? 'min' : 'all';
+      }
+      if (e.target.dataset.as === 'copy-mode') {
+        hub.autoSell.copyMode = e.target.value === 'merge' ? 'merge' : 'replace';
+      }
+      if (e.target.dataset.as === 'copy-enabled') {
+        hub.autoSell.copyEnabled = Boolean(e.target.checked);
+      }
+      if (e.target.dataset.asCopyTarget) {
+        const tid = e.target.dataset.asCopyTarget;
+        if (e.target.checked) hub.autoSell.copyTargetIds.add(tid);
+        else hub.autoSell.copyTargetIds.delete(tid);
+        updateAutoSellCopyFooterBtn();
+      }
+      if (e.target.dataset.asRuleMode) {
+        const rid = e.target.dataset.asRuleMode;
+        const rule = (hub.autoSell.config.rules || []).find(r => r.id === rid);
+        if (rule) {
+          rule.sellMode = e.target.value === 'min' ? 'min' : 'all';
+          saveAutoSellHub(false);
+        }
+      }
     });
     hub.el = el;
     return el;
@@ -1349,6 +1436,8 @@
         renderHistory();
         renderMarketSellForm();
       }
+    } else if (hub.subTab === 'autosell') {
+      refreshAutoSellHub();
     } else if (hub.subTab === 'active' || hub.subTab === 'deliveries') {
       refreshMineMarket();
     } else if (hub.subTab === 'browse') {
@@ -1419,6 +1508,11 @@
     }
 
     if (hub.el) {
+      const asPill = hub.el.querySelector('[data-role="hub-autosell-count"]');
+      if (asPill) {
+        const cnt = (hub.autoSell.config && Array.isArray(hub.autoSell.config.rules)) ? hub.autoSell.config.rules.length : 0;
+        asPill.textContent = String(cnt);
+      }
       const actPill = hub.el.querySelector('[data-role="hub-active-count"]');
       if (actPill) actPill.textContent = `${activeCount}/${limit}`;
       const delPill = hub.el.querySelector('[data-role="hub-deliv-count"]');
@@ -1429,6 +1523,435 @@
       const slotInfo = hub.el.querySelector('[data-role="hub-slot-info"]');
       if (slotInfo) slotInfo.textContent = `วางขายอยู่: ${activeCount}/${limit} ช่อง`;
     }
+  }
+
+  // ---------- 🤖 AUTO SELL SUB-TAB (LIST & COPY TO OTHER PROFILES) ----------
+  let autoSellSaveTimer = null;
+
+  function applyAutoSellApiResult(r) {
+    if (!r || !r.success) return;
+    const st = hub.autoSell;
+    st.offline = Boolean(r.offline);
+    if (r.config && typeof r.config === 'object') {
+      st.config = {
+        enabled: Boolean(r.config.enabled),
+        priceStrategy: r.config.priceStrategy || 'median',
+        checkIntervalSec: Number(r.config.checkIntervalSec) || 25,
+        maxActiveListings: Number(r.config.maxActiveListings) || 10,
+        rules: Array.isArray(r.config.rules) ? r.config.rules : []
+      };
+    }
+    if (r.ruleStates && typeof r.ruleStates === 'object') st.ruleStates = r.ruleStates;
+    if (typeof r.activeCount === 'number') st.activeCount = r.activeCount;
+    if (typeof r.maxListings === 'number') st.maxListings = r.maxListings;
+    if (Array.isArray(r.bagItemsSummary)) st.bagItemsSummary = r.bagItemsSummary;
+    if (Array.isArray(r.otherProfiles)) st.otherProfiles = r.otherProfiles;
+    updateMarketBadges();
+  }
+
+  async function refreshAutoSellHub() {
+    if (!bag.profileId) return;
+    hub.autoSell.loading = true;
+    if (hub.subTab === 'autosell') renderAutoSellHub();
+    try {
+      const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/autosell`);
+      if (r && r.success) {
+        applyAutoSellApiResult(r);
+      }
+    } finally {
+      hub.autoSell.loading = false;
+      updateMarketBadges();
+      if (hub.subTab === 'autosell') renderAutoSellHub();
+    }
+  }
+
+  function scheduleSaveAutoSellHub() {
+    if (autoSellSaveTimer) clearTimeout(autoSellSaveTimer);
+    autoSellSaveTimer = setTimeout(() => {
+      autoSellSaveTimer = null;
+      saveAutoSellHub(false);
+    }, 650);
+  }
+
+  async function saveAutoSellHub(showToast = false) {
+    if (!bag.profileId) return;
+    hub.autoSell.saving = true;
+    try {
+      const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/autosell`, {
+        op: 'save',
+        config: hub.autoSell.config
+      });
+      if (r && r.success) {
+        applyAutoSellApiResult(r);
+        if (showToast) {
+          toast(`🤖 บันทึก Auto Sell แล้ว (${hub.autoSell.config.enabled ? '🟢 เปิดใช้งาน' : '⚪ ปิด'} · ${(hub.autoSell.config.rules || []).length} รายการ)`);
+        }
+      } else if (showToast) {
+        toast(`❌ บันทึก Auto Sell ไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+      }
+    } finally {
+      hub.autoSell.saving = false;
+      renderAutoSellRulesOnly();
+      renderAutoSellBagSuggestionsOnly();
+    }
+  }
+
+  function addAutoSellRuleFromBar(customName, customMin) {
+    const st = hub.autoSell;
+    const name = String(customName !== undefined ? customName : st.newName || '').trim();
+    if (!name) {
+      toast('⚠️ กรุณาพิมพ์หรือเลือกชื่อไอเทมที่จะตั้งขายอัตโนมัติ', 'warn');
+      return;
+    }
+    const minQty = Math.max(1, parseInt(customMin !== undefined ? customMin : st.newMin, 10) || 1);
+    const sellMode = st.newMode === 'min' ? 'min' : 'all';
+    if (!Array.isArray(st.config.rules)) st.config.rules = [];
+    const existing = st.config.rules.find(r => r && String(r.itemName || '').trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      existing.minQty = minQty;
+      existing.sellMode = sellMode;
+      existing.enabled = true;
+      toast(`ℹ️ อัปเดต "${name}" ในรายการ Auto Sell (ครบ ≥ ${minQty} ชิ้น)`);
+    } else {
+      st.config.rules.unshift({
+        id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        itemName: name,
+        minQty,
+        sellMode,
+        enabled: true
+      });
+      toast(`➕ เพิ่ม "${name}" เข้ารายการ Auto Sell แล้ว (ครบ ≥ ${minQty} ชิ้น)`);
+    }
+    if (customName === undefined) st.newName = '';
+    saveAutoSellHub(false);
+    renderAutoSellHub();
+  }
+
+  function classifyAutoSellRuleState(rule) {
+    const st = hub.autoSell;
+    const rs = (st.ruleStates && st.ruleStates[rule.id]) || null;
+    if (rs) {
+      if (rs.ready) return 'ready';
+      if (rs.bagQty > 0) return 'inbag';
+      return 'empty';
+    }
+    const norm = String(rule.itemName || '').trim().toLowerCase();
+    const bagHit = (st.bagItemsSummary || []).find(b => b.name && b.name.toLowerCase() === norm);
+    if (!bagHit || !bagHit.qty) return 'empty';
+    return bagHit.qty >= (Number(rule.minQty) || 1) ? 'ready' : 'inbag';
+  }
+
+  function resolveAutoSellItemIcon(itemName, ruleId) {
+    const st = hub.autoSell;
+    const rs = st.ruleStates && st.ruleStates[ruleId];
+    if (rs && rs.icon) return rs.icon;
+    const norm = String(itemName || '').trim().toLowerCase();
+    if (!norm) return '';
+    const bagHit = (st.bagItemsSummary || []).find(b => b.name && b.name.toLowerCase() === norm);
+    if (bagHit && bagHit.icon) return bagHit.icon;
+    if (bag.data && Array.isArray(bag.data.items)) {
+      const it = bag.data.items.find(x => x && x.name && x.name.trim().toLowerCase() === norm);
+      if (it && it.icon) return it.icon;
+    }
+    return '';
+  }
+
+  function buildAutoSellRuleStatusBadge(rule) {
+    const st = hub.autoSell;
+    if (st.offline) {
+      return `<span class="im-as-status muted">⚪ จอออฟไลน์ (บันทึกไว้แล้ว)</span>`;
+    }
+    const rs = (st.ruleStates && st.ruleStates[rule.id]) || null;
+    const bagQty = rs ? (Number(rs.bagQty) || 0) : 0;
+    const reserveQty = rs ? (Number(rs.reserveQty) || 0) : 0;
+    const sellableQty = rs ? (Number(rs.sellableQty) || 0) : bagQty;
+    const threshold = Math.max(1, Number(rule.minQty) || 1);
+    const effThreshold = rs && rs.effectiveThreshold ? rs.effectiveThreshold : threshold;
+
+    if (bagQty <= 0) {
+      return `<span class="im-as-status empty">❌ ไม่มีในตัว</span>`;
+    }
+    if (reserveQty > 0 && bagQty <= reserveQty) {
+      return `<span class="im-as-status reserve" title="เก็บสำรองบริจาคกิลด์/ตีบวก ${reserveQty} ชิ้น">🏛️ มี ${bagQty.toLocaleString()}/${reserveQty} ชิ้น (สำรอง)</span>`;
+    }
+    if (bagQty >= effThreshold && sellableQty > 0) {
+      return `<span class="im-as-status ready">✅ มี ${bagQty.toLocaleString()} ชิ้น (พร้อมขาย${reserveQty > 0 ? ` ${sellableQty.toLocaleString()}` : ''})</span>`;
+    }
+    return `<span class="im-as-status wait">⏳ มี ${bagQty.toLocaleString()}/${effThreshold} ชิ้น (รอฟาร์ม)</span>`;
+  }
+
+  function renderAutoSellBagSuggestionsHtml() {
+    const st = hub.autoSell;
+    const existingSet = new Set((st.config.rules || []).map(r => String(r.itemName || '').trim().toLowerCase()).filter(Boolean));
+    const suggestions = (st.bagItemsSummary || []).filter(b => b && b.name && !existingSet.has(b.name.toLowerCase()));
+    if (suggestions.length === 0) return '';
+    return `
+      <div class="im-as-bag-pick">
+        <span class="im-as-bag-pick-lbl">🎒 คลิกเพิ่มจากของในกระเป๋า:</span>
+        <div class="im-as-bag-chips">
+          ${suggestions.slice(0, 18).map(b => `
+            <button type="button" class="im-as-bag-chip" data-as-pick-bag="${esc(b.name)}" data-as-pick-qty="${b.qty || 1}" title="คลิกเพื่อเพิ่ม ${esc(b.name)} เข้า Auto Sell">
+              ${b.icon ? `<img src="${esc(gameAssetUrl(b.icon))}" alt="">` : ''}
+              <span>+ ${esc(b.name)}</span>
+              <b>x${Number(b.qty || 1).toLocaleString()}</b>
+            </button>
+          `).join('')}
+        </div>
+      </div>`;
+  }
+
+  function renderAutoSellBagSuggestionsOnly() {
+    if (!hub.el) return;
+    const box = hub.el.querySelector('[data-role="as-bag-suggestions"]');
+    if (box) box.innerHTML = renderAutoSellBagSuggestionsHtml();
+  }
+
+  function renderAutoSellCopyGridHtml() {
+    const st = hub.autoSell;
+    const q = String(st.copyFilterQ || '').trim().toLowerCase();
+    const list = (st.otherProfiles || []).filter(p => {
+      if (!q) return true;
+      return (p.name && p.name.toLowerCase().includes(q)) ||
+             (p.charName && p.charName.toLowerCase().includes(q)) ||
+             (p.account && p.account.toLowerCase().includes(q));
+    });
+    if (list.length === 0) {
+      return `<div class="im-empty sm">ไม่พบโปรไฟล์อื่นที่ตรงกับคำค้นหา</div>`;
+    }
+    return list.map(p => {
+      const checked = st.copyTargetIds.has(p.id);
+      const label = p.charName && p.charName !== p.name ? `${p.name} (${p.charName})` : p.name;
+      return `
+        <label class="im-as-target-card ${checked ? 'selected' : ''} ${p.online ? 'online' : 'offline'}">
+          <input type="checkbox" data-as-copy-target="${esc(p.id)}" ${checked ? 'checked' : ''}>
+          <span class="im-as-dot ${p.online ? 'on' : 'off'}" title="${p.online ? 'ออนไลน์' : 'ออฟไลน์'}"></span>
+          <div class="im-as-target-info">
+            <div class="im-as-target-name">${esc(label)}</div>
+            <div class="im-as-target-sub">${p.online ? '🟢 ออนไลน์' : '⚫ ออฟไลน์'} · มี ${p.rulesCount || 0} รายการ ${p.enabled ? '(เปิดอยู่)' : ''}</div>
+          </div>
+        </label>`;
+    }).join('');
+  }
+
+  function renderAutoSellCopyGridOnly() {
+    if (!hub.el) return;
+    const grid = hub.el.querySelector('[data-role="as-copy-grid"]');
+    if (grid) grid.innerHTML = renderAutoSellCopyGridHtml();
+    updateAutoSellCopyFooterBtn();
+  }
+
+  function updateAutoSellCopyFooterBtn() {
+    if (!hub.el) return;
+    const btn = hub.el.querySelector('[data-as="copy-run-selected"]');
+    const cnt = hub.autoSell.copyTargetIds.size;
+    if (btn) {
+      btn.disabled = cnt === 0;
+      btn.textContent = `🚀 คัดลอกไปยังจอที่เลือก (${cnt} จอ)`;
+    }
+  }
+
+  function renderAutoSellRulesListHtml() {
+    const st = hub.autoSell;
+    const rules = Array.isArray(st.config.rules) ? st.config.rules : [];
+    const q = String(st.filterQ || '').trim().toLowerCase();
+
+    let countReady = 0, countInBag = 0, countEmpty = 0;
+    const decorated = rules.map((r, idx) => {
+      const cls = classifyAutoSellRuleState(r);
+      if (cls === 'ready') countReady++;
+      else if (cls === 'inbag') countInBag++;
+      else countEmpty++;
+      return { r, idx, cls };
+    });
+
+    if (hub.el) {
+      const fBar = hub.el.querySelector('[data-role="as-filter-pills"]');
+      if (fBar) {
+        const pills = [
+          ['all', `ทั้งหมด (${rules.length})`],
+          ['ready', `✅ พร้อมขาย (${countReady})`],
+          ['inbag', `⏳ มีในตัว (${countInBag})`],
+          ['empty', `❌ ไม่มีในตัว (${countEmpty})`]
+        ];
+        fBar.innerHTML = pills.map(([k, lbl]) => `
+          <button type="button" class="im-as-pill ${st.filterStatus === k ? 'active' : ''}" data-as-filter="${k}">${lbl}</button>
+        `).join('');
+      }
+    }
+
+    const filtered = decorated.filter(({ r, cls }) => {
+      if (st.filterStatus !== 'all' && cls !== st.filterStatus) return false;
+      if (q && !String(r.itemName || '').toLowerCase().includes(q)) return false;
+      return true;
+    });
+
+    if (rules.length === 0) {
+      return `<div class="im-empty">💡 ยังไม่มีรายการ Auto Sell ตลาดกลางสำหรับโปรไฟล์นี้ — พิมพ์ชื่อไอเทมด้านบน หรือคลิกเลือกจากของในกระเป๋าเพื่อเพิ่มรายการ</div>`;
+    }
+    if (filtered.length === 0) {
+      return `<div class="im-empty">🔍 ไม่พบรายการ Auto Sell ที่ตรงกับตัวกรอง</div>`;
+    }
+
+    return `<div class="im-as-grid">${filtered.map(({ r, idx, cls }) => {
+      const icon = resolveAutoSellItemIcon(r.itemName, r.id);
+      const canSellNow = !st.offline && (cls === 'ready' || cls === 'inbag');
+      return `
+        <div class="im-as-card ${cls === 'ready' ? 'ready' : ''}" data-rule-id="${esc(r.id)}">
+          <div class="im-as-card-top">
+            <span class="im-as-idx">#${idx + 1}</span>
+            <div class="im-as-icon-box">
+              ${icon ? `<img src="${esc(gameAssetUrl(icon))}" alt="">` : '🏷️'}
+            </div>
+            <input type="text" class="im-as-name-input" list="im-as-bag-datalist" value="${esc(r.itemName || '')}" placeholder="ชื่อไอเทม..." data-as-rule-name="${esc(r.id)}">
+            <button type="button" class="im-as-del-btn" data-as-del="${esc(r.id)}" title="ลบรายการนี้ออกจาก Auto Sell">➖</button>
+          </div>
+          <div class="im-as-card-mid">
+            <div class="im-as-cond">
+              <span>ครบ ≥</span>
+              <input type="number" min="1" max="99999" class="im-as-min-input" value="${Number(r.minQty) || 1}" data-as-rule-min="${esc(r.id)}">
+              <span>ชิ้น</span>
+            </div>
+            <select class="im-as-mode-select" data-as-rule-mode="${esc(r.id)}">
+              <option value="all" ${r.sellMode !== 'min' ? 'selected' : ''}>ขายหมดในตัว</option>
+              <option value="min" ${r.sellMode === 'min' ? 'selected' : ''}>ขายทีละ ${Number(r.minQty) || 1} ชิ้น</option>
+            </select>
+          </div>
+          <div class="im-as-card-foot">
+            ${buildAutoSellRuleStatusBadge(r)}
+            <button type="button" class="im-btn ${canSellNow ? 'primary' : 'ghost'} xs" data-as-sell-now="${esc(r.id)}" ${canSellNow ? '' : 'disabled'} title="สั่งประเมินราคาและลงขายในตลาดกลางทันที">
+              ⚡ ขายทันที
+            </button>
+          </div>
+        </div>`;
+    }).join('')}</div>`;
+  }
+
+  function renderAutoSellRulesOnly() {
+    if (!hub.el) return;
+    const box = hub.el.querySelector('[data-role="as-rules-list"]');
+    if (box) box.innerHTML = renderAutoSellRulesListHtml();
+    updateMarketBadges();
+  }
+
+  function renderAutoSellHub() {
+    if (!hub.el) return;
+    const root = hub.el.querySelector('[data-role="autosell-root"]');
+    if (!root) return;
+    const st = hub.autoSell;
+    const rules = Array.isArray(st.config.rules) ? st.config.rules : [];
+    const datalistNames = Array.from(new Set([
+      ...(st.bagItemsSummary || []).map(b => b.name),
+      ...rules.map(r => r.itemName)
+    ].filter(Boolean))).sort();
+
+    root.innerHTML = `
+      <datalist id="im-as-bag-datalist">
+        ${datalistNames.map(n => `<option value="${esc(n)}"></option>`).join('')}
+      </datalist>
+
+      <div class="im-as-wrap">
+        <!-- TOP CONTROL HEADER -->
+        <div class="im-as-head">
+          <div class="im-as-head-left">
+            <label class="im-as-switch">
+              <input type="checkbox" data-as="toggle-enabled" ${st.config.enabled ? 'checked' : ''}>
+              <span class="im-as-slider"></span>
+              <span class="im-as-switch-lbl">เปิดใช้งาน Auto Sell ตลาดกลาง (${rules.length} รายการ)</span>
+            </label>
+            <div class="im-as-badges">
+              <span class="im-as-badge strat">⚖️ กลยุทธ์: ราคากลางสมดุล / ตัดราคา 1z (ข้ามราคาล่อ)</span>
+              <span class="im-as-badge shield">🛡️ ป้องกันขาย NPC อัตโนมัติ</span>
+              <span class="im-as-badge quota">โควตาวางขาย: ${st.activeCount}/${st.maxListings} ช่อง</span>
+            </div>
+          </div>
+          <div class="im-as-head-right">
+            <button type="button" class="im-btn ghost sm" data-as="check-now" ${st.offline ? 'disabled' : ''} title="สั่งให้บอทเช็กกระเป๋าและตั้งขายทุกรายการที่ครบเงื่อนไขทันที">
+              ⚡ ตรวจสอบทันที
+            </button>
+            <button type="button" class="im-btn copy-btn sm ${st.copyOpen ? 'active' : ''}" data-as="toggle-copy-panel" title="คัดลอกรายการ Auto Sell ของโปรไฟล์นี้ไปยังโปรไฟล์อื่น">
+              📋 Copy To จออื่น (${(st.otherProfiles || []).length})
+            </button>
+          </div>
+        </div>
+
+        <!-- COPY TO OTHER PROFILES DRAWER/PANEL -->
+        <div class="im-as-copy-panel" style="display:${st.copyOpen ? 'flex' : 'none'};">
+          <div class="im-as-copy-head">
+            <div>
+              <div class="im-as-copy-title">📋 คัดลอกรายการ Auto Sell (${rules.length} รายการ) ไปยังโปรไฟล์อื่น</div>
+              <div class="im-as-copy-sub">รองรับทั้งจอที่กำลังออนไลน์ (ซิงค์เข้าเกมทันที) และจอที่ออฟไลน์อยู่</div>
+            </div>
+            <button type="button" class="im-btn ghost xs" data-as="toggle-copy-panel">✕ ปิด</button>
+          </div>
+
+          <div class="im-as-copy-controls">
+            <label class="im-as-copy-opt">
+              <span>โหมดการคัดลอก:</span>
+              <select class="im-select" data-as="copy-mode">
+                <option value="replace" ${st.copyMode !== 'merge' ? 'selected' : ''}>เขียนทับรายการทั้งหมดให้เหมือนจอนี้เป๊ะ (Replace)</option>
+                <option value="merge" ${st.copyMode === 'merge' ? 'selected' : ''}>รวมรายการเพิ่มเข้าไปโดยไม่ลบของเดิม (Merge)</option>
+              </select>
+            </label>
+            <label class="im-check">
+              <input type="checkbox" data-as="copy-enabled" ${st.copyEnabled ? 'checked' : ''}>
+              คัดลอกสถานะ เปิด/ปิด Auto Sell (${st.config.enabled ? 'เปิด' : 'ปิด'}) ไปด้วย
+            </label>
+            <div class="im-as-copy-quick">
+              <input type="text" class="im-input sm" data-as="copy-filter" value="${esc(st.copyFilterQ)}" placeholder="ค้นหาชื่อจอ...">
+              <button type="button" class="im-btn ghost xs" data-as="copy-sel-all">☑️ เลือกทุกจอ</button>
+              <button type="button" class="im-btn ghost xs" data-as="copy-sel-online">🟢 เฉพาะออนไลน์</button>
+              <button type="button" class="im-btn ghost xs" data-as="copy-sel-none">⬜ ล้างที่เลือก</button>
+            </div>
+          </div>
+
+          <div class="im-as-copy-grid" data-role="as-copy-grid">
+            ${renderAutoSellCopyGridHtml()}
+          </div>
+
+          <div class="im-as-copy-foot">
+            <span class="im-muted">💡 จอที่ได้รับรายการจะเก็บไอเทมเหล่านี้ไว้ลงขายตลาดกลางและไม่ขายทิ้งให้ NPC</span>
+            <div class="im-as-copy-actions">
+              <button type="button" class="im-btn ghost sm" data-as="copy-run-selected" ${st.copyTargetIds.size === 0 ? 'disabled' : ''}>
+                🚀 คัดลอกไปยังจอที่เลือก (${st.copyTargetIds.size} จอ)
+              </button>
+              <button type="button" class="im-btn market sm" data-as="copy-run-all" ${(st.otherProfiles || []).length === 0 ? 'disabled' : ''}>
+                ⚡ คัดลอกไปทุกจอทันที (${(st.otherProfiles || []).length} จอ)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ADD NEW RULE BAR -->
+        <div class="im-as-add-card">
+          <div class="im-as-add-row">
+            <input type="text" class="im-input" list="im-as-bag-datalist" data-as="new-name" value="${esc(st.newName)}" placeholder="พิมพ์หรือเลือกชื่อไอเทมที่จะตั้งขายอัตโนมัติ เช่น Elunium, Halloween Box, Slime Card...">
+            <div class="im-as-add-min">
+              <span>ครบ ≥</span>
+              <input type="number" min="1" max="99999" class="im-input" data-as="new-min" value="${Number(st.newMin) || 10}">
+              <span>ชิ้น</span>
+            </div>
+            <select class="im-select" data-as="new-mode">
+              <option value="all" ${st.newMode !== 'min' ? 'selected' : ''}>ขายหมดในตัว</option>
+              <option value="min" ${st.newMode === 'min' ? 'selected' : ''}>ขายทีละจำนวนขั้นต่ำ</option>
+            </select>
+            <button type="button" class="im-btn primary" data-as="add-rule">➕ เพิ่มรายการลงขาย</button>
+          </div>
+          <div data-role="as-bag-suggestions">
+            ${renderAutoSellBagSuggestionsHtml()}
+          </div>
+        </div>
+
+        <!-- FILTER & SEARCH BAR -->
+        <div class="im-as-filter-row">
+          <input type="text" class="im-input" data-as="filter-q" value="${esc(st.filterQ)}" placeholder="🔍 ค้นหาไอเทมในรายการ Auto Sell (${rules.length} รายการ)...">
+          <div class="im-as-pills" data-role="as-filter-pills"></div>
+        </div>
+
+        <!-- RULES GRID -->
+        <div class="im-as-rules-box" data-role="as-rules-list">
+          ${st.loading ? '<div class="im-empty">⏳ กำลังโหลดรายการ Auto Sell...</div>' : renderAutoSellRulesListHtml()}
+        </div>
+      </div>`;
   }
 
   function renderMineViews() {
@@ -1488,7 +2011,7 @@
                   ${l.qty > 1 ? `<small>${fmtZ(unit)} / ชิ้น</small>` : ''}
                 </div>
                 <span class="im-hub-time">⏳ ${timeLeft(l.expiresAt)}</span>
-                <button type="button" class="im-btn danger sm" data-hub-cancel="${esc(l.id)}">❌ ยกเลิกขาย</button>
+                <button type="button" class="im-btn danger sm" data-hub-cancel="${esc(l.listingId ?? l.id)}">❌ ยกเลิกขาย</button>
               </div>
             </div>`;
         }).join('')}</div>`;
@@ -1582,7 +2105,7 @@
                 <div class="im-hub-meta">
                   <div class="im-hub-name">
                     ${reasonBadge}
-                    ${it ? `<span style="color:${getRarityColor(it.rarity)};">${esc(formatItemDisplayName(it))}</span>` : ''}
+                    ${it ? `<span style="color:${getRarityColor(it.rarity)};">${esc(formatItemDisplayName(it))}</span>` : (d.name ? `<span style="color:#e2e8f0;">${esc(d.name)}</span>` : '')}
                     ${it && it.qty > 1 ? `<span class="im-hub-qty">x${Number(it.qty).toLocaleString()}</span>` : ''}
                     ${d.zeny > 0 ? `<b style="color:#fde047; font-family:var(--font-mono);">+${fmtZ(d.zeny)}</b>` : ''}
                   </div>
@@ -1591,7 +2114,7 @@
                 </div>
               </div>
               <div class="im-hub-item-right">
-                <button type="button" class="im-btn primary sm" data-hub-collect="${esc(d.id)}">📥 กดรับ</button>
+                <button type="button" class="im-btn primary sm" data-hub-collect="${esc(d.deliveryId ?? d.id)}">📥 กดรับ</button>
               </div>
             </div>`;
         }).join('')}</div>`;
@@ -1686,8 +2209,8 @@
               ${l.qty > 1 ? `<small>รวม ${fmtZ(l.price)} (x${l.qty})</small>` : ''}
             </div>
             ${l.mine
-              ? `<button type="button" class="im-btn danger sm" data-hub-cancel="${esc(l.id)}">❌ ยกเลิก</button>`
-              : `<button type="button" class="im-btn primary sm" data-hub-buy="${esc(l.id)}" data-buy-name="${esc(formatItemDisplayName(it))}" data-buy-qty="${l.qty || 1}" data-buy-price="${l.price || 0}" data-buy-unit="${unit}">🛒 ซื้อ</button>`}
+              ? `<button type="button" class="im-btn danger sm" data-hub-cancel="${esc(l.listingId ?? l.id)}">❌ ยกเลิก</button>`
+              : `<button type="button" class="im-btn primary sm" data-hub-buy="${esc(l.listingId ?? l.id)}" data-buy-name="${esc(formatItemDisplayName(it))}" data-buy-qty="${l.qty || 1}" data-buy-price="${l.price || 0}" data-buy-unit="${unit}">🛒 ซื้อ</button>`}
           </div>
         </div>`;
     }).join('')}</div>`;
@@ -1717,12 +2240,155 @@
       return;
     }
 
+    // ---------- 🤖 Auto Sell Hub click actions ----------
+    const asFilterBtn = e.target.closest('[data-as-filter]');
+    if (asFilterBtn) {
+      hub.autoSell.filterStatus = asFilterBtn.dataset.asFilter || 'all';
+      renderAutoSellRulesOnly();
+      return;
+    }
+
+    const asPickBag = e.target.closest('[data-as-pick-bag]');
+    if (asPickBag) {
+      const nm = asPickBag.dataset.asPickBag;
+      if (nm) addAutoSellRuleFromBar(nm, hub.autoSell.newMin || 1);
+      return;
+    }
+
+    const asDelBtn = e.target.closest('[data-as-del]');
+    if (asDelBtn) {
+      const rid = asDelBtn.dataset.asDel;
+      const rule = (hub.autoSell.config.rules || []).find(r => r.id === rid);
+      hub.autoSell.config.rules = (hub.autoSell.config.rules || []).filter(r => r.id !== rid);
+      toast(`🗑️ ลบ "${(rule && rule.itemName) || rid}" ออกจาก Auto Sell แล้ว`);
+      saveAutoSellHub(false);
+      renderAutoSellHub();
+      return;
+    }
+
+    const asSellNowBtn = e.target.closest('[data-as-sell-now]');
+    if (asSellNowBtn) {
+      const rid = asSellNowBtn.dataset.asSellNow;
+      const rule = (hub.autoSell.config.rules || []).find(r => r.id === rid);
+      asSellNowBtn.disabled = true;
+      const origTxt = asSellNowBtn.textContent;
+      asSellNowBtn.textContent = '⏳ กำลังขาย...';
+      try {
+        const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/autosell`, {
+          op: 'sell_rule_now',
+          ruleId: rid,
+          config: hub.autoSell.config
+        });
+        if (r && r.success) {
+          applyAutoSellApiResult(r);
+          toast(`⚡ สั่งประเมินราคากลางและลงขาย "${(rule && rule.itemName) || ''}" แล้ว`);
+          setTimeout(() => { refreshBag(); refreshMineMarket(); }, 500);
+        } else {
+          toast(`❌ ขายทันทีไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+        }
+      } finally {
+        asSellNowBtn.disabled = false;
+        asSellNowBtn.textContent = origTxt;
+        renderAutoSellHub();
+      }
+      return;
+    }
+
+    const asBtn = e.target.closest('[data-as]');
+    if (asBtn && asBtn.tagName === 'BUTTON') {
+      const act = asBtn.dataset.as;
+      if (act === 'add-rule') {
+        addAutoSellRuleFromBar();
+        return;
+      }
+      if (act === 'check-now') {
+        asBtn.disabled = true;
+        const origTxt = asBtn.textContent;
+        asBtn.textContent = '⏳ กำลังตรวจสอบ...';
+        try {
+          const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/autosell`, {
+            op: 'check_now',
+            config: hub.autoSell.config
+          });
+          if (r && r.success) {
+            applyAutoSellApiResult(r);
+            toast('⚡ สั่งตรวจสอบกระเป๋าและลงขายอัตโนมัติทันทีแล้ว!');
+            setTimeout(() => { refreshBag(); refreshMineMarket(); }, 600);
+          } else {
+            toast(`❌ ตรวจสอบไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+          }
+        } finally {
+          asBtn.disabled = false;
+          asBtn.textContent = origTxt;
+          renderAutoSellHub();
+        }
+        return;
+      }
+      if (act === 'toggle-copy-panel') {
+        hub.autoSell.copyOpen = !hub.autoSell.copyOpen;
+        renderAutoSellHub();
+        return;
+      }
+      if (act === 'copy-sel-all') {
+        (hub.autoSell.otherProfiles || []).forEach(p => hub.autoSell.copyTargetIds.add(p.id));
+        renderAutoSellCopyGridOnly();
+        return;
+      }
+      if (act === 'copy-sel-online') {
+        hub.autoSell.copyTargetIds.clear();
+        (hub.autoSell.otherProfiles || []).filter(p => p.online).forEach(p => hub.autoSell.copyTargetIds.add(p.id));
+        renderAutoSellCopyGridOnly();
+        return;
+      }
+      if (act === 'copy-sel-none') {
+        hub.autoSell.copyTargetIds.clear();
+        renderAutoSellCopyGridOnly();
+        return;
+      }
+      if (act === 'copy-run-selected' || act === 'copy-run-all') {
+        const isAll = act === 'copy-run-all';
+        const targetIds = isAll ? 'all' : Array.from(hub.autoSell.copyTargetIds);
+        const targetCount = isAll ? (hub.autoSell.otherProfiles || []).length : targetIds.length;
+        if (targetCount === 0) {
+          toast('⚠️ กรุณาเลือกจอปลายทางอย่างน้อย 1 จอ', 'warn');
+          return;
+        }
+        const rulesLen = (hub.autoSell.config.rules || []).length;
+        const modeTxt = hub.autoSell.copyMode === 'merge' ? 'รวมรายการเพิ่ม (Merge)' : 'เขียนทับให้เหมือนกันเป๊ะ (Replace)';
+        if (!confirm(`ยืนยันคัดลอกรายการ Auto Sell (${rulesLen} รายการ · โหมด ${modeTxt}) ไปยัง ${targetCount} จอ ?`)) return;
+
+        asBtn.disabled = true;
+        const origTxt = asBtn.textContent;
+        asBtn.textContent = '⏳ กำลังคัดลอก...';
+        try {
+          const r = await api(`/api/profiles/${encodeURIComponent(bag.profileId)}/autosell`, {
+            op: 'copy_to',
+            targetIds,
+            mode: hub.autoSell.copyMode,
+            copyEnabled: hub.autoSell.copyEnabled,
+            config: hub.autoSell.config
+          });
+          if (r && r.success) {
+            if (Array.isArray(r.otherProfiles)) hub.autoSell.otherProfiles = r.otherProfiles;
+            toast(`📋 คัดลอก Auto Sell (${r.rulesCount} รายการ) สำเร็จ ${r.totalTargets} จอ! (ออนไลน์ซิงค์ทันที ${r.appliedOnline} จอ${r.savedOffline ? ` · ออฟไลน์บันทึกไว้ ${r.savedOffline} จอ` : ''})`);
+          } else {
+            toast(`❌ คัดลอกไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+          }
+        } finally {
+          asBtn.disabled = false;
+          asBtn.textContent = origTxt;
+          renderAutoSellHub();
+        }
+        return;
+      }
+    }
+
     const actBtn = e.target.closest('[data-hub-act]');
     if (actBtn) {
       const act = actBtn.dataset.hubAct;
       if (act === 'refresh-all') {
         market.cache.clear();
-        await Promise.all([refreshBag(), refreshMineMarket()]);
+        await Promise.all([refreshBag(), refreshMineMarket(), refreshAutoSellHub()]);
         if (hub.subTab === 'sell' && market.item) loadMarketData(true);
         if (hub.subTab === 'browse') runBrowseSearch();
         toast('🏪 รีเฟรชข้อมูลตลาดกลางแล้ว');
@@ -2359,6 +3025,7 @@
 
       refreshBag();
       refreshMineMarket(); // preloads delivery count badge on Tab 4
+      refreshAutoSellHub(); // preloads Auto Sell rule count badge on Tab 4
 
       clearInterval(bag.timer);
       bag.timer = setInterval(() => {

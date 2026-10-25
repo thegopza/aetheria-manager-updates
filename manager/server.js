@@ -115,7 +115,13 @@ function writeJsonAtomic(filePath, data) {
   const text = JSON.stringify(data, null, 2);
   const tmpFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   try {
-    fs.writeFileSync(tmpFile, text, "utf8");
+    const fd = fs.openSync(tmpFile, "w");
+    try {
+      fs.writeFileSync(fd, text, "utf8");
+      try { fs.fsyncSync(fd); } catch (_) {}
+    } finally {
+      try { fs.closeSync(fd); } catch (_) {}
+    }
     fs.renameSync(tmpFile, filePath);
   } catch (e) {
     try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
@@ -473,24 +479,29 @@ function recoverProfilesFromLocalEvidence() {
   try {
     const dataDir = path.join(__dirname, "data");
     const map = new Map();
-    const ensure = (id) => {
+    let seededFromBackup = false;
+    const ensure = (id, allowCreate = true) => {
       const s = String(id || "").trim();
       if (!s.startsWith("profile_") || deletedIds.has(s)) return null;
-      if (!map.has(s)) map.set(s, { id: s });
+      if (!map.has(s)) {
+        if (!allowCreate || seededFromBackup) return null;
+        map.set(s, { id: s });
+      }
       return map.get(s);
     };
 
-    // 1. Seed from dedicated backup file if present (never return early before enriching credentials/accounts!)
+    // 1. Seed from dedicated backup file if present (enrich existing IDs only; do not resurrect unreferenced old session dirs)
     if (fs.existsSync(PROFILES_BACKUP_FILE)) {
       try {
         const backup = JSON.parse(fs.readFileSync(PROFILES_BACKUP_FILE, "utf8"));
         const filteredBackup = Array.isArray(backup) ? backup.filter(p => p && !deletedIds.has(String(p.id))) : [];
         if (filteredBackup.length > 0 && !isUntouchedDefaultMockProfiles(filteredBackup)) {
           for (const bp of filteredBackup) {
-            const p = ensure(bp.id);
+            const p = ensure(bp.id, true);
             if (!p) continue;
             Object.assign(p, bp, { id: String(bp.id).trim(), hasRealEvidence: true });
           }
+          if (map.size > 0) seededFromBackup = true;
         }
       } catch (_) {}
     }
@@ -725,7 +736,12 @@ function recoverProfilesFromLocalEvidence() {
       }
     }
 
-    const validCandidates = Array.from(map.values()).filter(p => p.hasRealEvidence);
+    const validCandidates = Array.from(map.values()).filter(p => {
+      if (!p.hasRealEvidence) return false;
+      if (seededFromBackup) return true;
+      // When recovering from raw session directories without a backup file, skip blank unconfigured shells
+      return Boolean(p.account || p.lastCharName || p.hasSavedPassword || p.id === "profile_main");
+    });
     if (validCandidates.length === 0) return null;
 
     // Sort: profile_main first, profile_1, profile_2, then profile_<ts> by timestamp
@@ -4517,6 +4533,7 @@ function applyProfileBackupPayload(data) {
   if (rawList.length === 0) return { restoredProfiles: 0, restoredCredentials: 0 };
   const existing = loadProfiles() || [];
   const existingById = new Map(existing.map(p => [p.id, p]));
+  const deletedIds = loadDeletedProfileIds();
   const merged = [];
   const seenIds = new Set();
   let restoredCredentials = 0;
@@ -4526,7 +4543,7 @@ function applyProfileBackupPayload(data) {
     if (!item || typeof item !== "object") continue;
     const base = (item.profile && typeof item.profile === "object") ? { ...item.profile } : { ...item };
     const id = String(base.id || item.id || item.profileId || "").trim();
-    if (!id || seenIds.has(id)) continue;
+    if (!id || seenIds.has(id) || deletedIds.has(id)) continue;
     seenIds.add(id);
     const prev = existingById.get(id) || {};
     const username = String(item.username || item.account || base.account || base.username || (credsObj[id] && credsObj[id].username) || prev.account || prev.username || "").trim();
@@ -6291,6 +6308,8 @@ const server = http.createServer(async (req, res) => {
     saveProfiles(profiles, { allowEmpty: true });
     if (profiles.length === 0) {
       try { writeJsonAtomic(PROFILES_BACKUP_FILE, []); } catch (_) {}
+    } else {
+      scheduleCentralProfileBackupSync(1500);
     }
     return sendJSON({ success: true });
   }
@@ -6317,6 +6336,7 @@ const server = http.createServer(async (req, res) => {
       browserMode.launch(profile)
         .then(r => {
           if (r && r.alreadyOpen) scriptCoordinator.cycle?.().catch(() => {});
+          else setTimeout(() => scriptCoordinator.cycle?.().catch(() => {}), 2500);
           if (profile.autoRegister || profile.loginSyncPending) {
             setImmediate(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}));
             setTimeout(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}), 2500);
@@ -6440,6 +6460,7 @@ const server = http.createServer(async (req, res) => {
           }
           catch (e) { failed.push(`${p.name}: ${e.message}`); }
         }
+        if (launched.length > 0) setTimeout(() => scriptCoordinator.cycle?.().catch(() => {}), 2500);
         sendJSON({ success: failed.length === 0, launched, skipped, error: failed.length ? failed.join('\n') : undefined });
       })();
       return;

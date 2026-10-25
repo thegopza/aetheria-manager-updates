@@ -11,6 +11,191 @@ const fs = require('fs');
 const path = require('path');
 
 const HALLOWEEN_STORE_PATH = path.join(__dirname, 'data', 'halloween_exchange.json');
+const AUTOSELL_STORE_PATH = path.join(__dirname, 'data', 'autosell_configs.json');
+const BROWSER_STORAGE_DIR = path.join(__dirname, '..', 'sessions', '_browser_storage');
+
+function sanitizeAutoSellConfig(raw) {
+  const cfg = raw && typeof raw === 'object' ? raw : {};
+  const rawRules = Array.isArray(cfg.rules) ? cfg.rules : [];
+  const seen = new Set();
+  const rules = [];
+  rawRules.forEach((r, idx) => {
+    if (!r || typeof r !== 'object') return;
+    const itemName = String(r.itemName || '').trim();
+    const id = String(r.id || `rule_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`);
+    const minQty = Math.max(1, Math.min(99999, parseInt(r.minQty, 10) || 1));
+    const sellMode = r.sellMode === 'min' ? 'min' : 'all';
+    const enabled = r.enabled !== false;
+    const key = itemName ? itemName.toLowerCase() : `__empty_${id}`;
+    if (itemName && seen.has(key)) return;
+    if (itemName) seen.add(key);
+    rules.push({ id, itemName, minQty, sellMode, enabled });
+  });
+  return {
+    enabled: Boolean(cfg.enabled),
+    priceStrategy: String(cfg.priceStrategy || 'median'),
+    checkIntervalSec: Number(cfg.checkIntervalSec) || 25,
+    maxActiveListings: Number(cfg.maxActiveListings) || 10,
+    rules
+  };
+}
+
+function loadAllAutoSellStore() {
+  try {
+    if (fs.existsSync(AUTOSELL_STORE_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(AUTOSELL_STORE_PATH, 'utf8'));
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+  } catch (_) {}
+  return {};
+}
+
+function loadProfileAutoSellStore(profileId) {
+  const pid = String(profileId || '').trim();
+  const all = loadAllAutoSellStore();
+  if (pid && all[pid] && typeof all[pid] === 'object') {
+    return sanitizeAutoSellConfig(all[pid]);
+  }
+  try {
+    const bsFile = path.join(BROWSER_STORAGE_DIR, `${pid}.json`);
+    if (fs.existsSync(bsFile)) {
+      const d = JSON.parse(fs.readFileSync(bsFile, 'utf8'));
+      const rawStr = d[`pelican_${pid}__auto_market_sell_cfg`] || d.pelican_auto_market_sell_cfg;
+      if (rawStr) {
+        return sanitizeAutoSellConfig(JSON.parse(rawStr));
+      }
+    }
+  } catch (_) {}
+  return sanitizeAutoSellConfig({ enabled: false, priceStrategy: 'median', rules: [] });
+}
+
+function saveProfileAutoSellStore(profileId, rawCfg) {
+  const pid = String(profileId || '').trim();
+  const clean = sanitizeAutoSellConfig(rawCfg);
+  if (!pid) return clean;
+  try {
+    const all = loadAllAutoSellStore();
+    all[pid] = Object.assign({}, clean, { updatedAt: Date.now() });
+    fs.mkdirSync(path.dirname(AUTOSELL_STORE_PATH), { recursive: true });
+    fs.writeFileSync(AUTOSELL_STORE_PATH, JSON.stringify(all, null, 2), 'utf8');
+  } catch (_) {}
+  try {
+    fs.mkdirSync(BROWSER_STORAGE_DIR, { recursive: true });
+    const bsFile = path.join(BROWSER_STORAGE_DIR, `${pid}.json`);
+    let d = {};
+    if (fs.existsSync(bsFile)) {
+      try { d = JSON.parse(fs.readFileSync(bsFile, 'utf8')) || {}; } catch (_) { d = {}; }
+    }
+    const serialized = JSON.stringify(clean);
+    d[`pelican_${pid}__auto_market_sell_cfg`] = serialized;
+    d.pelican_auto_market_sell_cfg = serialized;
+    fs.writeFileSync(bsFile, JSON.stringify(d, null, 2), 'utf8');
+  } catch (_) {}
+  return clean;
+}
+
+function buildAutoSellReadCode() {
+  return `(() => {
+    const cfg = window.__autoMarketSellConfig || { enabled: false, priceStrategy: 'median', rules: [] };
+    const rules = Array.isArray(cfg.rules) ? cfg.rules : [];
+    const bagItems = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+    const gearKept = it => typeof window.isGearKeptItem === 'function' && window.isGearKeptItem(it.raw || it);
+    const stashOnly = it => typeof window.isStashOnlyItem === 'function' && window.isStashOnlyItem(it.raw || it);
+    const iconByName = new Map();
+    const bagSummaryMap = new Map();
+    for (const it of bagItems) {
+      if (!it || !it.name) continue;
+      const nm = String(it.name).trim();
+      const key = nm.toLowerCase();
+      const icon = it.icon || (it.raw && it.raw.icon) || '';
+      if (icon && !iconByName.has(key)) iconByName.set(key, icon);
+      if (!it.bound && !it.locked && !gearKept(it)) {
+        const cur = bagSummaryMap.get(key) || { name: nm, itemId: it.itemId || it.id || 0, qty: 0, icon: icon || '' };
+        cur.qty += (Number(it.qty) || 1);
+        if (!cur.icon && icon) cur.icon = icon;
+        bagSummaryMap.set(key, cur);
+      }
+    }
+    const ruleStates = {};
+    for (const r of rules) {
+      if (!r || !r.id) continue;
+      const nm = String(r.itemName || '').trim();
+      const norm = nm.toLowerCase();
+      let totalCount = 0;
+      let sampleItem = null;
+      for (const it of bagItems) {
+        if (it && !it.locked && it.name && String(it.name).trim().toLowerCase() === norm && !gearKept(it) && !stashOnly(it)) {
+          totalCount += (Number(it.qty) || 1);
+          if (!sampleItem) sampleItem = it;
+        }
+      }
+      const threshold = Math.max(1, Number(r.minQty) || 1);
+      const gdReserve = (typeof window.getGuildDonationReserveQty === 'function') ? (Number(window.getGuildDonationReserveQty(sampleItem || nm)) || 0) : 0;
+      const gearReserve = (typeof window.getGearOreReserveQty === 'function') ? (Number(window.getGearOreReserveQty(sampleItem || nm)) || 0) : 0;
+      const reserveQty = Math.max(gdReserve, gearReserve);
+      const sellableQty = Math.max(0, totalCount - reserveQty);
+      const effectiveThreshold = reserveQty > 0
+        ? ((r.sellMode === 'min' || threshold <= reserveQty) ? (reserveQty + threshold) : threshold)
+        : threshold;
+      const ready = Boolean(nm && totalCount >= effectiveThreshold && sellableQty > 0);
+      ruleStates[r.id] = {
+        bagQty: totalCount,
+        reserveQty,
+        sellableQty,
+        effectiveThreshold,
+        ready,
+        icon: iconByName.get(norm) || ''
+      };
+    }
+    const activeCount = Number(window.__myMarketActiveCount) || 0;
+    const maxListings = (typeof window.getEffectiveMarketMaxListings === 'function') ? Number(window.getEffectiveMarketMaxListings()) : (Number(cfg.maxActiveListings) || 8);
+    return {
+      success: true,
+      config: {
+        enabled: Boolean(cfg.enabled),
+        priceStrategy: cfg.priceStrategy || 'median',
+        checkIntervalSec: Number(cfg.checkIntervalSec) || 25,
+        maxActiveListings: Number(cfg.maxActiveListings) || 10,
+        rules: rules.map(r => ({
+          id: String(r.id || ''),
+          itemName: String(r.itemName || '').trim(),
+          minQty: Math.max(1, Number(r.minQty) || 1),
+          sellMode: r.sellMode === 'min' ? 'min' : 'all',
+          enabled: r.enabled !== false
+        }))
+      },
+      ruleStates,
+      activeCount,
+      maxListings,
+      isBotRunning: Boolean(window.__isBotRunning),
+      bagItemsSummary: Array.from(bagSummaryMap.values()).sort((a, b) => b.qty - a.qty)
+    };
+  })()`;
+}
+
+function buildAutoSellSaveCode(cleanCfg) {
+  return `(() => {
+    const next = ${JSON.stringify(cleanCfg)};
+    window.__autoMarketSellConfig = Object.assign({}, window.__autoMarketSellConfig || {}, next);
+    try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch (e) {}
+    const en = Boolean(window.__autoMarketSellConfig.enabled);
+    const t1 = document.getElementById('p-autosell-toggle');
+    if (t1) t1.checked = en;
+    const t2 = document.getElementById('p-autosell-toggle-hud');
+    if (t2) t2.checked = en;
+    const badge = document.getElementById('p-subtab-autosell-count');
+    if (badge && Array.isArray(window.__autoMarketSellConfig.rules)) badge.innerText = String(window.__autoMarketSellConfig.rules.length);
+    if (typeof window.renderAutoSellHudRulesHtml === 'function') {
+      const hudBox = document.getElementById('p-autosell-hud-rules-container');
+      if (hudBox) hudBox.innerHTML = window.renderAutoSellHudRulesHtml();
+    }
+    if (typeof window.renderAutoSellRulesHtml === 'function') {
+      const modBox = document.getElementById('p-autosell-rules-container');
+      if (modBox) modBox.innerHTML = window.renderAutoSellRulesHtml();
+    }
+    return (${buildAutoSellReadCode()});
+  })()`;
+}
 
 function loadGlobalHalloweenStore() {
   try {
@@ -216,13 +401,13 @@ function buildMarketCode(p) {
   if (p.op === 'mine' || p.op === 'collect' || p.op === 'collect_all' || p.op === 'cancel') {
     let actionJs = `room.send('market', { op: 'mine' });`;
     if (p.op === 'collect') {
-      const deliveryId = toInt(p.deliveryId, 1, 2000000000);
+      const deliveryId = toInt(p.deliveryId ?? p.id, 1, 2000000000);
       if (deliveryId === null) return { error: 'deliveryId ไม่ถูกต้อง' };
       actionJs = `room.send('market', { op: 'collect', deliveryId: ${deliveryId} });`;
     } else if (p.op === 'collect_all') {
       actionJs = `room.send('market', { op: 'collect_all' });`;
     } else if (p.op === 'cancel') {
-      const listingId = toInt(p.listingId, 1, 2000000000);
+      const listingId = toInt(p.listingId ?? p.id, 1, 2000000000);
       if (listingId === null) return { error: 'listingId ไม่ถูกต้อง' };
       actionJs = `room.send('market', { op: 'cancel', listingId: ${listingId} });`;
     }
@@ -249,6 +434,10 @@ function buildMarketCode(p) {
         const enrich = list => (Array.isArray(list) ? list : []).map(entry => {
           if (entry && entry.item) {
             entry.item.icon = entry.item.icon || icon(entry.item, entry.item.name);
+          }
+          if (entry && entry.id === undefined) {
+            if (entry.listingId !== undefined) entry.id = entry.listingId;
+            else if (entry.deliveryId !== undefined) entry.id = entry.deliveryId;
           }
           return entry;
         });
@@ -722,41 +911,55 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     }
     if (!witchKey) {
       window.__halloweenNextTryAt = Date.now() + 60000;
+      window.__planJobChangeHoldUntil = 0;
       if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
       return { success: false, error: 'ไม่พบ NPC Witch Hazel ในเมืองหลวง' };
     }
     window.__isHalloweenExchanging = true;
     window.__planJobChangeHoldUntil = Date.now() + 45000;
     if (typeof window.needTown === 'function') window.needTown('halloween');
+    let unsubDlg = null, unsubShop = null;
     try {
       window.syncHalloweenWhitelist();
       const closeAll = () => {
         document.querySelectorAll('.shop-window .win-close, .npc-dialog .win-close').forEach(b => { try { b.click(); } catch (_) {} });
         try { room.send('npc_close', {}); } catch (_) {}
       };
+      let netDlg = null, netShop = null;
+      if (typeof room.onMessage === 'function') {
+        try {
+          unsubDlg = room.onMessage('npc_dialog', m => { if (m) netDlg = m; });
+          unsubShop = room.onMessage('shop', m => {
+            if (m && (m.shopId === 950 || /ฮาโลวีน|แม่มด|Witch Hazel/i.test(m.name || ''))) netShop = m;
+          });
+        } catch (_) {}
+      }
       let shopObj = window.readLiveWitchShopState();
       if (!shopObj) {
         room.send('npc_talk', { npcKey: witchKey });
         let dlg = null;
-        for (let i = 0; i < 65 && !dlg && !shopObj; i++) {
+        for (let i = 0; i < 100 && !dlg && !netDlg && !shopObj && !netShop; i++) {
+          if (i === 40) { try { room.send('npc_talk', { npcKey: witchKey }); } catch (_) {} }
           await sleep(200);
-          shopObj = window.readLiveWitchShopState();
+          shopObj = netShop || window.readLiveWitchShopState();
           dlg = document.querySelector('.npc-dialog');
         }
-        if (dlg && !shopObj) {
-          const opts = Array.from(dlg.querySelectorAll('.npc-options button')).map(b => (b.innerText || '').replace(/^\\s*\\d+\\s*/, '').trim());
-          let optIdx = opts.findIndex(o => /รางวัล|แลก|ร้าน|reward|shop/i.test(o));
+        if ((dlg || netDlg) && !shopObj) {
+          const opts = netDlg && Array.isArray(netDlg.options)
+            ? netDlg.options.map(s => String(s || '').trim())
+            : Array.from((dlg ? dlg.querySelectorAll('.npc-options button') : [])).map(b => (b.innerText || '').replace(/^\\s*\\d+\\s*/, '').trim());
+          let optIdx = opts.findIndex(o => /รางวัล|แลก|ร้าน|ฮาโลวีน|reward|shop/i.test(o));
           if (optIdx < 0) optIdx = 0;
           room.send('npc_option', { index: optIdx });
-          for (let i = 0; i < 30 && !shopObj; i++) {
+          for (let i = 0; i < 40 && !shopObj; i++) {
             await sleep(200);
-            shopObj = window.readLiveWitchShopState();
+            shopObj = netShop || window.readLiveWitchShopState();
           }
         }
       }
       if (!shopObj) {
         closeAll();
-        window.__halloweenNextTryAt = Date.now() + 20000;
+        window.__halloweenNextTryAt = Date.now() + 15000;
         return { success: false, error: 'เปิดหน้าต่างแลกของ Witch Hazel ไม่สำเร็จ (กำลังเดินไปหา NPC)' };
       }
       window.updateHalloweenQuotaFromShop(shopObj);
@@ -797,28 +1000,40 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       window.saveHalloweenExchangeConfig();
       if (!lines.length) {
         closeAll();
+        window.__halloweenLastLog = '⏭️ โควต้าของที่เลือกเต็มแล้ววันนี้ — เดินทางกลับแมพฟาร์ม';
+        window.__planJobChangeHoldUntil = 0;
         if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
         return { success: false, error: 'โควต้าของที่เลือกเต็มแล้ว หรือวัตถุดิบไม่พอแลกตามจำนวนขั้นต่ำที่ตั้งไว้' };
       }
+      netShop = null;
+      const beforeCandy = fresh.candy;
       room.send('shop_buy_many', { lines });
       window.__halloweenLastLog = '✅ แลกสำเร็จ: ' + exchangedSummary.join(', ');
       console.log('%c[PmheeAether Halloween] ' + window.__halloweenLastLog, 'color: #22c55e; font-weight: bold;');
-      await sleep(1200);
-      const afterShop = window.readLiveWitchShopState();
-      if (afterShop) window.updateHalloweenQuotaFromShop(afterShop);
+      for (let i = 0; i < 12; i++) {
+        await sleep(200);
+        if (netShop) { window.updateHalloweenQuotaFromShop(netShop); break; }
+        const curSt = window.getHalloweenExchangeStatus();
+        if (curSt.candy < beforeCandy) break;
+      }
       closeAll();
       window.__halloweenNextTryAt = Date.now() + 8000;
+      window.__planJobChangeHoldUntil = 0;
       if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
       return { success: true, exchanged: lines, summary: exchangedSummary.join(', '), status: window.getHalloweenExchangeStatus() };
     } finally {
+      if (typeof unsubDlg === 'function') { try { unsubDlg(); } catch (_) {} }
+      if (typeof unsubShop === 'function') { try { unsubShop(); } catch (_) {} }
       window.__isHalloweenExchanging = false;
     }
   };
-  if (!window.__pmHalloweenLoopId) {
+  if (!window.__pmHalloweenLoopId || window.__pmHalloweenLoopVer !== 3) {
+    if (window.__pmHalloweenLoopId) { try { clearInterval(window.__pmHalloweenLoopId); } catch (_) {} }
+    window.__pmHalloweenLoopVer = 3;
     window.__pmHalloweenLoopId = setInterval(() => {
       try {
         const liveShop = window.readLiveWitchShopState && window.readLiveWitchShopState();
-        if (liveShop) window.updateHalloweenQuotaFromShop(liveShop);
+        if (liveShop && !window.__isHalloweenExchanging) window.updateHalloweenQuotaFromShop(liveShop);
         if (window.__isBotRunning && !window.__consolidationPending && !window.__isHalloweenExchanging) {
           window.runHalloweenExchangeStep(false);
         }
@@ -1067,12 +1282,234 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
     return false;
   }
 
-  const m = pathname.match(/^\/api\/profiles\/([^/]+)\/(inventory|inventory-action|market|halloween)$/);
+  const m = pathname.match(/^\/api\/profiles\/([^/]+)\/(inventory|inventory-action|market|halloween|autosell)$/);
   if (!m) return false;
   const [, id, kind] = m;
   const profiles = loadProfiles();
   const profile = profiles.find(p => p.id === id);
-  if (!profile || !profile.debugPort) {
+  if (!profile) {
+    sendJSON({ success: false, error: 'ไม่พบโปรไฟล์นี้' }, 404);
+    return true;
+  }
+
+  if (kind === 'autosell') {
+    const buildOtherProfilesMeta = () => profiles
+      .filter(p => p && p.id && p.id !== id)
+      .map(p => {
+        const stored = loadProfileAutoSellStore(p.id);
+        return {
+          id: p.id,
+          name: p.name || p.id,
+          charName: p.lastCharName || '',
+          account: p.account || '',
+          online: Boolean(p.debugPort),
+          rulesCount: (stored.rules || []).length,
+          enabled: Boolean(stored.enabled)
+        };
+      });
+
+    if (req.method === 'GET') {
+      if (profile.debugPort) {
+        try {
+          const r = await evalProfilePort(profile.debugPort, buildAutoSellReadCode(), 4500);
+          if (r && r.result && r.result.success && r.result.config) {
+            saveProfileAutoSellStore(id, r.result.config);
+            sendJSON(Object.assign({}, r.result, {
+              offline: false,
+              otherProfiles: buildOtherProfilesMeta()
+            }));
+            return true;
+          }
+        } catch (_) {}
+      }
+      const fallbackCfg = loadProfileAutoSellStore(id);
+      sendJSON({
+        success: true,
+        offline: true,
+        config: fallbackCfg,
+        ruleStates: {},
+        activeCount: 0,
+        maxListings: Number(fallbackCfg.maxActiveListings) || 8,
+        isBotRunning: false,
+        bagItemsSummary: [],
+        otherProfiles: buildOtherProfilesMeta()
+      });
+      return true;
+    }
+
+    if (req.method === 'POST') {
+      const payload = await readBody(req);
+      if (!payload) {
+        sendJSON({ success: false, error: 'Invalid JSON' }, 400);
+        return true;
+      }
+      const op = payload.op || 'save';
+
+      if (op === 'save') {
+        const cleanCfg = saveProfileAutoSellStore(id, payload.config || payload);
+        if (profile.debugPort) {
+          try {
+            const r = await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg), 4500);
+            if (r && r.result && r.result.success) {
+              sendJSON(Object.assign({}, r.result, {
+                offline: false,
+                otherProfiles: buildOtherProfilesMeta()
+              }));
+              return true;
+            }
+          } catch (_) {}
+        }
+        sendJSON({
+          success: true,
+          offline: true,
+          config: cleanCfg,
+          ruleStates: {},
+          activeCount: 0,
+          maxListings: Number(cleanCfg.maxActiveListings) || 8,
+          isBotRunning: false,
+          bagItemsSummary: [],
+          otherProfiles: buildOtherProfilesMeta()
+        });
+        return true;
+      }
+
+      if (op === 'sell_rule_now') {
+        if (!profile.debugPort) {
+          sendJSON({ success: false, error: 'จอนี้ออฟไลน์อยู่ ไม่สามารถสั่งขายทันทีได้' }, 400);
+          return true;
+        }
+        if (payload.config) {
+          const cleanCfg = saveProfileAutoSellStore(id, payload.config);
+          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg), 4000).catch(() => {});
+        }
+        const ruleId = String(payload.ruleId || '').trim();
+        const sellCode = `(async () => {
+          if (typeof window.sellSingleRuleNow !== 'function') return { success: false, error: 'ไม่พบฟังก์ชัน sellSingleRuleNow ในเกม' };
+          await window.sellSingleRuleNow(${JSON.stringify(ruleId)});
+          return (${buildAutoSellReadCode()});
+        })()`;
+        const r = await evalProfilePort(profile.debugPort, sellCode, 15000);
+        sendJSON(r && r.result ? Object.assign({}, r.result, { otherProfiles: buildOtherProfilesMeta() }) : { success: false, error: r?.error || 'สั่งขายทันทีไม่สำเร็จ' });
+        return true;
+      }
+
+      if (op === 'check_now') {
+        if (!profile.debugPort) {
+          sendJSON({ success: false, error: 'จอนี้ออฟไลน์อยู่ ไม่สามารถตรวจสอบกระเป๋าทันทีได้' }, 400);
+          return true;
+        }
+        if (payload.config) {
+          const cleanCfg = saveProfileAutoSellStore(id, payload.config);
+          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg), 4000).catch(() => {});
+        }
+        const checkCode = `(async () => {
+          if (typeof window.runAutoMarketSellCycle === 'function') {
+            await window.runAutoMarketSellCycle(true);
+          }
+          return (${buildAutoSellReadCode()});
+        })()`;
+        const r = await evalProfilePort(profile.debugPort, checkCode, 20000);
+        sendJSON(r && r.result ? Object.assign({}, r.result, { otherProfiles: buildOtherProfilesMeta() }) : { success: false, error: r?.error || 'ตรวจสอบกระเป๋าไม่สำเร็จ' });
+        return true;
+      }
+
+      if (op === 'copy_to') {
+        const sourceCfg = payload.config
+          ? saveProfileAutoSellStore(id, payload.config)
+          : loadProfileAutoSellStore(id);
+        if (profile.debugPort && payload.config) {
+          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(sourceCfg), 3500).catch(() => {});
+        }
+        const mode = payload.mode === 'merge' ? 'merge' : 'replace';
+        const copyEnabled = payload.copyEnabled !== false;
+        const rawTargetIds = payload.targetIds === 'all'
+          ? profiles.filter(p => p && p.id && p.id !== id).map(p => p.id)
+          : (Array.isArray(payload.targetIds) ? payload.targetIds.map(String) : []);
+        const targetIdSet = new Set(rawTargetIds.filter(tid => tid && tid !== id));
+        const targets = profiles.filter(p => p && targetIdSet.has(p.id));
+        if (targets.length === 0) {
+          sendJSON({ success: false, error: 'กรุณาเลือกจอปลายทางอย่างน้อย 1 จอ' }, 400);
+          return true;
+        }
+
+        let appliedOnline = 0;
+        let savedOffline = 0;
+        await Promise.all(targets.map(async (tp) => {
+          const existing = loadProfileAutoSellStore(tp.id);
+          let nextRules;
+          if (mode === 'merge') {
+            const byName = new Map();
+            (existing.rules || []).forEach(r => {
+              if (!r || !r.itemName) return;
+              byName.set(r.itemName.trim().toLowerCase(), Object.assign({}, r));
+            });
+            (sourceCfg.rules || []).forEach((r, idx) => {
+              if (!r || !r.itemName) return;
+              const k = r.itemName.trim().toLowerCase();
+              if (byName.has(k)) {
+                const prev = byName.get(k);
+                prev.minQty = r.minQty;
+                prev.sellMode = r.sellMode;
+                prev.enabled = r.enabled !== false;
+              } else {
+                byName.set(k, {
+                  id: `rule_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+                  itemName: r.itemName.trim(),
+                  minQty: r.minQty,
+                  sellMode: r.sellMode,
+                  enabled: r.enabled !== false
+                });
+              }
+            });
+            nextRules = Array.from(byName.values());
+          } else {
+            nextRules = (sourceCfg.rules || []).map((r, idx) => ({
+              id: `rule_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+              itemName: String(r.itemName || '').trim(),
+              minQty: Math.max(1, Number(r.minQty) || 1),
+              sellMode: r.sellMode === 'min' ? 'min' : 'all',
+              enabled: r.enabled !== false
+            }));
+          }
+
+          const targetCfg = saveProfileAutoSellStore(tp.id, {
+            enabled: copyEnabled ? Boolean(sourceCfg.enabled) : Boolean(existing.enabled),
+            priceStrategy: sourceCfg.priceStrategy || 'median',
+            checkIntervalSec: sourceCfg.checkIntervalSec || 25,
+            maxActiveListings: sourceCfg.maxActiveListings || 10,
+            rules: nextRules
+          });
+
+          if (tp.debugPort) {
+            try {
+              const r = await evalProfilePort(tp.debugPort, buildAutoSellSaveCode(targetCfg), 4000);
+              if (r && r.result && r.result.success) {
+                appliedOnline++;
+                return;
+              }
+            } catch (_) {}
+          }
+          savedOffline++;
+        }));
+
+        sendJSON({
+          success: true,
+          totalTargets: targets.length,
+          appliedOnline,
+          savedOffline,
+          rulesCount: (sourceCfg.rules || []).length,
+          otherProfiles: buildOtherProfilesMeta()
+        });
+        return true;
+      }
+
+      sendJSON({ success: false, error: 'ไม่รู้จักคำสั่ง autosell: ' + op }, 400);
+      return true;
+    }
+    return false;
+  }
+
+  if (!profile.debugPort) {
     sendJSON({ success: false, error: 'จอนี้ออฟไลน์อยู่' }, 400);
     return true;
   }

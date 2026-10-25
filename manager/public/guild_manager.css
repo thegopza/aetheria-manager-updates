@@ -829,3 +829,145 @@ body.gd-open #gd-drawer {
   padding: 8px 14px;
   font-size: 12.5px;
 }
+
+/* Per-Card Zeny Bar & Zeny Donation Modal */
+.gd-card-zeny-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  margin-top: 2px;
+  border-radius: 8px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.28);
+}
+.gd-card-zeny-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.gd-zeny-submit-btn {
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.gd-preset-btn.is-active {
+  border-color: #facc15;
+  color: #111827;
+  background: #facc15;
+}
+.gd-preset-lv {
+  border-color: rgba(52, 211, 153, 0.5);
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.14);
+}
+.gd-preset-lv:hover {
+  border-color: #34d399;
+  color: #ecfdf5;
+  background: rgba(16, 185, 129, 0.28);
+}
+.gd-zeny-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.gd-zeny-pill {
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #fde047;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  white-space: nowrap;
+}
+
+.gd-zeny-modal-body {
+  padding: 14px;
+  gap: 11px;
+}
+.gd-zeny-char-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+.gd-zeny-char-meta {
+  flex: 1;
+  min-width: 0;
+}
+.gd-zeny-char-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13.5px;
+  color: #f9fafb;
+  flex-wrap: wrap;
+}
+.gd-zeny-char-sub {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.gd-gold-text {
+  color: #fde047;
+}
+.gd-exp-text {
+  color: #34d399;
+}
+.gd-zeny-modal-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.gd-zeny-modal-input {
+  font-family: var(--font-mono, monospace);
+  font-size: 15px;
+  font-weight: 700;
+  color: #fef08a;
+  padding-right: 54px;
+}
+.gd-zeny-unit {
+  position: absolute;
+  right: 12px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #9ca3af;
+  pointer-events: none;
+}
+.gd-zeny-modal-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.gd-zeny-modal-presets .gd-preset-btn {
+  padding: 5px 9px;
+  font-size: 11.5px;
+}
+.gd-zeny-preview-box {
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.32);
+  font-size: 12px;
+  color: #e5e7eb;
+  line-height: 1.5;
+}
+.gd-preview-sub {
+  font-size: 11px;
+  color: #9ca3af;
+  margin-top: 2px;
+}
+.gd-preview-warn {
+  color: #fca5a5;
+  font-weight: 600;
+}

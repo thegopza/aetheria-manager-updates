@@ -8,11 +8,66 @@
 
 (function () {
   const POLL_MS = 4500;
+  const ZENY_CFG_KEY = 'pelican_guild_zeny_cfg';
   let isOpen = false;
   let pollTimer = null;
   let lastData = { autoDonate: true, guilds: [], availableProfiles: [], allProfiles: [] };
   let createModalState = null; // { selectedLeaderId: string|null, guildName: string, autoFill: boolean, autoDonate: boolean }
   let memberPickerState = null; // { guildId: string }
+  let zenyModalState = null; // { profileId: string|null, guildId: string|null, scope: string|null, amount: number, donateAll: boolean, keepZeny: number }
+
+  function loadZenyCfg() {
+    try {
+      const raw = localStorage.getItem(ZENY_CFG_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        return {
+          amount: Math.max(10000, Math.floor((Number(parsed.amount) || 10000) / 10000) * 10000),
+          donateAll: Boolean(parsed.donateAll),
+          keepZeny: Math.max(0, Math.floor(Number(parsed.keepZeny) || 0))
+        };
+      }
+    } catch (_) {}
+    return { amount: 10000, donateAll: false, keepZeny: 0 };
+  }
+
+  let zenyCfg = loadZenyCfg();
+
+  function saveZenyCfg(patch = {}) {
+    if (patch.amount !== undefined) {
+      const n = Math.floor(Number(patch.amount) || 0);
+      if (n >= 10000) zenyCfg.amount = Math.floor(n / 10000) * 10000;
+    }
+    if (patch.donateAll !== undefined) {
+      zenyCfg.donateAll = Boolean(patch.donateAll);
+    }
+    if (patch.keepZeny !== undefined) {
+      zenyCfg.keepZeny = Math.max(0, Math.floor(Number(patch.keepZeny) || 0));
+    }
+    try {
+      localStorage.setItem(ZENY_CFG_KEY, JSON.stringify(zenyCfg));
+    } catch (_) {}
+    syncZenyInputsDOM();
+  }
+
+  function syncZenyInputsDOM(excludeEl = null) {
+    const drawer = document.getElementById('gd-drawer');
+    if (!drawer) return;
+    drawer.querySelectorAll('.js-gd-zeny-amount').forEach(inp => {
+      if (inp === excludeEl || document.activeElement === inp) return;
+      inp.value = String(zenyCfg.amount);
+      inp.disabled = zenyCfg.donateAll;
+    });
+    drawer.querySelectorAll('.js-gd-zeny-keep').forEach(inp => {
+      if (inp === excludeEl || document.activeElement === inp) return;
+      inp.value = String(zenyCfg.keepZeny);
+    });
+    drawer.querySelectorAll('[data-zeny-preset]').forEach(btn => {
+      const val = btn.dataset.zenyPreset;
+      const isActive = (val === 'all' && zenyCfg.donateAll) || (!zenyCfg.donateAll && Number(val) === zenyCfg.amount);
+      btn.classList.toggle('is-active', isActive);
+    });
+  }
 
   function esc(s) {
     return String(s ?? '').replace(/[&<>"']/g, c => ({
@@ -74,21 +129,22 @@
           <button type="button" class="gd-mini-btn gd-mini-btn-gold" id="gd-donate-all-items-btn" title="สั่งเช็กและบังคับบริจาคไอเทมรายวันทุกจอที่มีกิลด์ทันที">🎁 บังคับบริจาคของทุกจอ</button>
         </div>
         <div class="gd-zeny-bar" id="gd-zeny-bar">
-          <span class="gd-zeny-title">💰 บังคับบริจาคเงินเข้ากิลด์:</span>
+          <span class="gd-zeny-title">💰 ตั้งค่าบริจาคเงินเข้ากิลด์:</span>
           <label class="gd-zeny-field" title="จำนวนเงิน Zeny ที่จะสั่งบริจาคต่อจอ (ขั้นต่ำ 10,000z · ทุก 10,000z = 1 EXP/แต้มกิลด์)">
             <span>จำนวน/จอ</span>
-            <input type="number" id="gd-zeny-amount" class="gd-zeny-input" min="10000" step="10000" value="10000">
+            <input type="number" id="gd-zeny-amount" class="gd-zeny-input js-gd-zeny-amount" min="10000" step="10000" value="${zenyCfg.amount}" ${zenyCfg.donateAll ? 'disabled' : ''}>
           </label>
           <div class="gd-zeny-presets">
-            <button type="button" class="gd-preset-btn" data-zeny-preset="10000">10k</button>
-            <button type="button" class="gd-preset-btn" data-zeny-preset="50000">50k</button>
-            <button type="button" class="gd-preset-btn" data-zeny-preset="100000">100k</button>
-            <button type="button" class="gd-preset-btn" data-zeny-preset="500000">500k</button>
-            <button type="button" class="gd-preset-btn" data-zeny-preset="1000000">1M</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 10000 ? 'is-active' : ''}" data-zeny-preset="10000">10k</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 50000 ? 'is-active' : ''}" data-zeny-preset="50000">50k</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 100000 ? 'is-active' : ''}" data-zeny-preset="100000">100k</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 500000 ? 'is-active' : ''}" data-zeny-preset="500000">500k</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 1000000 ? 'is-active' : ''}" data-zeny-preset="1000000">1M</button>
+            <button type="button" class="gd-preset-btn ${zenyCfg.donateAll ? 'is-active' : ''}" data-zeny-preset="all" title="บริจาคเงินทั้งหมดในตัวหลังหักเงินสำรอง">ทั้งหมด</button>
           </div>
           <label class="gd-zeny-field" title="เก็บเงินสำรองติดตัวไว้ขั้นต่ำ (Zeny) จะไม่ดึงเงินส่วนนี้ไปบริจาค">
             <span>เหลือติดตัว</span>
-            <input type="number" id="gd-zeny-keep" class="gd-zeny-input gd-zeny-keep" min="0" step="10000" value="0">
+            <input type="number" id="gd-zeny-keep" class="gd-zeny-input gd-zeny-keep js-gd-zeny-keep" min="0" step="10000" value="${zenyCfg.keepZeny}">
           </label>
           <button type="button" class="gd-mini-btn gd-mini-btn-gold" id="gd-donate-zeny-all-btn" title="บังคับบริจาคเงินเข้ากิลด์เรียงตัวทุกหน้าจอที่มีกิลด์ในเกม">💰 บริจาคเงินทุกจอ (เรียงตัว)</button>
         </div>
@@ -113,10 +169,22 @@
     });
     document.getElementById('gd-donate-all-items-btn')?.addEventListener('click', onDonateAllItemsNow);
     document.getElementById('gd-donate-zeny-all-btn')?.addEventListener('click', () => onDonateZenyBatch({ scope: 'all' }, document.getElementById('gd-donate-zeny-all-btn')));
-    drawer.querySelectorAll('[data-zeny-preset]').forEach(btn => {
+    const masterAmtInput = document.getElementById('gd-zeny-amount');
+    const masterKeepInput = document.getElementById('gd-zeny-keep');
+    masterAmtInput?.addEventListener('input', () => {
+      saveZenyCfg({ amount: masterAmtInput.value, donateAll: false });
+    });
+    masterKeepInput?.addEventListener('input', () => {
+      saveZenyCfg({ keepZeny: masterKeepInput.value });
+    });
+    drawer.querySelectorAll('#gd-zeny-bar [data-zeny-preset]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const inp = document.getElementById('gd-zeny-amount');
-        if (inp) inp.value = String(Number(btn.dataset.zenyPreset || 10000));
+        const preset = btn.dataset.zenyPreset;
+        if (preset === 'all') {
+          saveZenyCfg({ donateAll: !zenyCfg.donateAll });
+        } else {
+          saveZenyCfg({ amount: Number(preset || 10000), donateAll: false });
+        }
       });
     });
     document.getElementById('gd-picker').addEventListener('click', (e) => {
@@ -207,12 +275,13 @@
     return '';
   }
 
-  function getZenyInputs() {
-    const amtEl = document.getElementById('gd-zeny-amount');
-    const keepEl = document.getElementById('gd-zeny-keep');
-    const amount = Math.max(10000, Math.floor((Number(amtEl && amtEl.value) || 10000) / 10000) * 10000);
-    const keepZeny = Math.max(0, Math.floor(Number(keepEl && keepEl.value) || 0));
-    return { amount, keepZeny };
+  function getZenyInputs(cardEl = null) {
+    const amtEl = (cardEl && cardEl.querySelector('.js-gd-zeny-amount')) || document.getElementById('gd-zeny-amount');
+    const keepEl = (cardEl && cardEl.querySelector('.js-gd-zeny-keep')) || document.getElementById('gd-zeny-keep');
+    const rawAmt = Math.max(10000, Math.floor((Number(amtEl && amtEl.value) || zenyCfg.amount || 10000) / 10000) * 10000);
+    const keepZeny = Math.max(0, Math.floor(Number(keepEl && keepEl.value) ?? zenyCfg.keepZeny ?? 0));
+    const amount = zenyCfg.donateAll ? 'all' : rawAmt;
+    return { amount, rawAmt, keepZeny };
   }
 
   async function onDonateAllItemsNow(e) {
@@ -239,8 +308,11 @@
     }
   }
 
-  async function onDonateZenyBatch(payload, btn) {
-    const { amount, keepZeny } = getZenyInputs();
+  async function onDonateZenyBatch(payload, btn, overrideAmount = undefined, overrideKeep = undefined) {
+    const cardEl = btn ? btn.closest('.gd-card') : null;
+    const defaults = getZenyInputs(cardEl);
+    const amount = overrideAmount !== undefined ? overrideAmount : defaults.amount;
+    const keepZeny = overrideKeep !== undefined ? overrideKeep : defaults.keepZeny;
     const orig = btn ? btn.textContent : '';
     if (btn) {
       btn.disabled = true;
@@ -256,8 +328,10 @@
           showToast(`ℹ️ ${firstReason}`, true);
         }
       }
+      return res;
     } catch (err) {
       if (typeof showToast === 'function') showToast(err.message, true);
+      throw err;
     } finally {
       if (btn) {
         btn.disabled = false;
@@ -266,17 +340,59 @@
     }
   }
 
+  function renderCardZenyBar(guildOrNull, scopeType) {
+    const g = guildOrNull;
+    const neededExp = g && g.guildExpToNext && g.guildExpToNext > (g.guildExp || 0)
+      ? Math.max(0, Number(g.guildExpToNext) - Number(g.guildExp || 0))
+      : 0;
+    const neededZeny = neededExp > 0 ? neededExp * 10000 : 0;
+    const actionAttr = scopeType === 'guild'
+      ? `data-act="donate-zeny-guild" data-guild="${esc(g.id)}"`
+      : `data-act="donate-zeny-external"`;
+    const btnLabel = scopeType === 'guild'
+      ? '💰 บริจาคเงินกิลด์นี้ (เรียงตัว)'
+      : '💰 บริจาคเงินกิลด์นอก (เรียงตัว)';
+
+    return `
+      <div class="gd-card-zeny-bar">
+        <div class="gd-card-zeny-controls">
+          <span class="gd-zeny-title">💰 ระบุเงินบริจาค/จอ:</span>
+          <label class="gd-zeny-field" title="ระบุจำนวนเงิน Zeny ที่ต้องการบริจาคต่อตัวละคร (ขั้นต่ำ 10,000z · ทุก 10,000z = +1 EXP/แต้มกิลด์)">
+            <input type="number" class="gd-zeny-input js-gd-zeny-amount" min="10000" step="10000" value="${zenyCfg.amount}" ${zenyCfg.donateAll ? 'disabled' : ''}>
+            <span>z</span>
+          </label>
+          <div class="gd-zeny-presets">
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 10000 ? 'is-active' : ''}" data-zeny-preset="10000">10k</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 50000 ? 'is-active' : ''}" data-zeny-preset="50000">50k</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 100000 ? 'is-active' : ''}" data-zeny-preset="100000">100k</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 500000 ? 'is-active' : ''}" data-zeny-preset="500000">500k</button>
+            <button type="button" class="gd-preset-btn ${!zenyCfg.donateAll && zenyCfg.amount === 1000000 ? 'is-active' : ''}" data-zeny-preset="1000000">1M</button>
+            ${neededZeny > 0 ? `<button type="button" class="gd-preset-btn gd-preset-lv ${!zenyCfg.donateAll && zenyCfg.amount === neededZeny ? 'is-active' : ''}" data-zeny-preset="${neededZeny}" title="จำนวนเงินที่ต้องใช้เพื่ออัปเลเวลกิลด์ถัดไปพอดี (+${neededExp} EXP = ${neededZeny.toLocaleString()}z)">⚡ พอดีอัป Lv. (${neededZeny >= 1000000 ? (neededZeny / 1000000).toFixed(neededZeny % 1000000 === 0 ? 0 : 2) + 'M' : (neededZeny / 1000) + 'k'})</button>` : ''}
+            <button type="button" class="gd-preset-btn ${zenyCfg.donateAll ? 'is-active' : ''}" data-zeny-preset="all" title="บริจาคเงินทั้งหมดในตัวหลังหักเงินสำรอง">ทั้งหมด</button>
+          </div>
+          <label class="gd-zeny-field" title="เก็บเงินสำรองติดตัวไว้ขั้นต่ำ (Zeny)">
+            <span>เหลือติดตัว</span>
+            <input type="number" class="gd-zeny-input gd-zeny-keep js-gd-zeny-keep" min="0" step="10000" value="${zenyCfg.keepZeny}">
+          </label>
+        </div>
+        <button type="button" class="gd-mini-btn gd-mini-btn-gold gd-zeny-submit-btn" ${actionAttr} title="สั่งบริจาคเงินเข้ากิลด์เรียงตัวตามจำนวนที่ระบุ">
+          ${btnLabel}
+        </button>
+      </div>
+    `;
+  }
+
   function renderMemberRow(m, guildId, isLeader, isExternal = false) {
     const charLabel = m.charName ? esc(m.charName) : `<span class="gd-dim">(ยังไม่เข้าเกม)</span>`;
     const subParts = [esc(m.name)];
     if (m.level) subParts.push(`Lv.${m.level}`);
     if (m.charClass) subParts.push(esc(m.charClass));
-    if (m.zeny !== null && m.zeny !== undefined) {
-      subParts.push(`💰 ${Number(m.zeny).toLocaleString()}z`);
-    }
     if (m.myPoints) {
       subParts.push(`⭐ ${Number(m.myPoints).toLocaleString()} แต้ม`);
     }
+    const zenyBadge = (m.zeny !== null && m.zeny !== undefined)
+      ? `<span class="gd-zeny-pill" title="เงิน Zeny ในตัวละครนี้">💰 ${Number(m.zeny).toLocaleString()}z</span>`
+      : '';
     const statusText = m.lastAction ? esc(m.lastAction) : (m.online ? 'ออนไลน์' : 'ออฟไลน์');
     const roleTag = isExternal
       ? `<span class="gd-ext-guild-badge" title="ตัวละครนี้สังกัดกิลด์ในเกมแล้ว (กิลด์คนอื่น / นอกรายการสร้างกิลด์)">🏰 ${esc(m.inGameGuildName || 'มีกิลด์')}${m.inGameGuildLevel ? ` Lv.${m.inGameGuildLevel}` : ''}</span>`
@@ -290,6 +406,7 @@
             <span class="gd-online-dot ${m.online ? 'on' : 'off'}" title="${m.online ? 'ออนไลน์ในเกม' : 'ออฟไลน์'}"></span>
             <span class="gd-char-name">${charLabel}</span>
             ${roleTag}
+            ${zenyBadge}
             ${renderDonationBadge(m)}
           </div>
           <div class="gd-slot-sub">${subParts.join(' · ')}</div>
@@ -301,7 +418,7 @@
             <span>🎁 บริจาคของ</span>
           </label>
           <button type="button" class="gd-mini-btn" data-act="donate-item-profile" data-profile="${esc(m.id)}" ${(!m.online || !m.inGameGuildName || m.donatedToday) ? 'disabled' : ''} title="สั่งบริจาคของรายวันเฉพาะตัวละครนี้ทันที">🎁</button>
-          <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-zeny-profile" data-profile="${esc(m.id)}" ${(!m.online || !m.inGameGuildName || (m.zeny || 0) < 10000) ? 'disabled' : ''} title="สั่งบริจาคเงินเข้ากิลด์เฉพาะตัวละครนี้ทันที (ตามจำนวนเงินด้านบน)">💰 บริจาคเงิน</button>
+          <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-zeny-profile" data-profile="${esc(m.id)}" data-guild="${esc(guildId || '')}" ${(!m.online || !m.inGameGuildName || (m.zeny || 0) < 10000) ? 'disabled' : ''} title="คลิกเพื่อระบุจำนวนเงิน Zeny ที่ต้องการบริจาคของตัวละครนี้">💰 บริจาคเงิน</button>
           ${!isExternal
             ? (isLeader
               ? `<button type="button" class="gd-icon-btn" data-act="change-leader" data-guild="${esc(guildId)}" title="เปลี่ยนหัวกิลด์">🔄</button>`
@@ -313,7 +430,7 @@
     `;
   }
 
-  function render() {
+  function render(forceDom = false) {
     const countEl = document.getElementById('gd-tab-count');
     const guilds = lastData.guilds || [];
     const externalProfiles = lastData.externalGuildProfiles || [];
@@ -330,6 +447,11 @@
 
     const body = document.getElementById('gd-body');
     if (!body) return;
+
+    // Avoid clobbering focused input fields inside #gd-body during background polling
+    if (!forceDom && body.contains(document.activeElement) && document.activeElement && document.activeElement.tagName === 'INPUT') {
+      return;
+    }
 
     if (guilds.length === 0 && externalProfiles.length === 0) {
       body.innerHTML = `
@@ -380,8 +502,8 @@
               </label>
               <button type="button" class="gd-mini-btn" data-act="trigger-autofill" data-guild="${esc(g.id)}" title="ดึงตัวละครที่ว่างทุกจอเข้ากิลด์นี้ทันที">⚡ ดึงคนว่างเข้ากิลด์</button>
               <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="trigger-donate" data-guild="${esc(g.id)}" title="สั่งเช็กและบริจาคไอเทมรายวันทันที">🎁 บริจาคของกิลด์นี้</button>
-              <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-zeny-guild" data-guild="${esc(g.id)}" title="บังคับบริจาคเงินเข้ากิลด์นี้เรียงตัวทุกจอ">💰 บริจาคเงินกิลด์นี้ (เรียงตัว)</button>
             </div>
+            ${renderCardZenyBar(g, 'guild')}
           </div>
 
           <div class="gd-section-label">หัวกิลด์ (Guild Master)</div>
@@ -419,8 +541,8 @@
                 <span>🎁 บริจาคของออโต้ทั้งหมด</span>
               </label>
               <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-item-external" title="สั่งบริจาคของรายวันเฉพาะตัวละครที่สังกัดกิลด์นอกทันที">🎁 บริจาคของกิลด์นอกตอนนี้</button>
-              <button type="button" class="gd-mini-btn gd-mini-btn-gold" data-act="donate-zeny-external" title="บังคับบริจาคเงินเรียงตัวเฉพาะตัวละครที่สังกัดกิลด์นอก">💰 บริจาคเงินกิลด์นอก (เรียงตัว)</button>
             </div>
+            ${renderCardZenyBar(null, 'external')}
           </div>
           <div class="gd-section-label">รายชื่อตัวละครที่มีกิลด์ในเกม — เลือกติ๊กบริจาคของรายตัว หรือกดบังคับบริจาคเงินได้ทันที</div>
           <div class="gd-members-list">
@@ -436,6 +558,26 @@
   }
 
   function bindCardEvents(root) {
+    root.querySelectorAll('.js-gd-zeny-amount').forEach(inp => {
+      inp.addEventListener('input', () => {
+        saveZenyCfg({ amount: inp.value, donateAll: false });
+      });
+    });
+    root.querySelectorAll('.js-gd-zeny-keep').forEach(inp => {
+      inp.addEventListener('input', () => {
+        saveZenyCfg({ keepZeny: inp.value });
+      });
+    });
+    root.querySelectorAll('[data-zeny-preset]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const preset = btn.dataset.zenyPreset;
+        if (preset === 'all') {
+          saveZenyCfg({ donateAll: !zenyCfg.donateAll });
+        } else {
+          saveZenyCfg({ amount: Number(preset || 10000), donateAll: false });
+        }
+      });
+    });
     root.querySelectorAll('[data-act]').forEach(el => {
       const act = el.dataset.act;
       const guildId = el.dataset.guild;
@@ -444,7 +586,7 @@
           const val = el.value.trim();
           if (val.length < 2 || val.length > 16) {
             if (typeof showToast === 'function') showToast('ชื่อกิลด์ต้องมีความยาว 2–16 ตัวอักษร', true);
-            render();
+            render(true);
             return;
           }
           try {
@@ -543,7 +685,7 @@
               el.textContent = orig;
             }
           } else if (act === 'donate-zeny-profile') {
-            await onDonateZenyBatch({ profileId: el.dataset.profile }, el);
+            openZenyDonateModal(el.dataset.profile, el.dataset.guild || null);
           } else if (act === 'donate-zeny-guild') {
             await onDonateZenyBatch({ guildId }, el);
           } else if (act === 'donate-zeny-external') {
@@ -572,6 +714,206 @@
           if (typeof showToast === 'function') showToast(err.message, true);
         }
       });
+    });
+  }
+
+  function findProfileInfo(profileId) {
+    const all = lastData.allProfiles || [];
+    const found = all.find(p => String(p.id) === String(profileId));
+    if (found) return found;
+    for (const g of (lastData.guilds || [])) {
+      if (g.leader && String(g.leader.id) === String(profileId)) return g.leader;
+      const m = (g.members || []).find(x => String(x.id) === String(profileId));
+      if (m) return m;
+    }
+    return (lastData.externalGuildProfiles || []).find(x => String(x.id) === String(profileId)) || null;
+  }
+
+  // Modal 3: Specify Zeny Donation Amount for a Character
+  function openZenyDonateModal(profileId, guildId = null) {
+    const prof = findProfileInfo(profileId);
+    if (!prof) return;
+    const g = guildId ? (lastData.guilds || []).find(x => x.id === guildId) : null;
+    zenyModalState = {
+      profileId: String(profileId),
+      guildId: guildId || null,
+      amount: zenyCfg.amount || 10000,
+      donateAll: Boolean(zenyCfg.donateAll),
+      keepZeny: zenyCfg.keepZeny || 0
+    };
+    renderZenyDonateModal(prof, g);
+  }
+
+  function renderZenyDonateModal(prof, g) {
+    if (!zenyModalState) return;
+    const overlay = document.getElementById('gd-picker');
+    const card = document.getElementById('gd-picker-card');
+    if (!overlay || !card) return;
+
+    const currentZeny = Math.max(0, Number(prof.zeny || 0));
+    const guildName = (g && (g.inGameName || g.name)) || prof.inGameGuildName || 'กิลด์';
+    const guildLv = (g && g.guildLevel) || prof.inGameGuildLevel || null;
+    const guildExp = (g && g.guildExp !== null && g.guildExp !== undefined) ? g.guildExp : prof.inGameGuildExp;
+    const guildExpToNext = (g && g.guildExpToNext) || prof.inGameGuildExpToNext || 0;
+    const neededExp = guildExpToNext > (guildExp || 0) ? Math.max(0, Number(guildExpToNext) - Number(guildExp || 0)) : 0;
+    const neededZeny = neededExp > 0 ? neededExp * 10000 : 0;
+
+    card.innerHTML = `
+      <div class="gd-picker-head">
+        <h3>💰 ระบุจำนวนเงินบริจาคเข้ากิลด์</h3>
+        <button type="button" class="gd-close" id="gd-picker-close">✕</button>
+      </div>
+      <div class="gd-create-form gd-zeny-modal-body">
+        <div class="gd-zeny-char-summary">
+          ${avatarHtml(prof)}
+          <div class="gd-zeny-char-meta">
+            <div class="gd-zeny-char-name">
+              <span class="gd-online-dot ${prof.online ? 'on' : 'off'}"></span>
+              <strong>${esc(prof.charName || prof.name)}</strong>
+              <span class="gd-ext-guild-badge">🏰 ${esc(guildName)}${guildLv ? ` Lv.${guildLv}` : ''}</span>
+            </div>
+            <div class="gd-zeny-char-sub">
+              <span>เงินในตัว: <b class="gd-gold-text">💰 ${currentZeny.toLocaleString()} Zeny</b></span>
+              ${prof.myPoints ? `<span>· แต้มสะสม: <b>⭐ ${Number(prof.myPoints).toLocaleString()}</b></span>` : ''}
+              ${neededExp > 0 ? `<span>· ขาดอีก <b>${neededExp.toLocaleString()} EXP</b> (${neededZeny.toLocaleString()}z) อัป Lv.${Number(guildLv || 1) + 1}</span>` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div class="gd-create-step-label">1. ระบุจำนวนเงิน Zeny ที่ต้องการบริจาค <span class="gd-hint-inline">(ขั้นต่ำ 10,000z · ทุก 10,000z = +1 EXP/แต้มกิลด์)</span></div>
+        <div class="gd-zeny-modal-input-wrap">
+          <input type="number" id="gd-modal-zeny-amount" class="gd-create-input gd-zeny-modal-input" min="10000" step="10000"
+            value="${zenyModalState.amount}" ${zenyModalState.donateAll ? 'disabled' : ''} placeholder="ใส่จำนวนเงิน เช่น 50000, 100000...">
+          <span class="gd-zeny-unit">Zeny</span>
+        </div>
+
+        <div class="gd-zeny-modal-presets">
+          <button type="button" class="gd-preset-btn" data-modal-preset="10000">10,000z (+1 EXP)</button>
+          <button type="button" class="gd-preset-btn" data-modal-preset="50000">50,000z (+5 EXP)</button>
+          <button type="button" class="gd-preset-btn" data-modal-preset="100000">100,000z (+10 EXP)</button>
+          <button type="button" class="gd-preset-btn" data-modal-preset="300000">300,000z (+30 EXP)</button>
+          <button type="button" class="gd-preset-btn" data-modal-preset="500000">500,000z (+50 EXP)</button>
+          <button type="button" class="gd-preset-btn" data-modal-preset="1000000">1,000,000z (+100 EXP)</button>
+          ${neededZeny > 0 ? `<button type="button" class="gd-preset-btn gd-preset-lv" data-modal-preset="${neededZeny}">⚡ พอดีอัป Lv. (${neededZeny.toLocaleString()}z)</button>` : ''}
+          <button type="button" class="gd-preset-btn gd-preset-all ${zenyModalState.donateAll ? 'is-active' : ''}" data-modal-preset="all">🔥 บริจาคทั้งหมดในตัว</button>
+        </div>
+
+        <div class="gd-create-step-label">2. เงินสำรองเหลือติดตัวขั้นต่ำ (Keep Zeny) <span class="gd-hint-inline">(ระบบจะไม่ดึงเงินส่วนนี้ไปบริจาค)</span></div>
+        <div class="gd-zeny-modal-input-wrap">
+          <input type="number" id="gd-modal-zeny-keep" class="gd-create-input" min="0" step="10000" value="${zenyModalState.keepZeny}" placeholder="0">
+          <span class="gd-zeny-unit">Zeny</span>
+        </div>
+
+        <div class="gd-zeny-preview-box" id="gd-modal-zeny-preview"></div>
+
+        <div class="gd-create-footer">
+          <button type="button" class="gd-btn gd-btn-ghost" id="gd-zeny-modal-cancel">ยกเลิก</button>
+          <button type="button" class="gd-btn gd-btn-primary gd-btn-confirm" id="gd-zeny-modal-confirm">
+            💰 ยืนยันบริจาคเงิน
+          </button>
+        </div>
+      </div>
+    `;
+
+    overlay.hidden = false;
+
+    const amtInput = card.querySelector('#gd-modal-zeny-keep') ? card.querySelector('#gd-modal-zeny-amount') : null;
+    const keepInput = card.querySelector('#gd-modal-zeny-keep');
+    const previewEl = card.querySelector('#gd-modal-zeny-preview');
+    const confirmBtn = card.querySelector('#gd-zeny-modal-confirm');
+
+    const updatePreview = () => {
+      const keep = Math.max(0, Math.floor(Number(keepInput ? keepInput.value : 0) || 0));
+      const spendable = Math.max(0, currentZeny - keep);
+      const maxDonatable = Math.floor(spendable / 10000) * 10000;
+      const reqAmt = zenyModalState.donateAll
+        ? maxDonatable
+        : Math.floor(Math.max(0, Number(amtInput ? amtInput.value : 0) || 0) / 10000) * 10000;
+      const finalAmt = Math.min(reqAmt, maxDonatable);
+      const expGain = Math.floor(finalAmt / 10000);
+      const remainZeny = Math.max(0, currentZeny - finalAmt);
+
+      card.querySelectorAll('[data-modal-preset]').forEach(b => {
+        const p = b.dataset.modalPreset;
+        const active = (p === 'all' && zenyModalState.donateAll) || (!zenyModalState.donateAll && Number(p) === reqAmt);
+        b.classList.toggle('is-active', active);
+      });
+
+      if (finalAmt < 10000) {
+        previewEl.innerHTML = `<span class="gd-preview-warn">⚠️ เงินที่บริจาคได้หลังหักเงินสำรองมีไม่ถึง 10,000 Zeny (มีให้ใช้ ${spendable.toLocaleString()}z)</span>`;
+        if (confirmBtn) confirmBtn.disabled = true;
+      } else {
+        previewEl.innerHTML = `
+          <div>จะบริจาคจริง: <b class="gd-gold-text">${finalAmt.toLocaleString()} Zeny</b> → ได้รับ <b class="gd-exp-text">+${expGain.toLocaleString()} EXP / แต้มกิลด์</b></div>
+          <div class="gd-preview-sub">คงเหลือติดตัวหลังบริจาค: <b>${remainZeny.toLocaleString()} Zeny</b></div>
+        `;
+        if (confirmBtn) confirmBtn.disabled = false;
+      }
+    };
+
+    updatePreview();
+
+    if (amtInput && !zenyModalState.donateAll) {
+      setTimeout(() => {
+        amtInput.focus();
+        amtInput.select();
+      }, 30);
+    }
+
+    card.querySelector('#gd-picker-close')?.addEventListener('click', closePicker);
+    card.querySelector('#gd-zeny-modal-cancel')?.addEventListener('click', closePicker);
+
+    amtInput?.addEventListener('input', () => {
+      zenyModalState.donateAll = false;
+      zenyModalState.amount = Math.max(0, Number(amtInput.value) || 0);
+      updatePreview();
+    });
+    keepInput?.addEventListener('input', () => {
+      zenyModalState.keepZeny = Math.max(0, Number(keepInput.value) || 0);
+      updatePreview();
+    });
+
+    card.querySelectorAll('[data-modal-preset]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const val = btn.dataset.modalPreset;
+        if (val === 'all') {
+          zenyModalState.donateAll = !zenyModalState.donateAll;
+          if (amtInput) amtInput.disabled = zenyModalState.donateAll;
+        } else {
+          zenyModalState.donateAll = false;
+          zenyModalState.amount = Number(val || 10000);
+          if (amtInput) {
+            amtInput.disabled = false;
+            amtInput.value = String(zenyModalState.amount);
+          }
+        }
+        updatePreview();
+      });
+    });
+
+    const submitDonation = async () => {
+      if (!confirmBtn || confirmBtn.disabled) return;
+      const keep = Math.max(0, Math.floor(Number(keepInput ? keepInput.value : 0) || 0));
+      const rawAmt = Math.max(10000, Math.floor((Number(amtInput ? amtInput.value : zenyModalState.amount) || 10000) / 10000) * 10000);
+      const sendAmount = zenyModalState.donateAll ? 'all' : rawAmt;
+      saveZenyCfg({ amount: rawAmt, donateAll: zenyModalState.donateAll, keepZeny: keep });
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = '⏳ กำลังบริจาคเงิน...';
+      try {
+        await onDonateZenyBatch({ profileId: zenyModalState.profileId }, null, sendAmount, keep);
+        closePicker();
+      } catch (_) {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = '💰 ยืนยันบริจาคเงิน';
+      }
+    };
+
+    confirmBtn?.addEventListener('click', submitDonation);
+    amtInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submitDonation();
+      }
     });
   }
 
@@ -789,6 +1131,7 @@
   function closePicker() {
     createModalState = null;
     memberPickerState = null;
+    zenyModalState = null;
     const overlay = document.getElementById('gd-picker');
     if (overlay) overlay.hidden = true;
   }

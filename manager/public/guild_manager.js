@@ -185,9 +185,9 @@
           </div>
         </div>
         <div class="gd-header-actions">
-          <button type="button" class="gd-btn gd-btn-gold" id="gd-routine-settings-btn" title="ตั้งค่าซื้อของบริจาครายวันจากตลาด & เลือกแลกหินร้านค้ากิลด์ (Enchant Rune / Accessory Enchant Rune)">⚙️ ตั้งค่าบริจาค & แลกหิน</button>
-          <button type="button" class="gd-btn gd-btn-ghost" id="gd-sync-now" title="ซิงค์กิลด์และเช็กบริจาครายวันทันที">🔄 ซิงค์ตอนนี้</button>
-          <button type="button" class="gd-btn gd-btn-primary" id="gd-create-btn">+ สร้าง / ตั้งกิลด์</button>
+          <button type="button" class="gd-btn gd-btn-gold" id="gd-routine-settings-btn" title="ตั้งค่าซื้อของบริจาครายวันจากตลาด & เลือกแลกหินร้านค้ากิลด์ (Enchant Rune / Accessory Enchant Rune)">⚙️ ตั้งค่าแลกหิน</button>
+          <button type="button" class="gd-btn gd-btn-ghost" id="gd-sync-now" title="ซิงค์กิลด์และเช็กบริจาครายวันทันที">🔄 ซิงค์</button>
+          <button type="button" class="gd-btn gd-btn-primary" id="gd-create-btn">+ สร้างกิลด์</button>
           <button type="button" class="gd-close" id="gd-close-btn" title="ปิด">✕</button>
         </div>
       </header>
@@ -1022,14 +1022,13 @@
         </div>
 
         <div class="gd-zeny-preview-box" id="gd-rt-calc-preview"></div>
-
-        <div class="gd-create-footer">
-          <button type="button" class="gd-btn gd-btn-ghost" id="gd-rt-cancel">ยกเลิก</button>
-          <button type="button" class="gd-btn gd-btn-ghost" id="gd-rt-save">💾 บันทึกการตั้งค่า</button>
-          <button type="button" class="gd-btn gd-btn-primary gd-btn-confirm" id="gd-rt-save-run">
-            🚀 บันทึก & สั่งทำทันทีทุกจอ
-          </button>
-        </div>
+      </div>
+      <div class="gd-create-footer gd-routine-modal-footer">
+        <button type="button" class="gd-btn gd-btn-ghost" id="gd-rt-cancel">ยกเลิก</button>
+        <button type="button" class="gd-btn gd-btn-ghost" id="gd-rt-save">💾 บันทึกการตั้งค่า</button>
+        <button type="button" class="gd-btn gd-btn-primary gd-btn-confirm" id="gd-rt-save-run">
+          🚀 บันทึก & สั่งทำทันทีทุกจอ
+        </button>
       </div>
     `;
 

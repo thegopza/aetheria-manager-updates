@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "667db19b6f1829d3bb29a6b2852409061a599fcb",
+  "sourceCommit": "8fd103fe2043e650db4b6b8b781474385bdc299e",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -148,11 +148,11 @@
     },
     {
       "path": "manager/public/guild_manager.css",
-      "sha256": "efb38c0b0e7bf1544b369fb3771214b831d898e22d539b0eff1c91e409e1431a"
+      "sha256": "001661db3a3aabbd5e84f26f6b804ac7857b8a54d52d3e8a1ecb6cba3d3e8d52"
     },
     {
       "path": "manager/public/guild_manager.js",
-      "sha256": "adb6c3e38196cbdde6b6ca636e90b3a3bc83fa8dfc974780367c7675d4b1714c"
+      "sha256": "d26b6466dc0332944a25df36c8363030aa171317e3d14197795c3ec81bab885e"
     },
     {
       "path": "manager/public/image_board_solver.js",

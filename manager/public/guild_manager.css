@@ -1076,11 +1076,45 @@ body.gd-open #gd-drawer {
   max-height: 92%;
 }
 .gd-routine-modal-body {
+  flex: 1;
+  min-height: 0;
   padding: 12px 14px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.gd-routine-modal-footer {
+  flex-shrink: 0;
+  padding: 10px 14px;
+  margin-top: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(11, 15, 25, 0.96);
+}
+.gd-routine-inline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gd-shop-item-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: #f9fafb;
+}
+.gd-shop-item-sub {
+  font-size: 10.5px;
+  color: #9ca3af;
+  margin-top: 2px;
+}
+.gd-shop-item-right {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
 }
 .gd-routine-section {
   padding: 10px 12px;

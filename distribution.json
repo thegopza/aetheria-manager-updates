@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "658efe13f22443d5a127b0d0699f55b292eeb9f0",
+  "sourceCommit": "667db19b6f1829d3bb29a6b2852409061a599fcb",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -112,7 +112,7 @@
     },
     {
       "path": "manager/guild_api.js",
-      "sha256": "60d5ad2ed66dfab8a6f0cec0205830b5367850e36703532f2f1ddc239e242e17"
+      "sha256": "e1edfd808768d6f716dd77c0dbfd3387c66b5fab6aabbe1fb033bd0edc715970"
     },
     {
       "path": "manager/proxy_register.js",
@@ -148,11 +148,11 @@
     },
     {
       "path": "manager/public/guild_manager.css",
-      "sha256": "13bfc012aa85985db49f75bac26c4a548693ca1af7aa4b34ec54357920b7a824"
+      "sha256": "efb38c0b0e7bf1544b369fb3771214b831d898e22d539b0eff1c91e409e1431a"
     },
     {
       "path": "manager/public/guild_manager.js",
-      "sha256": "e0847b24a8376cce0c57c0271da607e86eed26d93128b10de8459554bc182d6b"
+      "sha256": "adb6c3e38196cbdde6b6ca636e90b3a3bc83fa8dfc974780367c7675d4b1714c"
     },
     {
       "path": "manager/public/image_board_solver.js",
@@ -160,7 +160,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "9d99264d0e0cbd789880e0c0e3120d6355644b59f4a54f302818c04438cac163"
+      "sha256": "4971fb974205cdc6555d809767ad7fef347f15c7480169abbdb8fba8127affc1"
     },
     {
       "path": "manager/public/inventory_market.css",

@@ -971,3 +971,209 @@ body.gd-open #gd-drawer {
   color: #fca5a5;
   font-weight: 600;
 }
+
+/* Daily Routine & Guild Shop Rune Exchange UI */
+.gd-btn-gold {
+  border-color: rgba(250, 204, 21, 0.45);
+  background: rgba(250, 204, 21, 0.14);
+  color: #fde047;
+}
+.gd-btn-gold:hover {
+  background: rgba(250, 204, 21, 0.26);
+  border-color: rgba(250, 204, 21, 0.65);
+  color: #fef08a;
+}
+
+.gd-mini-btn-cyan {
+  border-color: rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+  background: rgba(14, 165, 233, 0.14);
+}
+.gd-mini-btn-cyan:hover {
+  background: rgba(14, 165, 233, 0.28);
+  color: #e0f2fe;
+}
+
+.gd-master-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gd-routine-summary-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin-top: 8px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.12), rgba(16, 185, 129, 0.08));
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+
+.gd-routine-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cbd5e1;
+}
+.gd-routine-chip.is-on {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(16, 185, 129, 0.42);
+  color: #6ee7b7;
+}
+.gd-routine-chip-pts {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fde68a;
+}
+
+.gd-shop-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 5px;
+  white-space: nowrap;
+}
+.gd-shop-done {
+  background: rgba(14, 165, 233, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+}
+.gd-shop-part {
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.38);
+  color: #fde047;
+}
+.gd-shop-wait {
+  background: rgba(107, 114, 128, 0.22);
+  border: 1px solid rgba(156, 163, 175, 0.28);
+  color: #cbd5e1;
+}
+.gd-pts-pill {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(56, 189, 248, 0.15);
+  color: #bae6fd;
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  white-space: nowrap;
+}
+
+/* Routine Settings Modal */
+.gd-routine-modal-card {
+  max-width: 540px;
+  max-height: 92%;
+}
+.gd-routine-modal-body {
+  padding: 12px 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gd-routine-section {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.gd-routine-sec-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #6ee7b7;
+}
+.gd-routine-field-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 11.5px;
+  color: #cbd5e1;
+}
+.gd-routine-sub-hint {
+  font-size: 11px;
+  color: #9ca3af;
+  line-height: 1.45;
+}
+.gd-shop-item-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+  gap: 8px;
+}
+.gd-shop-item-card {
+  padding: 9px 10px;
+  border-radius: 9px;
+  background: rgba(17, 24, 39, 0.78);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.gd-shop-item-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: #f9fafb;
+  cursor: pointer;
+}
+.gd-shop-item-head input {
+  accent-color: #10b981;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+.gd-shop-item-meta {
+  font-size: 10.5px;
+  color: #9ca3af;
+}
+.gd-shop-item-qty-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11.5px;
+  color: #cbd5e1;
+}
+.gd-shop-qty-input {
+  width: 68px;
+  text-align: center;
+  padding: 5px 8px;
+  font-size: 13px;
+}
+.gd-routine-calc-box {
+  border-color: rgba(56, 189, 248, 0.4);
+  background: rgba(14, 165, 233, 0.11);
+}
+.gd-calc-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.gd-calc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+}
+.gd-calc-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.12);
+  margin: 4px 0;
+}

@@ -15,6 +15,42 @@ function normName(s) {
   return String(s || '').trim().toLowerCase();
 }
 
+const GUILD_MAT_NAMES = {
+  90201: 'Phracon',
+  90202: 'Emveretarcon',
+  90203: 'Oridecon',
+  90204: 'Rough Elunium',
+  90205: 'Elunium',
+  90206: 'Enriched Elunium'
+};
+
+const DEFAULT_DAILY_ROUTINE = {
+  autoBuyDonateMaterials: false,
+  maxMaterialUnitPrice: 5000,
+  autoExchangeShop: false,
+  exchangeAccessoryRune: true,
+  accessoryRuneQty: 1,
+  exchangeEnchantRune: true,
+  enchantRuneQty: 10,
+  autoTopUpZenyForShop: true,
+  keepZeny: 50000
+};
+
+function sanitizeDailyRoutine(raw) {
+  const src = (raw && typeof raw === 'object') ? raw : {};
+  return {
+    autoBuyDonateMaterials: typeof src.autoBuyDonateMaterials === 'boolean' ? src.autoBuyDonateMaterials : DEFAULT_DAILY_ROUTINE.autoBuyDonateMaterials,
+    maxMaterialUnitPrice: Math.max(100, Math.floor(Number(src.maxMaterialUnitPrice) || DEFAULT_DAILY_ROUTINE.maxMaterialUnitPrice)),
+    autoExchangeShop: typeof src.autoExchangeShop === 'boolean' ? src.autoExchangeShop : DEFAULT_DAILY_ROUTINE.autoExchangeShop,
+    exchangeAccessoryRune: typeof src.exchangeAccessoryRune === 'boolean' ? src.exchangeAccessoryRune : DEFAULT_DAILY_ROUTINE.exchangeAccessoryRune,
+    accessoryRuneQty: Math.min(1, Math.max(0, Math.floor(Number(src.accessoryRuneQty ?? DEFAULT_DAILY_ROUTINE.accessoryRuneQty)))),
+    exchangeEnchantRune: typeof src.exchangeEnchantRune === 'boolean' ? src.exchangeEnchantRune : DEFAULT_DAILY_ROUTINE.exchangeEnchantRune,
+    enchantRuneQty: Math.min(10, Math.max(0, Math.floor(Number(src.enchantRuneQty ?? DEFAULT_DAILY_ROUTINE.enchantRuneQty)))),
+    autoTopUpZenyForShop: typeof src.autoTopUpZenyForShop === 'boolean' ? src.autoTopUpZenyForShop : DEFAULT_DAILY_ROUTINE.autoTopUpZenyForShop,
+    keepZeny: Math.max(0, Math.floor(Number(src.keepZeny ?? DEFAULT_DAILY_ROUTINE.keepZeny)))
+  };
+}
+
 // Evaluates inside the game client (Electron or Browser mode).
 // Reads character, guild state, pending guild invite, and checks which daily material tiers can be donated.
 const PROBE_GUILD_CLIENT_JS = `(() => {
@@ -204,6 +240,7 @@ const PROBE_GUILD_CLIENT_JS = `(() => {
         maxMembers: Number(g.maxMembers || 20),
         donatedToday: !!g.donatedToday,
         myPoints: Number(g.myPoints || 0),
+        shopToday: (g.shopToday && typeof g.shopToday === 'object') ? { ...g.shopToday } : {},
         totalDonated: Number(g.totalDonated || 0),
         members: Array.isArray(g.members) ? g.members.map(m => ({
           name: m.name,
@@ -281,12 +318,390 @@ function sendGuildActionJs(payloadObj) {
   })()`;
 }
 
+function buildBuyMissingMaterialsAndDonateJs(tierObj, maxUnitPrice, keepZeny) {
+  const payloadJson = JSON.stringify({
+    tier: Number(tierObj.tier || 0),
+    exp: Number(tierObj.exp || 0),
+    items: (tierObj.items || []).map(it => ({
+      itemId: Number(it.itemId),
+      need: Number(it.need || 1),
+      name: GUILD_MAT_NAMES[Number(it.itemId)] || String(it.name || '')
+    })),
+    maxUnitPrice: Math.max(100, Number(maxUnitPrice || 5000)),
+    keepZeny: Math.max(0, Number(keepZeny || 0))
+  });
+  return `(async () => {
+    const cfg = ${payloadJson};
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    try {
+      const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+      if (!room || !room.state || (room.connection && room.connection.isOpen === false)) {
+        return { ok: false, reason: 'ไม่ได้เชื่อมต่อห้องเกม' };
+      }
+      const getters = window.__pmGuildGetters || {};
+      const getGuild = () => {
+        try { if (getters.guild) return getters.guild(); } catch (e) {}
+        return window.__pmGuildData || null;
+      };
+      const getChar = () => {
+        try { if (getters.character) return getters.character(); } catch (e) {}
+        return (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || {};
+      };
+      const getBag = () => {
+        let raw = null;
+        try { if (getters.inventory) raw = getters.inventory(); } catch (e) {}
+        if (!raw && window.__latestInventory) raw = window.__latestInventory;
+        return Array.isArray(raw) ? raw : (raw && Array.isArray(raw.items) ? raw.items : []);
+      };
+      const countItem = (itemId) => {
+        const id = Number(itemId);
+        let sum = 0;
+        for (const it of getBag()) {
+          if (!it || it.equipped || Number(it.refine || 0) > 0) continue;
+          if (Number(it.itemId) === id) sum += Number(it.qty ?? it.count ?? 1);
+        }
+        return sum;
+      };
+      const getZeny = () => {
+        const ch = getChar();
+        if (ch && ch.zeny != null) return Number(ch.zeny) || 0;
+        try {
+          const me = room.state.players && room.state.players.get(room.sessionId);
+          if (me && me.zeny != null) return Number(me.zeny) || 0;
+        } catch (e) {}
+        return 0;
+      };
+
+      const g0 = getGuild();
+      if (!g0 || !g0.id) return { ok: false, reason: 'ตัวละครยังไม่มีกิลด์ในเกม' };
+      if (g0.donatedToday) return { ok: true, alreadyDonated: true, donated: false };
+
+      if (window.__pmGuildBuyInFlight || window.__planMarketBuyInFlight) {
+        return { ok: false, busy: true, reason: 'กำลังซื้อของในตลาดอยู่ รอสักครู่' };
+      }
+      window.__pmGuildBuyInFlight = true;
+      window.__planMarketBuyInFlight = true;
+      if (typeof window.pauseSniper === 'function') {
+        try { window.pauseSniper(); } catch (e) {}
+      }
+
+      try {
+        const hasAllInBag = () => cfg.items.every(req => countItem(req.itemId) >= req.need);
+        if (!hasAllInBag()) {
+          room.send('market', { op: 'collect_all' });
+          await sleep(1200);
+        }
+        const g1 = getGuild();
+        if (g1 && g1.donatedToday) {
+          return { ok: true, alreadyDonated: true, donated: false };
+        }
+
+        const boughtSummary = [];
+        let totalSpent = 0;
+
+        const searchMarketPage = (q, page) => new Promise(resolve => {
+          let unsub = null;
+          const timer = setTimeout(() => {
+            if (typeof unsub === 'function') { try { unsub(); } catch (e) {} }
+            resolve([]);
+          }, 3800);
+          try {
+            unsub = room.onMessage('market_results', msg => {
+              clearTimeout(timer);
+              if (typeof unsub === 'function') { try { unsub(); } catch (e) {} }
+              resolve((msg && Array.isArray(msg.listings)) ? msg.listings : []);
+            });
+            room.send('market', { op: 'search', filters: { q, sort: 'price_asc', page } });
+          } catch (e) {
+            clearTimeout(timer);
+            resolve([]);
+          }
+        });
+
+        for (const req of cfg.items) {
+          if (!req.itemId || !req.name) continue;
+          for (let round = 0; round < 6; round++) {
+            const gNow = getGuild();
+            if (gNow && gNow.donatedToday) break;
+            const haveNow = countItem(req.itemId);
+            const left = req.need - haveNow;
+            if (left <= 0) break;
+
+            const zenyNow = getZeny();
+            const canPay = Math.max(0, zenyNow - cfg.keepZeny);
+            if (canPay <= 0) {
+              return { ok: false, reason: 'เงิน Zeny หลังหักสำรองไม่พอซื้อ ' + req.name + ' (มี ' + zenyNow.toLocaleString() + 'z)' };
+            }
+
+            let best = null;
+            let fallbackOverStack = null;
+            for (let page = 0; page < 5 && !best; page++) {
+              const now = Date.now();
+              const listings = await searchMarketPage(req.name, page);
+              if (!Array.isArray(listings) || listings.length === 0) break;
+
+              const exactMatches = listings
+                .filter(l => l && !l.mine && l.item && Number(l.item.itemId) === Number(req.itemId))
+                .filter(l => !l.currency || l.currency === 'zeny')
+                .filter(l => !(l.auctionEndsAt && l.auctionEndsAt > now))
+                .map(l => {
+                  const qty = Math.max(1, Number(l.qty) || 1);
+                  const price = Number(l.price) || 0;
+                  const unit = price / qty;
+                  return { l, qty, price, unit };
+                })
+                .filter(c => c.price > 0 && c.price <= canPay && c.unit <= cfg.maxUnitPrice);
+
+              const exactFit = exactMatches
+                .filter(c => c.qty <= left)
+                .sort((a, b) => (a.unit - b.unit) || (b.qty - a.qty))[0] || null;
+              if (exactFit) {
+                best = exactFit;
+                break;
+              }
+              if (!fallbackOverStack) {
+                fallbackOverStack = exactMatches
+                  .filter(c => c.qty <= Math.max(left + 10, 20))
+                  .sort((a, b) => (a.price - b.price) || (a.unit - b.unit))[0] || null;
+              }
+              if (listings.length < 20) break;
+            }
+
+            const chosen = best || fallbackOverStack;
+            if (!chosen) {
+              return {
+                ok: false,
+                marketShortage: true,
+                reason: 'ไม่พบ ' + req.name + ' ในตลาดราคา ≤' + cfg.maxUnitPrice.toLocaleString() + 'z/ชิ้น (ขาดอีก ' + left + ' ชิ้น)'
+              };
+            }
+
+            const beforeCount = countItem(req.itemId);
+            room.send('market', { op: 'buy', listingId: Number(chosen.l.listingId), price: Number(chosen.price) });
+            await sleep(950);
+            room.send('market', { op: 'collect_all' });
+            let got = 0;
+            for (let w = 0; w < 14 && got <= 0; w++) {
+              await sleep(250);
+              got = countItem(req.itemId) - beforeCount;
+            }
+            if (got > 0) {
+              totalSpent += chosen.price;
+              boughtSummary.push(req.name + ' x' + got + ' (' + chosen.price.toLocaleString() + 'z)');
+            }
+            await sleep(350);
+          }
+        }
+
+        const gBeforeDonate = getGuild();
+        if (gBeforeDonate && gBeforeDonate.donatedToday) {
+          return { ok: true, alreadyDonated: true, donated: false, boughtSummary, totalSpent };
+        }
+        if (!hasAllInBag()) {
+          const stillMissing = cfg.items
+            .map(r => ({ name: r.name, left: Math.max(0, r.need - countItem(r.itemId)) }))
+            .filter(x => x.left > 0)
+            .map(x => x.name + ' ขาด ' + x.left)
+            .join(', ');
+          return { ok: false, marketShortage: true, reason: 'ยังได้ของบริจาคไม่ครบ (' + stillMissing + ')', boughtSummary, totalSpent };
+        }
+
+        room.send('guild', { action: 'donateMaterial', tier: cfg.tier });
+        await sleep(800);
+        const gAfter = getGuild();
+        const donatedOk = Boolean(gAfter && gAfter.donatedToday);
+        return {
+          ok: donatedOk,
+          donated: donatedOk,
+          tier: cfg.tier,
+          exp: cfg.exp,
+          boughtSummary,
+          totalSpent,
+          myPoints: gAfter ? Number(gAfter.myPoints || 0) : 0,
+          zeny: getZeny()
+        };
+      } finally {
+        window.__pmGuildBuyInFlight = false;
+        window.__planMarketBuyInFlight = false;
+        if (typeof window.resumeSniper === 'function') {
+          try { window.resumeSniper(1000); } catch (e) {}
+        }
+      }
+    } catch (err) {
+      window.__pmGuildBuyInFlight = false;
+      window.__planMarketBuyInFlight = false;
+      return { ok: false, reason: err.message || 'error' };
+    }
+  })()`;
+}
+
+function buildSmartTopUpAndExchangeShopJs(shopCfg) {
+  const cfgJson = JSON.stringify({
+    want90341: shopCfg.exchangeAccessoryRune ? Math.min(1, Math.max(0, Number(shopCfg.accessoryRuneQty ?? 1))) : 0,
+    want90340: shopCfg.exchangeEnchantRune ? Math.min(10, Math.max(0, Number(shopCfg.enchantRuneQty ?? 10))) : 0,
+    autoTopUpZeny: Boolean(shopCfg.autoTopUpZenyForShop),
+    keepZeny: Math.max(0, Number(shopCfg.keepZeny || 0)),
+    requireDonatedTodayForTopUp: shopCfg.requireDonatedTodayForTopUp !== false
+  });
+  return `(async () => {
+    const cfg = ${cfgJson};
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    try {
+      const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+      if (!room || !room.state || (room.connection && room.connection.isOpen === false)) {
+        return { ok: false, reason: 'ไม่ได้เชื่อมต่อห้องเกม' };
+      }
+      const getters = window.__pmGuildGetters || {};
+      const getGuild = () => {
+        try { if (getters.guild) return getters.guild(); } catch (e) {}
+        return window.__pmGuildData || null;
+      };
+      const getChar = () => {
+        try { if (getters.character) return getters.character(); } catch (e) {}
+        return (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || {};
+      };
+      const getZeny = () => {
+        const ch = getChar();
+        if (ch && ch.zeny != null) return Number(ch.zeny) || 0;
+        try {
+          const me = room.state.players && room.state.players.get(room.sessionId);
+          if (me && me.zeny != null) return Number(me.zeny) || 0;
+        } catch (e) {}
+        return 0;
+      };
+
+      let g = getGuild();
+      if (!g || !g.id) return { ok: false, reason: 'ตัวละครยังไม่มีกิลด์ในเกม' };
+
+      const shopToday = (g.shopToday && typeof g.shopToday === 'object') ? g.shopToday : {};
+      const bought90341 = Math.max(0, Number(shopToday['90341'] || 0));
+      const bought90340 = Math.max(0, Number(shopToday['90340'] || 0));
+      const rem90341 = Math.max(0, Math.min(1, cfg.want90341) - bought90341);
+      const rem90340 = Math.max(0, Math.min(10, cfg.want90340) - bought90340);
+
+      if (rem90341 <= 0 && rem90340 <= 0) {
+        return { ok: true, alreadyCompleted: true, bought90341, bought90340, myPoints: Number(g.myPoints || 0) };
+      }
+
+      const fullPointsNeeded = (rem90341 * 60) + (rem90340 * 10);
+      let myPoints = Math.max(0, Number(g.myPoints || 0));
+      let missingPoints = Math.max(0, fullPointsNeeded - myPoints);
+      let zenyDonated = 0;
+
+      if (missingPoints > 0 && cfg.autoTopUpZeny) {
+        if (cfg.requireDonatedTodayForTopUp && !g.donatedToday) {
+          return {
+            ok: false,
+            waitingMaterialDonate: true,
+            reason: 'รอบริจาคไอเทมรายวันก่อนคำนวณทบ Zeny แลกหิน (ขาดอีก ' + missingPoints + ' แต้ม)'
+          };
+        }
+        const zenyNow = getZeny();
+        const spendableZeny = Math.floor(Math.max(0, zenyNow - cfg.keepZeny) / 10000) * 10000;
+        const maxExtraPoints = Math.floor(spendableZeny / 10000);
+        const totalPossiblePoints = myPoints + maxExtraPoints;
+
+        let planPts = 0;
+        let remPossible = totalPossiblePoints;
+        if (rem90341 > 0 && remPossible >= 60) {
+          planPts += 60;
+          remPossible -= 60;
+        }
+        if (rem90340 > 0 && remPossible >= 10) {
+          const canBuy40 = Math.min(rem90340, Math.floor(remPossible / 10));
+          planPts += canBuy40 * 10;
+          remPossible -= canBuy40 * 10;
+        }
+
+        const topUpPoints = Math.max(0, planPts - myPoints);
+        const topUpZeny = topUpPoints * 10000;
+        if (topUpZeny >= 10000 && topUpZeny <= spendableZeny) {
+          room.send('guild', { action: 'donateZeny', amount: topUpZeny });
+          zenyDonated = topUpZeny;
+          await sleep(750);
+          g = getGuild() || g;
+          myPoints = Math.max(0, Number(g.myPoints || 0));
+        }
+      }
+
+      const exchanged = [];
+      g = getGuild() || g;
+      myPoints = Math.max(0, Number(g.myPoints || 0));
+      const curShop0 = (g.shopToday && typeof g.shopToday === 'object') ? g.shopToday : {};
+      const curRem90341 = Math.max(0, Math.min(1, cfg.want90341) - Math.max(0, Number(curShop0['90341'] || 0)));
+      if (curRem90341 > 0 && myPoints >= 60) {
+        room.send('guild', { action: 'shopBuy', itemId: 90341, qty: 1 });
+        await sleep(650);
+        g = getGuild() || g;
+        myPoints = Math.max(0, Number(g.myPoints || 0));
+        const after341 = Math.max(0, Number((g.shopToday && g.shopToday['90341']) || 0));
+        if (after341 > bought90341) {
+          exchanged.push('Accessory Enchant Rune x' + (after341 - bought90341));
+        }
+      }
+
+      g = getGuild() || g;
+      myPoints = Math.max(0, Number(g.myPoints || 0));
+      const curShop1 = (g.shopToday && typeof g.shopToday === 'object') ? g.shopToday : {};
+      const curRem90340 = Math.max(0, Math.min(10, cfg.want90340) - Math.max(0, Number(curShop1['90340'] || 0)));
+      const buyQty90340 = Math.min(curRem90340, Math.floor(myPoints / 10));
+      if (buyQty90340 > 0) {
+        room.send('guild', { action: 'shopBuy', itemId: 90340, qty: buyQty90340 });
+        await sleep(650);
+        g = getGuild() || g;
+        myPoints = Math.max(0, Number(g.myPoints || 0));
+        const after340 = Math.max(0, Number((g.shopToday && g.shopToday['90340']) || 0));
+        if (after340 > bought90340) {
+          exchanged.push('Enchant Rune x' + (after340 - bought90340));
+        }
+      }
+
+      const finalShop = (g && g.shopToday && typeof g.shopToday === 'object') ? g.shopToday : {};
+      const final90341 = Math.max(0, Number(finalShop['90341'] || 0));
+      const final90340 = Math.max(0, Number(finalShop['90340'] || 0));
+      const allDone = (final90341 >= cfg.want90341) && (final90340 >= cfg.want90340);
+
+      if (exchanged.length === 0 && !allDone) {
+        const stillNeedPts = Math.max(0, ((cfg.want90341 - final90341) * 60) + ((cfg.want90340 - final90340) * 10) - myPoints);
+        const zenyShort = stillNeedPts * 10000;
+        return {
+          ok: false,
+          shortZeny: true,
+          zenyDonated,
+          myPoints,
+          bought90341: final90341,
+          bought90340: final90340,
+          reason: !g.donatedToday
+            ? 'รอบริจาคของรายวันก่อนแลกหิน'
+            : ('แต้ม/เงินไม่พอแลกหิน (มี ' + myPoints + ' แต้ม, ขาดอีก ' + stillNeedPts + ' แต้ม = ' + zenyShort.toLocaleString() + 'z)')
+        };
+      }
+
+      return {
+        ok: true,
+        allDone,
+        exchanged,
+        zenyDonated,
+        myPoints,
+        bought90341: final90341,
+        bought90340: final90340
+      };
+    } catch (err) {
+      return { ok: false, reason: err.message || 'error' };
+    }
+  })()`;
+}
+
 function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy }) {
   let state = loadState();
   // Runtime status per profileId
   const liveStatus = {};
   const donateBackoffUntil = {};
   const donateBackoffNote = {};
+  const marketBuyBackoffUntil = {};
+  const marketBuyBackoffNote = {};
+  const shopExchangeBackoffUntil = {};
+  const shopExchangeBackoffNote = {};
   let syncInFlight = false;
   let timer = null;
 
@@ -297,6 +712,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         if (raw && Array.isArray(raw.guilds)) {
           return {
             autoDonate: raw.autoDonate !== false,
+            dailyRoutine: sanitizeDailyRoutine(raw.dailyRoutine),
             profileDonate: (raw.profileDonate && typeof raw.profileDonate === 'object') ? raw.profileDonate : {},
             lastDonatedDateByProfile: (raw.lastDonatedDateByProfile && typeof raw.lastDonatedDateByProfile === 'object') ? raw.lastDonatedDateByProfile : {},
             guilds: raw.guilds.map(g => ({
@@ -316,7 +732,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     } catch (e) {
       console.error('[Guild] Failed to load guilds.json:', e.message);
     }
-    return { autoDonate: true, profileDonate: {}, lastDonatedDateByProfile: {}, guilds: [] };
+    return { autoDonate: true, dailyRoutine: sanitizeDailyRoutine(), profileDonate: {}, lastDonatedDateByProfile: {}, guilds: [] };
   }
 
   function isProfileDonateEnabled(profileId) {
@@ -526,6 +942,199 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       return false;
     }
     return false;
+  }
+
+  // Buy missing daily donation materials from Market (strictly once per day when !donatedToday) and donate immediately
+  async function tryBuyMissingMaterialsAndDonate(g, profileId, profile, probe, force = false) {
+    const pid = String(profileId);
+    const dr = sanitizeDailyRoutine(state.dailyRoutine);
+    if (!force) {
+      if (!dr.autoBuyDonateMaterials) return { ok: false, skipped: true };
+      if (state.autoDonate === false) return { ok: false, skipped: true };
+      if (g && g.autoDonate === false) return { ok: false, skipped: true };
+      if (!isProfileDonateEnabled(pid)) return { ok: false, skipped: true };
+      if (marketBuyBackoffUntil[pid] && marketBuyBackoffUntil[pid] > Date.now()) {
+        return { ok: false, skipped: true, reason: marketBuyBackoffNote[pid] || 'รอค้นตลาดใหม่' };
+      }
+    }
+    if (!profile || !profile.debugPort || !probe || !probe.inWorld || !probe.roomOpen) {
+      return { ok: false, skipped: true, reason: 'ตัวละครไม่ได้ออนไลน์ในเกม' };
+    }
+    const ig = probe.inGameGuild;
+    if (!ig || !ig.id) {
+      return { ok: false, skipped: true, reason: 'ตัวละครยังไม่มีกิลด์ในเกม' };
+    }
+    if (ig.donatedToday) {
+      delete marketBuyBackoffUntil[pid];
+      delete marketBuyBackoffNote[pid];
+      return { ok: true, alreadyDonated: true, donated: false };
+    }
+    if (probe.newMemberCooldownNote || (donateBackoffUntil[pid] && donateBackoffUntil[pid] > Date.now())) {
+      const note = probe.newMemberCooldownNote || donateBackoffNote[pid] || 'รอครบ 24 ชม. จึงบริจาคได้';
+      setActionNote(pid, note);
+      return { ok: false, cooldown: true, reason: note };
+    }
+
+    // If character already has items in bag, use direct donate without touching market
+    if (Array.isArray(probe.donatableTiers) && probe.donatableTiers.length > 0) {
+      const ok = await tryAutoDonateForProfile(g, pid, profile, probe, true);
+      return { ok, donated: ok, boughtSummary: [], totalSpent: 0 };
+    }
+
+    // Pick highest EXP tier where character level qualifies
+    const eligibleTiers = (Array.isArray(ig.tierSummaries) ? ig.tierSummaries : [])
+      .filter(t => t && t.lvOk && Array.isArray(t.items) && t.items.length > 0)
+      .sort((a, b) => (b.exp - a.exp) || (b.tier - a.tier));
+    if (eligibleTiers.length === 0) {
+      return { ok: false, skipped: true, reason: 'เลเวลตัวละครยังไม่ถึงเกณฑ์บริจาคของ' };
+    }
+    const targetTier = eligibleTiers[0];
+
+    setActionNote(pid, `🛒 กำลังเช็ก/ซื้อของบริจาครายวัน (Tier ${targetTier.tier})...`);
+    const code = buildBuyMissingMaterialsAndDonateJs(targetTier, dr.maxMaterialUnitPrice, dr.keepZeny);
+    const evalRes = await evalProfilePort(profile.debugPort, code, 28000);
+    const r = (evalRes && evalRes.success && evalRes.result) ? evalRes.result : { ok: false, reason: 'คำสั่งซื้อของบริจาคไม่ตอบสนอง' };
+
+    const after = await probeClient(profile.debugPort);
+    if (after && after.inWorld) {
+      liveStatus[pid] = {
+        ...(liveStatus[pid] || {}),
+        online: true,
+        charName: after.charName,
+        zeny: after.zeny,
+        inGameGuild: after.inGameGuild,
+        donatedToday: !!(after.inGameGuild && after.inGameGuild.donatedToday),
+        myPoints: after.inGameGuild ? after.inGameGuild.myPoints : 0,
+        shopToday: (after.inGameGuild && after.inGameGuild.shopToday) || {},
+        donatableTiers: after.donatableTiers || [],
+        cooldownNote: after.newMemberCooldownNote || null
+      };
+      if (after.inGameGuild && after.inGameGuild.donatedToday) {
+        delete donateBackoffUntil[pid];
+        delete donateBackoffNote[pid];
+        delete marketBuyBackoffUntil[pid];
+        delete marketBuyBackoffNote[pid];
+        const today = getThaiDateKey();
+        if (g && g.lastDonatedDateByProfile) g.lastDonatedDateByProfile[pid] = today;
+        if (!state.lastDonatedDateByProfile) state.lastDonatedDateByProfile = {};
+        state.lastDonatedDateByProfile[pid] = today;
+        saveState();
+        const boughtTxt = (Array.isArray(r.boughtSummary) && r.boughtSummary.length > 0)
+          ? ` (ซื้อ ${r.boughtSummary.join(', ')})`
+          : '';
+        setActionNote(pid, `🎁 บริจาครายวันสำเร็จ +${targetTier.exp} แต้ม${boughtTxt}`);
+        return { ok: true, donated: true, boughtSummary: r.boughtSummary || [], totalSpent: r.totalSpent || 0, afterProbe: after };
+      }
+      if (after.newMemberCooldownNote) {
+        const cNote = after.newMemberCooldownNote;
+        donateBackoffUntil[pid] = after.newMemberUnlockAt && after.newMemberUnlockAt > Date.now()
+          ? Math.min(after.newMemberUnlockAt, Date.now() + 15 * 60 * 1000)
+          : (Date.now() + 15 * 60 * 1000);
+        donateBackoffNote[pid] = cNote;
+        setActionNote(pid, cNote);
+        return { ok: false, cooldown: true, reason: cNote, afterProbe: after };
+      }
+    }
+
+    const failNote = r.reason || 'ยังหาซื้อของบริจาครายวันในตลาดไม่ได้';
+    marketBuyBackoffUntil[pid] = Date.now() + 10 * 60 * 1000;
+    marketBuyBackoffNote[pid] = failNote;
+    setActionNote(pid, failNote);
+    return { ok: false, reason: failNote, afterProbe: after };
+  }
+
+  // Exchange selected Guild Shop runes (and optionally top up exact missing points via Zeny after daily material donation)
+  async function tryExchangeGuildShopForProfile(g, profileId, profile, probe, force = false) {
+    const pid = String(profileId);
+    const dr = sanitizeDailyRoutine(state.dailyRoutine);
+    const want90341 = dr.exchangeAccessoryRune ? Math.min(1, Math.max(0, Number(dr.accessoryRuneQty ?? 1))) : 0;
+    const want90340 = dr.exchangeEnchantRune ? Math.min(10, Math.max(0, Number(dr.enchantRuneQty ?? 10))) : 0;
+    if (want90341 <= 0 && want90340 <= 0) {
+      return { ok: false, skipped: true, reason: 'ไม่ได้ติ๊กเลือกหินที่จะแลกในตั้งค่า' };
+    }
+    if (!force) {
+      if (!dr.autoExchangeShop) return { ok: false, skipped: true };
+      if (!isProfileDonateEnabled(pid)) return { ok: false, skipped: true };
+      if (shopExchangeBackoffUntil[pid] && shopExchangeBackoffUntil[pid] > Date.now()) {
+        return { ok: false, skipped: true, reason: shopExchangeBackoffNote[pid] || 'รอแต้ม/เงินแลกหิน' };
+      }
+    }
+    if (!profile || !profile.debugPort || !probe || !probe.inWorld || !probe.roomOpen) {
+      return { ok: false, skipped: true, reason: 'ตัวละครไม่ได้ออนไลน์ในเกม' };
+    }
+    const ig = probe.inGameGuild;
+    if (!ig || !ig.id) {
+      return { ok: false, skipped: true, reason: 'ตัวละครยังไม่มีกิลด์ในเกม' };
+    }
+
+    const shopToday = (ig.shopToday && typeof ig.shopToday === 'object') ? ig.shopToday : {};
+    const bought90341 = Math.max(0, Number(shopToday['90341'] || 0));
+    const bought90340 = Math.max(0, Number(shopToday['90340'] || 0));
+    const rem90341 = Math.max(0, want90341 - bought90341);
+    const rem90340 = Math.max(0, want90340 - bought90340);
+    if (rem90341 <= 0 && rem90340 <= 0) {
+      delete shopExchangeBackoffUntil[pid];
+      delete shopExchangeBackoffNote[pid];
+      return { ok: true, alreadyCompleted: true, exchanged: [], zenyDonated: 0 };
+    }
+
+    if (probe.newMemberCooldownNote || (donateBackoffUntil[pid] && donateBackoffUntil[pid] > Date.now())) {
+      const cNote = probe.newMemberCooldownNote || donateBackoffNote[pid] || 'รอครบ 24 ชม.';
+      return { ok: false, cooldown: true, reason: cNote };
+    }
+
+    const pointsNeededNow = (rem90341 * 60) + (rem90340 * 10);
+    const myPoints = Math.max(0, Number(ig.myPoints || 0));
+    // Wait for daily material donation first before topping up Zeny, unless points are already sufficient
+    if (!ig.donatedToday && myPoints < pointsNeededNow) {
+      return { ok: false, waitingMaterialDonate: true, reason: 'รอบริจาคไอเทมรายวันก่อนคำนวณทบ Zeny แลกหิน' };
+    }
+
+    const code = buildSmartTopUpAndExchangeShopJs({
+      ...dr,
+      requireDonatedTodayForTopUp: true
+    });
+    const evalRes = await evalProfilePort(profile.debugPort, code, 12000);
+    const r = (evalRes && evalRes.success && evalRes.result) ? evalRes.result : { ok: false, reason: 'คำสั่งแลกหินร้านค้ากิลด์ไม่ตอบสนอง' };
+
+    const after = await probeClient(profile.debugPort);
+    if (after && after.inWorld) {
+      liveStatus[pid] = {
+        ...(liveStatus[pid] || {}),
+        online: true,
+        charName: after.charName,
+        zeny: after.zeny,
+        inGameGuild: after.inGameGuild,
+        donatedToday: !!(after.inGameGuild && after.inGameGuild.donatedToday),
+        myPoints: after.inGameGuild ? after.inGameGuild.myPoints : 0,
+        shopToday: (after.inGameGuild && after.inGameGuild.shopToday) || {},
+        donatableTiers: after.donatableTiers || [],
+        cooldownNote: after.newMemberCooldownNote || null
+      };
+    }
+
+    if (r.ok) {
+      delete shopExchangeBackoffUntil[pid];
+      delete shopExchangeBackoffNote[pid];
+      if (Array.isArray(r.exchanged) && r.exchanged.length > 0) {
+        const zTxt = r.zenyDonated > 0 ? ` (ทบ ${Number(r.zenyDonated).toLocaleString()}z)` : '';
+        setActionNote(pid, `💎 แลก ${r.exchanged.join(' + ')} สำเร็จ${zTxt}`);
+      }
+      return {
+        ok: true,
+        alreadyCompleted: Boolean(r.alreadyCompleted),
+        exchanged: r.exchanged || [],
+        zenyDonated: Number(r.zenyDonated || 0)
+      };
+    }
+
+    const note = r.reason || 'แต้ม/เงินไม่พอแลกหินร้านค้ากิลด์';
+    shopExchangeBackoffUntil[pid] = Date.now() + 5 * 60 * 1000;
+    shopExchangeBackoffNote[pid] = note;
+    if (!r.waitingMaterialDonate) {
+      setActionNote(pid, note);
+    }
+    return { ok: false, reason: note };
   }
 
   async function donateZenyForProfile(profileId, profile, amount, keepZeny = 0) {
@@ -839,6 +1448,60 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         }
       }
 
+      // Daily Routine Pass:
+      //  (A) Auto-buy missing daily donation materials from Market (max 1 character per sync tick to avoid market search rate limit)
+      //  (B) Auto-exchange selected Guild Shop runes (and smart Zeny top-up after daily material donation is done)
+      const dr = sanitizeDailyRoutine(state.dailyRoutine);
+      if (dr.autoBuyDonateMaterials || dr.autoExchangeShop) {
+        let marketBuyDoneThisTick = 0;
+        let shopExchangeDoneThisTick = 0;
+        for (const [pid, p] of byId.entries()) {
+          let pr = probes.get(pid);
+          if (!p || !pr || !pr.inWorld || !pr.inGameGuild) continue;
+          const gCard = findGuildOfProfile(pid);
+
+          // Step A: If not donated today & missing materials, auto-buy from market and donate (1 per tick)
+          if (dr.autoBuyDonateMaterials && !pr.inGameGuild.donatedToday && marketBuyDoneThisTick < 1) {
+            const canTryBuy = state.autoDonate !== false &&
+              (!gCard || gCard.autoDonate !== false) &&
+              isProfileDonateEnabled(pid) &&
+              !pr.newMemberCooldownNote &&
+              !(donateBackoffUntil[pid] > Date.now()) &&
+              !(marketBuyBackoffUntil[pid] > Date.now()) &&
+              (!Array.isArray(pr.donatableTiers) || pr.donatableTiers.length === 0);
+            if (canTryBuy) {
+              marketBuyDoneThisTick++;
+              const buyRes = await tryBuyMissingMaterialsAndDonate(gCard, pid, p, pr, false);
+              if (buyRes && buyRes.afterProbe) {
+                pr = buyRes.afterProbe;
+                probes.set(pid, pr);
+              }
+            }
+          }
+
+          // Step B: Auto-exchange Guild Shop runes (up to 2 characters per tick)
+          if (dr.autoExchangeShop && shopExchangeDoneThisTick < 2) {
+            const ig = pr.inGameGuild;
+            const shopToday = (ig && ig.shopToday && typeof ig.shopToday === 'object') ? ig.shopToday : {};
+            const want90341 = dr.exchangeAccessoryRune ? Math.min(1, Math.max(0, Number(dr.accessoryRuneQty ?? 1))) : 0;
+            const want90340 = dr.exchangeEnchantRune ? Math.min(10, Math.max(0, Number(dr.enchantRuneQty ?? 10))) : 0;
+            const rem90341 = Math.max(0, want90341 - Math.max(0, Number(shopToday['90341'] || 0)));
+            const rem90340 = Math.max(0, want90340 - Math.max(0, Number(shopToday['90340'] || 0)));
+            const ptsNeed = (rem90341 * 60) + (rem90340 * 10);
+            const readyForShop = (rem90341 > 0 || rem90340 > 0) &&
+              isProfileDonateEnabled(pid) &&
+              !pr.newMemberCooldownNote &&
+              !(donateBackoffUntil[pid] > Date.now()) &&
+              !(shopExchangeBackoffUntil[pid] > Date.now()) &&
+              (ig.donatedToday || Number(ig.myPoints || 0) >= ptsNeed);
+            if (readyForShop) {
+              shopExchangeDoneThisTick++;
+              await tryExchangeGuildShopForProfile(gCard, pid, p, pr, false);
+            }
+          }
+        }
+      }
+
       return { ok: true, count: state.guilds.length };
     } finally {
       syncInFlight = false;
@@ -887,6 +1550,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         autoDonate: isProfileDonateEnabled(id),
         donatedToday: !!(ig && ig.donatedToday),
         myPoints: ig ? ig.myPoints : 0,
+        shopToday: (ig && ig.shopToday && typeof ig.shopToday === 'object') ? ig.shopToday : {},
         canDonateCount: Array.isArray(ls.donatableTiers) ? ls.donatableTiers.length : 0,
         donatableTiers: ls.donatableTiers || [],
         cooldownNote: ls.cooldownNote || (donateBackoffUntil[String(id)] > Date.now() ? donateBackoffNote[String(id)] : null) || null,
@@ -953,6 +1617,7 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
 
     return {
       autoDonate: state.autoDonate !== false,
+      dailyRoutine: sanitizeDailyRoutine(state.dailyRoutine),
       profileDonate: state.profileDonate || {},
       guilds,
       externalGuildProfiles,
@@ -994,16 +1659,122 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       return sendJSON({ success: true, sync: r, ...buildPublicView() }), true;
     }
 
-    // POST /api/guilds/settings — toggle global autoDonate
+    // POST /api/guilds/settings — toggle global autoDonate and/or update dailyRoutine config
     if (req.method === 'POST' && pathname === '/api/guilds/settings') {
       try {
         const body = await readBody(req);
+        let changed = false;
         if (typeof body.autoDonate === 'boolean') {
           state.autoDonate = body.autoDonate;
+          changed = true;
+        }
+        if (body.dailyRoutine && typeof body.dailyRoutine === 'object') {
+          state.dailyRoutine = sanitizeDailyRoutine({
+            ...(state.dailyRoutine || {}),
+            ...body.dailyRoutine
+          });
+          // Clear backoffs so new settings take effect immediately
+          for (const k of Object.keys(marketBuyBackoffUntil)) delete marketBuyBackoffUntil[k];
+          for (const k of Object.keys(marketBuyBackoffNote)) delete marketBuyBackoffNote[k];
+          for (const k of Object.keys(shopExchangeBackoffUntil)) delete shopExchangeBackoffUntil[k];
+          for (const k of Object.keys(shopExchangeBackoffNote)) delete shopExchangeBackoffNote[k];
+          changed = true;
+        }
+        if (changed) {
           saveState();
-          if (body.autoDonate) syncAllGuilds().catch(() => {});
+          syncAllGuilds().catch(() => {});
         }
         return sendJSON({ success: true, ...buildPublicView() }), true;
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400), true;
+      }
+    }
+
+    // POST /api/guilds/run-daily-routine — run buy missing daily materials + donate + smart Zeny top-up + exchange runes
+    if (req.method === 'POST' && pathname === '/api/guilds/run-daily-routine') {
+      try {
+        const body = await readBody(req);
+        if (body.dailyRoutine && typeof body.dailyRoutine === 'object') {
+          state.dailyRoutine = sanitizeDailyRoutine({
+            ...(state.dailyRoutine || {}),
+            ...body.dailyRoutine
+          });
+          saveState();
+        }
+        const { byId, results: probes } = await probeAllConfigured();
+        const assigned = new Set();
+        for (const g of state.guilds) {
+          assigned.add(String(g.leaderId));
+          for (const m of g.memberIds) assigned.add(String(m));
+        }
+
+        let targetIds = [];
+        if (body.profileId) {
+          targetIds = [String(body.profileId)];
+        } else if (Array.isArray(body.profileIds) && body.profileIds.length > 0) {
+          targetIds = body.profileIds.map(String);
+        } else if (body.guildId) {
+          const g = state.guilds.find(x => x.id === String(body.guildId));
+          if (!g) return sendJSON({ success: false, error: 'ไม่พบกิลด์ที่ระบุ' }, 404), true;
+          targetIds = [String(g.leaderId), ...g.memberIds.map(String)];
+        } else if (body.scope === 'external') {
+          targetIds = Array.from(byId.keys()).filter(pid => !assigned.has(pid));
+        } else {
+          targetIds = Array.from(byId.keys());
+        }
+
+        let donatedMaterialsCount = 0;
+        let boughtMaterialsCount = 0;
+        let exchangedCharsCount = 0;
+        let totalTopUpZeny = 0;
+        let cooldownCount = 0;
+
+        for (const pid of targetIds) {
+          const p = byId.get(pid);
+          let pr = probes.get(pid);
+          if (!p || !pr || !pr.inWorld || !pr.inGameGuild) continue;
+          const gCard = findGuildOfProfile(pid);
+
+          // 1. Daily Material Donation (direct or buy missing from market)
+          if (!pr.inGameGuild.donatedToday) {
+            const matRes = await tryBuyMissingMaterialsAndDonate(gCard, pid, p, pr, true);
+            if (matRes && matRes.donated) {
+              donatedMaterialsCount++;
+              if (Array.isArray(matRes.boughtSummary) && matRes.boughtSummary.length > 0) {
+                boughtMaterialsCount++;
+              }
+            } else if (matRes && matRes.cooldown) {
+              cooldownCount++;
+            }
+            if (matRes && matRes.afterProbe) {
+              pr = matRes.afterProbe;
+              probes.set(pid, pr);
+            } else {
+              pr = await probeClient(p.debugPort);
+              probes.set(pid, pr);
+            }
+          }
+
+          // 2. Guild Shop Rune Exchange + Smart Zeny Top-Up
+          if (pr && pr.inWorld && pr.inGameGuild) {
+            const shopRes = await tryExchangeGuildShopForProfile(gCard, pid, p, pr, true);
+            if (shopRes && shopRes.ok && Array.isArray(shopRes.exchanged) && shopRes.exchanged.length > 0) {
+              exchangedCharsCount++;
+              totalTopUpZeny += Number(shopRes.zenyDonated || 0);
+            }
+          }
+        }
+
+        await probeAllConfigured().catch(() => {});
+        return sendJSON({
+          success: true,
+          donatedMaterialsCount,
+          boughtMaterialsCount,
+          exchangedCharsCount,
+          totalTopUpZeny,
+          cooldownCount,
+          ...buildPublicView()
+        }), true;
       } catch (e) {
         return sendJSON({ success: false, error: e.message }, 400), true;
       }
@@ -1053,7 +1824,10 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
           targetIds = Array.from(byId.keys());
         }
 
+        const dr = sanitizeDailyRoutine(state.dailyRoutine);
+        const allowBuyMissing = Boolean(body.buyMissing || dr.autoBuyDonateMaterials);
         let donatedNow = 0;
+        let boughtNow = 0;
         let cooldownCount = 0;
         let missingItemsCount = 0;
         let alreadyDonatedCount = 0;
@@ -1065,18 +1839,42 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
             alreadyDonatedCount++;
             continue;
           }
+          const gCard = findGuildOfProfile(pid);
           const tiers = Array.isArray(pr.donatableTiers) ? pr.donatableTiers : [];
           if (tiers.length === 0) {
-            missingItemsCount++;
+            if (allowBuyMissing) {
+              const buyRes = await tryBuyMissingMaterialsAndDonate(gCard, pid, p, pr, true);
+              if (buyRes && buyRes.donated) {
+                donatedNow++;
+                if (Array.isArray(buyRes.boughtSummary) && buyRes.boughtSummary.length > 0) boughtNow++;
+                if (dr.autoExchangeShop && buyRes.afterProbe) {
+                  await tryExchangeGuildShopForProfile(gCard, pid, p, buyRes.afterProbe, false);
+                }
+              } else if (buyRes && buyRes.cooldown) {
+                cooldownCount++;
+              } else {
+                missingItemsCount++;
+              }
+            } else {
+              missingItemsCount++;
+            }
             continue;
           }
-          const gCard = findGuildOfProfile(pid);
           const ok = await tryAutoDonateForProfile(gCard, pid, p, pr, true);
-          if (ok) donatedNow++;
-          else cooldownCount++;
+          if (ok) {
+            donatedNow++;
+            if (dr.autoExchangeShop) {
+              const freshPr = await probeClient(p.debugPort);
+              if (freshPr && freshPr.inWorld) {
+                await tryExchangeGuildShopForProfile(gCard, pid, p, freshPr, false);
+              }
+            }
+          } else {
+            cooldownCount++;
+          }
         }
         await probeAllConfigured().catch(() => {});
-        return sendJSON({ success: true, donatedNow, cooldownCount, missingItemsCount, alreadyDonatedCount, ...buildPublicView() }), true;
+        return sendJSON({ success: true, donatedNow, boughtNow, cooldownCount, missingItemsCount, alreadyDonatedCount, ...buildPublicView() }), true;
       } catch (e) {
         return sendJSON({ success: false, error: e.message }, 400), true;
       }
@@ -1088,6 +1886,8 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         const body = await readBody(req);
         const amount = body.amount === 'all' ? 'all' : Math.floor(Number(body.amount || 0));
         const keepZeny = Math.max(0, Math.floor(Number(body.keepZeny || 0)));
+        const maxTotalZeny = Math.max(0, Math.floor(Number(body.maxTotalZeny || 0) / 10000) * 10000);
+        const splitLevelUp = Boolean(body.splitLevelUp && maxTotalZeny >= 10000);
         if (amount !== 'all' && amount < 10000) {
           return sendJSON({ success: false, error: 'จำนวนเงินบริจาคต้องอย่างน้อย 10,000 Zeny (10,000z = 1 EXP กิลด์)' }, 400), true;
         }
@@ -1120,7 +1920,18 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         let totalExpGained = 0;
         let skippedCount = 0;
 
-        for (const pid of targetIds) {
+        // Pre-filter online characters in guild so we know exact remaining count for splitLevelUp
+        const onlineEligibleIds = targetIds.filter(pid => {
+          const p = byId.get(pid);
+          const pr = probes.get(pid);
+          return Boolean(p && p.debugPort && pr && pr.inWorld && pr.inGameGuild);
+        });
+
+        for (let idx = 0; idx < targetIds.length; idx++) {
+          const pid = targetIds[idx];
+          if (maxTotalZeny > 0 && totalZenyDonated >= maxTotalZeny) {
+            break;
+          }
           const p = byId.get(pid);
           const pr = probes.get(pid);
           if (!p || !p.debugPort || !pr || !pr.inWorld || !pr.inGameGuild) {
@@ -1130,7 +1941,22 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
             }
             continue;
           }
-          const r = await donateZenyForProfile(pid, p, amount, keepZeny);
+
+          let reqAmountForChar = amount;
+          if (maxTotalZeny > 0) {
+            const remainingTotal = Math.max(0, maxTotalZeny - totalZenyDonated);
+            if (remainingTotal < 10000) break;
+            if (splitLevelUp) {
+              const remainingOnlineCount = Math.max(1, onlineEligibleIds.filter(remId => targetIds.indexOf(remId) >= idx).length);
+              const dynamicShare = Math.max(10000, Math.ceil((remainingTotal / 10000) / remainingOnlineCount) * 10000);
+              const basePerChar = amount === 'all' ? remainingTotal : Math.max(amount, dynamicShare);
+              reqAmountForChar = Math.min(basePerChar, remainingTotal);
+            } else {
+              reqAmountForChar = amount === 'all' ? remainingTotal : Math.min(amount, remainingTotal);
+            }
+          }
+
+          const r = await donateZenyForProfile(pid, p, reqAmountForChar, keepZeny);
           results.push(r);
           if (r.ok) {
             donatedCount++;
@@ -1269,7 +2095,9 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     if (req.method === 'POST' && sub === 'donate') {
       const { byId, results: probes } = await probeAllConfigured();
       const allIds = [g.leaderId, ...g.memberIds];
+      const dr = sanitizeDailyRoutine(state.dailyRoutine);
       let donatedNow = 0;
+      let boughtNow = 0;
       let cooldownCount = 0;
       let missingItemsCount = 0;
       let alreadyDonatedCount = 0;
@@ -1283,16 +2111,40 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
           }
           const tiers = Array.isArray(pr.donatableTiers) ? pr.donatableTiers : [];
           if (tiers.length === 0) {
-            missingItemsCount++;
+            if (dr.autoBuyDonateMaterials) {
+              const buyRes = await tryBuyMissingMaterialsAndDonate(g, pid, p, pr, true);
+              if (buyRes && buyRes.donated) {
+                donatedNow++;
+                if (Array.isArray(buyRes.boughtSummary) && buyRes.boughtSummary.length > 0) boughtNow++;
+                if (dr.autoExchangeShop && buyRes.afterProbe) {
+                  await tryExchangeGuildShopForProfile(g, pid, p, buyRes.afterProbe, false);
+                }
+              } else if (buyRes && buyRes.cooldown) {
+                cooldownCount++;
+              } else {
+                missingItemsCount++;
+              }
+            } else {
+              missingItemsCount++;
+            }
             continue;
           }
           const ok = await tryAutoDonateForProfile(g, pid, p, pr, true);
-          if (ok) donatedNow++;
-          else cooldownCount++;
+          if (ok) {
+            donatedNow++;
+            if (dr.autoExchangeShop) {
+              const freshPr = await probeClient(p.debugPort);
+              if (freshPr && freshPr.inWorld) {
+                await tryExchangeGuildShopForProfile(g, pid, p, freshPr, false);
+              }
+            }
+          } else {
+            cooldownCount++;
+          }
         }
       }
       await probeAllConfigured().catch(() => {});
-      return sendJSON({ success: true, donatedNow, cooldownCount, missingItemsCount, alreadyDonatedCount, ...buildPublicView() }), true;
+      return sendJSON({ success: true, donatedNow, boughtNow, cooldownCount, missingItemsCount, alreadyDonatedCount, ...buildPublicView() }), true;
     }
 
     // POST /api/guilds/:id/members — manually add a member

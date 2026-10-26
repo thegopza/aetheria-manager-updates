@@ -236,44 +236,8 @@ async function fetchProfiles() {
   }
 }
 
-let lastHumanCheckBeep = 0;
-let sharedAlertAudioCtx = null;
-function ensureAlertAudioCtx() {
-  const AudioCtx = window.AudioContext || window.webkitAudioContext;
-  if (!AudioCtx) return null;
-  if (!sharedAlertAudioCtx || sharedAlertAudioCtx.state === 'closed') {
-    sharedAlertAudioCtx = new AudioCtx();
-  }
-  if (sharedAlertAudioCtx.state === 'suspended' && typeof sharedAlertAudioCtx.resume === 'function') {
-    sharedAlertAudioCtx.resume().catch(() => {});
-  }
-  return sharedAlertAudioCtx;
-}
-window.addEventListener('click', () => { try { ensureAlertAudioCtx(); } catch (_) {} }, { passive: true });
-window.addEventListener('keydown', () => { try { ensureAlertAudioCtx(); } catch (_) {} }, { passive: true });
-
-function playHumanCheckAlert(urgent = false) {
-  const now = Date.now();
-  const cooldown = urgent ? 4500 : 5000;
-  if (now - lastHumanCheckBeep < cooldown) return;
-  lastHumanCheckBeep = now;
-  try {
-    const ctx = ensureAlertAudioCtx();
-    if (!ctx) return;
-    const notes = urgent ? [987.77, 1318.51, 987.77, 1318.51] : [880, 1174.66, 880, 1318.51];
-    notes.forEach((freq, idx) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = urgent ? 'sawtooth' : 'triangle';
-      osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.16);
-      gain.gain.setValueAtTime(urgent ? 0.35 : 0.28, ctx.currentTime + idx * 0.16);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.16 + 0.14);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(ctx.currentTime + idx * 0.16);
-      osc.stop(ctx.currentTime + idx * 0.16 + 0.15);
-    });
-  } catch (e) {}
+function playHumanCheckAlert() {
+  // ปิดเสียงแจ้งเตือน Captcha บนหน้า Manager ตามคำขอของผู้ใช้งาน
 }
 
 function updateCaptchaSolvedDisplay(count) {

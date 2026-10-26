@@ -4312,21 +4312,9 @@ const discordService = createDiscordBotService({
 
 const embeddedHumanCheckBridge=require('./embedded_human_check_bridge').createEmbeddedHumanCheckBridge({evalProfilePort,recordCaptchaSolved,getConfig:()=>{const hc=humanCheckSolver.loadSettings(),dc=discordService.loadSettings();return {autoAnswer:hc.autoAnswer!==false&&dc.autoAnswer!==false,answerDelayMs:hc.answerDelayMs};}});
 
-// OS-level Windows sound alert so Human Check / Prison alerts are audible even when browser tabs are backgrounded or muted
-let lastWindowsBeepAt = 0;
-let windowsBeepInFlight = false;
-function triggerWindowsAlertBeep(urgent = false) {
-  if (TEST_INSTANCE || process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test') return;
-  const now = Date.now();
-  const minGap = urgent ? 4500 : 7500;
-  if (windowsBeepInFlight || now - lastWindowsBeepAt < minGap) return;
-  lastWindowsBeepAt = now;
-  windowsBeepInFlight = true;
-  try { process.stdout.write('\x07'); } catch (_) {}
-  const psCmd = urgent
-    ? '[console]::beep(988,160); [console]::beep(1318,160); [console]::beep(988,160); [console]::beep(1318,240)'
-    : '[console]::beep(880,170); [console]::beep(1175,210)';
-  runPowerShell(psCmd).finally(() => { windowsBeepInFlight = false; });
+// ปิดเสียงแจ้งเตือน Captcha ระดับ OS จากตัว Manager เพื่อไม่ให้รบกวนผู้ใช้งาน
+function triggerWindowsAlertBeep() {
+  // No-op: disabled per user request
 }
 
 const humanCheckFirstSeenByProfile = new Map();

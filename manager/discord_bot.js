@@ -1611,7 +1611,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         if (!sent && cfg.webhookUrl) {
           await discordRequest(cfg.webhookUrl, 'POST', {
             username: `PmheeAether (${nick})`,
-            avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/manager/public/icon.png',
+            avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-manager-updates/main/manager/public/icon.png',
             content: `🤖 **[Auto-Solver · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) ตอบเช็คผู้เล่นอัตโนมัติสำเร็จ -> บอทเลือก **"${solution.matchedName}"**${coordSuffix} (✅ ยืนยันผล: ตอบถูก!)`,
             embeds: [embed]
           }, null, fileAttachment);
@@ -1746,7 +1746,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       if (!sent && cfg.webhookUrl) {
         const payload = {
           username: `PmheeAether (${nick})`,
-          avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/manager/public/icon.png',
+          avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-manager-updates/main/manager/public/icon.png',
           content: `🚨 **แจ้งเตือนด่วน [เครื่อง: ${nick}]** ${reasonBadge}จอ **${charName}** (${profile.name}) มีคำถามเช็คผู้เล่น!`,
           embeds: [embed]
         };
@@ -1842,7 +1842,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
 
     const webhookPayload = {
       username: `PmheeAether Security (${nick})`,
-      avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/manager/public/icon.png',
+      avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-manager-updates/main/manager/public/icon.png',
       content: `🚨 **แจ้งเตือนความปลอดภัย [เครื่อง: ${nick}]:** ตรวจพบตัวละคร **${profile.name}** กลับเมืองโดยไม่ทราบสาเหตุ!`,
       embeds: [embed]
     };
@@ -1885,7 +1885,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     };
     const payload = {
       username: `PmheeAether Security (${nick})`,
-      avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/manager/public/icon.png',
+      avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-manager-updates/main/manager/public/icon.png',
       content: `👋 **[เครื่อง: ${nick}] ทดสอบ Webhook แจ้งเตือนกลับเมืองสำเร็จ!**`,
       embeds: [embed]
     };

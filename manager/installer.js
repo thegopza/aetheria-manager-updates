@@ -346,7 +346,7 @@ function checkManagerOnlineUpdate() {
     return new Promise((resolve) => {
         const options = {
             hostname: 'api.github.com',
-            path: '/repos/thegopza/aetheria-pelican-bot/commits/main',
+            path: `/repos/${process.env.PMHEE_MANAGER_UPDATE_REPO || 'thegopza/aetheria-manager-updates'}/commits/${process.env.PMHEE_MANAGER_UPDATE_BRANCH || 'main'}`,
             headers: {
                 'User-Agent': 'PmheeAether-Manager-Updater'
             },

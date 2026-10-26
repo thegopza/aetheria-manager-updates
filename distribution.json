@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "43ffaa1018da836276baac167fdda14a9b5285ca",
+  "sourceCommit": "ddf5433c1c1f05ffcdcf5fad07e5b107d2258ab9",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -36,7 +36,7 @@
     },
     {
       "path": "manager/discord_bot.js",
-      "sha256": "612ac8effd5456652e14201b75b9d0d393e7cf44c488d28d8dc8a713fdec3c59"
+      "sha256": "00f480e7b3ddd8eed49d60debbce2e8652b1abe2d91a9fbccc9c0feb908c85ac"
     },
     {
       "path": "manager/embedded_human_check_bridge.js",
@@ -64,7 +64,7 @@
     },
     {
       "path": "manager/installer.js",
-      "sha256": "26ae62f2fd3d3ad61cab7be6754ecc0ac0b974df1b5794599167f5b5e3aaf4fb"
+      "sha256": "e828be98d3769459096d3b340756724de381d0c1ef4c017fe744bf32c3f48627"
     },
     {
       "path": "manager/inventory_market_api.js",

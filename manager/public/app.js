@@ -4440,6 +4440,12 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                                 <option value="พีระมิดจมทราย">พีระมิดจมทราย (Lv. 115-130)</option>
                                 <option value="แกนลาวา">แกนลาวา (Lv. 135-150)</option>
                             </optgroup>
+                            <optgroup label="❄️ ดินแดนรูน - โลกที่ 2 (Lv. 150-190)">
+                                <option value="ดินแดนน้ำแข็ง">ดินแดนน้ำแข็ง (Lv. 150-160)</option>
+                                <option value="ที่ราบศิลา">ที่ราบศิลา (Lv. 155-165)</option>
+                                <option value="สุสานรูนโบราณ">สุสานรูนโบราณ (Lv. 165-175)</option>
+                                <option value="คุกใต้ดินรูน">คุกใต้ดินรูน (Lv. 170-190)</option>
+                            </optgroup>
                         </select>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 5px;">
                             <button class="p-btn p-btn-loop" id="p-btn-walk-map">🚀 เดินกลับแมพ</button>
@@ -6562,6 +6568,27 @@ const PLAN_MAP_OPTIONS = [
       {
         "value": "แกนลาวา",
         "label": "แกนลาวา (Lv. 135-150)"
+      }
+    ]
+  },
+  {
+    "group": "❄️ ดินแดนรูน - โลกที่ 2 (Lv. 150-190)",
+    "maps": [
+      {
+        "value": "ดินแดนน้ำแข็ง",
+        "label": "ดินแดนน้ำแข็ง (Lv. 150-160)"
+      },
+      {
+        "value": "ที่ราบศิลา",
+        "label": "ที่ราบศิลา (Lv. 155-165)"
+      },
+      {
+        "value": "สุสานรูนโบราณ",
+        "label": "สุสานรูนโบราณ (Lv. 165-175)"
+      },
+      {
+        "value": "คุกใต้ดินรูน",
+        "label": "คุกใต้ดินรูน (Lv. 170-190)"
       }
     ]
   }

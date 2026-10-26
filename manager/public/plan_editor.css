@@ -325,6 +325,23 @@
 .skill-auto-toggle.on .sat-switch::after { left: 14px; }
 .skill-auto-toggle.off { color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); }
 
+/* ---------- ✨ Skill Awakening (ปลุกพลังสกิล / Facets) on skill cards ---------- */
+.skill-facets-box { margin-top: 2px; padding: 7px 8px; border-radius: 7px; background: rgba(2, 6, 23, 0.65); border: 1px solid rgba(245, 158, 11, 0.22); display: flex; flex-direction: column; gap: 5px; }
+.skill-facets-header { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; font-weight: 700; color: #fcd34d; }
+.skill-facets-sub { font-size: 9.5px; font-weight: 500; color: #94a3b8; }
+.skill-facet-tier { display: flex; flex-direction: column; gap: 3px; }
+.skill-facet-tier-head { display: flex; align-items: center; gap: 5px; }
+.skill-facet-lv { flex-shrink: 0; min-width: 38px; text-align: center; font-size: 9.5px; font-weight: 800; padding: 2px 4px; border-radius: 4px; background: rgba(30, 41, 59, 0.9); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.25); }
+.skill-facet-lv.met { color: #4ade80; border-color: rgba(74, 222, 128, 0.45); background: rgba(20, 83, 45, 0.35); }
+.skill-facet-lv.bonus { color: #c084fc; border-color: rgba(192, 132, 252, 0.35); background: rgba(88, 28, 135, 0.25); }
+.skill-facet-opts { flex: 1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
+.skill-facet-btn { padding: 3px 4px; font-size: 10px; font-weight: 600; border-radius: 5px; border: 1px solid rgba(148, 163, 184, 0.25); background: rgba(15, 23, 42, 0.85); color: #cbd5e1; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: all 0.14s ease; }
+.skill-facet-btn:hover { border-color: rgba(251, 191, 36, 0.55); color: #fef3c7; background: rgba(120, 53, 15, 0.3); }
+.skill-facet-btn.on { background: linear-gradient(135deg, rgba(245, 158, 11, 0.28), rgba(168, 85, 247, 0.28)); border-color: #fbbf24; color: #fde68a; font-weight: 700; box-shadow: 0 0 8px rgba(245, 158, 11, 0.25); }
+.skill-facet-desc { font-size: 9.8px; color: #e2e8f0; background: rgba(245, 158, 11, 0.08); border-left: 2px solid #fbbf24; padding: 2px 6px; border-radius: 0 4px 4px 0; line-height: 1.35; }
+.skill-facet-desc b { color: #fcd34d; }
+.skill-facets-pending { font-size: 10px; color: #64748b; font-style: italic; padding: 3px 6px; border-radius: 5px; background: rgba(2, 6, 23, 0.4); border: 1px dashed rgba(148, 163, 184, 0.18); }
+
 /* ---------- 🛡️ Gear set builder (gear_builder.js) ---------- */
 .gb-backdrop { position: fixed; inset: 0; z-index: 10050; display: none; align-items: center; justify-content: center; background: rgba(2, 6, 23, 0.72); padding: 16px; }
 .gb-card { width: min(1180px, 100%); max-height: calc(100vh - 32px); display: flex; flex-direction: column; background: #0b1224; border: 1px solid rgba(56, 189, 248, 0.25); border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); overflow: hidden; }

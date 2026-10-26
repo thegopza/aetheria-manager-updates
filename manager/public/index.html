@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="style.css?v=44416">
   <link rel="stylesheet" href="inventory_market.css?v=4.44.23">
   <link rel="stylesheet" href="bot_update.css?v=44002">
-  <link rel="stylesheet" href="plan_editor.css?v=42900">
+  <link rel="stylesheet" href="plan_editor.css?v=4.45.0">
   <link rel="stylesheet" href="party_manager.css?v=4.44.21">
   <link rel="stylesheet" href="premium_manager.css?v=4.44.21">
   <link rel="stylesheet" href="guild_manager.css?v=4.44.26">
@@ -1030,15 +1030,15 @@
 
   <!-- MODAL: SKILL BUILDER (ระบบวางแผนอัปสกิลตามลำดับแต้ม) -->
   <div class="modal-overlay" id="skill-builder-modal">
-    <div class="modal-card" style="max-width: 900px; width: 95%; max-height: 92vh; display: flex; flex-direction: column;">
+    <div class="modal-card" style="max-width: 980px; width: 95%; max-height: 92vh; display: flex; flex-direction: column;">
       <div class="modal-header">
         <div style="display: flex; align-items: center; gap: 10px;">
           <div style="width: 36px; height: 36px; border-radius: 8px; background: rgba(168, 85, 247, 0.15); border: 1px solid rgba(168, 85, 247, 0.35); display: flex; align-items: center; justify-content: center; font-size: 18px;">
             ⚡
           </div>
           <div>
-            <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: #f8fafc;">ระบบวางแผนอัปสกิลตามลำดับแต้ม (Skill Point Queue)</h3>
-            <span style="font-size: 11px; color: #94a3b8;">คลิกสกิลตามลำดับความสำคัญ บอทจะบันทึกทุกแต้มและอัปตามลำดับที่คลิกทันทีเมื่อมีแต้มสกิล</span>
+            <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: #f8fafc;">ระบบวางแผนอัปสกิล &amp; ปลุกพลังสกิล (Skill Queue &amp; Awakening)</h3>
+            <span style="font-size: 11px; color: #94a3b8;">คลิก + เพื่อจัดลำดับการอัปแต้มสกิล และเลือกสาย ✨ ปลุกพลังสกิล (Awakening) ให้บอทเปิดใช้อัตโนมัติเมื่อถึงเลเวลที่กำหนด</span>
           </div>
         </div>
         <button class="modal-close" id="skill-builder-close-btn">&times;</button>
@@ -1084,7 +1084,7 @@
       </div>
 
       <!-- Skills Grid Container -->
-      <div id="skill-cards-grid" style="flex: 1; overflow-y: auto; max-height: 340px; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; padding: 4px 2px;">
+      <div id="skill-cards-grid" style="flex: 1; overflow-y: auto; max-height: 480px; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); align-items: start; gap: 10px; padding: 4px 2px;">
         <!-- Populated dynamically -->
       </div>
 
@@ -1094,7 +1094,7 @@
           <span style="font-size: 11.5px; font-weight: 700; color: #cbd5e1;">📋 ลำดับการอัปสกิลตามคิว (<span id="skill-queue-total-count">0</span> แต้ม):</span>
           <span style="font-size: 10px; color: #94a3b8;">*บอทจะอัปสกิลแรกในคิวที่ยังไม่เต็มทันทีเมื่อมีแต้มสกิล</span>
         </div>
-        <div id="skill-queue-chips-container" style="display: flex; gap: 4px; overflow-y: auto; padding-bottom: 6px; max-height: 96px; flex-wrap: wrap;">
+        <div id="skill-queue-chips-container" style="display: flex; gap: 4px; overflow-y: auto; padding-bottom: 6px; max-height: 68px; flex-wrap: wrap;">
           <!-- Skill chips -->
         </div>
       </div>
@@ -1158,7 +1158,7 @@
   <script src="image_board_solver.js?v=4381"></script>
   <script src="app.js?v=4.44.27"></script>
   <script src="patcher_module.js?v=41744"></script>
-  <script src="builder_module.js?v=44009"></script>
+  <script src="builder_module.js?v=4.45.0"></script>
   <script src="gear_builder.js?v=42900"></script>
   <script src="inventory_market.js?v=4.44.23"></script>
   <script src="bot_update.js?v=44002"></script>
@@ -1167,7 +1167,7 @@
   <script src="premium_manager.js?v=4.44.21"></script>
   <script src="guild_manager.js?v=4.44.26"></script>
   <script src="jail_manager.js?v=44004"></script>
-  <script src="update_log.js?v=4.44.27"></script>
+  <script src="update_log.js?v=4.45.0"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

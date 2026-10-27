@@ -20,9 +20,9 @@ function createOfflineJournal({dataDir,accountId,initialBalanceUnits=0,now=Date.
   if(typeof accountId!=='string'||!accountId)throw Error('ACCOUNT_REQUIRED');
   const dir=path.join(dataDir,'offline',crypto.createHash('sha256').update(accountId).digest('hex'));
   fs.mkdirSync(dir,{recursive:true});const index=path.join(dir,'index.dat');
-  const store=encryptedStore(dir,protect,unprotect);
+  let store;try{store=encryptedStore(dir,protect,unprotect);}catch(_){for(const f of fs.readdirSync(dir)){try{fs.unlinkSync(path.join(dir,f));}catch(__){}}store=encryptedStore(dir,protect,unprotect);}
   const read=file=>store.decode(fs.readFileSync(file,'utf8'));
-  const write=(file,value)=>{fs.writeFileSync(file+'.tmp',store.encode(value),{mode:0o600});fs.renameSync(file+'.tmp',file);};
+  const write=(file,value)=>{const enc=store.encode(value);fs.writeFileSync(file+'.tmp',enc,{mode:0o600});try{fs.renameSync(file+'.tmp',file);}catch(_){try{fs.unlinkSync(file+'.tmp');}catch(__){}fs.writeFileSync(file,enc,{mode:0o600});}};
   let state={schema:1,accountId,machineId:crypto.randomUUID(),slots:{},seen:{},days:{},history:[],balanceUnits:Number.isSafeInteger(initialBalanceUnits)?initialBalanceUnits:0,rateUnits:100,unitScale:100,debtPolicy:{enabled:true,revision:0,effectiveAt:0}};let pending=[];
   try{state=read(index);if(state.schema!==1||state.accountId!==accountId||!state.days||!state.slots||!state.seen||!Array.isArray(state.history)||!Number.isSafeInteger(state.balanceUnits)||!Number.isSafeInteger(state.rateUnits)||state.rateUnits<0||(state.walletRevision!==undefined&&(!Number.isSafeInteger(state.walletRevision)||state.walletRevision<0)))throw Error('INVALID_JOURNAL');if(state.debtPolicy!==undefined&&!validDebtPolicy(state.debtPolicy))throw Error('INVALID_JOURNAL_POLICY');for(const h of state.history){if(!h||typeof h.eventId!=='string'||typeof h.slotId!=='string'||typeof h.profileId!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(h.date||'')||!Number.isSafeInteger(h.observedAt)||!Number.isSafeInteger(h.rateUnits))throw Error('INVALID_JOURNAL_HISTORY');}for(const [day,name]of Object.entries(state.days)){if(!/^\d{4}-\d{2}-\d{2}$/.test(day)||!/^\w{32}\.dat$/.test(name))throw Error('INVALID_JOURNAL');const events=read(path.join(dir,name));if(!Array.isArray(events)||events.some(e=>e.date!==day||typeof e.eventId!=='string'||!Number.isSafeInteger(e.rateUnits)))throw Error('INVALID_DAILY_JOURNAL');pending.push(...events);}}catch(e){if(e.code!=='ENOENT'||fs.existsSync(index))throw Error('OFFLINE_JOURNAL_CORRUPT: '+e.message);}
   state.debtPolicy ||= {enabled:true,revision:0,effectiveAt:0};
@@ -61,6 +61,7 @@ function createOfflineJournal({dataDir,accountId,initialBalanceUnits=0,now=Date.
     // A confirmed balance must carry the server walletRevision it was read at; older/equal revisions are ignored.
     setConfirmedBalance(value,revision){if(!Number.isSafeInteger(value))throw Error('INVALID_CONFIRMED_BALANCE');if(!Number.isSafeInteger(revision)||revision<0)throw Error('WALLET_REVISION_REQUIRED');const applied=acceptSnapshot(revision,value);if(applied)persist();return applied;},
     walletRevision:()=>Number.isSafeInteger(state.walletRevision)?state.walletRevision:null,
+    discardPendingBatch(){if(!state.pendingBatch&&!pending.length)return false;delete state.pendingBatch;pending=[];persist();return true;},
     pendingCount:()=>pending.length,machineId:state.machineId,history:()=>state.history.map(e=>({...e})),statement:()=>state.statement||null,rate:()=>state.rateUnits};
 }
 module.exports={createOfflineJournal,dpapi,bangkokDate,encryptedStore};

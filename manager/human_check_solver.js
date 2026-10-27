@@ -37,10 +37,11 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   let account = null;
   let enrollment = null;
   let offlineWallet = null;
+  let onAccountChanged = null;
   let lastCatalogAttempt = 0;
   try {
     const saved = JSON.parse(fs.readFileSync(accountFile, 'utf8'));
-    if (saved.origin === base.origin && /^[a-f0-9]{64}$/.test(saved.token || '') && typeof saved.accountId === 'string') account = saved;
+    if (saved.origin === base.origin && /^[a-f0-9]{64}$/.test(saved.token || '') && typeof saved.accountId === 'string' && (!saved.machineHwid || saved.machineHwid === machineHwid)) account = saved;
   } catch (_) {}
   try{const saved=JSON.parse(fs.readFileSync(walletSnapshotFile,'utf8'));if(saved.origin===base.origin&&saved.accountId===account?.accountId&&Number.isSafeInteger(saved.balanceUnits)){balanceUnits=saved.balanceUnits;points=balanceUnits/100;if(Array.isArray(saved.topupHistory))topupHistory=saved.topupHistory;}}catch(_){}
   function atomicWrite(file, data) {
@@ -73,7 +74,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   const requestJSON = testRequest || ((route, payload, token) => new Promise((resolve, reject) => {
     const responseLimit = ['/v1/aetheria/script/payload-chunk','/v1/aetheria/offline/payload-chunk','/v1/aetheria/script/catalog'].includes(route) ? 1024 * 1024 : 131072;
     const data = payload == null ? null : JSON.stringify(payload);
-    const headers = { 'Accept': 'application/json' };
+    const headers = { 'Accept': 'application/json', 'X-Machine-Hwid': machineHwid };
     if (token) headers.Authorization = 'Bearer ' + token;
     if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
     const req = https.request(new URL(route, base), { method: data ? 'POST' : 'GET', headers, timeout: 15000 }, res => {
@@ -106,9 +107,12 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     if (!enrollment) enrollment = (async () => {
       const result = await requestJSON('/v1/aetheria/enroll', { machineHwid, machineName }, null);
       if (!result?.success || typeof result.accountId !== 'string' || !/^[a-f0-9]{64}$/.test(result.token || '')) throw new Error('Invalid account enrollment');
-      const saved = { origin: base.origin, accountId: result.accountId, token: result.token };
+      const saved = { origin: base.origin, accountId: result.accountId, token: result.token, machineHwid };
       atomicWrite(accountFile, saved);
       account = saved;
+      if (result.schemaVersion === 2 && result.unitScale === 100 && Number.isSafeInteger(result.balanceUnits)) {
+        updateBalance(result);
+      }
       return account;
     })().finally(() => { enrollment = null; });
     return enrollment;
@@ -119,7 +123,28 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       const result = await requestJSON(route, payload, credential.token);
       serviceAvailable = true;
       return result;
-    } catch (e) { serviceAvailable = false; throw e; }
+    } catch (e) {
+      if (e && e.status === 401 && e.code === 'ACCOUNT_HWID_MISMATCH') {
+        const prevAccountId = account?.accountId || null;
+        account = null;
+        try { fs.unlinkSync(accountFile); } catch (_) {}
+        try { fs.unlinkSync(walletSnapshotFile); } catch (_) {}
+        try {
+          const fresh = await ensureAccount();
+          if (onAccountChanged && fresh?.accountId && fresh.accountId !== prevAccountId) {
+            try { onAccountChanged(fresh.accountId, prevAccountId); } catch (_) {}
+          }
+          const retried = await requestJSON(route, payload, fresh.token);
+          serviceAvailable = true;
+          return retried;
+        } catch (retryErr) {
+          serviceAvailable = false;
+          throw retryErr;
+        }
+      }
+      serviceAvailable = false;
+      throw e;
+     }
   }
   function updateBalance(result) {
     if (result.schemaVersion === 2 && result.unitScale === 100 && Number.isSafeInteger(result.balanceUnits ?? result.remainingUnits)) {
@@ -192,6 +217,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   return {
     get serviceOrigin() { return base.origin; },
     setOfflineWallet(value){offlineWallet=value||null;},
+    setOnAccountChanged(fn){onAccountChanged=typeof fn==='function'?fn:null;},
     applyOfflineBalance(value){if(offlineWallet&&Number.isSafeInteger(value)){balanceUnits=value;points=value/100;}},
     applyOfflineWalletSnapshot(result){if(offlineWallet&&result?.unitScale===100&&Number.isSafeInteger(result.balanceUnits))updateBalance({...result,schemaVersion:2});},
     isRemoteService: true, loadSettings, saveSettings,

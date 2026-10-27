@@ -4515,8 +4515,9 @@ function buildLocalProfileBackupPayload() {
   };
 }
 
-function applyProfileBackupPayload(data) {
+function applyProfileBackupPayload(data, options = {}) {
   if (!data || typeof data !== "object") return { restoredProfiles: 0, restoredCredentials: 0 };
+  const replaceExisting = Boolean(options && options.replaceExisting);
   const rawList = Array.isArray(data.profiles) ? data.profiles : [];
   if (rawList.length === 0) return { restoredProfiles: 0, restoredCredentials: 0 };
   const existing = loadProfiles() || [];
@@ -4533,7 +4534,7 @@ function applyProfileBackupPayload(data) {
     const id = String(base.id || item.id || item.profileId || "").trim();
     if (!id || seenIds.has(id) || deletedIds.has(id)) continue;
     seenIds.add(id);
-    const prev = existingById.get(id) || {};
+    const prev = replaceExisting ? {} : (existingById.get(id) || {});
     const username = String(item.username || item.account || base.account || base.username || (credsObj[id] && credsObj[id].username) || prev.account || prev.username || "").trim();
     const password = String(item.password || (credsObj[id] && credsObj[id].password) || "").trim();
     const charName = String(item.characterName || base.lastCharName || prev.lastCharName || "").trim();
@@ -4562,10 +4563,20 @@ function applyProfileBackupPayload(data) {
     }
   }
 
-  // Keep any existing non-mock profiles that were not in the backup
-  if (!isUntouchedDefaultMockProfiles(existing)) {
+  if (replaceExisting) {
+    for (const oldP of existing) {
+      if (oldP && oldP.id && !seenIds.has(oldP.id)) {
+        try { credentials.setPassword(oldP.id, ""); } catch (_) {}
+        try {
+          const bsFile = path.join(SESSIONS_DIR, "_browser_storage", `${oldP.id}.json`);
+          if (fs.existsSync(bsFile)) fs.unlinkSync(bsFile);
+        } catch (_) {}
+      }
+    }
+  } else if (!isUntouchedDefaultMockProfiles(existing)) {
+    // Keep any existing non-mock profiles that were not in the backup
     for (const p of existing) {
-      if (p && p.id && !seenIds.has(p.id)) {
+      if (p && p.id && !seenIds.has(p.id) && !deletedIds.has(p.id)) {
         merged.push(p);
       }
     }
@@ -4591,6 +4602,9 @@ async function syncProfileBackupToCentral() {
       machineName: payload.machineName,
       profiles: payload.profiles
     });
+    if (res && res.foreignProfilesDetected === true) {
+      await restoreProfilesFromCentral({ replaceExisting: true }).catch(() => {});
+    }
     return res;
   } catch (_) {
     return null;
@@ -4608,16 +4622,20 @@ function scheduleCentralProfileBackupSync(delayMs = 3500) {
   }, delayMs);
 }
 
-async function restoreProfilesFromCentral() {
+async function restoreProfilesFromCentral(options = {}) {
   try {
-    const accountSettings = humanCheckSolver.loadSettings();
+    let accountSettings = humanCheckSolver.loadSettings();
+    if (!accountSettings || !accountSettings.accountId) {
+      await humanCheckSolver.refreshBalance().catch(() => {});
+      accountSettings = humanCheckSolver.loadSettings();
+    }
     if (!accountSettings || !accountSettings.accountId) return { success: false, error: 'NO_ACCOUNT' };
     const deviceId = getEffectiveDeviceNickname();
     const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/profile-restore', {
       machineId: deviceId
     });
     if (res && res.success && Array.isArray(res.profiles) && res.profiles.length > 0) {
-      const result = applyProfileBackupPayload(res);
+      const result = applyProfileBackupPayload(res, options);
       console.log(`[Central Admin] 🛡️ กู้คืนโปรไฟล์จากเซิร์ฟเวอร์สำเร็จ ${result.restoredProfiles} จอ (รหัสผ่าน ${result.restoredCredentials} จอ)`);
       return { success: true, ...result };
     }
@@ -4627,10 +4645,20 @@ async function restoreProfilesFromCentral() {
   }
 }
 
+if (typeof humanCheckSolver.setOnAccountChanged === "function") {
+  humanCheckSolver.setOnAccountChanged(() => {
+    restoreProfilesFromCentral({ replaceExisting: true }).catch(() => {});
+  });
+}
+
 function importEvidenceFromOtherManagerDirsOnDisk() {
   try {
     const home = os.homedir();
     const currentMgrDir = path.resolve(__dirname).toLowerCase();
+    const currentHwid = typeof humanCheckSolver.getMachineFingerprint === "function"
+      ? humanCheckSolver.getMachineFingerprint()
+      : "";
+    const currentAccountId = String(humanCheckSolver.loadSettings()?.accountId || "").trim();
     const searchRoots = new Set([
       path.resolve(__dirname, ".."),
       path.resolve(__dirname, "../.."),
@@ -4692,6 +4720,27 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
     for (const mgrDir of candidateMgrDirs) {
       try {
         const otherRoot = path.resolve(mgrDir, "..");
+        // Verify the candidate folder does not belong to a foreign machine or different service account
+        let isForeignFolder = false;
+        for (const saPath of [
+          path.join(mgrDir, "data", "aetheria_service_account.json"),
+          path.join(otherRoot, "manager", "data", "aetheria_service_account.json")
+        ]) {
+          if (!fs.existsSync(saPath)) continue;
+          try {
+            const sa = JSON.parse(fs.readFileSync(saPath, "utf8"));
+            if (sa && typeof sa === "object") {
+              if (sa.machineHwid && currentHwid && String(sa.machineHwid).trim() !== currentHwid) {
+                isForeignFolder = true;
+              }
+              if (currentAccountId && sa.accountId && String(sa.accountId).trim() !== currentAccountId) {
+                isForeignFolder = true;
+              }
+            }
+          } catch (_) {}
+        }
+        if (isForeignFolder) continue;
+
         // 1. Copy credentials.json entries if missing locally
         for (const credPath of [path.join(mgrDir, "data", "credentials.json"), path.join(otherRoot, "manager", "data", "credentials.json")]) {
           if (!fs.existsSync(credPath)) continue;
@@ -4815,6 +4864,10 @@ function hasProfilesMissingCredentialsOrAccount(list) {
 async function recoverAndEnrichProfilesFromBrowserAndLocal() {
   try {
     let current = loadProfiles() || [];
+    if (isUntouchedDefaultMockProfiles(current)) {
+      await restoreProfilesFromCentral().catch(() => {});
+      current = loadProfiles() || [];
+    }
     if (isUntouchedDefaultMockProfiles(current) || hasProfilesMissingCredentialsOrAccount(current)) {
       importEvidenceFromOtherManagerDirsOnDisk();
       current = loadProfiles() || [];
@@ -4987,7 +5040,7 @@ async function pollCentralCommands() {
         } else if (cmd.action === 'update_bot' || cmd.action === 'refresh_payload') {
           botAutoUpdater.retryFailed().catch(() => {});
         } else if (cmd.action === 'restore_profiles') {
-          await restoreProfilesFromCentral().catch(() => {});
+          await restoreProfilesFromCentral({ replaceExisting: cmd.target === 'replace' || cmd.target === 'all' }).catch(() => {});
           await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
         }
         ackIds.push(cmd.id);

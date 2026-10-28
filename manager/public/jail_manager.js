@@ -101,7 +101,7 @@
     });
 
     const bodyObserver = new MutationObserver(() => {
-      if (isOpen && (document.body.classList.contains('pt-open') || document.body.classList.contains('pm-open') || document.body.classList.contains('gd-open'))) {
+      if (isOpen && (document.body.classList.contains('pt-open') || document.body.classList.contains('pm-open') || document.body.classList.contains('gd-open') || document.body.classList.contains('dv-open'))) {
         isOpen = false;
         document.body.classList.remove('jl-open');
       }
@@ -112,7 +112,7 @@
   function setOpen(next) {
     isOpen = Boolean(next);
     if (isOpen) {
-      document.body.classList.remove('pt-open', 'pm-open', 'gd-open');
+      document.body.classList.remove('pt-open', 'pm-open', 'gd-open', 'dv-open');
     }
     document.body.classList.toggle('jl-open', isOpen);
     if (isOpen) {

@@ -5746,24 +5746,39 @@ const server = http.createServer(async (req, res) => {
         const assignedDeviceId = typeof browserMode.ensureProfileDeviceId === "function"
           ? browserMode.ensureProfileDeviceId(p.id)
           : null;
+        const assignedMachineId = typeof browserMode.ensureProfileMachineId === "function"
+          ? browserMode.ensureProfileMachineId(p.id)
+          : null;
+        const deviceGroupIndex = typeof browserMode.ensureProfileDeviceGroupIndex === "function"
+          ? browserMode.ensureProfileDeviceGroupIndex(p.id)
+          : 1;
 
         if (alive && p.debugPort && assignedDeviceId && !browserMode.isOpen(p.id)) {
           if (!windowStates[p.id]) windowStates[p.id] = {};
-          if (windowStates[p.id].syncedDeviceId !== assignedDeviceId) {
+          if (windowStates[p.id].syncedDeviceId !== assignedDeviceId || windowStates[p.id].syncedMachineId !== assignedMachineId) {
             windowStates[p.id].syncedDeviceId = assignedDeviceId;
+            windowStates[p.id].syncedMachineId = assignedMachineId;
             evalProfilePort(p.debugPort, `(() => {
+              window.__pmManagedDeviceGroup = true;
               window.__pmDeviceId = ${JSON.stringify(assignedDeviceId)};
-              try { if (window.localStorage) window.localStorage.setItem('aetheria.device', window.__pmDeviceId); } catch (_) {}
+              window.__pmMachineId = ${JSON.stringify(assignedMachineId || '')};
+              try {
+                if (window.localStorage) {
+                  window.localStorage.setItem('aetheria.device', window.__pmDeviceId);
+                  if (window.__pmMachineId) window.localStorage.setItem('aetheria.machine', window.__pmMachineId);
+                }
+              } catch (_) {}
               if (!window.__pmEnterWorldDeviceHookInstalled && typeof window.fetch === 'function') {
                 window.__pmEnterWorldDeviceHookInstalled = true;
                 const __origFetch = window.fetch;
                 window.fetch = function(input, init) {
                   try {
                     const urlStr = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : '');
-                    if (window.__pmDeviceId && init && typeof init.body === 'string' && (urlStr === '/world/enter' || urlStr.endsWith('/world/enter'))) {
+                    if (window.__pmDeviceId && init && typeof init.body === 'string' && (urlStr === '/world/enter' || urlStr.endsWith('/world/enter') || urlStr.includes('/world/enter?'))) {
                       const parsed = JSON.parse(init.body);
                       if (parsed && typeof parsed === 'object') {
                         parsed.deviceId = window.__pmDeviceId;
+                        if (window.__pmMachineId) parsed.machineId = window.__pmMachineId;
                         init = Object.assign({}, init, { body: JSON.stringify(parsed) });
                       }
                     }
@@ -5771,7 +5786,7 @@ const server = http.createServer(async (req, res) => {
                   return __origFetch.call(this, input, init);
                 };
               }
-              return { success: true, deviceId: window.__pmDeviceId };
+              return { success: true, deviceId: window.__pmDeviceId, machineId: window.__pmMachineId };
             })()`, 2500).catch(() => {});
           }
         }
@@ -5780,6 +5795,8 @@ const server = http.createServer(async (req, res) => {
           ...p,
           _adoptedAuthFromClient: adoptedAuthFromClient,
           deviceId: assignedDeviceId,
+          machineId: assignedMachineId,
+          deviceGroupIndex,
           hasLoginPassword: !!credentials.getPassword(p.id),
           isRunning: alive,
           pid: alive ? (proc ? proc.pid : null) : null,
@@ -5854,6 +5871,7 @@ const server = http.createServer(async (req, res) => {
     return sendJSON({
       success: true,
       profiles: enriched,
+      deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : [],
       bandwidthSummary,
       screenProxySummary: screenProxy.publicSettings(),
       gameExe: getGameExe(),
@@ -5930,27 +5948,107 @@ const server = http.createServer(async (req, res) => {
     return sendJSON({ success: true });
   }
 
+  // GET /api/device-groups
+  if (req.method === "GET" && pathname === "/api/device-groups") {
+    const groups = typeof browserMode.getDeviceGroupsSnapshot === "function"
+      ? browserMode.getDeviceGroupsSnapshot()
+      : [];
+    return sendJSON({ success: true, maxScreensPerDevice: 3, groups });
+  }
+
+  // POST /api/device-groups/rotate
+  if (req.method === "POST" && pathname === "/api/device-groups/rotate") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const target = payload.groupIndex || payload.profileId || payload.deviceId;
+        if (!target) return sendJSON({ success: false, error: "Missing groupIndex or profileId" }, 400);
+        const grp = typeof browserMode.rotateDeviceGroup === "function"
+          ? await browserMode.rotateDeviceGroup(target)
+          : null;
+        if (!grp) return sendJSON({ success: false, error: "Device group not found" }, 404);
+        for (const pid of (grp.profileIds || [])) {
+          if (windowStates[pid]) {
+            delete windowStates[pid].syncedDeviceId;
+            delete windowStates[pid].syncedMachineId;
+          }
+        }
+        const groups = typeof browserMode.getDeviceGroupsSnapshot === "function"
+          ? browserMode.getDeviceGroupsSnapshot()
+          : [];
+        return sendJSON({ success: true, group: grp, deviceGroups: groups });
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
   // POST /api/profiles/:id/rotate-device-id
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/rotate-device-id$/)) {
     const id = pathname.split("/")[3];
     const profiles = loadProfiles();
     const profile = profiles.find(p => p.id === id);
     if (!profile) return sendJSON({ success: false, error: "Profile not found" }, 404);
-    const newDeviceId = typeof browserMode.rotateProfileDeviceId === "function"
-      ? await browserMode.rotateProfileDeviceId(id)
+    const grp = typeof browserMode.rotateDeviceGroup === "function"
+      ? await browserMode.rotateDeviceGroup(id)
       : null;
-    if (windowStates[id]) delete windowStates[id].syncedDeviceId;
-    return sendJSON({ success: true, profileId: id, deviceId: newDeviceId });
+    const newDeviceId = grp ? grp.deviceId : (typeof browserMode.rotateProfileDeviceId === "function"
+      ? await browserMode.rotateProfileDeviceId(id)
+      : null);
+    if (grp && Array.isArray(grp.profileIds)) {
+      for (const pid of grp.profileIds) {
+        if (windowStates[pid]) {
+          delete windowStates[pid].syncedDeviceId;
+          delete windowStates[pid].syncedMachineId;
+        }
+      }
+    } else if (windowStates[id]) {
+      delete windowStates[id].syncedDeviceId;
+      delete windowStates[id].syncedMachineId;
+    }
+    const groups = typeof browserMode.getDeviceGroupsSnapshot === "function"
+      ? browserMode.getDeviceGroupsSnapshot()
+      : [];
+    return sendJSON({
+      success: true,
+      profileId: id,
+      deviceId: newDeviceId,
+      machineId: grp ? grp.machineId : null,
+      group: grp,
+      deviceGroups: groups
+    });
   }
 
   // POST /api/profiles/rotate-all-device-ids
   if (req.method === "POST" && pathname === "/api/profiles/rotate-all-device-ids") {
+    if (typeof browserMode.rotateAllDeviceIds === "function") {
+      const resAll = await browserMode.rotateAllDeviceIds();
+      for (const pid of Object.keys(resAll.deviceIds || {})) {
+        if (windowStates[pid]) {
+          delete windowStates[pid].syncedDeviceId;
+          delete windowStates[pid].syncedMachineId;
+        }
+      }
+      return sendJSON({
+        success: true,
+        count: Object.keys(resAll.deviceIds || {}).length,
+        deviceIds: resAll.deviceIds || {},
+        groups: resAll.groups || [],
+        deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : []
+      });
+    }
     const profiles = loadProfiles();
     const rotated = {};
     for (const p of profiles) {
       if (p && p.id && typeof browserMode.rotateProfileDeviceId === "function") {
         rotated[p.id] = await browserMode.rotateProfileDeviceId(p.id);
-        if (windowStates[p.id]) delete windowStates[p.id].syncedDeviceId;
+        if (windowStates[p.id]) {
+          delete windowStates[p.id].syncedDeviceId;
+          delete windowStates[p.id].syncedMachineId;
+        }
       }
     }
     return sendJSON({ success: true, count: Object.keys(rotated).length, deviceIds: rotated });

@@ -213,6 +213,9 @@ async function fetchProfiles() {
       if (typeof window.updateJailManagerFromProfiles === 'function') {
         window.updateJailManagerFromProfiles(currentProfiles);
       }
+      if (typeof window.updateDeviceManagerFromProfiles === 'function') {
+        window.updateDeviceManagerFromProfiles(currentProfiles, data.deviceGroups);
+      }
 
       if (data.captchaStats && typeof data.captchaStats.totalSolved === 'number') {
         updateCaptchaSolvedDisplay(data.captchaStats.totalSolved);

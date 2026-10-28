@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "a5a5d1562b40362785a17721579d3ba10376d381",
+  "sourceCommit": "ccb0ab3c685e2266a4a184f8efe5b5c25c64d0bc",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "17d02df043d11a8e604a160a72c4495c7e00f84e57d52948ed272a35ff1ffb81"
+      "sha256": "201015e449edca2ff550ab344fb6386e64c5aedfabf20aaef56dcf52f565d75d"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -56,7 +56,7 @@
     },
     {
       "path": "manager/human_check_solver.js",
-      "sha256": "87396855adeff8d5489abc8149224617c758c8d252b02d731a03cbec71bba740"
+      "sha256": "33480bf8bfd051b5ead05752c2026b4f5a0ef040f960535013953b7574bedff5"
     },
     {
       "path": "manager/image_board_solver.js",
@@ -84,11 +84,11 @@
     },
     {
       "path": "manager/offline_coordinator.js",
-      "sha256": "f18cd1c0119e4da51d2e1930ad09f69c566693bba56a8f2821568b45df797d5a"
+      "sha256": "f8e6823e5708ae862c50f67450d99b963aa51b31a1609d55e0bdeac429b609ab"
     },
     {
       "path": "manager/offline_journal.js",
-      "sha256": "b53c889414b9e9ebbb333412a64fc2cdfe384a061ada1d65af45c28db329900c"
+      "sha256": "072b85b7d59c4bfe19ab9bce2c3e1d46a285a0ea0a7baa909dcbb899d7b3ebb8"
     },
     {
       "path": "manager/offline_payload_cache.js",
@@ -120,7 +120,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "8ca940b80c95ece190cb62630d77fd46bd7f188a11ff5a5be23e9d0b17d03496"
+      "sha256": "e249db478d69470b22184a648bd5ac2dbf04fbe033e61d35b44f96efc4e7fb41"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -139,12 +139,20 @@
       "sha256": "11844e8008c97c4bc60495a678f8c52720e62c862b30142fed9913fdd627d308"
     },
     {
+      "path": "manager/public/device_manager.css",
+      "sha256": "0fa36c24155983a36d7e208416eb6260c6805cc8c366c601fa0fd87eb4eba9e9"
+    },
+    {
+      "path": "manager/public/device_manager.js",
+      "sha256": "52c44a70feff388c95dd2757405edfd81a754cb5a09b0eacc541359dd95fe131"
+    },
+    {
       "path": "manager/public/game-classes.json",
       "sha256": "10cfc93b9b6dd98aa95546adf228effd726e25752cbf593ea0a3520a9bc1a789"
     },
     {
       "path": "manager/public/gear_builder.js",
-      "sha256": "cf0a59601f8ca4c67c07de9136c3bc8037f4da7335507b3372474920608a165e"
+      "sha256": "f760650a005850186a25ea4d33ba79a49f80b830c369ce7d143075dc2c3e24ff"
     },
     {
       "path": "manager/public/guild_manager.css",
@@ -160,7 +168,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "7a89b7d6b67dc6c31cc2f5185b0d810c79cbae13ee4fccb1762f8c2ff15e9b6d"
+      "sha256": "a1e642642faf74da6816f0b501297cb0f512c12e4bd107aa82cde3c72d30da5e"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -176,7 +184,7 @@
     },
     {
       "path": "manager/public/jail_manager.js",
-      "sha256": "c73a88e60d33167be10fd5ccda47a82759e082d18a1843e16fa895b6ab3c257c"
+      "sha256": "0943aa96a3a04d6997eb860d02057a3bfb74beb7ebd4eb51599123e274cd2965"
     },
     {
       "path": "manager/public/party_manager.css",
@@ -215,6 +223,10 @@
       "sha256": "8c49c3cba6db2b7206422ef0f25ef320d413c91db1250bf4c9e2db6abccc27a0"
     },
     {
+      "path": "manager/public/update_log.js",
+      "sha256": "b9c6c96467916852c40c039e2864fa3744dd0e110512b1c8302ed020d1c9c15f"
+    },
+    {
       "path": "manager/screen_proxy_manager.js",
       "sha256": "ce055029f99cace4e18cef18388b09d58f88201c89ab0d3c820254e9a461ca59"
     },
@@ -240,7 +252,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "e0b7d4359d53b46954888944a1f5802d5ed36aea83af8a876a806eb228120de4"
+      "sha256": "8b0d27299f8af3a4353bd6e92d0d55e5031ef8340b4ed902bc8cbec01219f610"
     },
     {
       "path": "manager/test_isolation.js",

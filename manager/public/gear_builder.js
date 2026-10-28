@@ -26,6 +26,13 @@
   ];
   const OPTION_TYPES = ['DEX', 'AGI', 'STR', 'VIT', 'INT', 'LUK', 'ATK', 'ATK%', 'MATK', 'MATK%', 'ASPD', 'HIT', 'FLEE', 'CRIT', 'CRIT_DAMAGE', 'MAXHP', 'MAXSP', 'DEF', 'MDEF', 'MOVE_SPEED', 'RANGED_DAMAGE_PERCENT', 'MELEE_DAMAGE_PERCENT', 'MAGIC_DAMAGE_PERCENT', 'DAMAGE_REDUCTION', 'HEAL_POWER'];
   const RARITY = { common: '#cbd5e1', uncommon: '#4ade80', rare: '#38bdf8', epic: '#c084fc', legendary: '#fbbf24' };
+  const RARITY_TH = { common: 'ทั่วไป', uncommon: 'ดี', rare: 'หายาก', epic: 'มหากาพย์', legendary: 'ตำนาน' };
+  const WEAPON_TYPE_TH = {
+    Bow: 'ธนู', Instrument: 'เครื่องดนตรี', Whip: 'แส้', Staff: 'คทา', Book: 'สมุด/ตำรา',
+    Dagger: 'มีดสั้น', Katar: 'คาตาร์', Sword: 'ดาบมือเดียว', TwoHandSword: 'ดาบสองมือ',
+    Spear: 'หอก', TwoHandSpear: 'หอกสองมือ', Axe: 'ขวาน', TwoHandAxe: 'ขวานสองมือ',
+    Mace: 'กระบอง', Knuckle: 'สนับมือ'
+  };
   const ATTR_TH = { MELEE_ATTACK: 'ATK ประชิด', RANGE_ATTACK: 'ATK ระยะไกล', MAGIC_ATTACK: 'MATK', MELEE_DEFENSE: 'DEF', MAGIC_DEFENSE: 'MDEF' };
 
   let cards = [], pickMode = 'item';
@@ -166,19 +173,68 @@
       m.querySelector('.gb-col-' + side).innerHTML = SLOTS.filter(s => s.side === side).map(s => {
         const sp = slotPlan(s.key);
         const it = sp.equip && itemById(sp.equip.itemId);
+        const isFlex = !!(sp.equip && sp.equip.flexSlot);
+        const slotColor = it ? (RARITY[it.rarity] || '#e2e8f0') : (isFlex ? (RARITY[sp.equip.minRarity] || '#38bdf8') : '');
+        const hasSlottedInSlot = items && items.some(x => s.types.includes(x.slotType) && x.slots > 0);
+        const maxSlots = it ? (Number(it.slots) || 0) : (isFlex && hasSlottedInSlot ? Math.max(Number(sp.equip.minSlots) || 0, 1) : 0);
         return `<div class="gb-slot ${slotSel === s.key ? 'active' : ''} ${sp.equip ? 'filled' : ''}" data-slot="${s.key}">
-          <div class="gb-slot-icon">${it && it.icon ? `<img src="${esc(it.icon)}" alt="">` : ''}</div>
+          <div class="gb-slot-icon">${it && it.icon ? `<img src="${esc(it.icon)}" alt="">` : (isFlex ? '<span style="font-size:15px">⚡</span>' : '')}</div>
           <div class="gb-slot-text">
             <small>${esc(s.label)}</small>
-            <b style="${it ? 'color:' + (RARITY[it.rarity] || '#e2e8f0') : ''}">${sp.equip ? esc(sp.equip.itemName) + (sp.refine ? ` <span class="gb-ref">+${sp.refine}</span>` : '') + (sp.cardCount ? ` <span class="gb-cardn">🃏${sp.cardCount}</span>` : '') : 'ว่าง'}</b>
+            <b style="${slotColor ? 'color:' + slotColor : ''}">${sp.equip ? esc(sp.equip.itemName) + (sp.refine ? ` <span class="gb-ref">+${sp.refine}</span>` : '') + (sp.cardCount ? ` <span class="gb-cardn">🃏${sp.cardCount}</span>` : '') : 'ว่าง'}</b>
           </div>
-          ${sp.equip && it && it.slots > 0 ? `<button type="button" class="gb-card-btn ${slotSel === s.key && pickMode === 'card' ? 'on' : ''}" data-gb="card-mode" data-slot="${s.key}" title="ใส่การ์ดใน ${esc(sp.equip.itemName)} (${sp.cardCount}/${it.slots} ช่อง)">🃏 ${sp.cardCount}/${it.slots}</button>` : ''}
+          ${sp.equip && maxSlots > 0 ? `<button type="button" class="gb-card-btn ${slotSel === s.key && pickMode === 'card' ? 'on' : ''}" data-gb="card-mode" data-slot="${s.key}" title="ใส่การ์ดใน ${esc(sp.equip.itemName)} (${sp.cardCount}/${maxSlots} ช่อง)">🃏 ${sp.cardCount}/${maxSlots}</button>` : ''}
           ${sp.equip && (!it || it.refineable) ? `<div class="gb-slot-ref"><button type="button" data-gb="ref-minus" data-slot="${s.key}" title="เอาขั้นตีบวกล่าสุดออก" ${sp.refine ? '' : 'disabled'}>−</button><button type="button" data-gb="ref-plus" data-slot="${s.key}" title="เพิ่มรายการตีบวก +${sp.refine + 1}" ${sp.refine >= 10 ? 'disabled' : ''}>+</button></div>` : ''}
         </div>`;
       }).join('');
     });
     renderPicker();
     renderSteps();
+  }
+
+  const RARITY_RANK = { common: 1, uncommon: 2, rare: 3, epic: 4, legendary: 5 };
+  function fitsSlot(it, slot) {
+    if (!it || !slot || !slot.types.includes(it.slotType)) return false;
+    if (it.accSlot && (slot.key === 'accessory-left' || slot.key === 'accessory-right') && it.accSlot !== slot.key) return false;
+    return true;
+  }
+
+  function buildFlexOptionsForSlot(slot, q) {
+    if (!slot || slot.side === 'G' || !items) return [];
+    const slotType = slot.types[0];
+    const lin = lineage();
+    const out = [];
+    if (slot.key === 'main-hand') {
+      const wTypes = [...new Set(items.filter(it => it.slotType === 'Weapon' && wearableByPlan(it) && (it.jobs.length > 0 || lin.includes('thief'))).map(it => it.weaponType).filter(w => w && w !== 'None'))];
+      wTypes.forEach(wt => {
+        const wtLabel = WEAPON_TYPE_TH[wt] || wt;
+        [
+          { r: 'rare', slots: 0, desc: `อาวุธ ${wtLabel} ชิ้นไหนก็ได้ที่อาชีพในแผนใส่ได้ · หายากขึ้นไป (ถ้ามหากาพย์ถูกกว่าจะซื้อมหากาพย์ให้)` },
+          { r: 'epic', slots: 0, desc: `อาวุธ ${wtLabel} ชิ้นไหนก็ได้ที่อาชีพในแผนใส่ได้ · ระดับมหากาพย์ขึ้นไป` }
+        ].forEach(cfg => {
+          const name = `${wtLabel} (${RARITY_TH[cfg.r]})`;
+          if (q && !`${name} ${wt} ${cfg.r} flex ยืดหยุ่น`.toLowerCase().includes(q)) return;
+          out.push({ name, slotType: 'Weapon', weaponType: wt, minRarity: cfg.r, minSlots: cfg.slots, desc: cfg.desc });
+        });
+      });
+      return out;
+    }
+    const slotItems = items.filter(it => fitsSlot(it, slot) && (!onlyMine || wearableByPlan(it)));
+    const hasAtLeast = (minR, minS) => slotItems.some(it => (RARITY_RANK[it.rarity] || 1) >= (RARITY_RANK[minR] || 1) && (Number(it.slots) || 0) >= minS);
+    const tiers = [
+      ...(hasAtLeast('rare', 0) ? [{ r: 'rare', slots: 0, desc: 'ชิ้นไหนก็ได้ที่อาชีพในแผนใส่ได้ · หายากขึ้นไป (ถ้ามหากาพย์ถูกกว่าและไม่ได้เลือกรูไว้ จะซื้อมหากาพย์ให้)' }] : []),
+      ...(hasAtLeast('rare', 1) ? [{ r: 'rare', slots: 1, desc: 'ชิ้นไหนก็ได้ที่อาชีพในแผนใส่ได้ · หายากขึ้นไป แบบมีรูการ์ด [1]' }] : []),
+      ...(hasAtLeast('epic', 0) ? [{ r: 'epic', slots: 0, desc: 'ชิ้นไหนก็ได้ที่อาชีพในแผนใส่ได้ · ระดับมหากาพย์ขึ้นไป (ไม่บังคับรูการ์ด)' }] : []),
+      ...(hasAtLeast('epic', 1) ? [{ r: 'epic', slots: 1, desc: 'ชิ้นไหนก็ได้ที่อาชีพในแผนใส่ได้ · ระดับมหากาพย์ขึ้นไป แบบมีรูการ์ด [1]' }] : []),
+      ...(hasAtLeast('uncommon', 0) ? [{ r: 'uncommon', slots: 0, desc: 'ชิ้นไหนก็ได้ที่อาชีพในแผนใส่ได้ · ระดับดี (เขียว) ขึ้นไป' }] : []),
+      ...(hasAtLeast('common', 0) ? [{ r: 'common', slots: 0, desc: 'ชิ้นไหนก็ได้ที่อาชีพในแผนใส่ได้ · ทุกระดับ (ขาว/เขียว/ฟ้า/ม่วง ที่ถูกสุดในตลาด)' }] : [])
+    ];
+    tiers.forEach(cfg => {
+      const name = `${slot.label} (${RARITY_TH[cfg.r]}${cfg.slots ? ` [${cfg.slots}]` : ''})`;
+      if (q && !`${name} ${slotType} ${cfg.r} flex ยืดหยุ่น`.toLowerCase().includes(q)) return;
+      out.push({ name, slotType, weaponType: '', minRarity: cfg.r, minSlots: cfg.slots, desc: cfg.desc });
+    });
+    return out;
   }
 
   function renderPicker() {
@@ -189,12 +245,22 @@
     if (!items) return;
     if (pickMode === 'card') return renderCardPicker(m, slot, box);
     const q = query.trim().toLowerCase();
-    const list = items.filter(it => slot.types.includes(it.slotType))
+    const flexList = buildFlexOptionsForSlot(slot, q);
+    const list = items.filter(it => fitsSlot(it, slot))
       .filter(it => !onlyMine || wearableByPlan(it))
       .filter(it => !q || [it.name, it.weaponType, ...(it.attributes || []).map(a => a.type), ...(it.jobs || [])].join(' ').toLowerCase().includes(q))
       .sort((a, b) => (a.level - b.level) || a.name.localeCompare(b.name, undefined, { numeric: true }));
-    if (!list.length) { box.innerHTML = '<div class="gb-empty">ไม่พบไอเทมที่ตรงกับการค้นหา</div>'; return; }
-    box.innerHTML = list.map(it => `
+    if (!flexList.length && !list.length) { box.innerHTML = '<div class="gb-empty">ไม่พบไอเทมที่ตรงกับการค้นหา</div>'; return; }
+    const flexHtml = flexList.map(fx => `
+      <div class="gb-item gb-item-flex" style="border: 1px dashed ${RARITY[fx.minRarity] || '#38bdf8'}; background: rgba(15, 23, 42, 0.78);">
+        <div class="gb-item-icon" style="display:flex;align-items:center;justify-content:center;font-size:18px;">⚡</div>
+        <div class="gb-item-body">
+          <b style="color:${RARITY[fx.minRarity] || '#38bdf8'}">${esc(fx.name)} <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(56,189,248,0.16);color:#7dd3fc;font-weight:normal;">Flex ไม่ล็อคชื่อ</span></b>
+          <small>${esc(fx.desc)}</small>
+        </div>
+        <button type="button" class="gb-pick" data-gb="pick-flex" data-name="${esc(fx.name)}" data-slot-type="${esc(fx.slotType)}" data-weapon-type="${esc(fx.weaponType)}" data-rarity="${esc(fx.minRarity)}" data-slots="${fx.minSlots}">เลือก</button>
+      </div>`).join('');
+    box.innerHTML = flexHtml + list.map(it => `
       <div class="gb-item">
         <div class="gb-item-icon">${it.icon ? `<img src="${esc(it.icon)}" alt="" loading="lazy">` : ''}</div>
         <div class="gb-item-body">
@@ -210,13 +276,16 @@
   function renderCardPicker(m, slot, box) {
     const sp = slotPlan(slotSel);
     const it = sp.equip && itemById(sp.equip.itemId);
-    if (!sp.equip || !it) { pickMode = 'item'; return renderPicker(); }
-    m.querySelector('.gb-picker-title').textContent = `🃏 เลือกการ์ดใส่ ${sp.equip.itemName} (${sp.cardCount}/${it.slots} ช่อง)`;
+    const isFlex = !!(sp.equip && sp.equip.flexSlot);
+    if (!sp.equip || (!it && !isFlex)) { pickMode = 'item'; return renderPicker(); }
+    const targetSlotType = it ? it.slotType : (sp.equip.slotType || (slot && slot.types[0]) || '');
+    const maxSlots = it ? (Number(it.slots) || 0) : Math.max(Number(sp.equip.minSlots) || 0, 1);
+    m.querySelector('.gb-picker-title').textContent = `🃏 เลือกการ์ดใส่ ${sp.equip.itemName} (${sp.cardCount}/${maxSlots} ช่อง)`;
     const q = query.trim().toLowerCase();
-    const list = cards.filter(c => (c.cardSlotTypes || []).includes(it.slotType))
+    const list = cards.filter(c => (c.cardSlotTypes || []).includes(targetSlotType))
       .filter(c => !q || [c.name, ...(c.attributes || []).map(a => a.type)].join(' ').toLowerCase().includes(q))
       .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
-    const full = sp.cardCount >= it.slots;
+    const full = sp.cardCount >= maxSlots;
     if (!list.length) { box.innerHTML = '<div class="gb-empty">ไม่มีการ์ดที่ใส่กับไอเทมชนิดนี้ได้</div>'; return; }
     box.innerHTML = `<div class="gb-card-note">ใส่แล้วถอดเองไม่ได้ (ต้องให้ NPC ถอดและเสียเงิน) · การ์ดติดไปกับอุปกรณ์ชิ้นนี้${full ? ' · <b>ช่องการ์ดเต็มแล้ว</b>' : ''}</div>` + list.map(c => `
       <div class="gb-item">
@@ -233,7 +302,8 @@
   function stepText(st) {
     if (st.kind === 'card') return `🃏 ใส่การ์ด <b>${esc(st.cardName)}</b> ใน <b>${esc(st.itemName)}</b>`;
     if (st.kind === 'refine') return `🔨 ตีบวก <b>${esc(st.itemName)}</b> → <span class="gb-ref">+${Number(st.toLevel) || 0}</span>`;
-    return `🛒 ซื้อ / สวม <b>${esc(st.itemName)}</b>`;
+    if (st.flexSlot) return `⚡ ซื้อ / สวมแบบยืดหยุ่น <b>${esc(st.itemName)}</b>`;
+    return `🛒 ซื้อ / สวม <b>${esc(st.itemName)}${st.minSlots ? ` [${st.minSlots}]` : ''}</b>`;
   }
   function optionChips(st) {
     const terms = String(st.options || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -255,13 +325,14 @@
       const orphan = (st.kind === 'refine' || st.kind === 'card') && !steps.slice(0, i).some(x => x.kind === 'equip' && x.slot === st.slot && x.itemName === st.itemName);
       return `<div class="gb-step ${focusStepId === st.id ? 'flash' : ''} ${orphan ? 'warn' : ''}" data-id="${esc(st.id)}">
         <span class="gb-step-no">${i + 1}</span>
-        <div class="gb-step-icon">${it && it.icon ? `<img src="${esc(it.icon)}" alt="">` : ''}</div>
+        <div class="gb-step-icon">${it && it.icon ? `<img src="${esc(it.icon)}" alt="">` : (st.flexSlot ? '<span style="font-size:16px">⚡</span>' : '')}</div>
         <div class="gb-step-body">
           <div class="gb-step-title">${stepText(st)} <small>· ${esc(slot ? slot.label : st.slot)}</small></div>
-          ${st.kind === 'equip' ? `<div class="gb-step-opts"><small>ออปชั่นสุ่มที่ต้องมี:</small> ${optionChips(st) || '<small class="gb-muted">ไม่กำหนด (ชื่อตรงก็ใช้ได้)</small>'}
+          ${st.kind === 'equip' ? `<div class="gb-step-opts"><small>ออปชั่นสุ่มที่ต้องมี:</small> ${optionChips(st) || '<small class="gb-muted">ไม่กำหนด (ชื่อ/ระดับตรงก็ใช้ได้)</small>'}
             <select class="gb-opt-type" data-id="${esc(st.id)}"><option value="">+ เพิ่มออปชั่น</option>${OPTION_TYPES.map(o => `<option value="${o}">${o}</option>`).join('')}</select></div>` : ''}
-          ${st.kind === 'refine' ? `<label class="gb-step-bless"><input type="checkbox" data-gb="bless" data-id="${esc(st.id)}" ${st.blessing !== false ? 'checked' : ''}> ใช้ Blacksmith Blessing ถ้ามี (กันแตก/ลดขั้น) · ขั้นที่อาจแตกจะรอจนมี Blessing — เอาติ๊กออก = ยอมเสี่ยงตีเลย</label>` : ''}
-          ${st.kind === 'refine' && st.toLevel > 4 ? `<small class="gb-warn-text">⚠️ เกิน +4 (ขั้นปลอดภัย) ตีพลาดอาจลดขั้น · +${st.toLevel >= 9 ? st.toLevel + ' อาจแตก ถ้าไม่มี Blessing' : '9 ขึ้นไปอาจแตก'}</small>` : ''}
+          ${st.kind === 'equip' && st.flexSlot ? `<small class="gb-muted" style="color:#7dd3fc;">⚡ เลือกชิ้นไหนก็ได้ในช่องนี้ที่อาชีพในแผนใส่ได้ · ระดับ ${esc(RARITY_TH[st.minRarity] || st.minRarity || 'หายาก')} ขึ้นไป${st.minSlots ? ` · ต้องมีรูการ์ด [${st.minSlots}]` : ' (ถ้ามหากาพย์ถูกกว่าจะซื้อมหากาพย์ให้)'}</small>` : ''}
+          ${st.kind === 'refine' ? `<label class="gb-step-bless"><input type="checkbox" data-gb="bless" data-id="${esc(st.id)}" ${st.blessing !== false ? 'checked' : ''}> ใช้ Blacksmith Blessing ถ้ามีในกระเป๋า (กันแตก/ลดขั้น · หากไม่มีจะตีบวกต่อให้ทันที ไม่ค้างที่ +9)</label>` : ''}
+          ${st.kind === 'refine' && st.toLevel > 4 ? `<small class="gb-warn-text">⚠️ เกิน +4 (ขั้นปลอดภัย) ตีพลาดอาจลดขั้น${st.toLevel >= 10 ? ' · +10 มีโอกาสแตกหากไม่มี Blessing ในกระเป๋า' : ''}</small>` : ''}
           ${st.kind === 'card' ? '<small class="gb-warn-text">🃏 ใส่แล้วถอดเองไม่ได้ · ไม่มีการ์ดในกระเป๋า = ซื้อในตลาด (ราคาไม่เกินเงินที่ตั้ง)</small>' : ''}
           ${orphan ? '<small class="gb-warn-text">⚠️ ต้องมีรายการซื้อ/สวมไอเทมนี้อยู่ก่อนหน้า — ไม่งั้นบอทจะข้ามรายการนี้</small>' : ''}
         </div>
@@ -297,10 +368,45 @@
     const id = btn.dataset.id;
     if (act === 'cancel') return close(false);
     if (act === 'save') return close(true);
+    if (act === 'pick-flex') {
+      const st = {
+        id: newId(),
+        kind: 'equip',
+        slot: slotSel,
+        itemId: 0,
+        itemName: btn.dataset.name,
+        flexSlot: true,
+        slotType: btn.dataset.slotType || '',
+        weaponType: btn.dataset.weaponType || '',
+        minRarity: btn.dataset.rarity || 'rare',
+        minSlots: Number(btn.dataset.slots) || 0,
+        jobs: [],
+        options: '',
+        zeny: lastZeny(),
+        minLevel: 0
+      };
+      steps.push(st);
+      focusStepId = st.id;
+      return render();
+    }
     if (act === 'pick') {
       const it = itemById(Number(id));
       if (!it) return;
-      const st = { id: newId(), kind: 'equip', slot: slotSel, itemId: it.id, itemName: it.name, jobs: (it.jobs || []).slice(), options: '', zeny: lastZeny(), minLevel: Number(it.level) || 0 };
+      const hasZeroSlotTwin = it.slots > 0 && (items || []).some(x => x.id !== it.id && x.name === it.name && (Number(x.slots) || 0) === 0);
+      const st = {
+        id: newId(),
+        kind: 'equip',
+        slot: slotSel,
+        itemId: it.id,
+        itemName: it.name,
+        slotType: it.slotType || '',
+        rarity: it.rarity || 'common',
+        minSlots: hasZeroSlotTwin ? (Number(it.slots) || 0) : 0,
+        jobs: (it.jobs || []).slice(),
+        options: '',
+        zeny: lastZeny(),
+        minLevel: Number(it.level) || 0
+      };
       steps.push(st);
       focusStepId = st.id;
       return render();
@@ -316,8 +422,18 @@
       const c = cardById(Number(id));
       const sp = slotPlan(slotSel);
       const it = sp.equip && itemById(sp.equip.itemId);
-      if (!c || !sp.equip || !it) return;
-      if (sp.cardCount >= it.slots) return alert(`${sp.equip.itemName} มีช่องการ์ดแค่ ${it.slots} ช่อง`);
+      const isFlex = !!(sp.equip && sp.equip.flexSlot);
+      if (!c || !sp.equip || (!it && !isFlex)) return;
+      const maxSlots = it ? (Number(it.slots) || 0) : Math.max(Number(sp.equip.minSlots) || 0, 1);
+      if (sp.cardCount >= maxSlots) return alert(`${sp.equip.itemName} มีช่องการ์ดแค่ ${maxSlots} ช่อง`);
+      if (isFlex && !sp.equip.minSlots) {
+        const oldName = sp.equip.itemName;
+        sp.equip.minSlots = 1;
+        if (!/\[\s*1\s*\]/.test(sp.equip.itemName)) {
+          sp.equip.itemName = sp.equip.itemName.replace(/\)\s*$/, ' [1])');
+          steps.forEach(s => { if (s.slot === slotSel && s.itemName === oldName) s.itemName = sp.equip.itemName; });
+        }
+      }
       const st = { id: newId(), kind: 'card', slot: slotSel, itemName: sp.equip.itemName, cardId: c.id, cardName: c.name, zeny: lastZeny(), minLevel: lastLevel() };
       steps.push(st);
       focusStepId = st.id;

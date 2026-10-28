@@ -1484,7 +1484,7 @@ async function fetchGameItems() {
     const items = (wiki.items || []).filter(i => i.type === "Equipment" && i.equipmentType && i.equipmentType !== "Ammo" && !/^Costume/.test(i.equipmentType))
       .map(i => ({
         id: i.id, name: i.name, slotType: i.equipmentType, weaponType: i.weaponType, level: i.equipLevelMin || 0,
-        rarity: i.rarity, refineable: !!i.refineable, slots: i.slots || 0, weaponLevel: i.weaponLevel || 0,
+        rarity: i.rarity, refineable: !!i.refineable, slots: i.slots || 0, weaponLevel: i.weaponLevel || 0, accSlot: i.accSlot || null,
         jobs: i.jobs || [], attributes: (i.attributes || []).slice(0, 4).map(a => ({ type: a.type, value: a.value, perRefine: a.perRefine || 0 })),
         specials: (i.specials || []).slice(0, 2), soldBy: (i.soldBy || []).map(x => x.shop).slice(0, 1), icon: iconOf(i.id)
       }));

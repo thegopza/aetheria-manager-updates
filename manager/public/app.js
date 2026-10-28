@@ -7093,9 +7093,41 @@ function planClassLabel(value) {
   return c ? c.label : (value || '-');
 }
 
+function isPlanGemItemName(name) {
+  const s = String(name || '').trim();
+  return /\bgem\b/i.test(s) && /\d+(?:\.\d+)?\s*%?$/.test(s);
+}
+
+let _planEquipDatalistLoaded = false;
+function ensurePlanEquipItemDatalist() {
+  if (_planEquipDatalistLoaded) return;
+  _planEquipDatalistLoaded = true;
+  let dl = document.getElementById('pe-equip-item-datalist');
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = 'pe-equip-item-datalist';
+    document.body.appendChild(dl);
+  }
+  fetch('/api/game-items').then(r => r.json()).then(d => {
+    const names = new Set([
+      'Mana Gem (Skill) 3%', 'Mana Gem (Skill) 4%', 'Mana Gem (Skill) 5%', 'Mana Gem (Skill) 7%', 'Mana Gem (Skill) 8%', 'Mana Gem (Skill) 9%', 'Mana Gem (Skill) 10%',
+      'Mana Gem (Attack) 3%', 'Mana Gem (Attack) 4%', 'Mana Gem (Attack) 5%', 'Mana Gem (Attack) 7%', 'Mana Gem (Attack) 8%', 'Mana Gem (Attack) 9%', 'Mana Gem (Attack) 10%',
+      'Lifesteal Gem (Skill) 3%', 'Lifesteal Gem (Skill) 4%', 'Lifesteal Gem (Skill) 5%', 'Lifesteal Gem (Skill) 7%', 'Lifesteal Gem (Skill) 8%', 'Lifesteal Gem (Skill) 9%', 'Lifesteal Gem (Skill) 10%',
+      'Lifesteal Gem (Attack) 3%', 'Lifesteal Gem (Attack) 4%', 'Lifesteal Gem (Attack) 5%', 'Lifesteal Gem (Attack) 7%', 'Lifesteal Gem (Attack) 8%', 'Lifesteal Gem (Attack) 9%', 'Lifesteal Gem (Attack) 10%'
+    ]);
+    for (const it of (d.items || [])) {
+      if (it && it.name) names.add(it.name);
+    }
+    dl.innerHTML = [...names].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).map(n => `<option value="${escapeHTML(n)}">`).join('');
+  }).catch(() => {});
+}
+
 // Short chips shown in the trigger header so the whole plan reads at a glance
 function planActionSummary(act) {
-  if (act.type === 'equip_item') return `🛡️ ${act.itemName || '(ยังไม่ใส่ชื่อ)'}${act.optionFilter ? ` [${act.optionFilter}]` : ''}`;
+  if (act.type === 'equip_item') {
+    const isGem = isPlanGemItemName(act.itemName);
+    return `${isGem ? '💎' : '🛡️'} ${act.itemName || '(ยังไม่ใส่ชื่อ)'}${isGem ? ' (ถ้า % สูงกว่าถูกกว่าซื้ออันสูงกว่า)' : ''}${act.optionFilter ? ` [${act.optionFilter}]` : ''}`;
+  }
   if (act.type === 'change_map') return `🗺️ ${planMapLabel(act.targetMap)}`;
   if (act.type === 'change_class') return `🏹 ${planClassLabel(act.targetClass)}`;
   if (act.type === 'sell_trip') return '🛒 กลับเมืองขายของ';
@@ -7409,18 +7441,23 @@ function renderActionNodeHtml(trigIdx, actIdx, act) {
     <button type="button" class="pe-icon-btn sm" onclick="moveAction(${trigIdx}, ${actIdx}, 1)" ${actIdx >= count - 1 ? 'disabled' : ''} title="ย้ายลง">↓</button>`;
   const del = `<span class="pe-act-btns">${moves}<button type="button" class="pe-icon-btn danger sm" onclick="removeAction(${trigIdx}, ${actIdx})" title="ลบ Action นี้">✕</button></span>`;
   if (act.type === 'equip_item') {
+    ensurePlanEquipItemDatalist();
+    const isGem = isPlanGemItemName(act.itemName);
     return `
       <div class="pe-action equip_item">
-        <div class="pe-act-icon">🛡️</div>
+        <div class="pe-act-icon">${isGem ? '💎' : '🛡️'}</div>
         <div class="pe-act-main">
-          <div class="pe-act-title"><b>สวมใส่อุปกรณ์</b>${del}</div>
+          <div class="pe-act-title"><b>สวมใส่อุปกรณ์ / เจม (Gem)</b>${del}</div>
           <div class="pe-fields">
-            <label>ชื่อไอเทม (ตรงตัว)
-              <input type="text" class="form-input" placeholder="เช่น Gakkung Bow" value="${escapeHTML(act.itemName || '')}" onchange="updateActionField(${trigIdx}, ${actIdx}, 'itemName', this.value.trim())">
+            <label>ชื่อไอเทม หรือ เจม (เช่น Gakkung Bow, Mana Gem (Skill) 3%)
+              <input type="text" class="form-input" list="pe-equip-item-datalist" placeholder="เช่น Gakkung Bow หรือ Mana Gem (Skill) 3%" value="${escapeHTML(act.itemName || '')}" onchange="updateActionField(${trigIdx}, ${actIdx}, 'itemName', this.value.trim())">
             </label>
             <label>ออปชั่นที่ต้องมี (ว่าง = ไม่กรอง)
               <input type="text" class="form-input" placeholder="เช่น dex>=3, luk, melee dmg" title="ออปชั่นสุ่มที่ต้องมี คั่นด้วย , ใส่ค่าขั้นต่ำได้ เช่น dex>=3" value="${escapeHTML(act.optionFilter || '')}" onchange="updateActionField(${trigIdx}, ${actIdx}, 'optionFilter', this.value.trim())">
             </label>
+          </div>
+          <div style="font-size:11.5px; color:#7dd3fc; background:rgba(56,189,248,0.08); border:1px solid rgba(56,189,248,0.22); border-radius:6px; padding:5px 8px; margin-bottom:6px;">
+            💎 <b>รองรับเจมยืดหยุ่น:</b> ถ้าใส่เจมที่มี % (เช่น <b>Mana Gem (Skill) 3%</b>) แล้วในตลาดมีเจมชนิดเดียวกันที่ <b>% สูงกว่า (4%–10%) ราคาถูกกว่าหรือเท่ากัน</b> บอทจะซื้ออัน % สูงกว่าให้อัตโนมัติ
           </div>
           <div class="pe-inline">
             <label class="pe-check">

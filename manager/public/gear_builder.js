@@ -251,6 +251,10 @@
       .filter(it => !q || [it.name, it.weaponType, ...(it.attributes || []).map(a => a.type), ...(it.jobs || [])].join(' ').toLowerCase().includes(q))
       .sort((a, b) => (a.level - b.level) || a.name.localeCompare(b.name, undefined, { numeric: true }));
     if (!flexList.length && !list.length) { box.innerHTML = '<div class="gb-empty">ไม่พบไอเทมที่ตรงกับการค้นหา</div>'; return; }
+    const isGemSlot = !!(slot && slot.side === 'G');
+    const gemBanner = isGemSlot
+      ? `<div class="gb-card-note" style="border-color:rgba(56,189,248,0.35);color:#7dd3fc;">💎 <b>ระบบซื้อเจมคุ้มค่าอัตโนมัติ:</b> เลือกเจม % ขั้นต่ำที่ต้องการ (เช่น <b>Mana Gem (Skill) 3%</b>) — หากในตลาดมีเจมชนิดเดียวกันที่ <b>% สูงกว่า (4%–10%) แต่ราคาถูกกว่าหรือเท่ากัน</b> บอทจะซื้ออัน % สูงกว่าให้อัตโนมัติ</div>`
+      : '';
     const flexHtml = flexList.map(fx => `
       <div class="gb-item gb-item-flex" style="border: 1px dashed ${RARITY[fx.minRarity] || '#38bdf8'}; background: rgba(15, 23, 42, 0.78);">
         <div class="gb-item-icon" style="display:flex;align-items:center;justify-content:center;font-size:18px;">⚡</div>
@@ -260,16 +264,19 @@
         </div>
         <button type="button" class="gb-pick" data-gb="pick-flex" data-name="${esc(fx.name)}" data-slot-type="${esc(fx.slotType)}" data-weapon-type="${esc(fx.weaponType)}" data-rarity="${esc(fx.minRarity)}" data-slots="${fx.minSlots}">เลือก</button>
       </div>`).join('');
-    box.innerHTML = flexHtml + list.map(it => `
+    box.innerHTML = gemBanner + flexHtml + list.map(it => {
+      const isPctGem = isGemSlot && /\d+(?:\.\d+)?\s*%$/.test(it.name || '');
+      return `
       <div class="gb-item">
         <div class="gb-item-icon">${it.icon ? `<img src="${esc(it.icon)}" alt="" loading="lazy">` : ''}</div>
         <div class="gb-item-body">
-          <b style="color:${RARITY[it.rarity] || '#e2e8f0'}">${esc(it.name)}${it.slots ? ` [${it.slots}]` : ''}</b>
+          <b style="color:${RARITY[it.rarity] || '#e2e8f0'}">${esc(it.name)}${it.slots ? ` [${it.slots}]` : ''}${isPctGem ? ` <span style="font-size:10px;padding:1px 5px;border-radius:4px;background:rgba(56,189,248,0.15);color:#7dd3fc;font-weight:normal;">ถ้า % สูงกว่าถูกกว่า ซื้ออันสูงกว่า</span>` : ''}</b>
           <small>Lv.${it.level}${it.weaponType && it.weaponType !== 'None' ? ' · ' + esc(it.weaponType) : ''}${it.refineable ? '' : ' · ตีบวกไม่ได้'}${it.jobs.length ? ' · ' + esc(it.jobs.join('/')) : ''}</small>
           <div class="gb-attrs">${(it.attributes || []).map(a => `<span>${esc(ATTR_TH[a.type] || a.type)} +${a.value}</span>`).join('')}</div>
         </div>
         <button type="button" class="gb-pick" data-gb="pick" data-id="${it.id}">เลือก</button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   }
 
   // Cards that fit the planned item of the slot (game: card.cardSlotTypes has the item's equipment type)
@@ -331,6 +338,7 @@
           ${st.kind === 'equip' ? `<div class="gb-step-opts"><small>ออปชั่นสุ่มที่ต้องมี:</small> ${optionChips(st) || '<small class="gb-muted">ไม่กำหนด (ชื่อ/ระดับตรงก็ใช้ได้)</small>'}
             <select class="gb-opt-type" data-id="${esc(st.id)}"><option value="">+ เพิ่มออปชั่น</option>${OPTION_TYPES.map(o => `<option value="${o}">${o}</option>`).join('')}</select></div>` : ''}
           ${st.kind === 'equip' && st.flexSlot ? `<small class="gb-muted" style="color:#7dd3fc;">⚡ เลือกชิ้นไหนก็ได้ในช่องนี้ที่อาชีพในแผนใส่ได้ · ระดับ ${esc(RARITY_TH[st.minRarity] || st.minRarity || 'หายาก')} ขึ้นไป${st.minSlots ? ` · ต้องมีรูการ์ด [${st.minSlots}]` : ' (ถ้ามหากาพย์ถูกกว่าจะซื้อมหากาพย์ให้)'}</small>` : ''}
+          ${st.kind === 'equip' && /^gem-/.test(st.slot || '') && /\d+(?:\.\d+)?\s*%?$/.test(st.itemName || '') ? `<small class="gb-muted" style="color:#7dd3fc;">💎 ขั้นต่ำตามชื่อที่เลือก — ถ้าเจมชนิดเดียวกันที่ % สูงกว่าในตลาดราคาถูกกว่าหรือเท่ากัน บอทจะซื้ออัน % สูงกว่าให้อัตโนมัติ</small>` : ''}
           ${st.kind === 'refine' ? `<label class="gb-step-bless"><input type="checkbox" data-gb="bless" data-id="${esc(st.id)}" ${st.blessing !== false ? 'checked' : ''}> ใช้ Blacksmith Blessing ถ้ามีในกระเป๋า (กันแตก/ลดขั้น · หากไม่มีจะตีบวกต่อให้ทันที ไม่ค้างที่ +9)</label>` : ''}
           ${st.kind === 'refine' && st.toLevel > 4 ? `<small class="gb-warn-text">⚠️ เกิน +4 (ขั้นปลอดภัย) ตีพลาดอาจลดขั้น${st.toLevel >= 10 ? ' · +10 มีโอกาสแตกหากไม่มี Blessing ในกระเป๋า' : ''}</small>` : ''}
           ${st.kind === 'card' ? '<small class="gb-warn-text">🃏 ใส่แล้วถอดเองไม่ได้ · ไม่มีการ์ดในกระเป๋า = ซื้อในตลาด (ราคาไม่เกินเงินที่ตั้ง)</small>' : ''}

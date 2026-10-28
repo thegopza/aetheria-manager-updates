@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "eb0537c1ce172a52dd335f22c2cba6299d1b1b0d",
+  "sourceCommit": "27db141ffe8f1a14fd3d26d8dced60b71de021c1",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -168,7 +168,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "f1310aed16fe0d5310b3571aaf7fb6aa2637941b14ae191009e2d15316a50e08"
+      "sha256": "c14cfd0e884bbe5bb4758c16f5fed5b6f0c26e41a11d6caeb70cc87cc9772316"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -224,7 +224,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "de947915a8a39a3fca0389e428ca789faf4ff1d55793e85145c599270cc17a7f"
+      "sha256": "a1629f50e5ffab7c4e48c95edeb0f3ae44ef8c2de8502c7087f19e617cf2d3db"
     },
     {
       "path": "manager/screen_proxy_manager.js",

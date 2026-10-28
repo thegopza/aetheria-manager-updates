@@ -4317,6 +4317,53 @@ if (document.readyState === 'loading') {
 // ==========================================
 // FLOATING IN-GAME BOT HUD (DIRECT GITHUB REPLICA)
 // ==========================================
+const DEFAULT_WEB_INGAME_AUTO_ORDER = ['self', 'party', 'players', 'free', 'others'];
+const WEB_INGAME_AUTO_TARGET_LABELS = {
+  self: { label: 'สวนกลับมอนที่ตีเรา', help: 'มอนที่กำลังตีเราอยู่ ไม่ว่ามันยืนตรงไหน' },
+  party: { label: 'ช่วยเพื่อนในปาร์ตี้', help: 'มอนที่กำลังตีเพื่อนในปาร์ตี้ และบอสที่มีคนตีอยู่' },
+  players: { label: 'ตีผู้เล่นศัตรู (PvP / PK)', help: 'เฉพาะแมพ PvP และช่อง PK: ผู้เล่นศัตรูที่ใกล้สุด' },
+  free: { label: 'ล่ามอนว่าง', help: 'มอนในเขตล่าที่ยังไม่มีใครตี เลเวลเหมาะกับเราก่อน' },
+  others: { label: 'แจมผู้เล่นอื่น', help: 'มอนที่ผู้เล่นอื่นนอกปาร์ตี้ตีอยู่ (ทำงานเมื่อเปิดแจมผู้เล่นอื่น)' }
+};
+
+function normalizeWebInGameAutoOrder(order) {
+  const valid = new Set(DEFAULT_WEB_INGAME_AUTO_ORDER);
+  const out = [];
+  if (Array.isArray(order)) {
+    for (const k of order) {
+      const key = String(k || '').trim();
+      if (valid.has(key) && !out.includes(key)) out.push(key);
+    }
+  }
+  for (const k of DEFAULT_WEB_INGAME_AUTO_ORDER) {
+    if (!out.includes(k)) out.push(k);
+  }
+  return out;
+}
+
+function renderWebInGameAutoPriorityHtml(orderInput) {
+  const order = normalizeWebInGameAutoOrder(orderInput);
+  const summaryHtml = order.map((k, i) => {
+    const info = WEB_INGAME_AUTO_TARGET_LABELS[k] || { label: k, help: '' };
+    return `<span style="display:inline-block; margin-right:6px;"><b style="color:#facc15;">${i + 1}</b> ${escapeHTML(info.label)}</span>`;
+  }).join(' · ');
+  const rowsHtml = order.map((k, i) => {
+    const info = WEB_INGAME_AUTO_TARGET_LABELS[k] || { label: k, help: '' };
+    return `<div style="display:flex; align-items:center; gap:6px; padding:4px 6px; background:rgba(2,6,23,0.65); border:1px solid rgba(148,163,184,0.2); border-radius:5px; margin-top:4px;">
+      <b style="color:#facc15; font-size:11px; min-width:14px; text-align:center;">${i + 1}</b>
+      <div style="flex:1; min-width:0; line-height:1.25;">
+        <div style="font-size:10px; font-weight:bold; color:#f8fafc;">${escapeHTML(info.label)}</div>
+        <div style="font-size:8.5px; color:#94a3b8;">${escapeHTML(info.help)}</div>
+      </div>
+      <div style="display:flex; gap:3px;">
+        <button type="button" class="p-ig-prio-move" data-prio-idx="${i}" data-prio-dir="-1" ${i === 0 ? 'disabled' : ''} style="background:#1e293b; color:${i === 0 ? '#475569' : '#e2e8f0'}; border:1px solid #334155; border-radius:4px; font-size:9px; padding:2px 5px; cursor:${i === 0 ? 'default' : 'pointer'};">▲</button>
+        <button type="button" class="p-ig-prio-move" data-prio-idx="${i}" data-prio-dir="1" ${i === order.length - 1 ? 'disabled' : ''} style="background:#1e293b; color:${i === order.length - 1 ? '#475569' : '#e2e8f0'}; border:1px solid #334155; border-radius:4px; font-size:9px; padding:2px 5px; cursor:${i === order.length - 1 ? 'default' : 'pointer'};">▼</button>
+      </div>
+    </div>`;
+  }).join('');
+  return { summaryHtml, rowsHtml, order };
+}
+
 function getGitHubHudTemplate(profileId, clientData, profile) {
   const isCentral = (profileId === '__central__');
   const onlineCount = currentProfiles.filter(p => p.isRunning).length;
@@ -4329,6 +4376,18 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
   const shop = clientData?.shopConfig || {};
   const travel = clientData?.travelConfig || {};
   const humanize = clientData?.humanizeConfig || {};
+  const igAuto = Object.assign({
+    basicAttack: true,
+    targetOrder: DEFAULT_WEB_INGAME_AUTO_ORDER.slice(),
+    buffParty: true,
+    acceptParty: false,
+    joinOthers: false,
+    autoQuiver: false,
+    autoRevive: false,
+    autoReviveMax: 10,
+    pickupLoot: true
+  }, clientData?.inGameAutoConfig || {});
+  const igPrio = renderWebInGameAutoPriorityHtml(igAuto.targetOrder);
   const potionCounts = clientData?.potionCounts || {};
   const planName = clientData?.currentPlanName || '(ยังไม่เลือกแผน)';
 
@@ -4460,6 +4519,72 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                             <span style="font-size: 10px; color: #e2e8f0;">z ไม่วาร์ป เดินแทน</span>
                         </div>
                         <div style="font-size: 9px; color: #94a3b8; margin-top: 2px;">0 = วาร์ปตามปกติ · ถ้าเดินไปจากจุดนั้นไม่ได้ จะยังวาร์ปให้</div>
+                    </div>
+
+                    <!-- CARD: IN-GAME AUTO-BOT COMBAT SETTINGS -->
+                    <div class="p-card" style="border-color: rgba(250, 204, 21, 0.35); background: rgba(15, 23, 42, 0.7);">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                            <div style="font-size: 10.5px; font-weight: bold; color: #fde047;">⚔️ ตั้งค่าต่อสู้อัตโนมัติในเกม (Auto-Bot)</div>
+                            <button type="button" id="p-btn-sync-ingame-auto" style="background: rgba(234, 179, 8, 0.2); color: #fde047; border: 1px solid rgba(250, 204, 21, 0.45); border-radius: 4px; font-size: 9px; font-weight: bold; padding: 2px 6px; cursor: pointer;" title="${isCentral ? 'ส่งค่าตั้งค่าต่อสู้อัตโนมัติในการ์ดนี้ไปทุกจอที่ออนไลน์ทันที' : 'ส่งค่าตั้งค่าต่อสู้อัตโนมัติชุดนี้เข้าจอเกมทันที'}">${isCentral ? '🔄 ส่งทุกค่าไปทุกจอ' : '🔄 ซิงก์เข้าเกม'}</button>
+                        </div>
+
+                        <label class="p-check-box" style="color: #f8fafc; margin-bottom: 4px;">
+                            <input type="checkbox" id="p-ig-auto-basic-attack" ${igAuto.basicAttack !== false ? 'checked' : ''}>
+                            <span><b>ตีปกติ</b> <small style="color:#94a3b8; display:block;">ตีปกติระหว่างรอสกิลคูลดาวน์ (ปิด = ใช้แต่สกิลโจมตีที่เลือกไว้)</small></span>
+                        </label>
+
+                        <div style="background: rgba(2, 6, 23, 0.55); border: 1px solid rgba(250, 204, 21, 0.25); border-radius: 6px; padding: 5px 7px; margin: 4px 0 6px 0;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <button type="button" id="p-ig-auto-priority-toggle" style="background: none; border: none; color: #fde047; font-size: 10px; font-weight: bold; cursor: pointer; padding: 0; text-align: left;">
+                                    <span id="p-ig-auto-priority-arrow">▸</span> ลำดับการตี (ข้อ 1 ทำก่อน)
+                                </button>
+                                <span style="font-size: 8.5px; color: #94a3b8;">แตะเพื่อปรับลำดับ</span>
+                            </div>
+                            <div id="p-ig-auto-priority-summary" style="margin-top: 3px; font-size: 9.5px; color: #cbd5e1; line-height: 1.45; cursor: pointer;">
+                                <span id="p-ig-auto-priority-summary-text">${igPrio.summaryHtml}</span>
+                            </div>
+                            <div id="p-ig-auto-priority-body" style="display: none; margin-top: 5px; padding-top: 4px; border-top: 1px dashed rgba(148, 163, 184, 0.2);">
+                                <div id="p-ig-auto-priority-rows">${igPrio.rowsHtml}</div>
+                                <button type="button" id="p-ig-auto-priority-reset" style="margin-top: 5px; width: 100%; background: #1e293b; color: #cbd5e1; border: 1px solid #475569; border-radius: 4px; font-size: 9px; padding: 3px; cursor: pointer;">↺ คืนค่าลำดับการตีเริ่มต้น</button>
+                            </div>
+                        </div>
+
+                        <label class="p-check-box" style="color: #4ade80; margin-bottom: 3px;">
+                            <input type="checkbox" id="p-ig-auto-buff-party" ${igAuto.buffParty !== false ? 'checked' : ''}>
+                            <span><b>บัพเพื่อนในปาร์ตี้</b> <small style="color:#94a3b8; display:block;">ร่ายสกิลบัพที่เลือกไว้ใส่เพื่อนในปาร์ตี้ที่อยู่ในระยะเมื่อบัพหมด</small></span>
+                        </label>
+
+                        <label class="p-check-box" style="color: #38bdf8; margin-bottom: 3px;">
+                            <input type="checkbox" id="p-ig-auto-accept-party" ${igAuto.acceptParty ? 'checked' : ''}>
+                            <span><b>รับปาร์ตี้อัตโนมัติ</b> <small style="color:#94a3b8; display:block;">ระหว่างเปิด AUTO มีคนชวนเข้าปาร์ตี้ จะกดรับเข้าให้ทันที</small></span>
+                        </label>
+
+                        <label class="p-check-box" style="color: #fb923c; margin-bottom: 3px;">
+                            <input type="checkbox" id="p-ig-auto-join-others" ${igAuto.joinOthers ? 'checked' : ''}>
+                            <span><b>แจมผู้เล่นอื่น</b> <small style="color:#94a3b8; display:block;">ไม่มีมอนว่างแล้ว ไปช่วยตีมอนที่คนอื่นกำลังตีอยู่ (ปิด = ไม่ตีมอนคนอื่น)</small></span>
+                        </label>
+
+                        <label class="p-check-box" style="color: #c084fc; margin-bottom: 3px;">
+                            <input type="checkbox" id="p-ig-auto-quiver" ${igAuto.autoQuiver ? 'checked' : ''}>
+                            <span><b>เปิดซองธนูอัตโนมัติ <span style="background: rgba(234, 179, 8, 0.2); color: #facc15; border: 1px solid rgba(250, 204, 21, 0.45); border-radius: 3px; font-size: 8px; padding: 0 4px;">Premium</span></b> <small style="color:#94a3b8; display:block;">ลูกธนูที่ติดตั้งหมด จะเปิดซองธนูชนิดเดียวกันในกระเป๋าให้เอง</small></span>
+                        </label>
+
+                        <label class="p-check-box" style="color: #f43f5e; margin-bottom: 3px;">
+                            <input type="checkbox" id="p-ig-auto-revive" ${igAuto.autoRevive ? 'checked' : ''}>
+                            <span><b>ตายแล้วฟื้นที่เดิม</b> <small style="color:#94a3b8; display:block;">ใช้ Rebirth Feather ฟื้นตรงนั้นแล้ว AUTO ต่อ (ปิด = ตายแล้วหยุด)</small></span>
+                        </label>
+                        <div id="p-ig-auto-revive-row" class="p-row" style="display: ${igAuto.autoRevive ? 'flex' : 'none'}; margin: 2px 0 4px 18px; gap: 5px;">
+                            <span style="font-size: 9.5px; color: #cbd5e1;">ใช้สูงสุดต่อรอบ:</span>
+                            <button type="button" id="p-ig-auto-revive-dec" style="background:#1e293b; color:#fff; border:1px solid #475569; border-radius:4px; width:20px; height:20px; cursor:pointer; font-size:11px; line-height:1;">−</button>
+                            <input type="number" id="p-ig-auto-revive-max" min="1" max="99" value="${Number(igAuto.autoReviveMax) || 10}" style="width: 44px; background: #0f172a; border: 1px solid #f43f5e; color: #fff; text-align: center; border-radius: 4px; font-size: 10.5px; padding: 1px 3px;">
+                            <button type="button" id="p-ig-auto-revive-inc" style="background:#1e293b; color:#fff; border:1px solid #475569; border-radius:4px; width:20px; height:20px; cursor:pointer; font-size:11px; line-height:1;">+</button>
+                            <span style="font-size: 9.5px; color: #94a3b8;">ครั้ง</span>
+                        </div>
+
+                        <label class="p-check-box" style="color: #2dd4bf; margin-top: 2px;">
+                            <input type="checkbox" id="p-ig-auto-pickup-loot" ${igAuto.pickupLoot !== false ? 'checked' : ''}>
+                            <span><b>เก็บของดรอปอัตโนมัติ</b> <small style="color:#94a3b8; display:block;">เดินไปเก็บของดรอปในวงล่า (ปิด = ไม่เดินเก็บของบนพื้น)</small></span>
+                        </label>
                     </div>
 
                     <!-- CARD: SECURITY & HUMANIZE -->
@@ -5412,6 +5537,129 @@ async function openWebBotHUD(profileId) {
     };
   }
 
+  // In-Game Auto-Bot Combat Settings listeners (each control sends ONLY its own key)
+  let currentIgTargetOrder = normalizeWebInGameAutoOrder(clientData?.inGameAutoConfig?.targetOrder);
+  const refreshIgPriorityDom = () => {
+    const prio = renderWebInGameAutoPriorityHtml(currentIgTargetOrder);
+    const sumEl = hudEl.querySelector('#p-ig-auto-priority-summary-text');
+    if (sumEl) sumEl.innerHTML = prio.summaryHtml;
+    const rowsEl = hudEl.querySelector('#p-ig-auto-priority-rows');
+    if (rowsEl) rowsEl.innerHTML = prio.rowsHtml;
+  };
+
+  const bindIgAutoField = (sel, key) => {
+    const el = hudEl.querySelector(sel);
+    if (!el) return;
+    el.onchange = () => {
+      const checked = !!el.checked;
+      if (key === 'autoRevive') {
+        const revRow = hudEl.querySelector('#p-ig-auto-revive-row');
+        if (revRow) revRow.style.display = checked ? 'flex' : 'none';
+      }
+      sendWebHudAction(profileId, { type: 'update-ingame-auto-config', config: { [key]: checked } });
+    };
+  };
+  bindIgAutoField('#p-ig-auto-basic-attack', 'basicAttack');
+  bindIgAutoField('#p-ig-auto-buff-party', 'buffParty');
+  bindIgAutoField('#p-ig-auto-accept-party', 'acceptParty');
+  bindIgAutoField('#p-ig-auto-join-others', 'joinOthers');
+  bindIgAutoField('#p-ig-auto-quiver', 'autoQuiver');
+  bindIgAutoField('#p-ig-auto-revive', 'autoRevive');
+  bindIgAutoField('#p-ig-auto-pickup-loot', 'pickupLoot');
+
+  const igRevMaxInp = hudEl.querySelector('#p-ig-auto-revive-max');
+  const sendIgReviveMax = (val) => {
+    const clamped = Math.max(1, Math.min(99, Math.round(Number(val) || 10)));
+    if (igRevMaxInp) igRevMaxInp.value = String(clamped);
+    sendWebHudAction(profileId, { type: 'update-ingame-auto-config', config: { autoReviveMax: clamped } });
+  };
+  if (igRevMaxInp) {
+    igRevMaxInp.onchange = (e) => sendIgReviveMax(e.target.value);
+  }
+  const igRevDec = hudEl.querySelector('#p-ig-auto-revive-dec');
+  if (igRevDec) {
+    igRevDec.onclick = () => {
+      const cur = Number(igRevMaxInp ? igRevMaxInp.value : 10) || 10;
+      sendIgReviveMax(cur - 1);
+    };
+  }
+  const igRevInc = hudEl.querySelector('#p-ig-auto-revive-inc');
+  if (igRevInc) {
+    igRevInc.onclick = () => {
+      const cur = Number(igRevMaxInp ? igRevMaxInp.value : 10) || 10;
+      sendIgReviveMax(cur + 1);
+    };
+  }
+
+  const igPrioToggle = hudEl.querySelector('#p-ig-auto-priority-toggle');
+  const igPrioSummary = hudEl.querySelector('#p-ig-auto-priority-summary');
+  const igPrioBody = hudEl.querySelector('#p-ig-auto-priority-body');
+  const igPrioArrow = hudEl.querySelector('#p-ig-auto-priority-arrow');
+  const toggleIgPrioFold = () => {
+    if (!igPrioBody) return;
+    const isHidden = igPrioBody.style.display === 'none';
+    igPrioBody.style.display = isHidden ? 'block' : 'none';
+    if (igPrioArrow) igPrioArrow.innerText = isHidden ? '▾' : '▸';
+  };
+  if (igPrioToggle) igPrioToggle.onclick = toggleIgPrioFold;
+  if (igPrioSummary) igPrioSummary.onclick = toggleIgPrioFold;
+
+  const igPrioRows = hudEl.querySelector('#p-ig-auto-priority-rows');
+  if (igPrioRows) {
+    igPrioRows.addEventListener('click', (e) => {
+      const btn = e.target.closest('.p-ig-prio-move');
+      if (!btn || btn.disabled) return;
+      const idx = parseInt(btn.getAttribute('data-prio-idx'), 10);
+      const dir = parseInt(btn.getAttribute('data-prio-dir'), 10);
+      if (Array.isArray(activeWebHuds[profileId]?.data?.inGameAutoConfig?.targetOrder)) {
+        currentIgTargetOrder = normalizeWebInGameAutoOrder(activeWebHuds[profileId].data.inGameAutoConfig.targetOrder);
+      }
+      if (idx + dir >= 0 && idx + dir < currentIgTargetOrder.length) {
+        const tmp = currentIgTargetOrder[idx];
+        currentIgTargetOrder[idx] = currentIgTargetOrder[idx + dir];
+        currentIgTargetOrder[idx + dir] = tmp;
+        if (activeWebHuds[profileId]?.data?.inGameAutoConfig) {
+          activeWebHuds[profileId].data.inGameAutoConfig.targetOrder = currentIgTargetOrder.slice();
+        }
+        refreshIgPriorityDom();
+        sendWebHudAction(profileId, { type: 'update-ingame-auto-config', config: { targetOrder: currentIgTargetOrder.slice() } });
+      }
+    });
+  }
+
+  const igPrioReset = hudEl.querySelector('#p-ig-auto-priority-reset');
+  if (igPrioReset) {
+    igPrioReset.onclick = () => {
+      currentIgTargetOrder = DEFAULT_WEB_INGAME_AUTO_ORDER.slice();
+      if (activeWebHuds[profileId]?.data?.inGameAutoConfig) {
+        activeWebHuds[profileId].data.inGameAutoConfig.targetOrder = currentIgTargetOrder.slice();
+      }
+      refreshIgPriorityDom();
+      sendWebHudAction(profileId, { type: 'update-ingame-auto-config', config: { targetOrder: currentIgTargetOrder.slice() } });
+    };
+  }
+
+  const igSyncBtn = hudEl.querySelector('#p-btn-sync-ingame-auto');
+  if (igSyncBtn) {
+    igSyncBtn.onclick = async () => {
+      const fullCfg = {
+        basicAttack: !!hudEl.querySelector('#p-ig-auto-basic-attack')?.checked,
+        targetOrder: currentIgTargetOrder.slice(),
+        buffParty: !!hudEl.querySelector('#p-ig-auto-buff-party')?.checked,
+        acceptParty: !!hudEl.querySelector('#p-ig-auto-accept-party')?.checked,
+        joinOthers: !!hudEl.querySelector('#p-ig-auto-join-others')?.checked,
+        autoQuiver: !!hudEl.querySelector('#p-ig-auto-quiver')?.checked,
+        autoRevive: !!hudEl.querySelector('#p-ig-auto-revive')?.checked,
+        autoReviveMax: Math.max(1, Math.min(99, parseInt(hudEl.querySelector('#p-ig-auto-revive-max')?.value || '10', 10) || 10)),
+        pickupLoot: !!hudEl.querySelector('#p-ig-auto-pickup-loot')?.checked
+      };
+      const r = await sendWebHudAction(profileId, { type: 'update-ingame-auto-config', config: fullCfg });
+      if (profileId !== '__central__') {
+        showToast(r && r.success !== false ? '⚔️ ซิงก์ตั้งค่าต่อสู้อัตโนมัติเข้าจอเกมแล้ว' : '❌ สั่งงานจอเกมไม่สำเร็จ', r && r.success !== false ? 'success' : 'error');
+      }
+    };
+  }
+
   // Security & Humanize listeners (each control sends ONLY its own key)
   const unexpGuardCb = hudEl.querySelector('#p-unexpected-town-guard');
   if (unexpGuardCb) {
@@ -6143,6 +6391,37 @@ function populateWebHudData(profileId, data) {
   const warpMinZenyInp = hud.querySelector('#p-warp-min-zeny');
   if (warpMinZenyInp && data.travelConfig && document.activeElement !== warpMinZenyInp) {
     warpMinZenyInp.value = Number(data.travelConfig.minZenyForWarp) || 0;
+  }
+
+  // In-Game Auto-Bot Combat Settings
+  if (data.inGameAutoConfig && typeof data.inGameAutoConfig === 'object') {
+    const ig = data.inGameAutoConfig;
+    const setIgCb = (sel, v) => {
+      const el = hud.querySelector(sel);
+      if (el && v !== undefined && document.activeElement !== el) el.checked = !!v;
+    };
+    setIgCb('#p-ig-auto-basic-attack', ig.basicAttack);
+    setIgCb('#p-ig-auto-buff-party', ig.buffParty);
+    setIgCb('#p-ig-auto-accept-party', ig.acceptParty);
+    setIgCb('#p-ig-auto-join-others', ig.joinOthers);
+    setIgCb('#p-ig-auto-quiver', ig.autoQuiver);
+    setIgCb('#p-ig-auto-revive', ig.autoRevive);
+    setIgCb('#p-ig-auto-pickup-loot', ig.pickupLoot);
+    const revRow = hud.querySelector('#p-ig-auto-revive-row');
+    if (revRow && ig.autoRevive !== undefined) {
+      revRow.style.display = ig.autoRevive ? 'flex' : 'none';
+    }
+    const revMax = hud.querySelector('#p-ig-auto-revive-max');
+    if (revMax && ig.autoReviveMax !== undefined && document.activeElement !== revMax) {
+      revMax.value = String(Number(ig.autoReviveMax) || 10);
+    }
+    if (Array.isArray(ig.targetOrder) && ig.targetOrder.length > 0) {
+      const prio = renderWebInGameAutoPriorityHtml(ig.targetOrder);
+      const sumEl = hud.querySelector('#p-ig-auto-priority-summary-text');
+      if (sumEl) sumEl.innerHTML = prio.summaryHtml;
+      const rowsEl = hud.querySelector('#p-ig-auto-priority-rows');
+      if (rowsEl && !rowsEl.contains(document.activeElement)) rowsEl.innerHTML = prio.rowsHtml;
+    }
   }
 
   // Security & Humanize

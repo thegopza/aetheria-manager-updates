@@ -1689,6 +1689,65 @@ function buildClientActionEvalCode(payload) {
       if (typeof window.autoConfigureCombat === 'function') ok = await window.autoConfigureCombat(true);
       return { success: true, applied: ok };
     })()`;
+  } else if (payload.type === 'update-ingame-auto-config') {
+    const patch = payload.config || {};
+    return `(() => {
+      const patch = ${JSON.stringify(patch)};
+      if (!window.__inGameAutoCombatConfig || typeof window.__inGameAutoCombatConfig !== 'object') {
+        try {
+          window.__inGameAutoCombatConfig = JSON.parse(localStorage.getItem('pelican_ingame_auto_cfg') || '{}') || {};
+        } catch (e) {
+          window.__inGameAutoCombatConfig = {};
+        }
+      }
+      const defaultOrder = ['self', 'party', 'players', 'free', 'others'];
+      const normOrder = (arr) => {
+        const valid = new Set(defaultOrder);
+        const out = [];
+        if (Array.isArray(arr)) {
+          for (const k of arr) {
+            const key = String(k || '').trim();
+            if (valid.has(key) && !out.includes(key)) out.push(key);
+          }
+        }
+        for (const k of defaultOrder) {
+          if (!out.includes(k)) out.push(k);
+        }
+        return out;
+      };
+      if (patch && typeof patch === 'object') {
+        if (patch.basicAttack !== undefined) window.__inGameAutoCombatConfig.basicAttack = !!patch.basicAttack;
+        if (patch.targetOrder !== undefined) window.__inGameAutoCombatConfig.targetOrder = normOrder(patch.targetOrder);
+        if (patch.buffParty !== undefined) window.__inGameAutoCombatConfig.buffParty = !!patch.buffParty;
+        if (patch.acceptParty !== undefined) window.__inGameAutoCombatConfig.acceptParty = !!patch.acceptParty;
+        if (patch.joinOthers !== undefined) window.__inGameAutoCombatConfig.joinOthers = !!patch.joinOthers;
+        if (patch.autoQuiver !== undefined) window.__inGameAutoCombatConfig.autoQuiver = !!patch.autoQuiver;
+        if (patch.autoRevive !== undefined) window.__inGameAutoCombatConfig.autoRevive = !!patch.autoRevive;
+        if (patch.autoReviveMax !== undefined) window.__inGameAutoCombatConfig.autoReviveMax = Math.max(1, Math.min(99, Math.round(Number(patch.autoReviveMax) || 10)));
+        if (patch.pickupLoot !== undefined) window.__inGameAutoCombatConfig.pickupLoot = !!patch.pickupLoot;
+        if (patch.flyWing !== undefined) window.__inGameAutoCombatConfig.flyWing = !!patch.flyWing;
+      }
+      try { localStorage.setItem('pelican_ingame_auto_cfg', JSON.stringify(window.__inGameAutoCombatConfig)); } catch (e) {}
+      if (typeof window.applyInGameAutoCombatSettings === 'function') {
+        return window.applyInGameAutoCombatSettings(patch, true);
+      }
+      const room = (typeof window.getColyseusRoom === 'function') ? window.getColyseusRoom() : (window.__colyseusRoom || window.__gameRoom || null);
+      const charData = (typeof window.getLiveCharacterData === 'function') ? window.getLiveCharacterData() : (window.__latestCharacterData || null);
+      const currentConfig = (charData && charData.auto && charData.auto.config) ? charData.auto.config : {};
+      const nextConfig = Object.assign({}, currentConfig, window.__inGameAutoCombatConfig);
+      let sent = false;
+      if (room && typeof room.send === 'function') {
+        try {
+          room.send('auto_set', { config: nextConfig });
+          sent = true;
+        } catch (e) {}
+      }
+      if (charData && charData.auto) {
+        charData.auto.config = Object.assign({}, charData.auto.config || {}, nextConfig);
+      }
+      if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      return { success: true, sent, config: window.__inGameAutoCombatConfig };
+    })()`;
   } else if (payload.type === 'walk-to-map') {
     return `(() => {
       const select = document.getElementById('p-target-map-select');
@@ -6962,6 +7021,28 @@ public class PmFocus {
       const shop = window.__shopConfig || {};
       const state = typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null;
       const bagCount = (itemId) => (typeof window.getBagItemCount === 'function' ? window.getBagItemCount(itemId) : 0);
+      const charData = (typeof window.getLiveCharacterData === 'function') ? window.getLiveCharacterData() : (window.__latestCharacterData || null);
+      const liveAutoCfg = (charData && charData.auto && charData.auto.config) ? charData.auto.config : {};
+      let savedInGameAuto = window.__inGameAutoCombatConfig;
+      if (!savedInGameAuto || typeof savedInGameAuto !== 'object') {
+        try { savedInGameAuto = JSON.parse(localStorage.getItem('pelican_ingame_auto_cfg') || '{}') || {}; } catch (e) { savedInGameAuto = {}; }
+      }
+      const defaultOrder = ['self', 'party', 'players', 'free', 'others'];
+      const rawOrder = Array.isArray(savedInGameAuto.targetOrder) && savedInGameAuto.targetOrder.length
+        ? savedInGameAuto.targetOrder
+        : (Array.isArray(liveAutoCfg.targetOrder) && liveAutoCfg.targetOrder.length ? liveAutoCfg.targetOrder : defaultOrder);
+      const inGameAutoConfig = {
+        basicAttack: savedInGameAuto.basicAttack !== undefined ? !!savedInGameAuto.basicAttack : (liveAutoCfg.basicAttack !== false),
+        targetOrder: rawOrder.slice(),
+        buffParty: savedInGameAuto.buffParty !== undefined ? !!savedInGameAuto.buffParty : (liveAutoCfg.buffParty !== false),
+        acceptParty: savedInGameAuto.acceptParty !== undefined ? !!savedInGameAuto.acceptParty : (liveAutoCfg.acceptParty === true),
+        joinOthers: savedInGameAuto.joinOthers !== undefined ? !!savedInGameAuto.joinOthers : (liveAutoCfg.joinOthers === true),
+        autoQuiver: savedInGameAuto.autoQuiver !== undefined ? !!savedInGameAuto.autoQuiver : (liveAutoCfg.autoQuiver === true),
+        autoRevive: savedInGameAuto.autoRevive !== undefined ? !!savedInGameAuto.autoRevive : (liveAutoCfg.autoRevive === true),
+        autoReviveMax: Math.max(1, Math.min(99, Number(savedInGameAuto.autoReviveMax ?? liveAutoCfg.autoReviveMax ?? 10) || 10)),
+        pickupLoot: savedInGameAuto.pickupLoot !== undefined ? !!savedInGameAuto.pickupLoot : (liveAutoCfg.pickupLoot !== false),
+        flyWing: savedInGameAuto.flyWing !== undefined ? !!savedInGameAuto.flyWing : (liveAutoCfg.flyWing === true)
+      };
       return {
         state: state,
         botVersion: window.__pelicanBotVersion || null,
@@ -6973,6 +7054,7 @@ public class PmFocus {
         travelConfig: {
           minZenyForWarp: Number(travel.minZenyForWarp) || 0
         },
+        inGameAutoConfig: inGameAutoConfig,
         unexpectedTownGuardEnabled: window.__unexpectedTownGuardEnabled !== false,
         unexpectedTownWaiting: !!window.__unexpectedTownWaiting,
         unexpectedTownCountdown: document.getElementById('p-unexpected-countdown')?.innerText || '--:--',

@@ -2769,6 +2769,8 @@ async function ensureClientConsolidationItemHelpers(port, cfg = null) {
 // ==========================================
 let consolidationState = {
   running: false,
+  isPremiumConsolidation: false,
+  premiumGoal: null,
   status: 'idle', // 'idle' | 'running' | 'completed' | 'stopped' | 'error'
   step: 'พร้อมทำงาน',
   stepIndex: 0,
@@ -2795,16 +2797,30 @@ function addConsolidationLog(text, level = 'info') {
 
 async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, keepZeny = 0, tradeItemsOpts = null) {
   if (consolidationState.running) return;
+  const premiumGoal = (tradeItemsOpts && tradeItemsOpts.premiumGoal) ? tradeItemsOpts.premiumGoal : null;
   const savedItemCfg = loadConsolidationItemSettings();
-  const tradeItemsEnabled = (tradeItemsOpts && typeof tradeItemsOpts.enabled === 'boolean')
-    ? tradeItemsOpts.enabled
-    : Boolean(savedItemCfg.tradeOnConsolidate);
-  const tradeItemsList = (tradeItemsOpts && Array.isArray(tradeItemsOpts.items) && tradeItemsOpts.items.length > 0)
-    ? sanitizeConsolidationItemsList(tradeItemsOpts.items)
-    : sanitizeConsolidationItemsList(savedItemCfg.items);
+  const tradeItemsEnabled = premiumGoal
+    ? false
+    : ((tradeItemsOpts && typeof tradeItemsOpts.enabled === 'boolean')
+      ? tradeItemsOpts.enabled
+      : Boolean(savedItemCfg.tradeOnConsolidate));
+  const tradeItemsList = premiumGoal
+    ? []
+    : ((tradeItemsOpts && Array.isArray(tradeItemsOpts.items) && tradeItemsOpts.items.length > 0)
+      ? sanitizeConsolidationItemsList(tradeItemsOpts.items)
+      : sanitizeConsolidationItemsList(savedItemCfg.items));
 
   consolidationAborted = false;
   consolidationState.running = true;
+  consolidationState.isPremiumConsolidation = Boolean(premiumGoal);
+  consolidationState.premiumGoal = premiumGoal ? {
+    receiverId: receiverProfileId,
+    needTokens: premiumGoal.needTokens || 0,
+    planDays: premiumGoal.planDays || 7,
+    planTokens: premiumGoal.planTokens || 1000,
+    underHours: premiumGoal.underHours || 10,
+    keepZeny: Number(keepZeny) || 0
+  } : null;
   consolidationState.status = 'running';
   consolidationState.stepIndex = 1;
   consolidationState.step = 'เตรียมพร้อมและหยุดบอททุกจอ...';
@@ -2818,7 +2834,11 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
   consolidationState.endTime = 0;
 
   const itemModeMsg = tradeItemsEnabled ? ` + เบิกคลังและเทรดไอเทม [${tradeItemsList.join(', ')}]` : '';
-  addConsolidationLog(`🚀 เริ่มต้นระบบรวมเงินเข้าตัวหลัก (Receiver ID: ${receiverProfileId})${itemModeMsg}`, 'info');
+  if (premiumGoal) {
+    addConsolidationLog(`💎 เริ่มต้นระบบรวมเงินซื้อ Premium ก่อนหมดเวลา (< ${premiumGoal.underHours || 10} ชม.) ให้ตัวละคร (Receiver ID: ${receiverProfileId}) · เหลือเงินติดตัวคนโอน ${Number(keepZeny || 0).toLocaleString()} z`, 'info');
+  } else {
+    addConsolidationLog(`🚀 เริ่มต้นระบบรวมเงินเข้าตัวหลัก (Receiver ID: ${receiverProfileId})${itemModeMsg}`, 'info');
+  }
 
   const allProfiles = loadProfiles();
   const receiverProfile = allProfiles.find(p => p.id === receiverProfileId);
@@ -3068,8 +3088,12 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       if (typeof window.startMasterBot === 'function') window.startMasterBot(); else if (typeof window.startBot === 'function') window.startBot();
       return { success: true };
     })()`;
+    let consolidationEarlyStop = false;
+    let premiumActivated = false;
+
     // into the receiver's channel (waits for cooldown / a free slot) and up to the receiver
     const prepareSender = async (s) => {
+      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel: null, earlyStop: true };
       // no Butterfly Wing: it is walking home — wait for the capital before changing channel / trading
       const sInCap = await evalProfilePort(s.debugPort, `window.isInCapital ? window.isInCapital() : true`, 4000);
       if (sInCap && sInCap.result === false) {
@@ -3079,6 +3103,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       if (!(home && home.result && home.result.success)) return { ok: false, homeChannel: null, error: `ยังไม่ถึงเมืองหลวง: ${(home && home.result && home.result.error) || 'ไม่ทราบสาเหตุ'}` };
       const fromCh = await evalProfilePort(s.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 5000);
       const homeChannel = (fromCh && typeof fromCh.result === 'number') ? fromCh.result : null;
+      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
 
       let bagMatchingQty = 0;
       let bagMatchingWeight = 0;
@@ -3125,11 +3150,14 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         }
       }
 
+      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
       addConsolidationLog(`🔄 จอ ${s.name} กำลังย้ายไป CH ${targetChannel} (รอคูลดาวน์/ที่ว่างให้เอง)...`, 'info');
       const mv = await evalProfilePort(s.debugPort, `window.moveToChannel ? window.moveToChannel(${targetChannel}, 120000) : (window.switchChannel ? window.switchChannel(${targetChannel}) : null)`, 125000);
       const there = mv && mv.result && mv.result.success;
       if (!there) return { ok: false, homeChannel, error: `ย้ายไป CH ${targetChannel} ไม่ได้: ${(mv && mv.result && mv.result.error) || (mv && mv.error) || 'ไม่ทราบสาเหตุ'}` };
+      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
       await new Promise(r => setTimeout(r, 2000));
+      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
       const rPosRes = await evalProfilePort(receiverProfile.debugPort, `(() => {
         const r = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
         const me = r && r.state && r.state.players && r.state.players.get ? r.state.players.get(r.sessionId) : null;
@@ -3230,16 +3258,21 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     };
 
     const prep = new Map();
-    const startPrep = (s) => { if (s && !prep.has(s.id)) prep.set(s.id, prepareSender(s).catch(e => ({ ok: false, error: e.message }))); };
+    const startPrep = (s) => { if (s && !prep.has(s.id) && !consolidationEarlyStop) prep.set(s.id, prepareSender(s).catch(e => ({ ok: false, error: e.message }))); };
     queue.slice(0, SENDER_SLOTS).forEach(startPrep);
 
     for (let i = 0; i < queue.length; i++) {
       if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
+      if (consolidationEarlyStop) break;
       const sender = queue[i];
       consolidationState.currentSender = sender.name;
       addConsolidationLog(`----------------------------------------`, 'info');
       addConsolidationLog(`▶️ ลำดับที่ ${i + 1}/${queue.length}: จอ ${sender.name}...`, 'info');
       const ready = await prep.get(sender.id);
+      if (consolidationEarlyStop || (ready && ready.earlyStop)) {
+        await releaseSender(sender, ready && ready.homeChannel);
+        break;
+      }
 
       const senderLive = await queryClientState(sender.debugPort);
       const senderCharName = senderLive?.charName || sender.name;
@@ -3348,8 +3381,47 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       evalProfilePort(receiverProfile.debugPort, `window.stopReceiverTradeWatcher ? window.stopReceiverTradeWatcher() : null`, 3000);
       // leave the channel free for the next one, back to farming; the sender after next starts moving in
       await releaseSender(sender, ready.homeChannel);
+
+      if (premiumGoal && typeof premiumGoal.onAfterSenderTrade === 'function') {
+        if (movedZeny > 0 || i === queue.length - 1) {
+          addConsolidationLog(`💎 ตัวรับเงิน (${receiverCharName}) กำลังนำเงินที่รวมได้ไปซื้อ Token / ต่ออายุ VIP...`, 'info');
+          consolidationState.step = `ตัวรับเงิน (${receiverCharName}) กำลังซื้อ Token / ต่ออายุ VIP...`;
+        }
+        try {
+          const pgRes = await premiumGoal.onAfterSenderTrade(receiverProfile, {
+            movedZeny,
+            totalTransferredZeny: consolidationState.totalTransferredZeny,
+            isLastSender: i === queue.length - 1,
+            senderIndex: i,
+            totalSenders: queue.length
+          });
+          if (pgRes && pgRes.bought > 0) {
+            addConsolidationLog(`🛒 ตัวรับเงิน (${receiverCharName}) ซื้อ Token ได้ +${pgRes.bought.toLocaleString()} เหรียญ (รวมมี ${Number(pgRes.tokens || 0).toLocaleString()} Token)`, 'success');
+          }
+          if (pgRes && pgRes.stopConsolidation) {
+            premiumActivated = Boolean(pgRes.activated);
+            consolidationEarlyStop = true;
+            addConsolidationLog(`🎉 ตัวรับเงิน (${receiverCharName}) ได้รับ VIP เรียบร้อยแล้ว! หยุดการรวมเงินและปล่อยจอที่เหลือกลับไปฟาร์มทันที`, 'success');
+            break;
+          }
+        } catch (pgErr) {
+          addConsolidationLog(`⚠️ ตรวจสอบการซื้อ VIP หลังเทรด: ${pgErr.message}`, 'warning');
+        }
+      }
+
       startPrep(queue[i + SENDER_SLOTS]);
       await new Promise(r => setTimeout(r, 1000));
+    }
+
+    if (consolidationEarlyStop && prep.size > 0) {
+      for (const s of queue) {
+        if (!restarted.has(s.id) && prep.has(s.id)) {
+          try {
+            const r = await prep.get(s.id);
+            await releaseSender(s, r && r.homeChannel);
+          } catch (e) {}
+        }
+      }
     }
 
     // If tradeItemsEnabled, have the Receiver deposit all collected items into its storage at the end of Step 4
@@ -3419,7 +3491,19 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       }
     }
 
-    consolidationState.step = 'เสร็จสิ้นการรวมเงินและเริ่มบอทกลับฟาร์มเรียบร้อย!';
+    if (premiumGoal && typeof premiumGoal.onConsolidationFinished === 'function') {
+      try {
+        await premiumGoal.onConsolidationFinished({
+          ok: true,
+          activated: premiumActivated,
+          totalTransferredZeny: consolidationState.totalTransferredZeny
+        });
+      } catch (e) {}
+    }
+
+    consolidationState.step = premiumActivated
+      ? 'รวมเงินและต่ออายุ VIP สำเร็จ! เริ่มบอทกลับฟาร์มเรียบร้อย!'
+      : 'เสร็จสิ้นการรวมเงินและเริ่มบอทกลับฟาร์มเรียบร้อย!';
     consolidationState.running = false;
     consolidationState.status = 'completed';
     consolidationState.endTime = Date.now();
@@ -3428,6 +3512,17 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     consolidationState.running = false;
     consolidationState.status = consolidationAborted ? 'stopped' : 'error';
     addConsolidationLog(`⛔ การรวมเงินหยุดทำงาน: ${err.message}`, 'error');
+    if (premiumGoal && typeof premiumGoal.onConsolidationFinished === 'function') {
+      try {
+        await premiumGoal.onConsolidationFinished({
+          ok: false,
+          aborted: consolidationAborted,
+          activated: false,
+          totalTransferredZeny: consolidationState.totalTransferredZeny,
+          error: err.message
+        });
+      } catch (e) {}
+    }
     const involvedProfiles = [receiverProfile, ...senderProfiles];
     for (const p of involvedProfiles) {
       try {
@@ -4243,6 +4338,43 @@ partyService.start();
 const premiumService = createPremiumService({
   loadProfiles,
   evalProfilePort,
+  queryProfileState: async (p) => (p && p.debugPort) ? await queryClientState(p.debugPort) : null,
+  startPremiumConsolidation: async (opts) => {
+    if (consolidationState.running) {
+      return { started: false, error: 'ระบบกำลังรวมเงินอยู่ในขณะนี้' };
+    }
+    const recvId = opts && opts.receiverProfile && opts.receiverProfile.id;
+    const senderIds = ((opts && opts.senderProfiles) || []).map(s => s.id);
+    if (!recvId || !senderIds.length) {
+      return { started: false, error: 'ไม่พบตัวรับหรือตัวโอนเงิน' };
+    }
+    runConsolidationWorkflow(recvId, senderIds, opts.keepZeny || 0, {
+      enabled: false,
+      items: [],
+      premiumGoal: opts
+    });
+    return { started: true };
+  },
+  stopPremiumConsolidation: async () => {
+    if (consolidationState.running) {
+      consolidationAborted = true;
+      addConsolidationLog('🛑 ผู้ใช้สั่งหยุดการรวมเงินซื้อ Premium...', 'warning');
+    }
+    return { stopped: true };
+  },
+  getConsolidationStatus: () => ({
+    running: consolidationState.running,
+    isPremiumConsolidation: Boolean(consolidationState.isPremiumConsolidation),
+    status: consolidationState.status,
+    step: consolidationState.step,
+    stepIndex: consolidationState.stepIndex,
+    totalSteps: consolidationState.totalSteps,
+    receiver: consolidationState.receiver,
+    currentSender: consolidationState.currentSender,
+    completedSenders: consolidationState.completedSenders,
+    totalTransferredZeny: consolidationState.totalTransferredZeny,
+    premiumGoal: consolidationState.premiumGoal || null
+  }),
   dataFile: path.join(__dirname, "data", "premium.json"),
   isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
 });

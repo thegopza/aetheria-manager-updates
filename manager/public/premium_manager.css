@@ -124,6 +124,72 @@ body.pm-open .pm-drawer { transform: translateX(0); visibility: visible; pointer
 .pm-opt-txt small { display: block; margin-top: 2px; font-size: 10px; color: var(--text-muted, #8d9ab5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pm-opt-toggle .pm-switch { margin-top: 0; }
 
+/* consolidate before expire */
+.pm-consolidate-wrap { display: flex; flex-direction: column; gap: 6px; }
+.pm-opt-consolidate.on {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: linear-gradient(155deg, rgba(16, 185, 129, 0.14), rgba(56, 189, 248, 0.08));
+}
+.pm-consolidate-cfg {
+  padding: 9px 11px; border-radius: 11px;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: linear-gradient(165deg, rgba(6, 18, 32, 0.85), rgba(10, 14, 28, 0.92));
+  display: flex; flex-direction: column; gap: 8px;
+}
+.pm-consolidate-cfg[hidden] { display: none !important; }
+.pm-consolidate-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pm-consolidate-inp-prefix {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 9px; border-radius: 9px;
+  background: rgba(4, 8, 20, 0.6); border: 1px solid rgba(148, 163, 184, 0.2);
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+.pm-consolidate-inp-prefix:focus-within, .pm-consolidate-inp-prefix:hover {
+  border-color: rgba(56, 189, 248, 0.55); box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.12);
+}
+.pm-consolidate-inp-prefix > span {
+  font: 700 13px var(--font-mono, monospace); color: #38bdf8;
+}
+.pm-consolidate-inp-prefix > input {
+  border: none !important; background: transparent !important; box-shadow: none !important;
+  padding: 7px 2px !important; flex: 1; min-width: 0;
+}
+.pm-consolidate-inp-prefix > small {
+  font-size: 10.5px; color: var(--text-muted, #8d9ab5); white-space: nowrap;
+}
+.pm-consolidate-status { font-size: 10.5px; line-height: 1.45; }
+.pm-cons-live, .pm-cons-ready, .pm-cons-hint {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 8px; border-radius: 8px;
+}
+.pm-cons-live {
+  background: rgba(56, 189, 248, 0.14); border: 1px solid rgba(56, 189, 248, 0.35); color: #bae6fd;
+}
+.pm-cons-ready {
+  background: rgba(16, 185, 129, 0.14); border: 1px solid rgba(16, 185, 129, 0.35); color: #a7f3d0;
+}
+.pm-cons-hint {
+  background: rgba(148, 163, 184, 0.08); border: 1px solid rgba(148, 163, 184, 0.16); color: var(--text-muted, #8d9ab5);
+}
+.pm-cons-hint b, .pm-cons-ready b, .pm-cons-live b { color: #e0f2fe; }
+.pm-cons-now-btn, .pm-cons-stop-btn {
+  flex: none; padding: 5px 10px; border-radius: 7px; font: 700 10.5px var(--font-sans, sans-serif);
+  cursor: pointer; white-space: nowrap; transition: all 0.15s;
+}
+.pm-cons-now-btn {
+  color: #06131f; background: linear-gradient(135deg, #34d399, #38bdf8); border: none;
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.25);
+}
+.pm-cons-now-btn.ghost {
+  color: #7dd3fc; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.32);
+  box-shadow: none;
+}
+.pm-cons-now-btn:hover:not(:disabled) { transform: translateY(-1px); filter: brightness(1.08); }
+.pm-cons-stop-btn {
+  color: #fecaca; background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(248, 113, 113, 0.45);
+}
+.pm-cons-stop-btn:hover:not(:disabled) { background: rgba(239, 68, 68, 0.35); color: #fff; }
+
 /* filter */
 .pm-filter { display: flex; align-items: center; gap: 5px; padding: 10px 14px 4px; flex-wrap: wrap; }
 .pm-filter button {
@@ -169,8 +235,8 @@ body.pm-open .pm-drawer { transform: translateX(0); visibility: visible; pointer
 .pm-bar span { position: relative; display: block; text-align: center; font: 700 10.5px/14px var(--font-mono, monospace); color: #fff; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); }
 .pm-state { margin-top: 5px; font-size: 11.5px; color: var(--text-muted, #8d9ab5); }
 .pm-state::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; background: currentColor; }
-.pm-state.buy, .pm-state.activate { color: #7dd3fc; }
-.pm-state.buy::before, .pm-state.activate::before { animation: pm-pulse 1.1s ease-in-out infinite; }
+.pm-state.buy, .pm-state.activate, .pm-state.consolidate { color: #7dd3fc; }
+.pm-state.buy::before, .pm-state.activate::before, .pm-state.consolidate::before { animation: pm-pulse 1.1s ease-in-out infinite; }
 @keyframes pm-pulse { 50% { opacity: 0.25; } }
 .pm-state.idle { color: #6ee7b7; }
 .pm-state.plan { color: #c4b5fd; }

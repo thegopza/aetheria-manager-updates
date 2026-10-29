@@ -19,13 +19,17 @@
 const fs = require('fs');
 const path = require('path');
 
+const HOUR = 3600000;
 const DAY = 86400000;
 const DEFAULTS = {
   reserveZeny: 2000000,
   planId: '7d',
   leadDays: 1,
   prebuyNextRound: true,
-  requireGearComplete: true
+  requireGearComplete: true,
+  consolidateBeforeExpire: false,
+  consolidateUnderHours: 10,
+  consolidateKeepZeny: 100000
 };
 const TIMING = {
   tickMs: 60000,
@@ -34,7 +38,9 @@ const TIMING = {
   renewBeforeMs: 30 * 60000,
   minBatch: 10,
   readTimeoutMs: 9000,
-  actTimeoutMs: 15000
+  actTimeoutMs: 15000,
+  partialConsolidateCooldownMs: 30 * 60000,
+  failConsolidateCooldownMs: 3 * 60000
 };
 const BUSY_FLAGS = ['__isConsolidating', '__isShopping', '__isAutoSellingNow', '__isManualSelling', '__isStoring',
   '__isMarketScanning', '__isChangingJob', '__isGearRefining', '__isWeightScrollBusy'];
@@ -54,6 +60,7 @@ const READ_JS = `(async () => {
   const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
   if (!room || !room.state) return { ok: false, reason: 'not-in-game' };
   let me = null; try { me = room.state.players.get(room.sessionId); } catch (e) {}
+  try { if (typeof window.__pmForceSyncCharZeny === 'function') window.__pmForceSyncCharZeny(); } catch (e) {}
   try { if (typeof window.getLiveCharacterData === 'function') window.getLiveCharacterData(true); } catch (e) {}
   let live = null; try { live = typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null; } catch (e) {}
   ${EXCHANGE_FETCH}
@@ -302,15 +309,31 @@ function walkAsks(asks, want, budget) {
   return { qty, zeny };
 }
 
+function estimateTokensZenyCost(ex, needTokens) {
+  const want = Math.max(0, Math.ceil(Number(needTokens) || 0));
+  if (!ex || want <= 0) return 0;
+  const asks = Array.isArray(ex.asks) ? ex.asks : [];
+  const w = walkAsks(asks, want, Infinity);
+  if (w.qty >= want) return w.zeny;
+  const rem = want - w.qty;
+  const sorted = asks.filter(a => a && a.price > 0 && a.qty > 0).sort((a, b) => a.price - b.price);
+  const tailPrice = (sorted.length ? Number(sorted[sorted.length - 1].price) : 0) || Number(ex.bestAsk) || 0;
+  if (tailPrice <= 0) return w.zeny;
+  return w.zeny + rem * tailPrice;
+}
+
 // How many Token should the wallet hold right now?
 // No Premium → the full plan price. Premium on → grows linearly so the full price is there `leadDays` before the end
-// (or 0 while Premium is active if prebuyNextRound === false).
-function tokenTarget(cost, days, leadDays, premiumUntilMs, nowMs, prebuyNextRound) {
+// (or 0 while Premium is active if prebuyNextRound === false, unless consolidateBeforeExpire window is active).
+function tokenTarget(cost, days, leadDays, premiumUntilMs, nowMs, prebuyNextRound, consolidateBeforeExpire, consolidateUnderHours) {
   if (!premiumUntilMs || premiumUntilMs <= nowMs) return cost;
+  const remaining = premiumUntilMs - nowMs;
+  if (consolidateBeforeExpire && remaining <= Math.max(0, Number(consolidateUnderHours) || 0) * HOUR) {
+    return cost;
+  }
   if (prebuyNextRound === false) return 0;
   const period = days * DAY;
   const spread = Math.max(DAY / 4, period - Math.max(0, leadDays) * DAY);
-  const remaining = premiumUntilMs - nowMs;
   const elapsed = period - remaining; // negative while more than one period is left (e.g. a 30 d plan bought by hand)
   const frac = Math.max(0, Math.min(1, elapsed / spread));
   return Math.ceil(cost * frac);
@@ -341,41 +364,75 @@ function decide(snap, cfg, gateOpen, nowMs, timing) {
   const until = toMs(ex.premiumUntil);
   const active = until > nowMs;
   const prebuy = !cfg || cfg.prebuyNextRound !== false;
-  const target = tokenTarget(plan.tokens, plan.days, cfg.leadDays, until, nowMs, prebuy);
-  const base = { plan, target, active, premiumUntil: until || null, tokens: ex.tokens };
+  const consOn = Boolean(cfg && cfg.consolidateBeforeExpire);
+  const consUnderHours = consOn ? (Number(cfg.consolidateUnderHours) || DEFAULTS.consolidateUnderHours) : 0;
+  const consUnderMs = consOn ? Math.max(0, consUnderHours) * HOUR : 0;
+  const inConsolidateWindow = Boolean(consOn && active && (until - nowMs <= consUnderMs));
+  const target = tokenTarget(plan.tokens, plan.days, cfg.leadDays, until, nowMs, prebuy, consOn, consUnderHours);
+  const base = { plan, target, active, premiumUntil: until || null, tokens: ex.tokens, inConsolidateWindow };
   if (Array.isArray(ex.askOrders) && ex.askOrders.length > 0) {
     const rem = ex.askOrders.reduce((s, o) => s + (Number(o.remaining) || Number(o.qty) || 0), 0);
     return Object.assign(base, { action: 'wait', text: 'กำลังตั้งขาย ' + rem.toLocaleString() + ' Token รอคนซื้อ' });
   }
-  if (ex.tokens >= plan.tokens && (!active || until - nowMs <= T.renewBeforeMs)) {
+  const renewWindowMs = inConsolidateWindow ? Math.max(T.renewBeforeMs, consUnderMs) : T.renewBeforeMs;
+  if (ex.tokens >= plan.tokens && (!active || until - nowMs <= renewWindowMs)) {
     return Object.assign(base, { action: 'activate', text: active ? 'ต่อ Premium ' + plan.days + ' วัน' : 'ปลดล็อค Premium ' + plan.days + ' วัน' });
   }
   const need = target - ex.tokens;
   if (need <= 0) {
     const idleText = active
-      ? (prebuy ? 'Premium ใช้งานอยู่ · Token ครบตามแผนแล้ว' : 'Premium ใช้งานอยู่ (ปิดซื้อเผื่อรอบถัดไป)')
+      ? (prebuy
+        ? 'Premium ใช้งานอยู่ · Token ครบตามแผนแล้ว'
+        : (consOn ? `Premium ใช้งานอยู่ (รอรวมเงินเมื่อเหลือ < ${consUnderHours} ชม.)` : 'Premium ใช้งานอยู่ (ปิดซื้อเผื่อรอบถัดไป)'))
       : 'รอปลดล็อค';
     return Object.assign(base, { action: 'idle', text: idleText });
   }
   const budget = Math.max(0, (Number(snap.zeny) || 0) - Math.max(0, Number(cfg.reserveZeny) || 0));
-  if (budget <= 0) return Object.assign(base, { action: 'wait', need, text: 'เงินไม่พอ (เก็บสำรองไว้ ' + Number(cfg.reserveZeny || 0).toLocaleString() + ' z)' });
+  const neededZeny = estimateTokensZenyCost(ex, need);
+  const shortfallZeny = Math.max(0, neededZeny - budget);
+  const consMeta = inConsolidateWindow && shortfallZeny > 0
+    ? { needsConsolidation: true, neededZeny, shortfallZeny }
+    : {};
+  if (budget <= 0) {
+    const waitTxt = inConsolidateWindow && shortfallZeny > 0
+      ? `รอรวมเงินซื้อ VIP (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
+      : 'เงินไม่พอ (เก็บสำรองไว้ ' + Number(cfg.reserveZeny || 0).toLocaleString() + ' z)';
+    return Object.assign(base, consMeta, { action: 'wait', need, text: waitTxt });
+  }
   const w = walkAsks(ex.asks, need, budget);
-  if (w.qty <= 0) return Object.assign(base, { action: 'wait', need, text: (ex.asks && ex.asks.length) ? 'เงินไม่พอซื้อแม้แต่ 1 Token' : 'ยังไม่มีคนขาย Token' });
-  if (w.qty < Math.min(need, T.minBatch)) return Object.assign(base, { action: 'wait', need, text: 'รอเงินพอซื้อ ' + Math.min(need, T.minBatch) + ' Token' });
+  if (w.qty <= 0) {
+    const waitTxt = (ex.asks && ex.asks.length)
+      ? (inConsolidateWindow && shortfallZeny > 0
+        ? `รอรวมเงินซื้อ VIP (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
+        : 'เงินไม่พอซื้อแม้แต่ 1 Token')
+      : 'ยังไม่มีคนขาย Token';
+    return Object.assign(base, consMeta, { action: 'wait', need, text: waitTxt });
+  }
+  if (w.qty < Math.min(need, T.minBatch)) {
+    const waitTxt = inConsolidateWindow && shortfallZeny > 0
+      ? `รอรวมเงินซื้อ VIP (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
+      : 'รอเงินพอซื้อ ' + Math.min(need, T.minBatch) + ' Token';
+    return Object.assign(base, consMeta, { action: 'wait', need, text: waitTxt });
+  }
   const maxZeny = Math.min(budget, Math.ceil(w.zeny * 1.01));
-  return Object.assign(base, { action: 'buy', need, qty: w.qty, maxZeny, estZeny: w.zeny, text: 'ซื้อ ' + w.qty + ' Token (~' + w.zeny.toLocaleString() + ' z)' });
+  return Object.assign(base, consMeta, { action: 'buy', need, qty: w.qty, maxZeny, estZeny: w.zeny, text: 'ซื้อ ' + w.qty + ' Token (~' + w.zeny.toLocaleString() + ' z)' });
 }
 
 function sanitizeSettings(s) {
   s = s || {};
   const reserve = Math.floor(Number(s.reserveZeny));
   const lead = Number(s.leadDays);
+  const underH = Number(s.consolidateUnderHours);
+  const keepZ = Math.floor(Number(s.consolidateKeepZeny));
   return {
     reserveZeny: Number.isFinite(reserve) && reserve >= 0 ? Math.min(reserve, 2e9) : DEFAULTS.reserveZeny,
     planId: typeof s.planId === 'string' && /^[\w-]{1,20}$/.test(s.planId) ? s.planId : DEFAULTS.planId,
     leadDays: Number.isFinite(lead) && lead >= 0 && lead <= 30 ? lead : DEFAULTS.leadDays,
     prebuyNextRound: s.prebuyNextRound !== undefined ? Boolean(s.prebuyNextRound) : DEFAULTS.prebuyNextRound,
-    requireGearComplete: s.requireGearComplete !== undefined ? Boolean(s.requireGearComplete) : DEFAULTS.requireGearComplete
+    requireGearComplete: s.requireGearComplete !== undefined ? Boolean(s.requireGearComplete) : DEFAULTS.requireGearComplete,
+    consolidateBeforeExpire: s.consolidateBeforeExpire !== undefined ? Boolean(s.consolidateBeforeExpire) : DEFAULTS.consolidateBeforeExpire,
+    consolidateUnderHours: Number.isFinite(underH) && underH > 0 && underH <= 720 ? underH : DEFAULTS.consolidateUnderHours,
+    consolidateKeepZeny: Number.isFinite(keepZ) && keepZ >= 0 ? Math.min(keepZ, 2e9) : DEFAULTS.consolidateKeepZeny
   };
 }
 
@@ -393,6 +450,10 @@ function createPremiumService(opts) {
   const { loadProfiles, evalProfilePort } = opts;
   const dataFile = opts.dataFile || path.join(__dirname, 'data', 'premium.json');
   const isBusy = opts.isBusy || (() => false);
+  const queryProfileState = opts.queryProfileState || null;
+  const startPremiumConsolidation = opts.startPremiumConsolidation || null;
+  const stopPremiumConsolidation = opts.stopPremiumConsolidation || null;
+  const getConsolidationStatus = opts.getConsolidationStatus || null;
   const now = opts.now || (() => Date.now());
   const log = opts.log || ((...a) => console.log('[Premium]', ...a));
   const T = Object.assign({}, TIMING, opts.timing || {});
@@ -405,8 +466,9 @@ function createPremiumService(opts) {
     clients = raw.clients && typeof raw.clients === 'object' ? raw.clients : {};
   } catch (e) { /* first run */ }
 
-  const runtime = new Map(); // profileId -> { snap, decision, at, buyAt, activateAt, lastError }
+  const runtime = new Map(); // profileId -> { snap, decision, at, buyAt, activateAt, lastError, lastPartialConsolidateAt, lastConsolidateFailAt }
   let market = null;
+  let lastConsolidationSummary = null;
   let ticking = false, timer = null;
 
   function save() {
@@ -418,7 +480,21 @@ function createPremiumService(opts) {
     } catch (e) { log('save failed', e.message); }
   }
   const cl = id => { if (!clients[id]) clients[id] = { enabled: false, gatePlan: null, history: [] }; if (!Array.isArray(clients[id].history)) clients[id].history = []; return clients[id]; };
-  const rt = id => { if (!runtime.has(id)) runtime.set(id, { snap: null, decision: null, at: 0, buyAt: 0, activateAt: 0, lastError: null }); return runtime.get(id); };
+  const rt = id => {
+    if (!runtime.has(id)) {
+      runtime.set(id, {
+        snap: null,
+        decision: null,
+        at: 0,
+        buyAt: 0,
+        activateAt: 0,
+        lastError: null,
+        lastPartialConsolidateAt: 0,
+        lastConsolidateFailAt: 0
+      });
+    }
+    return runtime.get(id);
+  };
   function remember(id, text, ok) {
     const c = cl(id);
     c.history.unshift({ at: now(), text, ok: ok !== false });
@@ -500,15 +576,330 @@ function createPremiumService(opts) {
       if (now() - R.buyAt < T.buyCooldownMs) return;
       R.buyAt = now();
       const res = await evalOk(p.debugPort, ACTIONS.buy(d.qty, d.maxZeny, d.target), T.actTimeoutMs);
-      if (res.ok) { remember(p.id, 'ซื้อ ' + (res.result.after - res.result.before) + ' Token (' + res.result.before + ' → ' + res.result.after + ')'); R.lastError = null; }
-      else { R.lastError = res.error; if (res.error !== 'Token พอแล้ว') remember(p.id, 'ซื้อ Token ไม่สำเร็จ: ' + (res.error || 'ไม่ทราบสาเหตุ'), false); }
+      if (res.ok) {
+        remember(p.id, 'ซื้อ ' + (res.result.after - res.result.before) + ' Token (' + res.result.before + ' → ' + res.result.after + ')');
+        R.lastError = null;
+        if (snap && snap.exchange && res.result && res.result.after != null) {
+          snap.exchange.tokens = Number(res.result.after) || snap.exchange.tokens;
+          snap.zeny = Math.max(0, (Number(snap.zeny) || 0) - (Number(d.estZeny) || 0));
+          R.decision = decide(snap, settings, gateOpen(p.id, snap), now(), T);
+        }
+      } else {
+        R.lastError = res.error;
+        if (res.error !== 'Token พอแล้ว') remember(p.id, 'ซื้อ Token ไม่สำเร็จ: ' + (res.error || 'ไม่ทราบสาเหตุ'), false);
+      }
     } else if (d.action === 'activate') {
       if (now() - R.activateAt < T.activateCooldownMs) return;
       R.activateAt = now();
       const res = await evalOk(p.debugPort, ACTIONS.activate(d.plan.id, d.plan.tokens), T.actTimeoutMs);
-      if (res.ok) { remember(p.id, (d.active ? 'ต่อ' : 'ปลดล็อค') + ' Premium ' + d.plan.days + ' วัน · ถึง ' + new Date(toMs(res.result.premiumUntil)).toLocaleString('th-TH')); R.lastError = null; }
-      else { R.lastError = res.error; remember(p.id, 'ซื้อ Premium ไม่สำเร็จ: ' + (res.error || 'ไม่ทราบสาเหตุ'), false); }
+      if (res.ok) {
+        remember(p.id, (d.active ? 'ต่อ' : 'ปลดล็อค') + ' Premium ' + d.plan.days + ' วัน · ถึง ' + new Date(toMs(res.result.premiumUntil)).toLocaleString('th-TH'));
+        R.lastError = null;
+        if (snap && snap.exchange && res.result) {
+          if (res.result.premiumUntil) snap.exchange.premiumUntil = res.result.premiumUntil;
+          if (res.result.tokens != null) snap.exchange.tokens = Number(res.result.tokens);
+          R.decision = decide(snap, settings, gateOpen(p.id, snap), now(), T);
+        }
+      } else {
+        R.lastError = res.error;
+        remember(p.id, 'ซื้อ Premium ไม่สำเร็จ: ' + (res.error || 'ไม่ทราบสาเหตุ'), false);
+      }
     }
+  }
+
+  async function readSenderCandidateInfo(p) {
+    if (!p || !p.debugPort) return null;
+    if (typeof queryProfileState === 'function') {
+      try {
+        const st = await queryProfileState(p);
+        if (st && typeof st.zeny === 'number') {
+          return {
+            zeny: st.zeny,
+            hasPremium: st.hasPremium !== undefined ? Boolean(st.hasPremium) : (Number(p.lastPremiumUntil || 0) > now()),
+            charName: st.charName || p.lastCharName || p.name
+          };
+        }
+      } catch (e) {}
+    }
+    const R = runtime.get(p.id);
+    if (R && R.snap && R.snap.ok && typeof R.snap.zeny === 'number') {
+      const until = R.snap.exchange ? toMs(R.snap.exchange.premiumUntil) : Number(p.lastPremiumUntil || 0);
+      return {
+        zeny: R.snap.zeny,
+        hasPremium: until > now(),
+        charName: R.snap.name || p.lastCharName || p.name
+      };
+    }
+    return null;
+  }
+
+  async function checkAndRunPremiumConsolidation(profiles, triggerOpts) {
+    triggerOpts = triggerOpts || {};
+    const forceProfileId = triggerOpts.profileId ? String(triggerOpts.profileId) : null;
+    const isManualForce = Boolean(triggerOpts.force);
+    if (!settings.consolidateBeforeExpire && !isManualForce) {
+      return { ok: false, started: false, reason: 'disabled' };
+    }
+    if (isBusy()) {
+      return { ok: false, started: false, reason: 'busy', error: 'ระบบกำลังรวมเงินหรืออัปเดตอยู่ในขณะนี้' };
+    }
+    if (typeof startPremiumConsolidation !== 'function') {
+      return { ok: false, started: false, reason: 'no-handler', error: 'ระบบรวมเงินไม่พร้อมใช้งาน' };
+    }
+
+    const underHours = Math.max(0.5, Number(settings.consolidateUnderHours) || DEFAULTS.consolidateUnderHours);
+    const underMs = underHours * HOUR;
+    const keepZeny = Math.max(0, Math.floor(Number(settings.consolidateKeepZeny) || 0));
+
+    let urgentList = [];
+    if (forceProfileId) {
+      const fp = profiles.find(x => x.id === forceProfileId);
+      if (!fp || !fp.debugPort) return { ok: false, started: false, error: 'จอที่เลือกไม่ได้ออนไลน์อยู่' };
+      const R = rt(fp.id);
+      if (!R.snap || !R.snap.ok) {
+        try { await handleClient(fp, !Boolean(clients[fp.id] && clients[fp.id].enabled)); } catch (e) {}
+      }
+      if (!R.snap || !R.snap.ok || !R.snap.exchange) {
+        return { ok: false, started: false, error: 'อ่านข้อมูลตลาด Token ของตัวละครไม่ได้' };
+      }
+      urgentList = [fp];
+    } else {
+      urgentList = profiles.filter(p => {
+        if (!p || !p.debugPort || !(clients[p.id] && clients[p.id].enabled)) return false;
+        const R = rt(p.id);
+        const snap = R.snap;
+        if (!snap || !snap.ok || !snap.exchange) return false;
+        if (!gateOpen(p.id, snap)) return false;
+        if (snap.busy && snap.busy.length > 0) return false;
+        const d = R.decision || decide(snap, settings, true, now(), T);
+        return Boolean(d && d.inConsolidateWindow && d.needsConsolidation && d.shortfallZeny > 0);
+      });
+    }
+
+    if (!urgentList.length) {
+      lastConsolidationSummary = {
+        at: now(),
+        urgentCount: 0,
+        keepZeny,
+        underHours
+      };
+      return { ok: false, started: false, reason: 'no-urgent-client', error: `ยังไม่มีจอที่เปิดไว้ที่เหลือเวลา VIP ต่ำกว่า ${underHours} ชม. และขาดเงินซื้อ Token` };
+    }
+
+    urgentList.sort((a, b) => {
+      const ra = rt(a.id), rb = rt(b.id);
+      const ua = toMs(ra.snap && ra.snap.exchange && ra.snap.exchange.premiumUntil);
+      const ub = toMs(rb.snap && rb.snap.exchange && rb.snap.exchange.premiumUntil);
+      const remA = ua > now() ? ua - now() : 0;
+      const remB = ub > now() ? ub - now() : 0;
+      if (remA !== remB) return remA - remB;
+      const sfA = (ra.decision && ra.decision.shortfallZeny) || 0;
+      const sfB = (rb.decision && rb.decision.shortfallZeny) || 0;
+      return sfA - sfB;
+    });
+
+    const recvProfile = urgentList[0];
+    const R = rt(recvProfile.id);
+    const snap = R.snap;
+    const ex = snap.exchange;
+    const plan = (ex.plans || []).find(pl => pl.id === settings.planId) || (ex.plans || [])[0] || { id: '7d', days: 7, tokens: 1000 };
+    const until = toMs(ex.premiumUntil);
+    const activeVip = until > now();
+    if (!activeVip) {
+      return { ok: false, started: false, reason: 'receiver-no-vip', error: `ตัวรับเงิน (${snap.name || recvProfile.name}) ไม่มีสถานะ VIP จึงรับเทรดในเกมไม่ได้` };
+    }
+
+    const curTokens = Number(ex.tokens) || 0;
+    const needTokens = Math.max(0, plan.tokens - curTokens);
+    if (needTokens <= 0) {
+      return { ok: false, started: false, reason: 'tokens-already-full', error: 'มี Token ครบตามแพ็กเกจแล้ว' };
+    }
+
+    if (!isManualForce && R.lastConsolidateFailAt && (now() - R.lastConsolidateFailAt < T.failConsolidateCooldownMs)) {
+      return { ok: false, started: false, reason: 'fail-cooldown' };
+    }
+
+    const neededZeny = estimateTokensZenyCost(ex, needTokens);
+    const ownUsable = Math.max(0, (Number(snap.zeny) || 0) - Math.max(0, Number(settings.reserveZeny) || 0));
+    const shortfallZeny = Math.max(0, neededZeny - ownUsable);
+    if (shortfallZeny <= 0 && !isManualForce) {
+      return { ok: false, started: false, reason: 'enough-own-zeny' };
+    }
+
+    const otherProfiles = profiles.filter(x => x && x.id !== recvProfile.id && x.debugPort);
+    const senderCandidates = [];
+    for (const s of otherProfiles) {
+      const info = await readSenderCandidateInfo(s);
+      if (!info || !info.hasPremium) continue;
+      const transferable = Math.max(0, Math.floor((Number(info.zeny) || 0) - keepZeny));
+      if (transferable > 0) {
+        senderCandidates.push({
+          profile: s,
+          zeny: info.zeny,
+          transferable,
+          charName: info.charName
+        });
+      }
+    }
+
+    senderCandidates.sort((a, b) => b.transferable - a.transferable);
+    const totalTransferable = senderCandidates.reduce((sum, c) => sum + c.transferable, 0);
+    const recvDisplayName = snap.name || recvProfile.lastCharName || recvProfile.name;
+
+    lastConsolidationSummary = {
+      at: now(),
+      urgentCount: urgentList.length,
+      receiverId: recvProfile.id,
+      receiverName: recvDisplayName,
+      needTokens,
+      shortfallZeny,
+      totalTransferable,
+      senderCount: senderCandidates.length,
+      keepZeny,
+      underHours
+    };
+
+    if (!senderCandidates.length || totalTransferable <= 0) {
+      if (R.decision) {
+        R.decision.text = `รอรวมเงินซื้อ VIP (< ${underHours} ชม.): จออื่นยังไม่มีเงินเกิน ${keepZeny.toLocaleString()} z`;
+      }
+      return {
+        ok: false,
+        started: false,
+        reason: 'no-senders-with-excess-zeny',
+        error: `ไม่มีจออื่นที่มี VIP และมีเงินเกิน ${keepZeny.toLocaleString()} z ให้ดึงมารวม`
+      };
+    }
+
+    const cheapestAsk = Number(ex.bestAsk) || (ex.asks && ex.asks[0] && ex.asks[0].price) || 25000;
+    const minBatchCost = cheapestAsk * Math.min(needTokens, T.minBatch);
+    const canFinishFullVip = totalTransferable >= shortfallZeny * 0.95;
+    const canBuyMinBatch = (totalTransferable + ownUsable) >= minBatchCost;
+    const partialCooldownPassed = !R.lastPartialConsolidateAt || (now() - R.lastPartialConsolidateAt >= T.partialConsolidateCooldownMs);
+
+    if (!isManualForce && !canFinishFullVip && (!canBuyMinBatch || !partialCooldownPassed)) {
+      if (R.decision) {
+        R.decision.text = `รอรวมเงินซื้อ VIP (< ${underHours} ชม.): เงินดึงได้ ${totalTransferable.toLocaleString()} / ขาดอีก ${shortfallZeny.toLocaleString()} z`;
+      }
+      return {
+        ok: false,
+        started: false,
+        reason: 'waiting-for-more-zeny',
+        totalTransferable,
+        shortfallZeny
+      };
+    }
+
+    const targetCollect = Math.ceil(Math.max(shortfallZeny, minBatchCost) * 1.35) + Math.max(0, Number(settings.reserveZeny) || 0);
+    const selectedSenders = [];
+    let accZeny = 0;
+    let extraBackups = 0;
+    for (const cand of senderCandidates) {
+      selectedSenders.push(cand.profile);
+      if (accZeny >= targetCollect) {
+        extraBackups++;
+        if (extraBackups >= 2) break;
+      }
+      accZeny += cand.transferable;
+    }
+
+    remember(
+      recvProfile.id,
+      `🤝 เริ่มรวมเงินซื้อ VIP (< ${underHours} ชม.) จาก ${selectedSenders.length} จอ · เหลือติดตัวคนโอน ${keepZeny.toLocaleString()} z (ขาดอีก ~${shortfallZeny.toLocaleString()} z)`,
+      true
+    );
+    if (R.decision) {
+      R.decision.action = 'consolidate';
+      R.decision.text = `กำลังรวมเงินซื้อ VIP จาก ${selectedSenders.length} จอ...`;
+    }
+
+    const consolidationReserve = Math.min(Math.max(0, Number(settings.reserveZeny) || 0), keepZeny);
+
+    const startRes = await startPremiumConsolidation({
+      receiverProfile: recvProfile,
+      senderProfiles: selectedSenders,
+      keepZeny,
+      needTokens,
+      planId: plan.id,
+      planDays: plan.days,
+      planTokens: plan.tokens,
+      underHours,
+      onAfterSenderTrade: async (receiverProf, tradeStats) => {
+        if (!tradeStats || (tradeStats.movedZeny <= 0 && !tradeStats.isLastSender)) {
+          return { stopConsolidation: false, activated: false, bought: 0 };
+        }
+        await new Promise(r => setTimeout(r, 700));
+        const fb = await forceBuy(receiverProf, {
+          capToPlanTokens: true,
+          ignoreReserve: false,
+          autoActivate: true,
+          customReserveZeny: consolidationReserve
+        });
+        const newUntil = toMs(rt(receiverProf.id).snap && rt(receiverProf.id).snap.exchange && rt(receiverProf.id).snap.exchange.premiumUntil);
+        const gotVip = Boolean(fb.activated || (newUntil > now() && (newUntil - now() > underMs)));
+        if (gotVip) {
+          R.lastPartialConsolidateAt = 0;
+          R.lastConsolidateFailAt = 0;
+          remember(
+            receiverProf.id,
+            `🎉 รวมเงินและต่ออายุ VIP สำเร็จ! (รับเงินรวม ${Number(tradeStats.totalTransferredZeny || 0).toLocaleString()} z) → หยุดรวมเงินทันที`,
+            true
+          );
+          return {
+            stopConsolidation: true,
+            activated: true,
+            bought: fb.bought || 0,
+            tokens: fb.tokens,
+            message: fb.message
+          };
+        }
+        return {
+          stopConsolidation: false,
+          activated: false,
+          bought: fb.bought || 0,
+          tokens: fb.tokens,
+          message: fb.message
+        };
+      },
+      onConsolidationFinished: async (finishStats) => {
+        finishStats = finishStats || {};
+        if (finishStats.activated) {
+          R.lastPartialConsolidateAt = 0;
+          R.lastConsolidateFailAt = 0;
+          return;
+        }
+        if (Number(finishStats.totalTransferredZeny) > 0) {
+          try {
+            const finalFb = await forceBuy(recvProfile, {
+              capToPlanTokens: true,
+              ignoreReserve: false,
+              autoActivate: true,
+              customReserveZeny: consolidationReserve
+            });
+            if (finalFb && finalFb.activated) {
+              R.lastPartialConsolidateAt = 0;
+              R.lastConsolidateFailAt = 0;
+              return;
+            }
+          } catch (e) {}
+          R.lastPartialConsolidateAt = now();
+        } else {
+          R.lastConsolidateFailAt = now();
+        }
+      }
+    });
+
+    return Object.assign({
+      ok: Boolean(startRes && startRes.started !== false),
+      started: Boolean(startRes && startRes.started !== false),
+      receiverId: recvProfile.id,
+      receiverName: recvDisplayName,
+      senderCount: selectedSenders.length,
+      needTokens,
+      shortfallZeny,
+      totalTransferable,
+      message: `เริ่มรวมเงินให้ ${recvDisplayName} จาก ${selectedSenders.length} จอ (เหลือเงินติดตัวคนโอน ${keepZeny.toLocaleString()} z)`
+    }, startRes || {});
   }
 
   async function tick() {
@@ -526,6 +917,13 @@ function createPremiumService(opts) {
       }
       for (const p of sellWatching) {
         try { await handleClient(p, true); } catch (e) { log('client-sell-watch', p.name || p.id, e.message); }
+      }
+      if (settings.consolidateBeforeExpire && !isBusy()) {
+        try {
+          await checkAndRunPremiumConsolidation(profiles, { force: false });
+        } catch (e) {
+          log('auto-consolidate', e.message);
+        }
       }
     } finally { ticking = false; }
   }
@@ -554,14 +952,19 @@ function createPremiumService(opts) {
     if (!ex) return { ok: false, error: 'อ่านตลาด Token ในเกมไม่ได้' };
 
     const plan = (ex.plans || []).find(pl => pl.id === (opts.planId || settings.planId)) || (ex.plans || [])[0] || { id: '7d', days: 7, tokens: 1000 };
-    const wantQty = Math.max(0, Math.min(100000, Math.floor(Number(opts.qty) || 0)));
+    const curTokensAtStart = Number(ex.tokens) || 0;
+    const wantQty = opts.capToPlanTokens
+      ? Math.max(0, plan.tokens - curTokensAtStart)
+      : Math.max(0, Math.min(100000, Math.floor(Number(opts.qty) || 0)));
     const ignoreReserve = Boolean(opts.ignoreReserve);
     const autoActivate = opts.autoActivate !== false;
-    const reserve = ignoreReserve ? 0 : Math.max(0, Number(settings.reserveZeny) || 0);
+    const reserve = ignoreReserve
+      ? 0
+      : (opts.customReserveZeny != null ? Math.max(0, Number(opts.customReserveZeny) || 0) : Math.max(0, Number(settings.reserveZeny) || 0));
     const budget = Math.max(0, (Number(snap.zeny) || 0) - reserve);
 
     let bought = 0;
-    let tokensNow = Number(ex.tokens) || 0;
+    let tokensNow = curTokensAtStart;
     let buyError = null;
     let spentEst = 0;
 
@@ -602,7 +1005,7 @@ function createPremiumService(opts) {
 
     let activated = false;
     let activateError = null;
-    if (autoActivate && plan && tokensNow >= plan.tokens && (bought > 0 || wantQty === 0 || !(toMs(ex.premiumUntil) > now()))) {
+    if (autoActivate && plan && tokensNow >= plan.tokens && (bought > 0 || wantQty === 0 || opts.capToPlanTokens || !(toMs(ex.premiumUntil) > now()))) {
       const wasActive = toMs(ex.premiumUntil) > now();
       R.activateAt = now();
       const actRes = await evalOk(p.debugPort, ACTIONS.activate(plan.id, plan.tokens), T.actTimeoutMs);
@@ -769,8 +1172,13 @@ function createPremiumService(opts) {
   function view() {
     const profiles = loadProfiles();
     const reserve = Math.max(0, Number(settings.reserveZeny) || 0);
+    const liveConsolidation = typeof getConsolidationStatus === 'function' ? getConsolidationStatus() : null;
     return {
-      success: true, settings, market,
+      success: true,
+      settings,
+      market,
+      consolidation: liveConsolidation,
+      consolidationSummary: lastConsolidationSummary,
       clients: profiles.map(p => {
         const c = clients[p.id] || { enabled: false, history: [] };
         const R = runtime.get(p.id) || {};
@@ -788,6 +1196,9 @@ function createPremiumService(opts) {
           tokens: ex ? ex.tokens : null, premiumUntil: ex ? toMs(ex.premiumUntil) || null : null,
           askOrders,
           target: d && d.target != null ? d.target : null, cost: d && d.plan ? d.plan.tokens : null,
+          inConsolidateWindow: Boolean(d && d.inConsolidateWindow),
+          needsConsolidation: Boolean(d && d.needsConsolidation),
+          shortfallZeny: d && d.shortfallZeny != null ? d.shortfallZeny : null,
           maxBuyWithReserve, maxBuyAllZeny,
           status: d ? d.action : (c.enabled ? 'pending' : 'off'), statusText: d ? d.text : (c.enabled ? 'รอรอบตรวจถัดไป' : 'ปิดอยู่'),
           planName: ep ? ep.name : null, planBlocked: ep && !(c.gatePlan && c.gatePlan === ep.id && !hasNonZenyBlock(ep)) ? ep.blocked : [],
@@ -806,6 +1217,9 @@ function createPremiumService(opts) {
       settings = sanitizeSettings(Object.assign({}, settings, body));
       save();
       recomputeDecisions();
+      if (settings.consolidateBeforeExpire) {
+        setTimeout(() => tick().catch(() => {}), 80);
+      }
       sendJSON(view());
       return true;
     }
@@ -817,6 +1231,25 @@ function createPremiumService(opts) {
       for (const x of ids) { cl(x).enabled = !!body.enabled; if (!body.enabled) rt(x).decision = null; }
       save();
       if (body.enabled) setTimeout(() => tick().catch(() => {}), 50);
+      sendJSON(view());
+      return true;
+    }
+    if (pathname === '/api/premium/consolidate-now') {
+      const cRes = await checkAndRunPremiumConsolidation(loadProfiles(), {
+        profileId: body.profileId || null,
+        force: true
+      });
+      if (!cRes.ok) {
+        sendJSON(Object.assign(view(), { success: false, error: cRes.error || 'ไม่สามารถเริ่มรวมเงินได้', consolidateResult: cRes }), 400);
+        return true;
+      }
+      sendJSON(Object.assign(view(), { consolidateResult: cRes }));
+      return true;
+    }
+    if (pathname === '/api/premium/consolidate-stop') {
+      if (typeof stopPremiumConsolidation === 'function') {
+        await stopPremiumConsolidation();
+      }
       sendJSON(view());
       return true;
     }
@@ -875,7 +1308,20 @@ function createPremiumService(opts) {
   }
   function stop() { if (timer) clearInterval(timer); timer = null; }
 
-  return { handleRoute, tick, forceBuy, forceSell, forceSellAll, scanAllOnline, start, stop, view, _settings: () => settings, _clients: () => clients };
+  return {
+    handleRoute,
+    tick,
+    forceBuy,
+    forceSell,
+    forceSellAll,
+    checkAndRunPremiumConsolidation,
+    scanAllOnline,
+    start,
+    stop,
+    view,
+    _settings: () => settings,
+    _clients: () => clients
+  };
 }
 
-module.exports = { createPremiumService, decide, walkAsks, tokenTarget, sanitizeSettings, effectivePlan, toMs, READ_JS, ACTIONS, DEFAULTS, TIMING };
+module.exports = { createPremiumService, decide, walkAsks, estimateTokensZenyCost, tokenTarget, sanitizeSettings, effectivePlan, toMs, READ_JS, ACTIONS, DEFAULTS, TIMING };

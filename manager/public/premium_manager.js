@@ -94,6 +94,32 @@
             <span class="pm-switch"><input type="checkbox" id="pm-req-gear" data-set="requireGearComplete" checked><span></span></span>
           </label>
         </div>
+        <div class="pm-consolidate-wrap" id="pm-consolidate-wrap">
+          <label class="pm-opt-toggle pm-opt-consolidate" for="pm-consolidate-before">
+            <div class="pm-opt-txt">
+              <b>🤝 รวมเงินซื้อก่อนหมด</b>
+              <small>รวมเงินให้ตัวที่ VIP ใกล้หมดเพื่อซื้อ Token จนได้ VIP แล้วหยุดทันที</small>
+            </div>
+            <span class="pm-switch"><input type="checkbox" id="pm-consolidate-before" data-set="consolidateBeforeExpire"><span></span></span>
+          </label>
+          <div class="pm-consolidate-cfg" id="pm-consolidate-cfg" hidden>
+            <div class="pm-consolidate-fields">
+              <div class="pm-field">
+                <label for="pm-consolidate-hours">เมื่อ VIP เหลือต่ำกว่า</label>
+                <div class="pm-consolidate-inp-prefix">
+                  <span>&lt;</span>
+                  <input id="pm-consolidate-hours" data-set="consolidateUnderHours" inputmode="decimal" value="10" placeholder="10">
+                  <small>ชั่วโมง</small>
+                </div>
+              </div>
+              <div class="pm-field">
+                <label for="pm-consolidate-keep">เหลือเงินติดตัว (z)</label>
+                <input id="pm-consolidate-keep" data-set="consolidateKeepZeny" inputmode="numeric" value="100,000" placeholder="100,000">
+              </div>
+            </div>
+            <div class="pm-consolidate-status" id="pm-consolidate-status"></div>
+          </div>
+        </div>
       </section>
       <nav class="pm-filter" id="pm-filter">
         <button type="button" data-f="all" class="on">ทุกจอ</button>
@@ -130,6 +156,7 @@
     drawer.querySelector('#pm-body').addEventListener('input', onBodyInput);
     drawer.querySelector('#pm-body').addEventListener('click', onBodyClick);
     drawer.querySelector('#pm-settings').addEventListener('change', onSetting);
+    drawer.querySelector('#pm-settings').addEventListener('click', onSettingsClick);
     drawer.querySelector('#pm-filter').addEventListener('click', e => {
       const b = e.target.closest('[data-f]'); if (!b) return;
       filter = b.dataset.f;
@@ -256,6 +283,64 @@
     const reqGearCard = reqGearChk && reqGearChk.closest('.pm-opt-toggle');
     if (reqGearCard) reqGearCard.classList.toggle('on', reqGearOn);
 
+    const consOn = Boolean(s.consolidateBeforeExpire);
+    const consChk = document.getElementById('pm-consolidate-before');
+    if (consChk && consChk.checked !== consOn) consChk.checked = consOn;
+    const consCard = consChk && consChk.closest('.pm-opt-toggle');
+    if (consCard) consCard.classList.toggle('on', consOn);
+    const consCfg = document.getElementById('pm-consolidate-cfg');
+    if (consCfg) consCfg.hidden = !consOn;
+
+    const consHoursInp = document.getElementById('pm-consolidate-hours');
+    const underHoursVal = s.consolidateUnderHours != null ? s.consolidateUnderHours : 10;
+    if (consHoursInp && document.activeElement !== consHoursInp) {
+      const nextHours = String(underHoursVal);
+      if (consHoursInp.value !== nextHours) consHoursInp.value = nextHours;
+    }
+
+    const consKeepInp = document.getElementById('pm-consolidate-keep');
+    const keepZenyVal = s.consolidateKeepZeny != null ? s.consolidateKeepZeny : 100000;
+    if (consKeepInp && document.activeElement !== consKeepInp) {
+      const nextKeep = fmt(keepZenyVal);
+      if (consKeepInp.value !== nextKeep) consKeepInp.value = nextKeep;
+    }
+
+    const consStatusEl = document.getElementById('pm-consolidate-status');
+    if (consStatusEl && consOn) {
+      const liveCons = data.consolidation;
+      const urgentClients = data.clients.filter(c => c.enabled && c.inConsolidateWindow && c.needsConsolidation);
+      if (liveCons && liveCons.running) {
+        const recvName = (liveCons.receiver && liveCons.receiver.name) || 'ตัวหลัก';
+        const movedTxt = fmt(liveCons.totalTransferredZeny || 0);
+        setHtml(
+          consStatusEl,
+          `<div class="pm-cons-live">
+            <span class="pm-cons-live-txt">🔄 กำลังรวมเงินให้ <b>${esc(recvName)}</b>: ${esc(liveCons.step || 'กำลังดำเนินการ...')} · โอนแล้ว <b>${movedTxt} z</b></span>
+            <button type="button" class="pm-cons-stop-btn" id="pm-consolidate-stop-btn">⏹️ หยุดรวมเงิน</button>
+          </div>`
+        );
+      } else if (urgentClients.length > 0) {
+        const firstUrg = urgentClients[0];
+        const uName = firstUrg.charName || firstUrg.name;
+        const sfTxt = firstUrg.shortfallZeny ? ` (ขาดอีก ~${fmt(firstUrg.shortfallZeny)} z)` : '';
+        setHtml(
+          consStatusEl,
+          `<div class="pm-cons-ready">
+            <span>⚡ พบ <b>${urgentClients.length}</b> ตัวละครที่ VIP เหลือ &lt; ${esc(underHoursVal)} ชม. · คิวถัดไป: <b>${esc(uName)}</b>${sfTxt}</span>
+            <button type="button" class="pm-cons-now-btn" id="pm-consolidate-now-btn" data-profile-id="${esc(firstUrg.id)}">🤝 รวมเงินซื้อทันที</button>
+          </div>`
+        );
+      } else {
+        setHtml(
+          consStatusEl,
+          `<div class="pm-cons-hint">
+            <span>💡 เมื่อตัวที่เปิดไว้เหลือ VIP <b>&lt; ${esc(underHoursVal)} ชั่วโมง</b> ระบบจะดึงเงินจากจออื่นที่มี VIP (เหลือเงินติดตัว <b>${fmt(keepZenyVal)} z</b>) มาซื้อ Token จนต่อ VIP สำเร็จแล้วหยุดรวมเงินทันที</span>
+            <button type="button" class="pm-cons-now-btn ghost" id="pm-consolidate-now-btn" title="สั่งตรวจสอบและรวมเงินซื้อ VIP ทันที">🤝 เช็ก/รวมทันที</button>
+          </div>`
+        );
+      }
+    }
+
     const leadField = document.getElementById('pm-lead-field');
     if (leadField) leadField.classList.toggle('disabled', !prebuyOn);
     if (leadInp) leadInp.disabled = !prebuyOn;
@@ -274,7 +359,9 @@
     if (prebuyHint) {
       setText(
         prebuyHint,
-        prebuyOn ? 'มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด' : 'มี Premium แล้ว → หยุดซื้อเผื่อรอบถัดไป'
+        prebuyOn
+          ? 'มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด'
+          : (consOn ? `มี Premium แล้ว → รวมเงินซื้อเมื่อเหลือ < ${underHoursVal} ชม.` : 'มี Premium แล้ว → หยุดซื้อเผื่อรอบถัดไป')
       );
     }
 
@@ -283,8 +370,8 @@
       setText(
         hint,
         prebuyOn
-          ? (cur ? `(${cur.days} วัน → ครบใน ${Math.max(0.25, cur.days - (Number(s.leadDays) || 0))} วัน)` : '')
-          : '(รอหมดอายุก่อนค่อยซื้อรอบใหม่)'
+          ? (cur ? `(${cur.days} วัน → ครบใน ${Math.max(0.25, cur.days - (Number(s.leadDays) || 0))} วัน${consOn ? ` · รวมเงินเมื่อ < ${underHoursVal} ชม.` : ''})` : '')
+          : (consOn ? `(ดึงเงินจออื่นเหลือติดตัว ${fmt(keepZenyVal)} z)` : '(รอหมดอายุก่อนค่อยซื้อรอบใหม่)')
       );
     }
 
@@ -986,11 +1073,61 @@
     }
   }
 
+  async function onSettingsClick(e) {
+    const nowBtn = e.target.closest('#pm-consolidate-now-btn');
+    if (nowBtn) {
+      if (busy) return;
+      const profileId = nowBtn.dataset.profileId || null;
+      busy = true;
+      nowBtn.disabled = true;
+      const oldTxt = nowBtn.textContent;
+      nowBtn.textContent = '⏳ กำลังเช็ก...';
+      try {
+        const r = await api('/consolidate-now', { profileId });
+        if (r.success === false) {
+          toast(r.error || 'ไม่สามารถเริ่มรวมเงินได้', 'error');
+        } else {
+          toast((r.consolidateResult && r.consolidateResult.message) || 'เริ่มรวมเงินซื้อ VIP แล้ว', 'success');
+          render();
+        }
+      } finally {
+        busy = false;
+        nowBtn.disabled = false;
+        nowBtn.textContent = oldTxt;
+      }
+      return;
+    }
+    const stopBtn = e.target.closest('#pm-consolidate-stop-btn');
+    if (stopBtn) {
+      if (busy) return;
+      busy = true;
+      stopBtn.disabled = true;
+      try {
+        await api('/consolidate-stop', {});
+        toast('สั่งหยุดการรวมเงินแล้ว', 'info');
+        render();
+      } finally {
+        busy = false;
+        stopBtn.disabled = false;
+      }
+    }
+  }
+
   async function onSetting(e) {
     const t = e.target; if (!t.dataset.set) return;
     let v = t.type === 'checkbox' ? Boolean(t.checked) : t.value;
-    if (t.dataset.set === 'reserveZeny') v = Number(String(v).replace(/[^0-9]/g, '')) || 0;
-    if (t.dataset.set === 'leadDays') v = Number(v);
+    if (t.dataset.set === 'reserveZeny' || t.dataset.set === 'consolidateKeepZeny') {
+      v = Number(String(v).replace(/[^0-9]/g, '')) || 0;
+    }
+    if (t.dataset.set === 'leadDays' || t.dataset.set === 'consolidateUnderHours') {
+      v = Number(v);
+    }
+    if (t.dataset.set === 'consolidateBeforeExpire') {
+      const consCfg = document.getElementById('pm-consolidate-cfg');
+      if (consCfg) consCfg.hidden = !v;
+      const consCard = t.closest('.pm-opt-toggle');
+      if (consCard) consCard.classList.toggle('on', v);
+    }
     busy = true;
     try {
       const r = await api('/settings', { [t.dataset.set]: v });

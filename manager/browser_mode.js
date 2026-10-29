@@ -12,7 +12,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 
 const GAME_URL = 'https://www.aetheria-online.in.th/play';
 const BOT_URL = 'https://raw.githubusercontent.com/thegopza/aetheria-pelican-bot/main/bot.js';
@@ -420,6 +420,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       return (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
     } catch (_) { return {}; }
   }
+  function isTransientStorageKey(k) {
+    if (!k || typeof k !== 'string') return false;
+    if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k.startsWith('webgame.chat.')) return true;
+    return k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight');
+  }
   function saveProfileStorage(profileId, entries) {
     if (!storageDir || !profileId || !entries || typeof entries !== 'object') return;
     try {
@@ -429,12 +434,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const rawExisting = loadProfileStorage(profileId);
       const merged = {};
       for (const [k, v] of Object.entries(rawExisting || {})) {
-        if (v === null || v === undefined || k === 'aetheria.device' || k === 'aetheria.machine') continue;
+        if (v === null || v === undefined || isTransientStorageKey(k)) continue;
         if (k.startsWith('pelican_')) {
           if (k.startsWith(pfx)) {
             merged[k] = v;
           } else if (!k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
             const mapped = pfx + k.slice(8);
+            if (isTransientStorageKey(mapped)) continue;
             if (rawExisting[mapped] === undefined && merged[mapped] === undefined) merged[mapped] = v;
           }
         } else {
@@ -442,7 +448,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         }
       }
       for (const [k, v] of Object.entries(entries)) {
-        if (v === null || v === undefined || k === 'aetheria.device' || k === 'aetheria.machine') continue;
+        if (v === null || v === undefined || isTransientStorageKey(k)) continue;
         let targetKey = k;
         if (k.startsWith('pelican_')) {
           if (k.startsWith(pfx)) {
@@ -450,6 +456,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           } else if (!k.includes('__')) {
             if (k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_script_plan' || k === 'pelican_plan_script_enabled') continue;
             const mapped = pfx + k.slice(8);
+            if (isTransientStorageKey(mapped)) continue;
             if (entries[mapped] !== undefined || merged[mapped] !== undefined) continue;
             targetKey = mapped;
           } else {
@@ -856,8 +863,57 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     try { await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, 1500); return true; } catch (e) { return false; }
   }
 
-  async function ensureBrowser() {
-    if (await browserAlive()) return connect();
+  function killStuckBrowserProcesses() {
+    if (!sessionsDir || sessionsDir === 'fake' || typeof execFile !== 'function') return Promise.resolve();
+    return new Promise((resolve) => {
+      const escapedDir = String(userDataDir || '').replace(/'/g, "''");
+      const portFlag = `--remote-debugging-port=${CDP_PORT}`;
+      const psCmd = `
+        $dir = '${escapedDir}';
+        $portFlag = '${portFlag}';
+        Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe' OR Name = 'msedge.exe'" -ErrorAction SilentlyContinue | Where-Object {
+          $_.CommandLine -and ($_.CommandLine.IndexOf($dir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or $_.CommandLine.IndexOf($portFlag, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        } | ForEach-Object {
+          Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+      `;
+      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psCmd], { timeout: 6000, windowsHide: true }, () => {
+        for (const lockName of ['SingletonLock', 'SingletonSocket', 'SingletonCookie', 'lockfile']) {
+          try {
+            const lp = path.join(userDataDir, lockName);
+            if (fs.existsSync(lp)) fs.unlinkSync(lp);
+          } catch (_) {}
+        }
+        setTimeout(resolve, 400);
+      });
+    });
+  }
+
+  let ensureBrowserPromise = null;
+  function ensureBrowser(forceClean = false) {
+    if (!ensureBrowserPromise) {
+      ensureBrowserPromise = ensureBrowserOnce(forceClean).finally(() => {
+        ensureBrowserPromise = null;
+      });
+    }
+    return ensureBrowserPromise;
+  }
+
+  async function ensureBrowserOnce(forceClean = false) {
+    if (!forceClean && await browserAlive()) {
+      try {
+        await connect();
+        await send('Target.getTargets', {}, undefined, 4000);
+        return;
+      } catch (e) {
+        if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+        if (clients.size > 0) throw e;
+        forceClean = true;
+      }
+    }
+    if (forceClean && clients.size === 0) {
+      await killStuckBrowserProcesses();
+    }
     const settings = getSettings() || {};
     const exe = findBrowser(settings.browserKind);
     if (!exe) throw new Error('ไม่พบ Google Chrome หรือ Microsoft Edge ในเครื่อง');
@@ -865,6 +921,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const args = [
       `--remote-debugging-port=${CDP_PORT}`, '--remote-allow-origins=*',
       `--user-data-dir=${userDataDir}`,
+      '--disable-background-mode',
       // the bot's timers must keep running in background / covered windows
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
       '--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling',
@@ -874,12 +931,24 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     ];
     browserProc = spawn(exe, args, { detached: true, stdio: 'ignore' });
     browserProc.unref();
+    let cleanedMidWait = forceClean;
     for (let i = 0; i < 40; i++) {
       await new Promise(r => setTimeout(r, 300));
       if (await browserAlive()) {
-        await connect();
-        try { startupPages = (await send('Target.getTargets')).targetInfos.filter(t => t.type === 'page').map(t => t.targetId); } catch (e) {}
-        return;
+        try {
+          await connect();
+          const tRes = await send('Target.getTargets', {}, undefined, 4000);
+          startupPages = (tRes?.targetInfos || []).filter(t => t.type === 'page').map(t => t.targetId);
+          return;
+        } catch (e) {
+          if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+        }
+      }
+      if (i === 10 && !cleanedMidWait && clients.size === 0) {
+        cleanedMidWait = true;
+        await killStuckBrowserProcesses();
+        browserProc = spawn(exe, args, { detached: true, stdio: 'ignore' });
+        browserProc.unref();
       }
     }
     throw new Error('เปิดเบราว์เซอร์ไม่สำเร็จ');
@@ -908,12 +977,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const saved = {};
     const pfx = profileId ? `pelican_${profileId}__` : 'pelican_';
     for (const [k, v] of Object.entries(rawSaved || {})) {
-      if (typeof v !== 'string' || k === 'aetheria.device' || k === 'aetheria.machine') continue;
+      if (typeof v !== 'string' || isTransientStorageKey(k)) continue;
       if (profileId && k.startsWith('pelican_')) {
         if (k.startsWith(pfx)) {
           saved[k] = v;
         } else if (!k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
           const mappedKey = pfx + k.slice(8);
+          if (isTransientStorageKey(mappedKey)) continue;
           if (rawSaved[mappedKey] === undefined && saved[mappedKey] === undefined) saved[mappedKey] = v;
         }
       } else {
@@ -1258,7 +1328,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           const extraKeys = new Set(['ui.windows', 'partyFrameFolded', 'skip-anim:refine', 'hudMenuOpen', 'webgame.camera']);
           for (let i = 0; i < window.localStorage.length; i++) {
             const k = window.localStorage.key(i);
-            if (!k || k === 'aetheria.device' || k === 'aetheria.machine') continue;
+            if (!k || k === 'aetheria.device' || k === 'aetheria.machine' || k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.startsWith('webgame.chat.')) continue;
             const rawVal = __rawGet.call(window.localStorage, k);
             if (typeof rawVal !== 'string') continue;
             if (k.startsWith(pfx) || extraKeys.has(k)) {
@@ -1686,12 +1756,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         }
       } catch (e) {}
     }
-    for (const c of clients.values()) {
-      const diag = diagnostics.get(c.profileId);
-      if (!diag || diag.state !== 'ready') {
-        await injectBot(c);
-      }
-    }
+    for (const c of clients.values()) await injectBot(c);
   }
 
   // ---------- per-profile HTTP API (same as the Electron loader's) ----------
@@ -1807,8 +1872,21 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   // ---------- public ----------
   async function launch(profile) {
+    try {
+      return await launchOnce(profile, false);
+    } catch (e) {
+      if (isGoneError(e) || /CDP connect|CDP timeout|CDP not available|เปิดเบราว์เซอร์ไม่สำเร็จ/i.test(String(e && e.message || e))) {
+        if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+        await new Promise(r => setTimeout(r, 400));
+        return await launchOnce(profile, clients.size === 0);
+      }
+      throw e;
+    }
+  }
+
+  async function launchOnce(profile, forceCleanBrowser = false) {
     stoppedProfiles.delete(profile.id);
-    await ensureBrowser();
+    await ensureBrowser(forceCleanBrowser);
     const wasReady = diagnostics.get(profile.id)?.botReady === true;
     await rediscover();
     let existing = clients.get(profile.id);
@@ -2115,7 +2193,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         }
       }
       rediscover().catch(()=>scheduleReconnect());
-    },5000);monitorTimer.unref?.();
+    },15000);monitorTimer.unref?.();
   }
 
   function dispose(){

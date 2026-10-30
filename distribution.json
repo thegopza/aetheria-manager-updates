@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "099aa0eedfd5f0135abe5c8a759df3181f658ccd",
+  "sourceCommit": "6c09b6aa63c6e34e274e3bf75359829906c0d0ed",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -40,7 +40,7 @@
     },
     {
       "path": "manager/discord_bot.js",
-      "sha256": "00f480e7b3ddd8eed49d60debbce2e8652b1abe2d91a9fbccc9c0feb908c85ac"
+      "sha256": "6868fb533fc4fbaf4bfe04a0a4be8930afded6c09b4205d7d5079f068332d140"
     },
     {
       "path": "manager/embedded_human_check_bridge.js",
@@ -60,7 +60,7 @@
     },
     {
       "path": "manager/human_check_solver.js",
-      "sha256": "33480bf8bfd051b5ead05752c2026b4f5a0ef040f960535013953b7574bedff5"
+      "sha256": "fff70d1aac160aceefd5e357c7f91f6a4f5d819bd99ff7dcc1370015906878f0"
     },
     {
       "path": "manager/image_board_solver.js",
@@ -88,11 +88,11 @@
     },
     {
       "path": "manager/offline_coordinator.js",
-      "sha256": "f8e6823e5708ae862c50f67450d99b963aa51b31a1609d55e0bdeac429b609ab"
+      "sha256": "676913c82b5b10c111ae85b168dbcbcb2b84b83530730b5274aafaa7aea986d7"
     },
     {
       "path": "manager/offline_journal.js",
-      "sha256": "072b85b7d59c4bfe19ab9bce2c3e1d46a285a0ea0a7baa909dcbb899d7b3ebb8"
+      "sha256": "085751458068cc671361a73f71ce42fb1238b7a8892c0fa427c5241dff994ca6"
     },
     {
       "path": "manager/offline_payload_cache.js",
@@ -180,7 +180,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "2dd465784ea495746db4dd1cc3e8023b978dcbf5bd255df54d285a044e43598f"
+      "sha256": "4a0ff55aa0af5c3bc8f6915353f940b8ffb1ec7f01a135d498684680755b1296"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -244,7 +244,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "5c2dea6e6b936df3204eb2732ee221ce82ff2dc86089c0c98d191bff4be58293"
+      "sha256": "a3e02b70d7f0412b989a085b49e68108f269c7485b3be4bb3fa1dd92855a081e"
     },
     {
       "path": "manager/screen_proxy_manager.js",
@@ -272,7 +272,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "429401def99376153f67439d1592ae6d1c77d4d2966e7e4d0c11e433f2733bdc"
+      "sha256": "ad6e1af67ff33499a0e9dc783ba00b81b8eff0b2459402226a44d41f16c4f923"
     },
     {
       "path": "manager/test_isolation.js",

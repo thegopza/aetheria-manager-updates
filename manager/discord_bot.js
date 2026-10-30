@@ -2076,7 +2076,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           value: [
             `💵 **ยอดเงิน:** **\`+${formatMeritNumber(amountBaht)} บาท\`**`,
             `✨ **ส่วนบุญที่ได้:** **\`+${formatMeritNumber(pointsAdded)} ส่วนบุญ\`**`,
-            `📡 **ช่องทาง:** \`ซองของขวัญ TrueMoney\``
+            `📡 **ช่องทาง:** \`${(typeof topupData.channel === 'string' && topupData.channel.trim()) ? topupData.channel.trim() : 'ซองของขวัญ TrueMoney'}\``
           ].join('\n'),
           inline: true
         },

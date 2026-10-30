@@ -5684,8 +5684,19 @@ const server = http.createServer(async (req, res) => {
         const result = await humanCheckSolver.serviceRequest("/v1/aetheria/machine/promptpay-order", payload);
         if (result && result.success && result.order && result.order.state === "paid") {
           try {
-            if (Number.isSafeInteger(result.balanceUnits)) {
-              humanCheckSolver.applyOfflineWalletSnapshot?.(result);
+            const snapUnits = Number.isSafeInteger(result.balanceUnits)
+              ? result.balanceUnits
+              : (Number.isSafeInteger(result.order.balanceUnits) ? result.order.balanceUnits : null);
+            const snapRev = Number.isSafeInteger(result.walletRevision)
+              ? result.walletRevision
+              : (Number.isSafeInteger(result.order.walletRevision) ? result.order.walletRevision : null);
+            if (Number.isSafeInteger(snapUnits)) {
+              humanCheckSolver.applyOfflineWalletSnapshot?.({
+                ...result,
+                unitScale: 100,
+                balanceUnits: snapUnits,
+                ...(Number.isSafeInteger(snapRev) ? { walletRevision: snapRev } : {})
+              });
             }
             if (offlineCoordinator && offlineCoordinator.wallet && typeof offlineCoordinator.wallet.forceRefresh === "function") {
               await offlineCoordinator.wallet.forceRefresh().catch(() => {});
@@ -5693,26 +5704,54 @@ const server = http.createServer(async (req, res) => {
             await humanCheckSolver.refreshBalance().catch(() => {});
           } catch (_) {}
           const afterSettings = humanCheckSolver.loadSettings();
-          if (Number.isSafeInteger(afterSettings?.balanceUnits)) {
-            result.balanceUnits = afterSettings.balanceUnits;
-            result.totalPoints = afterSettings.points;
+          const serverUnits = Number.isSafeInteger(result.balanceUnits)
+            ? result.balanceUnits
+            : (Number.isSafeInteger(result.order?.balanceUnits) ? result.order.balanceUnits : null);
+          const effectiveUnits = Number.isSafeInteger(serverUnits)
+            ? serverUnits
+            : (Number.isSafeInteger(afterSettings?.balanceUnits) ? afterSettings.balanceUnits : null);
+          if (Number.isSafeInteger(effectiveUnits)) {
+            result.balanceUnits = effectiveUnits;
+            result.totalPoints = Number((effectiveUnits / 100).toFixed(2));
+            if (result.order) {
+              result.order.balanceUnits = effectiveUnits;
+              result.order.totalPoints = result.totalPoints;
+            }
           }
           const orderId = String(result.order.orderId || "");
-          if (!global.__pmNotifiedPromptPayOrders) global.__pmNotifiedPromptPayOrders = new Set();
-          if (orderId && !global.__pmNotifiedPromptPayOrders.has(orderId) && discordService && typeof discordService.notifyMeritTopup === "function") {
+          const notifiedFile = path.join(DATA_DIR, "notified_promptpay_orders.json");
+          if (!global.__pmNotifiedPromptPayOrders) {
+            global.__pmNotifiedPromptPayOrders = new Set();
+            try {
+              if (fs.existsSync(notifiedFile)) {
+                const savedIds = JSON.parse(fs.readFileSync(notifiedFile, "utf8"));
+                if (Array.isArray(savedIds)) savedIds.forEach(id => global.__pmNotifiedPromptPayOrders.add(String(id)));
+              }
+            } catch (_) {}
+          }
+          const paidAtMs = Number(result.order.paidAt || 0);
+          const isRecentPaid = !paidAtMs || (Date.now() - paidAtMs < 15 * 60 * 1000);
+          if (orderId && isRecentPaid && !global.__pmNotifiedPromptPayOrders.has(orderId) && discordService && typeof discordService.notifyMeritTopup === "function") {
             global.__pmNotifiedPromptPayOrders.add(orderId);
-            const pointsAdded = Number(result.pointsAdded ?? result.order.amountBaht ?? 0);
-            const amountBaht = Number(result.amount ?? result.order.amountBaht ?? pointsAdded ?? 0);
-            const netPoints = Number.isFinite(Number(afterSettings?.points))
-              ? Number(afterSettings.points)
-              : (Number.isFinite(Number(result.totalPoints)) ? Number(result.totalPoints) : pointsAdded);
+            try {
+              const allIds = Array.from(global.__pmNotifiedPromptPayOrders).slice(-200);
+              fs.writeFileSync(notifiedFile, JSON.stringify(allIds), "utf8");
+            } catch (_) {}
+            const pointsAdded = Number(result.order.pointsAdded ?? result.pointsAdded ?? result.order.amountBaht ?? 0);
+            const amountBaht = Number(result.order.amountBaht ?? result.amount ?? pointsAdded ?? 0);
+            const netPoints = Number.isSafeInteger(effectiveUnits)
+              ? Number((effectiveUnits / 100).toFixed(2))
+              : (Number.isFinite(Number(afterSettings?.points))
+                  ? Number(afterSettings.points)
+                  : (Number.isFinite(Number(result.totalPoints)) ? Number(result.totalPoints) : pointsAdded));
             const previousPoints = Number((netPoints - pointsAdded).toFixed(2));
             discordService.notifyMeritTopup({
               amount: amountBaht,
               pointsAdded,
               previousPoints,
               totalPoints: netPoints,
-              balanceUnits: afterSettings?.balanceUnits ?? result.balanceUnits,
+              balanceUnits: effectiveUnits ?? afterSettings?.balanceUnits ?? result.balanceUnits,
+              channel: "สแกน QR พร้อมเพย์ (กสิกรไทย)",
               accountId: afterSettings?.accountId || beforeSettings?.accountId || "",
               machineHwid: afterSettings?.machineHwid || beforeSettings?.machineHwid || ""
             }).catch(err => {

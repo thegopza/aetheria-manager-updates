@@ -149,6 +149,9 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   function updateBalance(result) {
     if (result.schemaVersion === 2 && result.unitScale === 100 && Number.isSafeInteger(result.balanceUnits ?? result.remainingUnits)) {
       balanceUnits = result.balanceUnits ?? result.remainingUnits; points = balanceUnits / 100;
+      if (offlineWallet && typeof offlineWallet.confirmBalance === 'function' && Number.isSafeInteger(result.walletRevision)) {
+        try { offlineWallet.confirmBalance(balanceUnits, result.walletRevision); } catch (_) {}
+      }
     } else {
     const balance = result.points ?? result.remaining ?? result.totalPoints;
     if (Number.isSafeInteger(balance) && balance >= 0) points = balance;
@@ -158,7 +161,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     if(account&&Number.isSafeInteger(balanceUnits))atomicWrite(walletSnapshotFile,{origin:base.origin,accountId:account.accountId,balanceUnits,topupHistory});
   }
   async function refreshBalance() {
-    if(offlineWallet){try{await offlineWallet.refresh();}catch(_){serviceAvailable=false;}return loadSettings();}
+    if(offlineWallet){try{await offlineWallet.refresh();}catch(_){serviceAvailable=false;}try{const result=await call('/v1/aetheria/balance');if(result?.success&&result.schemaVersion===2&&result.unitScale===100&&Number.isSafeInteger(result.balanceUnits))updateBalance(result);}catch(_){}return loadSettings();}
     try {
       const result = await call('/v1/aetheria/balance');
       if (!result?.success || !(result.schemaVersion === 2 ? result.unitScale === 100 && Number.isSafeInteger(result.balanceUnits) && (result.points === undefined || result.points === result.balanceUnits / 100) : Number.isSafeInteger(result.points) && result.points >= 0)) throw new Error('Invalid balance');

@@ -61,7 +61,7 @@ function createOfflineJournal({dataDir,accountId,initialBalanceUnits=0,now=Date.
     // A confirmed balance must carry the server walletRevision it was read at; older/equal revisions are ignored.
     setConfirmedBalance(value,revision){if(!Number.isSafeInteger(value))throw Error('INVALID_CONFIRMED_BALANCE');if(!Number.isSafeInteger(revision)||revision<0)throw Error('WALLET_REVISION_REQUIRED');const applied=acceptSnapshot(revision,value);if(applied)persist();return applied;},
     walletRevision:()=>Number.isSafeInteger(state.walletRevision)?state.walletRevision:null,
-    discardPendingBatch(){if(!state.pendingBatch&&!pending.length)return false;delete state.pendingBatch;pending=[];persist();return true;},
+    discardPendingBatch(rotateSlots=false){if(!state.pendingBatch&&!pending.length&&!rotateSlots)return false;delete state.pendingBatch;pending=[];if(rotateSlots){state.machineId=crypto.randomUUID();state.slots={};}persist();return true;},
     pendingCount:()=>pending.length,machineId:state.machineId,history:()=>state.history.map(e=>({...e})),statement:()=>state.statement||null,rate:()=>state.rateUnits};
 }
 module.exports={createOfflineJournal,dpapi,bangkokDate,encryptedStore};

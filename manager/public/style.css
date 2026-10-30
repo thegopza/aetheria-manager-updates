@@ -1547,8 +1547,49 @@ body {
 
 .points-chips {
   display: flex;
+  align-items: center;
   gap: 5px;
   flex-shrink: 0;
+}
+
+.btn-card-reload-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: #e2e8f0;
+  background: rgba(56, 189, 248, 0.14);
+  border: 1px solid rgba(56, 189, 248, 0.38);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.btn-card-reload-inline:hover {
+  background: rgba(56, 189, 248, 0.26);
+  border-color: rgba(56, 189, 248, 0.65);
+  color: #fff;
+}
+.btn-card-reload-inline.is-error {
+  color: #fecaca;
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(248, 113, 113, 0.48);
+}
+.btn-card-reload-inline.is-error:hover {
+  background: rgba(239, 68, 68, 0.32);
+  border-color: rgba(248, 113, 113, 0.8);
+  color: #fff;
+}
+.btn-card-reload-inline:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.profile-card.is-screen-error {
+  border-color: rgba(248, 113, 113, 0.45);
+  box-shadow: 0 0 18px rgba(239, 68, 68, 0.12);
 }
 
 /* ---------- Stats grid ---------- */
@@ -1590,6 +1631,14 @@ body {
   font-size: 12.5px;
   font-weight: 700;
   color: #7dd3fc;
+}
+.stat-val.stat-map.is-screen-error {
+  color: #fca5a5;
+  font-size: 11.5px;
+}
+.stat-val.stat-map.is-screen-wait {
+  color: #fcd34d;
+  font-size: 11.5px;
 }
 
 /* ---------- GP/M & GP/H Rate Bar ---------- */

@@ -1056,7 +1056,7 @@ function updateMetrics() {
   if (tabCount) tabCount.innerText = total;
   const onlineCount = currentProfiles.filter(p => p.isRunning).length;
   if (onlineEl) onlineEl.innerText = onlineCount;
-  const farmingCount = currentProfiles.filter(p => p.liveState && p.liveState.isBotRunning).length;
+  const farmingCount = currentProfiles.filter(p => p.liveState && p.liveState.isBotRunning && (!p.liveState.screenPhase || p.liveState.screenPhase === 'in_game')).length;
   if (farmingEl) farmingEl.innerText = farmingCount;
 
   const setBar = (id, ofId, count) => {
@@ -1120,12 +1120,18 @@ function getPortraitSrc(p, state) {
   return failedPortraits.has(src) ? '' : src;
 }
 
-function getActivityTone(text) {
-  if (text.includes('ตาย') || text.includes('ชุบ')) return 'danger';
-  if (text.includes('ซื้อ') || text.includes('ขาย')) return 'warn';
-  if (text.includes('เดิน')) return 'travel';
-  if (text.includes('ฟาร์ม') || text.includes('Farm')) return 'farm';
-  if (text.includes('รอ') || text.includes('แสตนด์บาย') || text.includes('หยุด')) return 'idle';
+function getActivityTone(text, screenPhase) {
+  if (screenPhase && screenPhase !== 'in_game') {
+    if (screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'login_auth_error' || screenPhase === 'char_select_online' || screenPhase === 'disconnected') return 'danger';
+    if (screenPhase === 'char_select_limit' || screenPhase === 'loading' || screenPhase === 'char_select_loading') return 'warn';
+    if (screenPhase === 'login' || screenPhase === 'login_loading' || screenPhase === 'char_select' || screenPhase === 'char_create' || screenPhase === 'register') return 'travel';
+  }
+  const t = String(text || '');
+  if (t.includes('ตาย') || t.includes('ชุบ') || t.includes('พลาด') || t.includes('ไม่ตอบ') || t.includes('ไม่ผ่าน') || t.includes('Error') || t.includes('HTTP 5') || t.includes('ค้างออนไลน์')) return 'danger';
+  if (t.includes('ซื้อ') || t.includes('ขาย') || t.includes('กำลังโหลด') || t.includes('จำกัด 3 จอ') || t.includes('รีเฟรช')) return 'warn';
+  if (t.includes('เดิน') || t.includes('หน้า Login') || t.includes('เลือกตัวละคร') || t.includes('สมัครบัญชี') || t.includes('สร้างตัวละคร') || t.includes('กำลังเข้าสู่ระบบ')) return 'travel';
+  if (t.includes('ฟาร์ม') || t.includes('Farm')) return 'farm';
+  if (t.includes('รอ') || t.includes('แสตนด์บาย') || t.includes('หยุด')) return 'idle';
   return 'farm';
 }
 
@@ -1395,6 +1401,11 @@ function buildProfileCard(p) {
   const expPct = (t) => (t === 'MAX' ? 100 : Math.min(100, parseFloat(t) || 0));
   const hasExp = Boolean(state && (state.baseExp || state.jobExp));
 
+  const screenPhase = state?.screenPhase || 'in_game';
+  const isPreGameScreen = Boolean(isOnline && state && screenPhase && screenPhase !== 'in_game');
+  const isErrorScreen = Boolean(isPreGameScreen && (screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'login_auth_error' || screenPhase === 'char_select_online'));
+  const isActivelyFarming = Boolean(isBotRunning && !isPreGameScreen);
+
   // Bot Activity Status
   let activityText = "ออฟไลน์";
   let activityTone = "offline";
@@ -1405,10 +1416,13 @@ function buildProfileCard(p) {
     if (isJailed) {
       activityText = "⛓️ อยู่ในคุก (เปิดจอโดยผู้ใช้)";
       activityTone = "danger";
+    } else if (isPreGameScreen) {
+      activityText = state.screenPhaseLabel || state.botStatus || "⏳ กำลังโหลดเข้าเกม...";
+      activityTone = getActivityTone(activityText, screenPhase);
     } else if (state) {
       if (state.botStatus) {
         activityText = state.botStatus;
-        activityTone = getActivityTone(activityText);
+        activityTone = getActivityTone(activityText, screenPhase);
       } else if (isBotRunning) {
         activityText = "⚔️ Auto-Farm ทำงาน";
         activityTone = "farm";
@@ -1430,7 +1444,7 @@ function buildProfileCard(p) {
         </div>`;
 
   return `
-    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isBotRunning ? 'is-farming' : ''} ${isJailed ? 'is-jailed' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
+    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isActivelyFarming ? 'is-farming' : ''} ${isErrorScreen ? 'is-screen-error' : ''} ${isJailed ? 'is-jailed' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
       ${isJailed && !isOnline ? `
       <div class="card-jail-cross-overlay" title="ตัวละครนี้ตรวจพบว่าอยู่ในคุก ระบบได้ทำการปิดจอเกมอัตโนมัติแล้ว (เปิดจอใหม่ได้โดยไม่ปิดซ้ำ)">
         <svg class="jail-cross-svg" viewBox="0 0 200 200" preserveAspectRatio="none" aria-hidden="true">
@@ -1509,6 +1523,10 @@ function buildProfileCard(p) {
                 <button type="button" class="card-menu-item" onclick="closeCardMenu(); focusClientWindow('${p.id}', this)">
                   <span class="cm-icon">🔝</span>
                   <span>ดึงจอขึ้นบนสุด (Popup)</span>
+                </button>
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); reloadClientPage('${p.id}', event, this)">
+                  <span class="cm-icon">🔄</span>
+                  <span>รีเฟรชหน้าเกม (Reload)</span>
                 </button>
                 <button type="button" class="card-menu-item" onclick="closeCardMenu(); toggleClientWindow('${p.id}')">
                   <span class="cm-icon">⚡</span>
@@ -1595,8 +1613,9 @@ function buildProfileCard(p) {
       </div>` : ''}
 
       <div class="card-status-row">
-        <span class="activity-pill tone-${activityTone}"><i></i>${escapeHTML(activityText)}</span>
+        <span class="activity-pill tone-${activityTone}" title="${escapeHTML(state?.screenDetail || activityText)}"><i></i>${escapeHTML(activityText)}</span>
         <div class="points-chips">
+          ${isPreGameScreen ? `<button type="button" class="btn-card-reload-inline ${isErrorScreen ? 'is-error' : ''}" onclick="reloadClientPage('${p.id}', event, this)" title="รีเฟรชหน้าเว็บเกมของจอนี้ทันที (Reload)">🔄 รีเฟรชจอ</button>` : ''}
           ${state?.statPoints ? `<span class="chip chip-points" title="แต้มสถานะที่ยังไม่ได้อัป">STAT ${state.statPoints}</span>` : ''}
           ${state?.skillPoints ? `<span class="chip chip-points" title="แต้มสกิลที่ยังไม่ได้อัป">SKILL ${state.skillPoints}</span>` : ''}
         </div>
@@ -1604,8 +1623,13 @@ function buildProfileCard(p) {
 
       <div class="card-body">
         <div class="stat-item stat-wide">
+          ${isPreGameScreen ? `
+          <span class="stat-lbl">🖥️ สถานะหน้าจอเกม${state?.autoRefreshInSec ? ` (รีเฟรชอัตโนมัติใน ${state.autoRefreshInSec} วิ)` : ''}</span>
+          <span class="stat-val stat-map ${isErrorScreen ? 'is-screen-error' : 'is-screen-wait'}" title="${escapeHTML(state?.screenDetail || activityText)}">${escapeHTML(state?.screenDetail || activityText)}</span>
+          ` : `
           <span class="stat-lbl">📍 ${isOnline ? 'แมพปัจจุบัน' : 'แมพเป้าหมาย'}</span>
           <span class="stat-val stat-map" title="${escapeHTML(curMap)}">${escapeHTML(curMap || '--')}</span>
+          `}
         </div>
         ${isOnline ? `
         <div class="stat-item">
@@ -1907,7 +1931,7 @@ function summarizeGroupStats(profiles) {
     const rate = getProfileZenyRate(p);
     if (p.isRunning) {
       onlineCount++;
-      if (p.liveState && p.liveState.isBotRunning) farmingCount++;
+      if (p.liveState && p.liveState.isBotRunning && (!p.liveState.screenPhase || p.liveState.screenPhase === 'in_game')) farmingCount++;
       totalGpm += rate.gpm || 0;
       totalGph += rate.gph || 0;
       totalGained += rate.totalGained || 0;
@@ -2368,6 +2392,26 @@ async function focusClientWindow(id, btnEl) {
     console.error("focusClientWindow error:", err);
   } finally {
     if (btnEl) btnEl.disabled = false;
+  }
+}
+
+async function reloadClientPage(id, event, btnEl) {
+  if (event) event.stopPropagation();
+  if (btnEl) btnEl.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}/api/profiles/${id}/reload-page`, { method: "POST" });
+    const data = await res.json();
+    if (data && data.success) {
+      showToast("🔄 สั่งรีเฟรชหน้าจอเกมแล้ว", "success");
+    } else {
+      showToast("❌ รีเฟรชจอไม่สำเร็จ: " + (data?.error || "เกิดข้อผิดพลาด"), "error");
+    }
+    setTimeout(() => fetchProfiles(), 600);
+  } catch (err) {
+    console.error("reloadClientPage error:", err);
+    showToast("❌ รีเฟรชจอไม่สำเร็จ: " + err.message, "error");
+  } finally {
+    if (btnEl) setTimeout(() => { btnEl.disabled = false; }, 1200);
   }
 }
 

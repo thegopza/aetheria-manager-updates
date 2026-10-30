@@ -895,11 +895,24 @@ function isProcessAlive(pid) {
   }
 }
 
-// Extra HUD details read straight from the game DOM (portrait, EXP, levels, unspent points).
+// Extra HUD details read straight from the game DOM (portrait, EXP, levels, unspent points)
+// plus pre-game screen phase detection (Login / Character Select / HTTP 502 / Loading) and safe delayed auto-refresh.
 // Evaluated alongside __getClientLiveState so it works without reinstalling bot.js.
 const LIVE_STATE_EVAL = `(() => {
-  const s = (typeof window.__getClientLiveState === 'function') ? window.__getClientLiveState() : null;
-  if (!s) return null;
+  let s = (typeof window.__getClientLiveState === 'function') ? window.__getClientLiveState() : null;
+  if (!s) {
+    s = {
+      isBotRunning: false,
+      autoLoop: false,
+      botStatus: '⏳ กำลังโหลดเข้าเกม...',
+      map: 'ไม่ทราบแมพ',
+      charName: '',
+      charClass: 'Novice',
+      coords: '--',
+      weight: '--',
+      zeny: null
+    };
+  }
   try {
     const isBadMap = (t) => !t || t === 'ไม่ทราบแมพ' || /^(?:\\d+|[-—–]+)\\s*ms$/i.test(t) || /\\b\\d+\\s*ms\\b/i.test(t) || /^CH\\b/i.test(t) || /▾/.test(t);
     if (isBadMap(String(s.map || '').trim())) {
@@ -932,6 +945,152 @@ const LIVE_STATE_EVAL = `(() => {
         if (t.includes('สถานะ')) s.statPoints = num(t);
         else if (t.includes('สกิล')) s.skillPoints = num(t);
       });
+    }
+  } catch (e) {}
+  try {
+    const hasHud = Boolean(document.querySelector('.hud, .hud-status, .hud-name'));
+    const charPanel = document.querySelector('.panel.char-select, .char-select');
+    const loginForm = document.querySelector('form.login-form, .login-card, .login-panel');
+    const charCards = Array.from(document.querySelectorAll('.char-card:not(.empty):not(.pending-delete)')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+    const emptyCards = Array.from(document.querySelectorAll('.char-card.empty')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+    const createForm = document.querySelector('form.char-create');
+    const errEl = (charPanel && charPanel.querySelector('p.error, .error, [class*="error"]')) ||
+                  (loginForm && loginForm.querySelector('p.error, .error, [class*="error"]')) ||
+                  document.querySelector('.panel p.error, .login-card p.error, p.error');
+    const errText = errEl ? String(errEl.innerText || errEl.textContent || '').replace(/\\s+/g, ' ').trim() : '';
+    const hasSessionToken = Boolean((() => { try { return sessionStorage.getItem('aetheria.session'); } catch (_) { return null; } })());
+    const authCfg = window.__authConfig || (() => { try { return JSON.parse(localStorage.getItem('pelican_auth_cfg') || '{}'); } catch (_) { return {}; } })() || {};
+
+    let screenPhase = 'in_game';
+    let baseLabel = '';
+    let detail = '';
+    let autoReloadAfterMs = 0;
+
+    if (hasHud && !charPanel && !loginForm) {
+      screenPhase = 'in_game';
+      window.__pmScreenPhaseTracker = null;
+    } else if (charPanel) {
+      if (errText) {
+        if (/ตัวละครนี้ออนไลน์อยู่แล้ว|ตัวนี้ออนไลน์อยู่|already online/i.test(errText)) {
+          screenPhase = 'char_select_online';
+          baseLabel = '⚠️ ตัวละครค้างออนไลน์ (กำลังเคลียร์...)';
+          detail = '⚠️ หน้าเลือกตัวละคร: ' + errText;
+          autoReloadAfterMs = 16000;
+        } else if (/เครื่องนี้เล่นพร้อมกันได้สูงสุด|ออกจากตัวละครอื่นก่อน/i.test(errText)) {
+          screenPhase = 'char_select_limit';
+          baseLabel = '🔑 จำกัด 3 จอ (กำลังสลับ Device ID...)';
+          detail = '🔑 หน้าเลือกตัวละคร: ' + errText;
+          autoReloadAfterMs = 16000;
+        } else {
+          screenPhase = 'char_select_error';
+          const httpMatch = errText.match(/HTTP\\s*\\d+/i);
+          const httpTag = httpMatch ? ' (' + httpMatch[0].toUpperCase() + ')' : '';
+          baseLabel = '⚠️ โหลดตัวละครพลาด' + httpTag;
+          detail = '⚠️ หน้าเลือกตัวละคร: ' + errText;
+          autoReloadAfterMs = 15000;
+        }
+      } else if (createForm || (authCfg.autoCreateChar && emptyCards.length > 0 && charCards.length === 0)) {
+        screenPhase = 'char_create';
+        baseLabel = '🧝 กำลังสร้างตัวละครใหม่...';
+        detail = '🧝 หน้าเลือกตัวละคร: กำลังสร้างตัวละครใหม่';
+        autoReloadAfterMs = 0;
+      } else if (charCards.length > 0) {
+        screenPhase = 'char_select';
+        baseLabel = '👤 หน้าเลือกตัวละคร (กำลังเข้าเกม...)';
+        detail = '👤 หน้าเลือกตัวละคร (' + charCards.length + ' ตัวละคร) — กำลังกดเข้าสู่โลก';
+        autoReloadAfterMs = (authCfg.enabled || hasSessionToken || window.__isBotRunning || window.__autoLoopEnabled) ? 18000 : 0;
+      } else {
+        screenPhase = 'char_select_loading';
+        baseLabel = '⏳ กำลังโหลดตัวละคร...';
+        detail = '⏳ หน้าเลือกตัวละคร: กำลังดึงรายชื่อตัวละครจากเซิร์ฟเวอร์...';
+        autoReloadAfterMs = 18000;
+      }
+    } else if (loginForm) {
+      const inputs = Array.from(loginForm.querySelectorAll('input'));
+      const isRegisterForm = inputs.length >= 3 || Boolean(authCfg && authCfg.register);
+      const submitBtn = loginForm.querySelector('button.login-go, button[type="submit"]');
+      const isSubmitting = Boolean(submitBtn && submitBtn.disabled);
+      if (isRegisterForm) {
+        screenPhase = 'register';
+        baseLabel = errText ? ('⚠️ สมัครไอดี: ' + errText.slice(0, 28)) : '📝 กำลังสมัครบัญชีใหม่...';
+        detail = errText ? ('⚠️ หน้าสมัครสมาชิก: ' + errText) : '📝 หน้าสมัครสมาชิก: กำลังกรอกข้อมูลสมัครบัญชีใหม่';
+        autoReloadAfterMs = 0;
+      } else if (errText) {
+        const isServerLoginErr = /เชื่อมต่อเซิร์ฟเวอร์ไม่ได้|เซิร์ฟเวอร์ไม่ตอบ|เซิร์ฟเวอร์เกมไม่ตอบ|HTTP\\s*5\\d\\d|network|failed to fetch|timeout|ลองเข้าเกมใหม่อีกครั้ง|เชื่อมต่อไม่ได้/i.test(errText);
+        if (isServerLoginErr) {
+          screenPhase = 'login_error';
+          baseLabel = '⚠️ เซิร์ฟเกมไม่ตอบ (Login Error)';
+          detail = '⚠️ หน้า Login: ' + errText;
+          autoReloadAfterMs = 15000;
+        } else {
+          screenPhase = 'login_auth_error';
+          baseLabel = '❌ ล็อกอินไม่ผ่าน: ' + errText.slice(0, 26);
+          detail = '❌ หน้า Login: ' + errText;
+          autoReloadAfterMs = 0;
+        }
+      } else if (isSubmitting) {
+        screenPhase = 'login_loading';
+        baseLabel = '🔄 กำลังเข้าสู่ระบบ (Login)...';
+        detail = '🔄 หน้า Login: กำลังส่งข้อมูลเข้าสู่ระบบ...';
+        autoReloadAfterMs = 20000;
+      } else {
+        screenPhase = 'login';
+        const hasAutoLogin = Boolean(authCfg && authCfg.enabled && authCfg.username && authCfg.password);
+        baseLabel = hasAutoLogin ? '🔑 หน้า Login (กำลัง Auto-Login...)' : (hasSessionToken ? '🔑 หน้า Login (มี Session ค้าง)' : '🔑 หน้า Login (รอเข้าสู่ระบบ)');
+        detail = hasAutoLogin
+          ? ('🔑 หน้า Login: กำลังเข้าสู่ระบบด้วย ID ' + authCfg.username)
+          : (hasSessionToken ? '🔑 หน้า Login: พบ Session เดิมในระบบ กำลังเตรียมรีเฟรชเข้าเกม...' : '🔑 หน้า Login: รอเข้าสู่ระบบ หรือตั้งค่า Auto-Login');
+        autoReloadAfterMs = (hasSessionToken || hasAutoLogin) ? 18000 : 0;
+      }
+    } else {
+      screenPhase = 'loading';
+      baseLabel = errText ? ('⚠️ โหลดเกมค้าง: ' + errText.slice(0, 26)) : '⏳ กำลังโหลดเข้าเกม...';
+      detail = errText ? ('⚠️ หน้าโหลดเกม: ' + errText) : '⏳ กำลังโหลดข้อมูลแผนที่และเชื่อมต่อเซิร์ฟเวอร์เกม...';
+      autoReloadAfterMs = 20000;
+    }
+
+    s.screenPhase = screenPhase;
+    s.screenError = errText || null;
+
+    if (screenPhase !== 'in_game') {
+      const now = Date.now();
+      const pageReady = document.readyState === 'complete' && (typeof performance !== 'undefined' ? performance.now() >= 4000 : true);
+      let tracker = window.__pmScreenPhaseTracker;
+      if (!tracker || tracker.phase !== screenPhase) {
+        tracker = window.__pmScreenPhaseTracker = { phase: screenPhase, since: now, reloaded: false };
+      } else if (!pageReady) {
+        tracker.since = now;
+      }
+      const elapsed = Math.max(0, now - tracker.since);
+      let finalLabel = baseLabel;
+      if (autoReloadAfterMs > 0) {
+        let lastReloadAt = 0;
+        try { lastReloadAt = Number(sessionStorage.getItem('__pm_last_auto_reload_at') || 0); } catch (_) {}
+        const cooldownElapsed = now - lastReloadAt;
+        const cooldownRemainMs = Math.max(0, 20000 - cooldownElapsed);
+        const totalWaitMs = Math.max(autoReloadAfterMs, elapsed + cooldownRemainMs);
+        const remainSec = Math.max(1, Math.ceil((totalWaitMs - elapsed) / 1000));
+        s.autoRefreshInSec = remainSec;
+        const isImmediateErrorPhase = (screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'char_select_online' || screenPhase === 'char_select_limit');
+        if (pageReady && elapsed >= totalWaitMs && !tracker.reloaded) {
+          tracker.reloaded = true;
+          try { sessionStorage.setItem('__pm_last_auto_reload_at', String(now)); } catch (_) {}
+          finalLabel = '🔄 กำลังรีเฟรชหน้าจออัตโนมัติ...';
+          detail = detail + ' — รีเฟรชหน้าจออัตโนมัติแล้ว';
+          console.warn('[PmheeAether Recovery] ♻️ หน้าจอค้างที่สถานะ ' + screenPhase + ' นาน ' + Math.round(elapsed / 1000) + ' วินาที -> รีเฟรชหน้าเกมอัตโนมัติ...');
+          setTimeout(() => { try { window.location.reload(); } catch (_) {} }, 150);
+        } else if (isImmediateErrorPhase || elapsed >= 4000) {
+          finalLabel = baseLabel + ' · รีเฟรชใน ' + remainSec + ' วิ';
+        }
+      }
+      s.screenPhaseLabel = finalLabel;
+      s.screenDetail = detail;
+      s.botStatus = finalLabel;
+      s.map = 'ไม่ทราบแมพ';
+    } else {
+      s.screenPhaseLabel = null;
+      s.screenDetail = null;
+      s.autoRefreshInSec = null;
     }
   } catch (e) {}
   try {
@@ -6125,10 +6284,11 @@ const server = http.createServer(async (req, res) => {
         const zenyRate = updateZenyRateTracker(p.id, alive ? liveState : null);
         const bandwidth = await updateBandwidthTracker(p.id, alive ? liveState : null, p.debugPort);
 
-        const liveHasPremium = !!(liveState && !liveState.error && liveState.hasPremium);
-        const livePremiumUntil = (liveState && !liveState.error && Number(liveState.premiumUntil) > 0) ? Number(liveState.premiumUntil) : null;
+        const isInGameLive = Boolean(alive && liveState && !liveState.error && (!liveState.screenPhase || liveState.screenPhase === 'in_game'));
+        const liveHasPremium = !!(isInGameLive && liveState.hasPremium);
+        const livePremiumUntil = (isInGameLive && Number(liveState.premiumUntil) > 0) ? Number(liveState.premiumUntil) : null;
         const effectivePremiumUntil = livePremiumUntil || (Number(p.lastPremiumUntil) > Date.now() ? Number(p.lastPremiumUntil) : null);
-        const hasPremium = (alive && liveState && !liveState.error) ? liveHasPremium : Boolean(effectivePremiumUntil && effectivePremiumUntil > Date.now());
+        const hasPremium = isInGameLive ? liveHasPremium : Boolean(effectivePremiumUntil && effectivePremiumUntil > Date.now());
 
         if (alive && liveState && typeof liveState.zeroRender === 'boolean') {
           if (!windowStates[p.id] || (Date.now() - (windowStates[p.id].updatedAt || 0) > 4000)) {
@@ -6212,9 +6372,10 @@ const server = http.createServer(async (req, res) => {
       const s = p.liveState;
       if (!s || s.error) return false;
       const hasChar = Boolean(s.charName);
+      const inGamePhase = !s.screenPhase || s.screenPhase === 'in_game';
       const portrait = hasChar && s.portrait && portraitPathFromSrc(s.portrait);
       const premChanged = (Number(s.premiumUntil) > 0 && Number(s.premiumUntil) !== Number(p.lastPremiumUntil || 0)) ||
-                          (hasChar && s.hasPremium === false && Number(p.lastPremiumUntil || 0) > Date.now());
+                          (inGamePhase && hasChar && s.hasPremium === false && Number(p.lastPremiumUntil || 0) > Date.now());
       return (portrait && portrait !== p.lastPortrait) || (hasChar && s.charName !== p.lastCharName) || (hasChar && s.charClass && s.charClass !== p.lastCharClass) || premChanged;
     });
     if (changed.length > 0) {
@@ -6227,13 +6388,14 @@ const server = http.createServer(async (req, res) => {
         }
         if (p.liveState && !p.liveState.error) {
           const hasChar = Boolean(p.liveState.charName);
+          const inGamePhase = !p.liveState.screenPhase || p.liveState.screenPhase === 'in_game';
           const portrait = hasChar && p.liveState.portrait && portraitPathFromSrc(p.liveState.portrait);
           if (portrait) target.lastPortrait = p.lastPortrait = portrait;
           if (hasChar) target.lastCharName = p.lastCharName = p.liveState.charName;
           if (hasChar && p.liveState.charClass) target.lastCharClass = p.lastCharClass = p.liveState.charClass;
           if (Number(p.liveState.premiumUntil) > 0) {
             target.lastPremiumUntil = p.lastPremiumUntil = Number(p.liveState.premiumUntil);
-          } else if (hasChar && p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
+          } else if (inGamePhase && hasChar && p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
             target.lastPremiumUntil = p.lastPremiumUntil = 0;
           }
         }
@@ -7277,6 +7439,28 @@ public class PmFocus {
     }
 
     return sendJSON({ success: true, isHidden, zeroRender: isHidden });
+  }
+
+  // POST /api/profiles/:id/reload-page (Reload game page on specific client)
+  if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/reload-page$/)) {
+    const id = pathname.split("/")[3];
+    const profiles = loadProfiles();
+    const profile = profiles.find(p => p.id === id);
+    if (!profile) return sendJSON({ success: false, error: "Profile not found" }, 404);
+    if (!profile.debugPort) return sendJSON({ success: false, error: "Client debug port not set" }, 400);
+
+    clientStateCacheByPort.delete(profile.debugPort);
+    const evalRes = await evalProfilePort(profile.debugPort, `(() => {
+      try { sessionStorage.setItem('__pm_last_auto_reload_at', String(Date.now())); } catch (_) {}
+      setTimeout(() => { try { window.location.reload(); } catch (_) {} }, 50);
+      return { success: true };
+    })()`, 3000).catch(e => ({ error: e.message }));
+    clientStateCacheByPort.delete(profile.debugPort);
+
+    if (evalRes && evalRes.error) {
+      return sendJSON({ success: false, error: evalRes.error }, 502);
+    }
+    return sendJSON({ success: true });
   }
 
   // POST /api/profiles/:id/toggle-bot (Start / Stop Bot loop on specific card)

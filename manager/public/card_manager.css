@@ -296,6 +296,104 @@ body.cd-open.cd-fp-open .cd-drawer {
 .cd-sort-sel:focus {
   border-color: #fbbf24;
 }
+.cd-lv-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+.cd-lv-lbl {
+  font: 700 11px var(--font-sans, sans-serif);
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+.cd-lv-inp {
+  width: 66px;
+  box-sizing: border-box;
+  padding: 4px 7px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(9, 13, 24, 0.9);
+  color: #f8fafc;
+  font: 600 11.5px var(--font-mono, monospace);
+  text-align: center;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+  -moz-appearance: textfield;
+}
+.cd-lv-inp::-webkit-outer-spin-button,
+.cd-lv-inp::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.cd-lv-inp::placeholder {
+  color: #64748b;
+  font-family: var(--font-sans, sans-serif);
+  font-weight: 500;
+  font-size: 10.5px;
+}
+.cd-lv-inp:focus,
+.cd-lv-inp.is-active {
+  border-color: #fbbf24;
+  background: rgba(245, 158, 11, 0.1);
+  color: #fef3c7;
+}
+.cd-lv-sep {
+  color: #64748b;
+  font-size: 11px;
+  user-select: none;
+}
+.cd-lv-presets {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cd-lv-preset {
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.65);
+  color: #94a3b8;
+  font: 600 10.5px var(--font-mono, monospace);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.16s;
+}
+.cd-lv-preset:hover {
+  color: #e2e8f0;
+  border-color: rgba(251, 191, 36, 0.45);
+}
+.cd-lv-preset.on {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.26), rgba(217, 119, 6, 0.18));
+  border-color: #fbbf24;
+  color: #fef3c7;
+}
+.cd-lv-clear {
+  padding: 3px 7px;
+  border-radius: 6px;
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  background: rgba(239, 68, 68, 0.15);
+  color: #fca5a5;
+  font: 700 10.5px var(--font-sans, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.16s;
+}
+.cd-lv-clear:hover {
+  background: rgba(239, 68, 68, 0.28);
+}
+.cd-lv-clear[hidden] {
+  display: none !important;
+}
+.cd-lv-count {
+  margin-left: auto;
+  font: 600 10.5px var(--font-mono, monospace);
+  color: #64748b;
+  white-space: nowrap;
+}
+.cd-lv-count.is-filtered {
+  color: #fbbf24;
+}
 .cd-slots-row {
   display: flex;
   align-items: center;

@@ -102,6 +102,25 @@
   let searchQuery = '';
   let sortMode = 'velocity_desc';
   let slotFilter = 'all';
+  let minMonsterLv = null;
+  let maxMonsterLv = null;
+
+  function getCardMonsterLevels(c) {
+    const lvs = [];
+    if (c && Array.isArray(c.monsters)) {
+      for (const mo of c.monsters) {
+        const lv = Number(mo && (mo.level ?? mo.lv));
+        if (Number.isFinite(lv) && lv > 0) lvs.push(lv);
+      }
+    }
+    if (lvs.length === 0 && c && Array.isArray(c.maps)) {
+      for (const mp of c.maps) {
+        const lv = Number(mp && mp.monsterLevel);
+        if (Number.isFinite(lv) && lv > 0) lvs.push(lv);
+      }
+    }
+    return lvs;
+  }
 
   // Multi-card selection state
   const selectedCardIds = new Set(); // Set<number>
@@ -401,8 +420,23 @@
             <option value="price_desc">💎 ราคาแพง → ถูก</option>
             <option value="listings_desc">📦 วางขายมากสุด</option>
             <option value="lv_asc">⚔️ เลเวลมอนต่ำ → สูง</option>
+            <option value="lv_desc">⚔️ เลเวลมอนสูง → ต่ำ</option>
             <option value="name_asc">🔤 ชื่อการ์ด A → Z</option>
           </select>
+        </div>
+        <div class="cd-lv-row">
+          <span class="cd-lv-lbl">👾 เลเวลมอน:</span>
+          <input type="number" class="cd-lv-inp" id="cd-lv-min" min="1" max="999" step="1" placeholder="ต่ำสุด" title="เลเวลมอนสเตอร์ต่ำสุด (Min Lv.)">
+          <span class="cd-lv-sep">–</span>
+          <input type="number" class="cd-lv-inp" id="cd-lv-max" min="1" max="999" step="1" placeholder="สูงสุด" title="เลเวลมอนสเตอร์สูงสุด (Max Lv.)">
+          <div class="cd-lv-presets" id="cd-lv-presets">
+            <button type="button" class="cd-lv-preset" data-lv-min="1" data-lv-max="25" title="มอนสเตอร์ Lv. 1–25">1–25</button>
+            <button type="button" class="cd-lv-preset" data-lv-min="26" data-lv-max="50" title="มอนสเตอร์ Lv. 26–50">26–50</button>
+            <button type="button" class="cd-lv-preset" data-lv-min="51" data-lv-max="75" title="มอนสเตอร์ Lv. 51–75">51–75</button>
+            <button type="button" class="cd-lv-preset" data-lv-min="76" data-lv-max="" title="มอนสเตอร์ Lv. 76 ขึ้นไป">76+</button>
+          </div>
+          <button type="button" class="cd-lv-clear" id="cd-lv-clear" hidden title="ล้างตัวกรองเลเวลมอนสเตอร์">✕</button>
+          <span class="cd-lv-count" id="cd-lv-count">66 ใบ</span>
         </div>
         <div class="cd-slots-row">
           <div class="cd-slots" id="cd-slots">${slotPillsHtml}</div>
@@ -485,6 +519,77 @@
       sortMode = e.target.value || 'velocity_desc';
       renderList();
     });
+
+    const lvMinInp = document.getElementById('cd-lv-min');
+    const lvMaxInp = document.getElementById('cd-lv-max');
+    const lvClearBtn = document.getElementById('cd-lv-clear');
+    const lvPresetsEl = document.getElementById('cd-lv-presets');
+
+    function syncLvFilterStateFromInputs() {
+      const rawMin = String((lvMinInp && lvMinInp.value) || '').trim();
+      const rawMax = String((lvMaxInp && lvMaxInp.value) || '').trim();
+      const nMin = rawMin !== '' ? Math.max(1, Math.floor(Number(rawMin))) : null;
+      const nMax = rawMax !== '' ? Math.max(1, Math.floor(Number(rawMax))) : null;
+      minMonsterLv = nMin !== null && Number.isFinite(nMin) ? nMin : null;
+      maxMonsterLv = nMax !== null && Number.isFinite(nMax) ? nMax : null;
+      syncLvFilterControlsUI();
+      renderList();
+    }
+
+    function syncLvFilterControlsUI() {
+      const hasLv = minMonsterLv !== null || maxMonsterLv !== null;
+      if (lvClearBtn) lvClearBtn.hidden = !hasLv;
+      if (lvMinInp) lvMinInp.classList.toggle('is-active', minMonsterLv !== null);
+      if (lvMaxInp) lvMaxInp.classList.toggle('is-active', maxMonsterLv !== null);
+      if (lvPresetsEl) {
+        lvPresetsEl.querySelectorAll('.cd-lv-preset').forEach(btn => {
+          const pMinRaw = btn.getAttribute('data-lv-min') || '';
+          const pMaxRaw = btn.getAttribute('data-lv-max') || '';
+          const pMin = pMinRaw !== '' ? Number(pMinRaw) : null;
+          const pMax = pMaxRaw !== '' ? Number(pMaxRaw) : null;
+          const matched = minMonsterLv === pMin && maxMonsterLv === pMax;
+          btn.classList.toggle('on', matched);
+        });
+      }
+    }
+
+    if (lvMinInp) lvMinInp.addEventListener('input', syncLvFilterStateFromInputs);
+    if (lvMaxInp) lvMaxInp.addEventListener('input', syncLvFilterStateFromInputs);
+
+    if (lvPresetsEl) {
+      lvPresetsEl.addEventListener('click', e => {
+        const btn = e.target.closest('.cd-lv-preset');
+        if (!btn) return;
+        const pMinRaw = btn.getAttribute('data-lv-min') || '';
+        const pMaxRaw = btn.getAttribute('data-lv-max') || '';
+        const pMin = pMinRaw !== '' ? Number(pMinRaw) : null;
+        const pMax = pMaxRaw !== '' ? Number(pMaxRaw) : null;
+        if (minMonsterLv === pMin && maxMonsterLv === pMax) {
+          minMonsterLv = null;
+          maxMonsterLv = null;
+          if (lvMinInp) lvMinInp.value = '';
+          if (lvMaxInp) lvMaxInp.value = '';
+        } else {
+          minMonsterLv = pMin;
+          maxMonsterLv = pMax;
+          if (lvMinInp) lvMinInp.value = pMin !== null ? String(pMin) : '';
+          if (lvMaxInp) lvMaxInp.value = pMax !== null ? String(pMax) : '';
+        }
+        syncLvFilterControlsUI();
+        renderList();
+      });
+    }
+
+    if (lvClearBtn) {
+      lvClearBtn.addEventListener('click', () => {
+        minMonsterLv = null;
+        maxMonsterLv = null;
+        if (lvMinInp) lvMinInp.value = '';
+        if (lvMaxInp) lvMaxInp.value = '';
+        syncLvFilterControlsUI();
+        renderList();
+      });
+    }
 
     document.getElementById('cd-slots').addEventListener('click', e => {
       const btn = e.target.closest('[data-slot]');
@@ -940,13 +1045,34 @@
           c.cardSlot,
           ...(c.specials || []),
           c.album || '',
-          ...(c.monsters || []).map(m => m.name),
+          ...(c.monsters || []).map(m => `${m.name} lv.${m.level || ''} lv${m.level || ''}`),
           ...(c.maps || []).map(m => `${m.map} ${m.mapLevel || getMapLevelLabel(m.map, m.monsterLevel)}`)
         ]
           .join(' ')
           .toLowerCase();
         return hay.includes(searchQuery);
       });
+    }
+
+    const hasMinLv = minMonsterLv !== null && Number.isFinite(minMonsterLv) && minMonsterLv > 0;
+    const hasMaxLv = maxMonsterLv !== null && Number.isFinite(maxMonsterLv) && maxMonsterLv > 0;
+    const effMinLv = hasMinLv && hasMaxLv ? Math.min(minMonsterLv, maxMonsterLv) : hasMinLv ? minMonsterLv : null;
+    const effMaxLv = hasMinLv && hasMaxLv ? Math.max(minMonsterLv, maxMonsterLv) : hasMaxLv ? maxMonsterLv : null;
+
+    if (effMinLv !== null || effMaxLv !== null) {
+      filtered = filtered.filter(c => {
+        const lvs = getCardMonsterLevels(c);
+        if (lvs.length === 0) return false;
+        return lvs.some(lv => (effMinLv === null || lv >= effMinLv) && (effMaxLv === null || lv <= effMaxLv));
+      });
+    }
+
+    const lvCountEl = document.getElementById('cd-lv-count');
+    if (lvCountEl) {
+      const total = state.cards.length || 66;
+      const isFiltered = filtered.length !== total || slotFilter !== 'all' || Boolean(searchQuery) || effMinLv !== null || effMaxLv !== null;
+      lvCountEl.textContent = isFiltered ? `${filtered.length} / ${total} ใบ` : `${total} ใบ`;
+      lvCountEl.classList.toggle('is-filtered', isFiltered);
     }
 
     filtered.sort((a, b) => {
@@ -974,9 +1100,19 @@
         return (pb || 0) - (pa || 0);
       }
       if (sortMode === 'lv_asc') {
-        const lva = (a.monsters && a.monsters[0] && a.monsters[0].level) || 999;
-        const lvb = (b.monsters && b.monsters[0] && b.monsters[0].level) || 999;
+        const lvsA = getCardMonsterLevels(a);
+        const lvsB = getCardMonsterLevels(b);
+        const lva = lvsA.length ? Math.min(...lvsA) : 999;
+        const lvb = lvsB.length ? Math.min(...lvsB) : 999;
         if (lva !== lvb) return lva - lvb;
+        return a.name.localeCompare(b.name);
+      }
+      if (sortMode === 'lv_desc') {
+        const lvsA = getCardMonsterLevels(a);
+        const lvsB = getCardMonsterLevels(b);
+        const lva = lvsA.length ? Math.max(...lvsA) : 0;
+        const lvb = lvsB.length ? Math.max(...lvsB) : 0;
+        if (lvb !== lva) return lvb - lva;
         return a.name.localeCompare(b.name);
       }
       if (sortMode === 'name_asc') {

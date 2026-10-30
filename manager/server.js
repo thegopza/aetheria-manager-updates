@@ -398,6 +398,7 @@ function isSingleDefaultMockProfile(p) {
 }
 
 function isUntouchedDefaultMockProfiles(profiles) {
+  if (loadDeletedProfileIds().size > 0) return false;
   if (!Array.isArray(profiles) || profiles.length === 0) return true;
   if (profiles.length > 2) return false;
   return profiles.every(isSingleDefaultMockProfile);
@@ -435,6 +436,7 @@ function isVerifiedAuthConfig(auth) {
 
 function writeOrMergeProfileStorageFile(pid, incomingMap) {
   if (!pid || !incomingMap || typeof incomingMap !== "object") return false;
+  if (loadDeletedProfileIds().has(String(pid))) return false;
   try {
     const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
     fs.mkdirSync(bsDir, { recursive: true });
@@ -495,7 +497,11 @@ function recoverProfilesFromLocalEvidence() {
     if (fs.existsSync(PROFILES_BACKUP_FILE)) {
       try {
         const backup = JSON.parse(fs.readFileSync(PROFILES_BACKUP_FILE, "utf8"));
-        const filteredBackup = Array.isArray(backup) ? backup.filter(p => p && !deletedIds.has(String(p.id))) : [];
+        const filteredBackup = Array.isArray(backup) ? backup.filter(p => {
+          if (!p || !p.id || deletedIds.has(String(p.id))) return false;
+          if (!p.account && !p.lastCharName && /^Client \d+$/i.test(String(p.name || "").trim())) return false;
+          return true;
+        }) : [];
         if (filteredBackup.length > 0 && !isUntouchedDefaultMockProfiles(filteredBackup)) {
           for (const bp of filteredBackup) {
             const p = ensure(bp.id, true);
@@ -739,9 +745,8 @@ function recoverProfilesFromLocalEvidence() {
 
     const validCandidates = Array.from(map.values()).filter(p => {
       if (!p.hasRealEvidence) return false;
-      if (seededFromBackup) return true;
-      // When recovering from raw session directories without a backup file, skip blank unconfigured shells
-      return Boolean(p.account || p.lastCharName || p.hasSavedPassword || p.id === "profile_main");
+      // Never recover blank unconfigured shells that have neither an account username nor a character name
+      return Boolean(p.account || p.lastCharName || p.id === "profile_main");
     });
     if (validCandidates.length === 0) return null;
 
@@ -4783,18 +4788,21 @@ function applyProfileBackupPayload(data, options = {}) {
     const base = (item.profile && typeof item.profile === "object") ? { ...item.profile } : { ...item };
     const id = String(base.id || item.id || item.profileId || "").trim();
     if (!id || seenIds.has(id) || deletedIds.has(id)) continue;
-    seenIds.add(id);
     const prev = replaceExisting ? {} : (existingById.get(id) || {});
     const username = String(item.username || item.account || base.account || base.username || (credsObj[id] && credsObj[id].username) || prev.account || prev.username || "").trim();
     const password = String(item.password || (credsObj[id] && credsObj[id].password) || "").trim();
     const charName = String(item.characterName || base.lastCharName || prev.lastCharName || "").trim();
+    const finalName = String(item.name || base.name || prev.name || id).trim();
+    // Skip blank unconfigured Client X shells when restoring from backup
+    if (!username && !charName && /^Client \d+$/i.test(finalName)) continue;
+    seenIds.add(id);
     delete base.password;
     delete base.liveState;
     const finalProfile = {
       ...prev,
       ...base,
       id,
-      name: String(item.name || base.name || prev.name || id).trim(),
+      name: finalName,
       server: String(item.server || base.server || prev.server || "aetheria-main").trim(),
       ...(username ? { account: username, username } : {}),
       ...(charName ? { lastCharName: charName } : {})
@@ -4807,7 +4815,8 @@ function applyProfileBackupPayload(data, options = {}) {
   }
 
   for (const [id, cred] of Object.entries(credsObj)) {
-    if (cred && cred.password && !rawList.some(x => (x.id || x.profileId) === id)) {
+    if (deletedIds.has(id)) continue;
+    if (cred && cred.password && seenIds.has(id) && !credentials.getPassword(id)) {
       credentials.setPassword(id, String(cred.password));
       restoredCredentials++;
     }
@@ -4845,12 +4854,15 @@ async function syncProfileBackupToCentral() {
     const accountSettings = humanCheckSolver.loadSettings();
     if (!accountSettings || !accountSettings.accountId) return null;
     const currentProfiles = loadProfiles() || [];
-    if (currentProfiles.length === 0 || isUntouchedDefaultMockProfiles(currentProfiles)) return null;
+    const deletedProfileIds = Array.from(loadDeletedProfileIds());
+    if ((currentProfiles.length === 0 || isUntouchedDefaultMockProfiles(currentProfiles)) && deletedProfileIds.length === 0) return null;
     const payload = buildLocalProfileBackupPayload();
     const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/profile-backup', {
       machineId: payload.machineId,
       machineName: payload.machineName,
-      profiles: payload.profiles
+      profiles: payload.profiles,
+      deletedProfileIds,
+      syncExact: true
     });
     if (res && res.foreignProfilesDetected === true) {
       await restoreProfilesFromCentral({ replaceExisting: true }).catch(() => {});
@@ -4881,8 +4893,10 @@ async function restoreProfilesFromCentral(options = {}) {
     }
     if (!accountSettings || !accountSettings.accountId) return { success: false, error: 'NO_ACCOUNT' };
     const deviceId = getEffectiveDeviceNickname();
+    const deletedProfileIds = Array.from(loadDeletedProfileIds());
     const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/profile-restore', {
-      machineId: deviceId
+      machineId: deviceId,
+      deletedProfileIds
     });
     if (res && res.success && Array.isArray(res.profiles) && res.profiles.length > 0) {
       const result = applyProfileBackupPayload(res, options);
@@ -4901,8 +4915,13 @@ if (typeof humanCheckSolver.setOnAccountChanged === "function") {
   });
 }
 
+let diskEvidenceImportedOnce = false;
+
 function importEvidenceFromOtherManagerDirsOnDisk() {
+  if (diskEvidenceImportedOnce) return;
+  diskEvidenceImportedOnce = true;
   try {
+    const deletedIds = loadDeletedProfileIds();
     const home = os.homedir();
     const currentMgrDir = path.resolve(__dirname).toLowerCase();
     const currentHwid = typeof humanCheckSolver.getMachineFingerprint === "function"
@@ -4918,13 +4937,9 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
       path.join(home, "Documents"),
       path.join(home, "OneDrive", "Desktop"),
       path.join(home, "OneDrive", "Documents"),
-      path.join(home, "AppData", "Local", "Temp"),
       "C:\\",
       "D:\\",
-      "E:\\",
-      "C:\\$Recycle.Bin",
-      "D:\\$Recycle.Bin",
-      "E:\\$Recycle.Bin"
+      "E:\\"
     ]);
     const candidateMgrDirs = [];
     const seenDirs = new Set();
@@ -4932,7 +4947,7 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
       if (!dir || depth > maxDepth) return;
       let norm;
       try { norm = path.resolve(dir).toLowerCase(); } catch (_) { return; }
-      if (seenDirs.has(norm)) return;
+      if (seenDirs.has(norm) || norm.includes("$recycle.bin")) return;
       seenDirs.add(norm);
       if (!fs.existsSync(dir)) return;
       try {
@@ -4949,13 +4964,11 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
           candidateMgrDirs.push(path.join(dir, "manager"));
         }
         if (depth < maxDepth) {
-          const isRecycle = norm.includes("$recycle.bin");
           const entries = fs.readdirSync(dir, { withFileTypes: true });
           for (const e of entries) {
             if (!e.isDirectory()) continue;
-            if (/^(windows|program files|program files \(x86\)|programdata|system volume information|node_modules|\.git|appdata)$/i.test(e.name)) continue;
-            if (!isRecycle && /^\$recycle\.bin$/i.test(e.name)) continue;
-            if (isRecycle || depth === 0 || /pelican|pmhee|aetheria|bot|manager|release|rar\$|7z|\$r/i.test(e.name)) {
+            if (/^(windows|program files|program files \(x86\)|programdata|system volume information|node_modules|\.git|appdata|\$recycle\.bin)$/i.test(e.name)) continue;
+            if (depth === 0 || /pelican|pmhee|aetheria|bot|manager|release/i.test(e.name)) {
               checkDir(path.join(dir, e.name), depth + 1, maxDepth);
             }
           }
@@ -4963,8 +4976,7 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
       } catch (_) {}
     };
     for (const r of searchRoots) {
-      const isRec = String(r).toLowerCase().includes("$recycle.bin");
-      checkDir(r, 0, isRec ? 3 : 2);
+      checkDir(r, 0, 2);
     }
 
     for (const mgrDir of candidateMgrDirs) {
@@ -4991,14 +5003,47 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
         }
         if (isForeignFolder) continue;
 
-        // 1. Copy credentials.json entries if missing locally
+        // Also include any deleted_profiles.json from the other folder so previously deleted profiles stay deleted
+        for (const delPath of [path.join(mgrDir, "data", "deleted_profiles.json"), path.join(otherRoot, "manager", "data", "deleted_profiles.json")]) {
+          if (!fs.existsSync(delPath)) continue;
+          try {
+            const otherDel = JSON.parse(fs.readFileSync(delPath, "utf8"));
+            if (Array.isArray(otherDel)) {
+              for (const did of otherDel) {
+                if (did) {
+                  deletedIds.add(String(did));
+                  recordDeletedProfileId(String(did));
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
+        // Collect configured profile IDs (those with account or lastCharName) from the other folder
+        const configuredPidsInFolder = new Set();
+        for (const pf of [path.join(mgrDir, "data", "profiles.backup.json"), path.join(mgrDir, "profiles.json")]) {
+          if (!fs.existsSync(pf)) continue;
+          try {
+            const arr = JSON.parse(fs.readFileSync(pf, "utf8"));
+            if (Array.isArray(arr)) {
+              for (const item of arr) {
+                if (item && item.id && !deletedIds.has(String(item.id)) && (item.account || item.lastCharName)) {
+                  configuredPidsInFolder.add(String(item.id));
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
+        // 1. Copy credentials.json entries if missing locally (only for non-deleted, configured profiles)
         for (const credPath of [path.join(mgrDir, "data", "credentials.json"), path.join(otherRoot, "manager", "data", "credentials.json")]) {
           if (!fs.existsSync(credPath)) continue;
           try {
             const raw = JSON.parse(fs.readFileSync(credPath, "utf8"));
             if (raw && typeof raw === "object") {
               for (const [pid, val] of Object.entries(raw)) {
-                if (!pid.startsWith("profile_") || credentials.getPassword(pid)) continue;
+                if (!pid.startsWith("profile_") || deletedIds.has(pid) || credentials.getPassword(pid)) continue;
+                if (configuredPidsInFolder.size > 0 && !configuredPidsInFolder.has(pid)) continue;
                 const pw = typeof val === "string" ? val : (val && val.password ? String(val.password) : "");
                 if (pw) credentials.setPassword(pid, pw);
               }
@@ -5012,7 +5057,7 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
             for (const f of fs.readdirSync(otherBs)) {
               if (!f.endsWith(".json")) continue;
               const pid = f.slice(0, -5);
-              if (!pid.startsWith("profile_")) continue;
+              if (!pid.startsWith("profile_") || deletedIds.has(pid)) continue;
               try {
                 const srcData = JSON.parse(fs.readFileSync(path.join(otherBs, f), "utf8"));
                 writeOrMergeProfileStorageFile(pid, srcData);
@@ -5021,39 +5066,25 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
           }
           // 3. Extract _browser/Default/Local Storage/leveldb directly and merge into local _browser_storage
           const otherLdb = path.join(sessBase, "_browser", "Default", "Local Storage", "leveldb");
-          const localLdb = path.join(SESSIONS_DIR, "_browser", "Default", "Local Storage", "leveldb");
           if (fs.existsSync(otherLdb)) {
             try {
               const diskHarvest = extractPelicanStorageFromLevelDb(otherLdb);
               if (diskHarvest && diskHarvest.byProfile) {
                 for (const [pid, entries] of Object.entries(diskHarvest.byProfile)) {
-                  writeOrMergeProfileStorageFile(pid, entries);
+                  if (!deletedIds.has(pid)) {
+                    writeOrMergeProfileStorageFile(pid, entries);
+                  }
                 }
               }
             } catch (_) {}
-            const sumBytes = d => {
-              if (!fs.existsSync(d)) return 0;
-              try {
-                return fs.readdirSync(d).reduce((s, f) => {
-                  try { return s + fs.statSync(path.join(d, f)).size; } catch (_) { return s; }
-                }, 0);
-              } catch (_) { return 0; }
-            };
-            if (sumBytes(otherLdb) > sumBytes(localLdb)) {
-              fs.mkdirSync(localLdb, { recursive: true });
-              for (const f of fs.readdirSync(otherLdb)) {
-                if (f === "LOCK") continue;
-                try { fs.copyFileSync(path.join(otherLdb, f), path.join(localLdb, f)); } catch (_) {}
-              }
-            }
           }
           // 3b. Extract Electron sessions/profile_*/Local Storage/leveldb directly
           if (fs.existsSync(sessBase)) {
             for (const entry of fs.readdirSync(sessBase, { withFileTypes: true })) {
               if (!entry.isDirectory() || !entry.name.startsWith("profile_")) continue;
               const pid = entry.name;
+              if (deletedIds.has(pid)) continue;
               const srcP = path.join(sessBase, pid, "Local Storage", "leveldb");
-              const dstP = path.join(SESSIONS_DIR, pid, "Local Storage", "leveldb");
               if (fs.existsSync(srcP)) {
                 try {
                   const diskHarvest = extractPelicanStorageFromLevelDb(srcP, pid);
@@ -5061,13 +5092,6 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
                     writeOrMergeProfileStorageFile(pid, diskHarvest.byProfile[pid]);
                   }
                 } catch (_) {}
-                if (!fs.existsSync(dstP)) {
-                  fs.mkdirSync(dstP, { recursive: true });
-                  for (const f of fs.readdirSync(srcP)) {
-                    if (f === "LOCK") continue;
-                    try { fs.copyFileSync(path.join(srcP, f), path.join(dstP, f)); } catch (_) {}
-                  }
-                }
               }
             }
           }
@@ -5076,10 +5100,11 @@ function importEvidenceFromOtherManagerDirsOnDisk() {
         for (const pf of [path.join(mgrDir, "data", "profiles.backup.json"), path.join(mgrDir, "profiles.json")]) {
           if (!fs.existsSync(pf)) continue;
           try {
-            const arr = JSON.parse(fs.readFileSync(pf, "utf8"));
-            if (Array.isArray(arr) && arr.length > 0 && !isUntouchedDefaultMockProfiles(arr)) {
+            const rawArr = JSON.parse(fs.readFileSync(pf, "utf8"));
+            const arr = Array.isArray(rawArr) ? rawArr.filter(x => x && x.id && !deletedIds.has(String(x.id)) && (x.account || x.lastCharName)) : [];
+            if (arr.length > 0 && !isUntouchedDefaultMockProfiles(arr)) {
               const cur = loadProfiles() || [];
-              if (isUntouchedDefaultMockProfiles(cur)) {
+              if (isUntouchedDefaultMockProfiles(cur) && deletedIds.size === 0) {
                 saveProfiles(arr);
               } else {
                 let enriched = false;
@@ -5118,7 +5143,7 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
       await restoreProfilesFromCentral().catch(() => {});
       current = loadProfiles() || [];
     }
-    if (isUntouchedDefaultMockProfiles(current) || hasProfilesMissingCredentialsOrAccount(current)) {
+    if (isUntouchedDefaultMockProfiles(current)) {
       importEvidenceFromOtherManagerDirsOnDisk();
       current = loadProfiles() || [];
     }
@@ -5257,7 +5282,7 @@ if (!TEST_INSTANCE) {
   }, 5000);
   setInterval(async () => {
     const cur = loadProfiles() || [];
-    if (isUntouchedDefaultMockProfiles(cur) || hasProfilesMissingCredentialsOrAccount(cur)) {
+    if (hasProfilesMissingCredentialsOrAccount(cur)) {
       await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
     } else {
       await syncProfileBackupToCentral().catch(() => {});
@@ -6689,6 +6714,11 @@ const server = http.createServer(async (req, res) => {
 
     screenProxy.releaseProfile(id, "deleted").catch(() => {});
     recordDeletedProfileId(id);
+    try { credentials.setPassword(id, ""); } catch (_) {}
+    try {
+      const bsFile = path.join(SESSIONS_DIR, "_browser_storage", `${id}.json`);
+      if (fs.existsSync(bsFile)) fs.unlinkSync(bsFile);
+    } catch (_) {}
     // Stop process if running
     if (runningProcesses[id] && isProcessAlive(runningProcesses[id].pid)) {
       try { process.kill(runningProcesses[id].pid, "SIGTERM"); } catch (e) {}
@@ -6697,11 +6727,8 @@ const server = http.createServer(async (req, res) => {
 
     profiles.splice(idx, 1);
     saveProfiles(profiles, { allowEmpty: true });
-    if (profiles.length === 0) {
-      try { writeJsonAtomic(PROFILES_BACKUP_FILE, []); } catch (_) {}
-    } else {
-      scheduleCentralProfileBackupSync(1500);
-    }
+    try { writeJsonAtomic(PROFILES_BACKUP_FILE, profiles); } catch (_) {}
+    scheduleCentralProfileBackupSync(1000);
     return sendJSON({ success: true });
   }
 

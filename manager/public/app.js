@@ -4630,7 +4630,8 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
     autoQuiver: false,
     autoRevive: false,
     autoReviveMax: 10,
-    pickupLoot: true
+    pickupLoot: true,
+    lootWhen: 'first'
   }, clientData?.inGameAutoConfig || {});
   const igPrio = renderWebInGameAutoPriorityHtml(igAuto.targetOrder);
   const potionCounts = clientData?.potionCounts || {};
@@ -4828,7 +4829,19 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
 
                         <label class="p-check-box" style="color: #2dd4bf; margin-top: 2px;">
                             <input type="checkbox" id="p-ig-auto-pickup-loot" ${igAuto.pickupLoot !== false ? 'checked' : ''}>
-                            <span><b>เก็บของดรอปอัตโนมัติ</b> <small style="color:#94a3b8; display:block;">เดินไปเก็บของดรอปในวงล่า (ปิด = ไม่เดินเก็บของบนพื้น)</small></span>
+                            <span><b>เก็บของดรอปอัตโนมัติ</b> <small style="color:#94a3b8; display:block;">เดินไปเก็บของดรอปในวงล่า (มอนมาตีระหว่างทาง = สู้ก่อน)</small></span>
+                        </label>
+                        <div id="p-ig-auto-loot-when-row" style="display: ${igAuto.pickupLoot !== false ? 'grid' : 'none'}; grid-template-columns: 1fr 1fr; gap: 5px; margin: 4px 0 2px 0;">
+                            <label id="p-ig-auto-loot-when-first-lbl" style="display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 9.5px; line-height: 1.3; border: 1px solid ${igAuto.lootWhen !== 'clear' ? '#eab308' : '#334155'}; background: ${igAuto.lootWhen !== 'clear' ? 'rgba(234, 179, 8, 0.14)' : 'rgba(15, 23, 42, 0.6)'}; color: ${igAuto.lootWhen !== 'clear' ? '#fef08a' : '#cbd5e1'}; font-weight: ${igAuto.lootWhen !== 'clear' ? 'bold' : 'normal'};">
+                                <input type="radio" name="p-ig-auto-loot-when-${profileId}" id="p-ig-auto-loot-when-first" value="first" ${igAuto.lootWhen !== 'clear' ? 'checked' : ''} style="accent-color: #eab308; margin: 0; flex-shrink: 0;">
+                                <span>เก็บก่อน แล้วค่อยตีตัวถัดไป</span>
+                            </label>
+                            <label id="p-ig-auto-loot-when-clear-lbl" style="display: flex; align-items: center; gap: 5px; padding: 5px 6px; border-radius: 6px; cursor: pointer; font-size: 9.5px; line-height: 1.3; border: 1px solid ${igAuto.lootWhen === 'clear' ? '#eab308' : '#334155'}; background: ${igAuto.lootWhen === 'clear' ? 'rgba(234, 179, 8, 0.14)' : 'rgba(15, 23, 42, 0.6)'}; color: ${igAuto.lootWhen === 'clear' ? '#fef08a' : '#cbd5e1'}; font-weight: ${igAuto.lootWhen === 'clear' ? 'bold' : 'normal'};">
+                                <input type="radio" name="p-ig-auto-loot-when-${profileId}" id="p-ig-auto-loot-when-clear" value="clear" ${igAuto.lootWhen === 'clear' ? 'checked' : ''} style="accent-color: #eab308; margin: 0; flex-shrink: 0;">
+                                <span>ตีให้หมดก่อน ไม่มีมอนแล้วค่อยเก็บ</span>
+                            </label>
+                        </div>
+                        <label style="display:none;">
                         </label>
                     </div>
 
@@ -5801,6 +5814,10 @@ async function openWebBotHUD(profileId) {
         const revRow = hudEl.querySelector('#p-ig-auto-revive-row');
         if (revRow) revRow.style.display = checked ? 'flex' : 'none';
       }
+      if (key === 'pickupLoot') {
+        const lootWhenRow = hudEl.querySelector('#p-ig-auto-loot-when-row');
+        if (lootWhenRow) lootWhenRow.style.display = checked ? 'grid' : 'none';
+      }
       sendWebHudAction(profileId, { type: 'update-ingame-auto-config', config: { [key]: checked } });
     };
   };
@@ -5811,6 +5828,35 @@ async function openWebBotHUD(profileId) {
   bindIgAutoField('#p-ig-auto-quiver', 'autoQuiver');
   bindIgAutoField('#p-ig-auto-revive', 'autoRevive');
   bindIgAutoField('#p-ig-auto-pickup-loot', 'pickupLoot');
+
+  const applyIgLootWhenStyle = (val) => {
+    const isClear = val === 'clear';
+    const firstLbl = hudEl.querySelector('#p-ig-auto-loot-when-first-lbl');
+    const clearLbl = hudEl.querySelector('#p-ig-auto-loot-when-clear-lbl');
+    if (firstLbl) {
+      firstLbl.style.borderColor = !isClear ? '#eab308' : '#334155';
+      firstLbl.style.background = !isClear ? 'rgba(234, 179, 8, 0.14)' : 'rgba(15, 23, 42, 0.6)';
+      firstLbl.style.color = !isClear ? '#fef08a' : '#cbd5e1';
+      firstLbl.style.fontWeight = !isClear ? 'bold' : 'normal';
+    }
+    if (clearLbl) {
+      clearLbl.style.borderColor = isClear ? '#eab308' : '#334155';
+      clearLbl.style.background = isClear ? 'rgba(234, 179, 8, 0.14)' : 'rgba(15, 23, 42, 0.6)';
+      clearLbl.style.color = isClear ? '#fef08a' : '#cbd5e1';
+      clearLbl.style.fontWeight = isClear ? 'bold' : 'normal';
+    }
+  };
+  const bindIgLootWhenRadio = (sel, val) => {
+    const rad = hudEl.querySelector(sel);
+    if (!rad) return;
+    rad.onchange = () => {
+      if (!rad.checked) return;
+      applyIgLootWhenStyle(val);
+      sendWebHudAction(profileId, { type: 'update-ingame-auto-config', config: { lootWhen: val } });
+    };
+  };
+  bindIgLootWhenRadio('#p-ig-auto-loot-when-first', 'first');
+  bindIgLootWhenRadio('#p-ig-auto-loot-when-clear', 'clear');
 
   const igRevMaxInp = hudEl.querySelector('#p-ig-auto-revive-max');
   const sendIgReviveMax = (val) => {
@@ -5896,7 +5942,8 @@ async function openWebBotHUD(profileId) {
         autoQuiver: !!hudEl.querySelector('#p-ig-auto-quiver')?.checked,
         autoRevive: !!hudEl.querySelector('#p-ig-auto-revive')?.checked,
         autoReviveMax: Math.max(1, Math.min(99, parseInt(hudEl.querySelector('#p-ig-auto-revive-max')?.value || '10', 10) || 10)),
-        pickupLoot: !!hudEl.querySelector('#p-ig-auto-pickup-loot')?.checked
+        pickupLoot: !!hudEl.querySelector('#p-ig-auto-pickup-loot')?.checked,
+        lootWhen: hudEl.querySelector('#p-ig-auto-loot-when-clear')?.checked ? 'clear' : 'first'
       };
       const r = await sendWebHudAction(profileId, { type: 'update-ingame-auto-config', config: fullCfg });
       if (profileId !== '__central__') {
@@ -6652,6 +6699,31 @@ function populateWebHudData(profileId, data) {
     setIgCb('#p-ig-auto-quiver', ig.autoQuiver);
     setIgCb('#p-ig-auto-revive', ig.autoRevive);
     setIgCb('#p-ig-auto-pickup-loot', ig.pickupLoot);
+    const lootWhenRow = hud.querySelector('#p-ig-auto-loot-when-row');
+    if (lootWhenRow && ig.pickupLoot !== undefined) {
+      lootWhenRow.style.display = ig.pickupLoot ? 'grid' : 'none';
+    }
+    if (ig.lootWhen === 'clear' || ig.lootWhen === 'first') {
+      const isClear = ig.lootWhen === 'clear';
+      const firstRad = hud.querySelector('#p-ig-auto-loot-when-first');
+      const clearRad = hud.querySelector('#p-ig-auto-loot-when-clear');
+      if (firstRad && document.activeElement !== firstRad) firstRad.checked = !isClear;
+      if (clearRad && document.activeElement !== clearRad) clearRad.checked = isClear;
+      const firstLbl = hud.querySelector('#p-ig-auto-loot-when-first-lbl');
+      const clearLbl = hud.querySelector('#p-ig-auto-loot-when-clear-lbl');
+      if (firstLbl) {
+        firstLbl.style.borderColor = !isClear ? '#eab308' : '#334155';
+        firstLbl.style.background = !isClear ? 'rgba(234, 179, 8, 0.14)' : 'rgba(15, 23, 42, 0.6)';
+        firstLbl.style.color = !isClear ? '#fef08a' : '#cbd5e1';
+        firstLbl.style.fontWeight = !isClear ? 'bold' : 'normal';
+      }
+      if (clearLbl) {
+        clearLbl.style.borderColor = isClear ? '#eab308' : '#334155';
+        clearLbl.style.background = isClear ? 'rgba(234, 179, 8, 0.14)' : 'rgba(15, 23, 42, 0.6)';
+        clearLbl.style.color = isClear ? '#fef08a' : '#cbd5e1';
+        clearLbl.style.fontWeight = isClear ? 'bold' : 'normal';
+      }
+    }
     const revRow = hud.querySelector('#p-ig-auto-revive-row');
     if (revRow && ig.autoRevive !== undefined) {
       revRow.style.display = ig.autoRevive ? 'flex' : 'none';

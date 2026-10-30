@@ -1120,6 +1120,50 @@ function createCardMarketService({
 
     const pricedCount = cards.filter(c => c.price.displayPrice > 0 || c.price.updatedAt > 0).length;
     const listedCount = cards.filter(c => c.price.lowestPrice > 0).length;
+
+    let parties = [];
+    try {
+      const partiesFile = path.join(__dirname, 'data', 'parties.json');
+      if (fs.existsSync(partiesFile)) {
+        const rawParties = JSON.parse(fs.readFileSync(partiesFile, 'utf8'));
+        const list = Array.isArray(rawParties) ? rawParties : (rawParties && Array.isArray(rawParties.parties) ? rawParties.parties : []);
+        const clientById = new Map(clients.map(cl => [String(cl.id), cl]));
+        parties = list.map((pt, idx) => {
+          const leaderCl = clientById.get(String(pt.leaderId)) || null;
+          const memberIds = Array.isArray(pt.memberIds) ? pt.memberIds.map(String) : [];
+          return {
+            id: String(pt.id || `party_${idx + 1}`),
+            index: idx + 1,
+            leaderId: String(pt.leaderId || ''),
+            memberIds,
+            max: 6,
+            expMode: pt.expMode || 'even-share',
+            lootMode: pt.lootMode || 'personal',
+            syncMap: pt.syncMap !== false,
+            leader: leaderCl ? {
+              id: leaderCl.id,
+              profileName: leaderCl.name,
+              charName: leaderCl.charName,
+              charClass: leaderCl.charClass,
+              level: leaderCl.level,
+              mapName: leaderCl.currentMap
+            } : { id: String(pt.leaderId || '') },
+            members: memberIds.map(mid => {
+              const mc = clientById.get(mid);
+              return mc ? {
+                id: mc.id,
+                profileName: mc.name,
+                charName: mc.charName,
+                charClass: mc.charClass,
+                level: mc.level,
+                mapName: mc.currentMap
+              } : { id: mid };
+            })
+          };
+        });
+      }
+    } catch (_) {}
+
     return {
       success: true,
       scanning,
@@ -1130,6 +1174,7 @@ function createCardMarketService({
       pricedCount,
       listedCount,
       overrides: overridesStore,
+      parties,
       cards,
       clients
     };

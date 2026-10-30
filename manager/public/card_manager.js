@@ -90,6 +90,7 @@
   let state = {
     cards: [],
     clients: [],
+    parties: [],
     overrides: {},
     scanning: false,
     lastFullSweepAt: 0
@@ -106,7 +107,124 @@
   const selectedCardIds = new Set(); // Set<number>
   const selectedCardMaps = new Map(); // Map<number, string>
   const selectedProfileIds = new Set(); // Set<string>
+  const collapsedClientGroups = new Set(); // Set<string>
   let profilesInitializedForPanel = false;
+
+  function isPriestClassName(cls) {
+    return /^(priest|acolyte|พระ)$/i.test(String(cls || '').trim());
+  }
+
+  function buildClientPartyGrouping() {
+    const liveParties =
+      window.__partyManagerData &&
+      Array.isArray(window.__partyManagerData.parties) &&
+      window.__partyManagerData.parties.length > 0
+        ? window.__partyManagerData.parties
+        : Array.isArray(state.parties)
+        ? state.parties
+        : [];
+
+    const clientById = new Map(state.clients.map(c => [String(c.id), c]));
+    const roleMap = new Map();
+    const partyGroups = [];
+
+    liveParties.forEach((party, idx) => {
+      if (!party) return;
+      const pIndex = party.index || idx + 1;
+      const leaderId = String((party.leader && party.leader.id) || party.leaderId || '');
+      const rawMembers = Array.isArray(party.members)
+        ? party.members.map(m => (m && m.id ? String(m.id) : '')).filter(Boolean)
+        : Array.isArray(party.memberIds)
+        ? party.memberIds.map(String).filter(Boolean)
+        : [];
+      const allIds = Array.from(new Set([leaderId, ...rawMembers].filter(Boolean)));
+      const rawSlots = [party.leader, ...(Array.isArray(party.members) ? party.members : [])].filter(Boolean);
+      const slotById = new Map(rawSlots.map(s => [String(s.id), s]));
+
+      let anchorPriestId = null;
+      for (const pid of allIds) {
+        const cl = clientById.get(pid);
+        const slot = slotById.get(pid);
+        const cls = (cl && cl.charClass) || (slot && slot.charClass) || '';
+        if (isPriestClassName(cls)) {
+          anchorPriestId = pid;
+          break;
+        }
+      }
+
+      for (const pid of allIds) {
+        const isLeader = pid === leaderId;
+        const isAnchorPriest = pid === anchorPriestId;
+        roleMap.set(pid, {
+          partyId: String(party.id),
+          partyIndex: pIndex,
+          isLeader,
+          isAnchorPriest
+        });
+      }
+
+      const partyClients = allIds.map(pid => clientById.get(pid)).filter(Boolean);
+      partyClients.sort((a, b) => {
+        const ra = roleMap.get(String(a.id)) || {};
+        const rb = roleMap.get(String(b.id)) || {};
+        const score = r => (r.isLeader ? 0 : r.isAnchorPriest ? 1 : 2);
+        return score(ra) - score(rb);
+      });
+
+      if (partyClients.length === 0) return;
+
+      const leaderCl = clientById.get(leaderId) || partyClients[0];
+      const leaderSlot = slotById.get(leaderId) || {};
+      const leaderName =
+        (leaderCl && (leaderCl.charName || leaderCl.name)) ||
+        leaderSlot.charName ||
+        leaderSlot.profileName ||
+        'หัวตี้';
+
+      const priestCl = anchorPriestId ? clientById.get(anchorPriestId) : null;
+      const priestSlot = anchorPriestId ? slotById.get(anchorPriestId) : null;
+      const priestName = priestCl
+        ? priestCl.charName || priestCl.name
+        : priestSlot
+        ? priestSlot.charName || priestSlot.profileName
+        : '';
+
+      const anchorMapRaw =
+        (priestCl && priestCl.currentMap) ||
+        (leaderCl && leaderCl.currentMap) ||
+        (priestSlot && priestSlot.mapName) ||
+        leaderSlot.mapName ||
+        '';
+      const mapLabel = anchorMapRaw ? formatMapWithLevel(anchorMapRaw) : 'ในเมือง/ออฟไลน์';
+      const onlineCount = partyClients.filter(c => c.online).length;
+      const selectedCount = partyClients.filter(c => selectedProfileIds.has(String(c.id))).length;
+
+      partyGroups.push({
+        key: 'party:' + String(party.id),
+        partyId: String(party.id),
+        partyIndex: pIndex,
+        leaderName,
+        priestName,
+        mapLabel,
+        expMode: party.expMode || 'even-share',
+        max: party.max || 6,
+        clients: partyClients,
+        onlineCount,
+        selectedCount
+      });
+    });
+
+    const soloClients = state.clients.filter(c => !roleMap.has(String(c.id)));
+    const orderedClients = [...partyGroups.flatMap(g => g.clients), ...soloClients];
+
+    return {
+      hasParties: partyGroups.length > 0,
+      partyGroups,
+      soloClients,
+      roleMap,
+      orderedClients
+    };
+  }
 
   let busyScan = false;
   let busyRefreshOne = false;
@@ -161,7 +279,8 @@
       activeCards.push({ card, mapName });
     }
 
-    const chosenClients = state.clients.filter(cl => selectedProfileIds.has(String(cl.id)));
+    const { orderedClients } = buildClientPartyGrouping();
+    const chosenClients = orderedClients.filter(cl => selectedProfileIds.has(String(cl.id)));
     const M = activeCards.length;
     const N = chosenClients.length;
 
@@ -481,12 +600,62 @@
     });
 
     document.getElementById('cd-fp-clients').addEventListener('change', e => {
+      const groupCb = e.target.closest('input[data-group-check]');
+      if (groupCb) {
+        const gKey = String(groupCb.getAttribute('data-group-check') || '');
+        const { partyGroups, soloClients } = buildClientPartyGrouping();
+        let targetClients = [];
+        if (gKey === 'solo') {
+          targetClients = soloClients;
+        } else {
+          const found = partyGroups.find(g => g.key === gKey);
+          if (found) targetClients = found.clients;
+        }
+        for (const cl of targetClients) {
+          const pid = String(cl.id);
+          if (groupCb.checked) selectedProfileIds.add(pid);
+          else selectedProfileIds.delete(pid);
+        }
+        renderFarmPanel();
+        return;
+      }
+
       const cb = e.target.closest('input[data-prof-id]');
       if (!cb) return;
       const pid = String(cb.getAttribute('data-prof-id'));
       if (cb.checked) selectedProfileIds.add(pid);
       else selectedProfileIds.delete(pid);
       renderFarmPanel();
+    });
+
+    document.getElementById('cd-fp-clients').addEventListener('click', e => {
+      const toggleAllBtn = e.target.closest('button[data-group-select-btn]');
+      if (toggleAllBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const gKey = String(toggleAllBtn.getAttribute('data-group-select-btn') || '');
+        const { partyGroups, soloClients } = buildClientPartyGrouping();
+        const targetClients =
+          gKey === 'solo' ? soloClients : (partyGroups.find(g => g.key === gKey) || { clients: [] }).clients;
+        const allSelected =
+          targetClients.length > 0 && targetClients.every(cl => selectedProfileIds.has(String(cl.id)));
+        for (const cl of targetClients) {
+          const pid = String(cl.id);
+          if (allSelected) selectedProfileIds.delete(pid);
+          else selectedProfileIds.add(pid);
+        }
+        renderFarmPanel();
+        return;
+      }
+
+      const head = e.target.closest('.cd-fp-group-head[data-group-key]');
+      if (head && !e.target.closest('.cd-fp-group-check-wrap') && !e.target.closest('button[data-group-select-btn]')) {
+        const gKey = String(head.getAttribute('data-group-key') || '');
+        if (!gKey) return;
+        if (collapsedClientGroups.has(gKey)) collapsedClientGroups.delete(gKey);
+        else collapsedClientGroups.add(gKey);
+        renderFarmPanel();
+      }
     });
 
     document.getElementById('cd-fp-go').addEventListener('click', () => applyFarmMapToSelected(false));
@@ -498,6 +667,9 @@
     if (isOpen) {
       document.body.classList.remove('pt-open', 'pm-open', 'gd-open');
       document.body.classList.add('cd-open');
+      if (typeof window.refreshPartyManagerData === 'function') {
+        try { window.refreshPartyManagerData(); } catch (_) {}
+      }
       fetchCardsData().then(() => {
         if (!scannedOnFirstOpen) {
           scannedOnFirstOpen = true;
@@ -534,6 +706,7 @@
       if (!j || !j.success) return;
       state.cards = Array.isArray(j.cards) ? j.cards : [];
       state.clients = Array.isArray(j.clients) ? j.clients : [];
+      state.parties = Array.isArray(j.parties) ? j.parties : [];
       state.overrides = j.overrides && typeof j.overrides === 'object' ? j.overrides : {};
       state.scanning = !!j.scanning;
       state.lastFullSweepAt = Number(j.lastFullSweepAt) || 0;
@@ -995,44 +1168,165 @@
     const clientsBox = document.getElementById('cd-fp-clients');
     if (clientsBox) {
       if (!state.clients || state.clients.length === 0) {
+        clientsBox.classList.remove('is-grouped');
         clientsBox.innerHTML = `<div style="color:#64748b;font-size:11.5px;padding:8px;">ยังไม่มีโปรไฟล์ในระบบ</div>`;
       } else {
-        clientsBox.innerHTML = state.clients
-          .map(cl => {
-            const pid = String(cl.id);
-            const checked = selectedProfileIds.has(pid);
-            const dispName = cl.charName ? `${cl.charName} (${cl.name})` : cl.name;
-            const lvStr = cl.level ? `Lv.${cl.level}` : '';
-            const curMap = cl.currentMap ? formatMapWithLevel(cl.currentMap) : (cl.online ? 'ในเมือง/กำลังโหลด' : 'ออฟไลน์');
-            const ovMap = String(cl.overrideFarmMap || '').trim();
-            const assigned = byProfileId.get(pid);
-            const autoSellCards = Array.isArray(cl.autoSellCards) ? cl.autoSellCards : [];
+        const { hasParties, partyGroups, soloClients, roleMap } = buildClientPartyGrouping();
 
-            return `
-              <label class="cd-fp-client${checked ? ' checked' : ''}">
-                <input type="checkbox" data-prof-id="${esc(pid)}"${checked ? ' checked' : ''}>
-                <span class="cd-fp-dot${cl.online ? ' on' : ''}"></span>
-                <div class="cd-fp-cinfo">
-                  <div class="cd-fp-cname">${esc(dispName)} <small style="color:#94a3b8;font-weight:500;">${esc(lvStr)}</small></div>
-                  <div class="cd-fp-cmap">
-                    📍 ${esc(curMap)}
-                    ${ovMap ? ` · <b>🗺️ เป้าหมายการ์ด: ${esc(formatMapWithLevel(ovMap))}</b>` : ''}
-                  </div>
-                  ${
-                    autoSellCards.length > 0
-                      ? `<div style="font-size:10px;color:#34d399;margin-top:2px;">🏷️ Auto-Sell (≥1): ${esc(autoSellCards.join(', '))}</div>`
-                      : ''
-                  }
-                  ${
-                    assigned && assigned.mapName
-                      ? `<div class="cd-fp-cassign">➡️ จะไป: ${esc(formatMapWithLevel(assigned.mapName))} (${esc(assigned.card.name.replace(/ Card$/i, ''))} · Auto-Sell ≥1)</div>`
-                      : ''
-                  }
+        const renderClientCard = cl => {
+          const pid = String(cl.id);
+          const checked = selectedProfileIds.has(pid);
+          const dispName = cl.charName ? `${cl.charName} (${cl.name})` : cl.name;
+          const lvStr = cl.level ? `Lv.${cl.level}` : '';
+          const curMap = cl.currentMap ? formatMapWithLevel(cl.currentMap) : (cl.online ? 'ในเมือง/กำลังโหลด' : 'ออฟไลน์');
+          const ovMap = String(cl.overrideFarmMap || '').trim();
+          const assigned = byProfileId.get(pid);
+          const autoSellCards = Array.isArray(cl.autoSellCards) ? cl.autoSellCards : [];
+          const roleInfo = roleMap.get(pid);
+          let roleChipHtml = '';
+          if (roleInfo) {
+            if (roleInfo.isLeader && roleInfo.isAnchorPriest) {
+              roleChipHtml = `<span class="cd-fp-role-chip role-priest-leader">👑✨ หัวตี้·พระ #${roleInfo.partyIndex}</span>`;
+            } else if (roleInfo.isLeader) {
+              roleChipHtml = `<span class="cd-fp-role-chip role-leader">👑 หัวตี้ #${roleInfo.partyIndex}</span>`;
+            } else if (roleInfo.isAnchorPriest) {
+              roleChipHtml = `<span class="cd-fp-role-chip role-priest">✨ พระหลัก #${roleInfo.partyIndex}</span>`;
+            } else {
+              roleChipHtml = `<span class="cd-fp-role-chip role-member">👥 ตี้ #${roleInfo.partyIndex}</span>`;
+            }
+          }
+
+          return `
+            <label class="cd-fp-client${checked ? ' checked' : ''}">
+              <input type="checkbox" data-prof-id="${esc(pid)}"${checked ? ' checked' : ''}>
+              <span class="cd-fp-dot${cl.online ? ' on' : ''}"></span>
+              <div class="cd-fp-cinfo">
+                <div class="cd-fp-cname-row">
+                  <span class="cd-fp-cname">${esc(dispName)} <small style="color:#94a3b8;font-weight:500;">${esc(lvStr)}</small></span>
+                  ${roleChipHtml}
                 </div>
-              </label>
-            `;
-          })
-          .join('');
+                <div class="cd-fp-cmap">
+                  📍 ${esc(curMap)}
+                  ${ovMap ? ` · <b>🗺️ เป้าหมายการ์ด: ${esc(formatMapWithLevel(ovMap))}</b>` : ''}
+                </div>
+                ${
+                  autoSellCards.length > 0
+                    ? `<div style="font-size:10px;color:#34d399;margin-top:2px;">🏷️ Auto-Sell (≥1): ${esc(autoSellCards.join(', '))}</div>`
+                    : ''
+                }
+                ${
+                  assigned && assigned.mapName
+                    ? `<div class="cd-fp-cassign">➡️ จะไป: ${esc(formatMapWithLevel(assigned.mapName))} (${esc(assigned.card.name.replace(/ Card$/i, ''))} · Auto-Sell ≥1)</div>`
+                    : ''
+                }
+              </div>
+            </label>
+          `;
+        };
+
+        if (hasParties) {
+          clientsBox.classList.add('is-grouped');
+          const partySectionsHtml = partyGroups
+            .map(g => {
+              const isCollapsed = collapsedClientGroups.has(g.key);
+              const allChecked = g.clients.length > 0 && g.selectedCount === g.clients.length;
+              return `
+                <section class="cd-fp-group is-party-group${isCollapsed ? ' is-collapsed' : ''}">
+                  <header class="cd-fp-group-head" data-group-key="${esc(g.key)}">
+                    <div class="cd-fp-gh-left">
+                      <button type="button" class="cd-fp-collapse-btn" title="${isCollapsed ? 'คลิกเพื่อขยายดูจอในตี้นี้' : 'คลิกเพื่อพับเก็บจอในตี้นี้'}">${isCollapsed ? '▶' : '▼'}</button>
+                      <label class="cd-fp-group-check-wrap" title="ติ๊กเลือก/ยกเลิกเลือกทุกจอในปาร์ตี้ #${g.partyIndex}">
+                        <input type="checkbox" class="cd-fp-group-check" data-group-check="${esc(g.key)}"${allChecked ? ' checked' : ''}>
+                      </label>
+                      <span class="cd-fp-group-badge party">👑 ปาร์ตี้ #${g.partyIndex}</span>
+                      <div class="cd-fp-gh-titles">
+                        <div class="cd-fp-gh-main">
+                          <span>หัวตี้: <b>${esc(g.leaderName)}</b></span>
+                          ${
+                            g.priestName
+                              ? `<span class="cd-fp-priest-pill">✨ พระหลัก: <b>${esc(g.priestName)}</b></span>`
+                              : `<span class="cd-fp-no-priest-pill">ไม่มีพระในตี้</span>`
+                          }
+                        </div>
+                        <div class="cd-fp-gh-meta">
+                          <span class="cd-fp-meta-chip">👥 สมาชิก <b>${g.clients.length}</b>/${g.max} · ออนไลน์ <b>${g.onlineCount}</b></span>
+                          <span class="cd-fp-meta-chip map">📍 ${esc(g.mapLabel)}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="cd-fp-gh-right">
+                      <button type="button" class="cd-fp-group-sel-btn${allChecked ? ' all-on' : g.selectedCount > 0 ? ' some-on' : ''}" data-group-select-btn="${esc(g.key)}" title="คลิกเพื่อเลือกหรือยกเลิกทั้งปาร์ตี้ #${g.partyIndex}">
+                        ${allChecked ? '✅ เลือกทั้งตี้แล้ว' : '☑️ เลือกทั้งตี้'} (${g.selectedCount}/${g.clients.length})
+                      </button>
+                    </div>
+                  </header>
+                  ${
+                    isCollapsed
+                      ? ''
+                      : `<div class="cd-fp-group-grid">${g.clients.map(renderClientCard).join('')}</div>`
+                  }
+                </section>
+              `;
+            })
+            .join('');
+
+          const soloKey = 'solo';
+          const soloCollapsed = collapsedClientGroups.has(soloKey);
+          const soloOnline = soloClients.filter(c => c.online).length;
+          const soloSelected = soloClients.filter(c => selectedProfileIds.has(String(c.id))).length;
+          const soloAllChecked = soloClients.length > 0 && soloSelected === soloClients.length;
+
+          const soloSectionHtml = `
+            <section class="cd-fp-group is-solo-group${soloCollapsed ? ' is-collapsed' : ''}">
+              <header class="cd-fp-group-head" data-group-key="${soloKey}">
+                <div class="cd-fp-gh-left">
+                  <button type="button" class="cd-fp-collapse-btn" title="${soloCollapsed ? 'คลิกเพื่อขยายดูจอฟาร์มเดี่ยว' : 'คลิกเพื่อพับเก็บจอฟาร์มเดี่ยว'}">${soloCollapsed ? '▶' : '▼'}</button>
+                  <label class="cd-fp-group-check-wrap" title="ติ๊กเลือก/ยกเลิกเลือกทุกจอฟาร์มเดี่ยว">
+                    <input type="checkbox" class="cd-fp-group-check" data-group-check="${soloKey}"${soloAllChecked ? ' checked' : ''} ${soloClients.length === 0 ? 'disabled' : ''}>
+                  </label>
+                  <span class="cd-fp-group-badge solo">⚔️ ฟาร์มเดี่ยว (Solo)</span>
+                  <div class="cd-fp-gh-titles">
+                    <div class="cd-fp-gh-main">
+                      <span>ตัวละครที่ไม่ได้อยู่ในปาร์ตี้ (${soloClients.length} จอ)</span>
+                    </div>
+                    <div class="cd-fp-gh-meta">
+                      <span class="cd-fp-meta-chip">🖥️ ออนไลน์ <b>${soloOnline}</b>/${soloClients.length} จอ</span>
+                    </div>
+                  </div>
+                </div>
+                ${
+                  soloClients.length > 0
+                    ? `<div class="cd-fp-gh-right">
+                        <button type="button" class="cd-fp-group-sel-btn${soloAllChecked ? ' all-on' : soloSelected > 0 ? ' some-on' : ''}" data-group-select-btn="${soloKey}">
+                          ${soloAllChecked ? '✅ เลือกโซโล่ทั้งหมดแล้ว' : '☑️ เลือกโซโล่ทั้งหมด'} (${soloSelected}/${soloClients.length})
+                        </button>
+                      </div>`
+                    : ''
+                }
+              </header>
+              ${
+                soloCollapsed
+                  ? ''
+                  : soloClients.length > 0
+                  ? `<div class="cd-fp-group-grid">${soloClients.map(renderClientCard).join('')}</div>`
+                  : `<div style="color:#64748b;font-size:11px;padding:6px 10px;">ทุกโปรไฟล์ถูกจัดอยู่ในปาร์ตี้หมดแล้ว</div>`
+              }
+            </section>
+          `;
+
+          clientsBox.innerHTML = partySectionsHtml + soloSectionHtml;
+
+          // Update indeterminate state for group checkboxes
+          partyGroups.forEach(g => {
+            const cb = clientsBox.querySelector(`input[data-group-check="${g.key}"]`);
+            if (cb) cb.indeterminate = g.selectedCount > 0 && g.selectedCount < g.clients.length;
+          });
+          const soloCb = clientsBox.querySelector('input[data-group-check="solo"]');
+          if (soloCb) soloCb.indeterminate = soloSelected > 0 && soloSelected < soloClients.length;
+        } else {
+          clientsBox.classList.remove('is-grouped');
+          clientsBox.innerHTML = state.clients.map(renderClientCard).join('');
+        }
       }
     }
 
@@ -1146,6 +1440,15 @@
   function init() {
     buildDOM();
     window.openCardMarketDrawer = () => toggleDrawer(true);
+    const prevPartyHook = window.onPartyDataUpdated;
+    window.onPartyDataUpdated = function (pData) {
+      if (typeof prevPartyHook === 'function') {
+        try { prevPartyHook(pData); } catch (_) {}
+      }
+      if (isOpen && farmPanelOpen) {
+        renderFarmPanel();
+      }
+    };
     try {
       const params = new URLSearchParams(window.location.search);
       if (params.get('openCards') === '1') {

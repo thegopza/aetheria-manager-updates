@@ -784,12 +784,233 @@ body.cd-open .cd-farm-panel.is-open {
   overflow-y: auto;
   padding-right: 3px;
 }
+.cd-fp-clients.is-grouped {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
 .cd-fp-clients::-webkit-scrollbar {
   width: 7px;
 }
 .cd-fp-clients::-webkit-scrollbar-thumb {
   background: rgba(245, 158, 11, 0.24);
   border-radius: 8px;
+}
+
+/* Party & Solo Group Sections inside Farm Panel */
+.cd-fp-group {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  padding: 9px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.cd-fp-group.is-party-group {
+  border-color: rgba(250, 204, 21, 0.34);
+  background: linear-gradient(180deg, rgba(234, 179, 8, 0.06) 0%, rgba(15, 23, 42, 0.72) 100%);
+}
+.cd-fp-group.is-solo-group {
+  border-color: rgba(56, 189, 248, 0.28);
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.05) 0%, rgba(15, 23, 42, 0.72) 100%);
+}
+.cd-fp-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  background: rgba(9, 14, 28, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.cd-fp-group-head:hover {
+  background: rgba(24, 34, 54, 0.9);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+.cd-fp-gh-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1;
+}
+.cd-fp-collapse-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(15, 23, 42, 0.85);
+  color: #cbd5e1;
+  font-size: 9.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex: none;
+}
+.cd-fp-group-check-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 2px;
+}
+.cd-fp-group-check {
+  width: 15px;
+  height: 15px;
+  accent-color: #f59e0b;
+  cursor: pointer;
+  margin: 0;
+}
+.cd-fp-group-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.cd-fp-group-badge.party {
+  background: linear-gradient(135deg, rgba(234, 179, 8, 0.26), rgba(245, 158, 11, 0.16));
+  border: 1px solid rgba(250, 204, 21, 0.5);
+  color: #fef08a;
+}
+.cd-fp-group-badge.solo {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.22), rgba(99, 102, 241, 0.18));
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #bae6fd;
+}
+.cd-fp-gh-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.cd-fp-gh-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: #e2e8f0;
+}
+.cd-fp-priest-pill {
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.16);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  color: #7dd3fc;
+}
+.cd-fp-no-priest-pill {
+  font-size: 9.5px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  color: #94a3b8;
+}
+.cd-fp-gh-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.cd-fp-meta-chip {
+  font-size: 9.5px;
+  color: #94a3b8;
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+.cd-fp-meta-chip b {
+  color: #f8fafc;
+}
+.cd-fp-meta-chip.map {
+  color: #6ee7b7;
+  border-color: rgba(16, 185, 129, 0.28);
+}
+.cd-fp-gh-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.cd-fp-group-sel-btn {
+  padding: 4px 8px;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(30, 41, 59, 0.75);
+  color: #cbd5e1;
+  font: 700 10px var(--font-sans, sans-serif);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.cd-fp-group-sel-btn:hover {
+  border-color: #fbbf24;
+  color: #fef3c7;
+}
+.cd-fp-group-sel-btn.all-on {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(52, 211, 153, 0.5);
+  color: #6ee7b7;
+}
+.cd-fp-group-sel-btn.some-on {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(251, 191, 36, 0.45);
+  color: #fde68a;
+}
+.cd-fp-group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(225px, 1fr));
+  gap: 6px;
+}
+
+.cd-fp-cname-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 5px;
+  min-width: 0;
+}
+.cd-fp-role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 800;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.cd-fp-role-chip.role-leader {
+  background: linear-gradient(135deg, rgba(234, 179, 8, 0.26), rgba(245, 158, 11, 0.18));
+  border: 1px solid rgba(250, 204, 21, 0.55);
+  color: #fde047;
+}
+.cd-fp-role-chip.role-priest,
+.cd-fp-role-chip.role-priest-leader {
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.26), rgba(168, 85, 247, 0.24));
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  color: #7dd3fc;
+}
+.cd-fp-role-chip.role-member {
+  background: rgba(16, 185, 129, 0.16);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  color: #6ee7b7;
 }
 .cd-fp-client {
   display: flex;

@@ -5669,6 +5669,107 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // PromptPay QR Code Top-up (สแกนพร้อมเพย์กสิกรไทย ยืนยันยอดสตางค์อัตโนมัติ ฟรีค่าธรรมเนียม 0%)
+  if (pathname === "/api/human-check/promptpay-order" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => {
+      body += c;
+      if (Buffer.byteLength(body, "utf8") > 16384) req.destroy();
+    });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const beforeSettings = humanCheckSolver.loadSettings();
+        const result = await humanCheckSolver.serviceRequest("/v1/aetheria/machine/promptpay-order", payload);
+        if (result && result.success && result.order && result.order.state === "paid") {
+          try {
+            if (Number.isSafeInteger(result.balanceUnits)) {
+              humanCheckSolver.applyOfflineWalletSnapshot?.(result);
+            }
+            if (offlineCoordinator && offlineCoordinator.wallet && typeof offlineCoordinator.wallet.forceRefresh === "function") {
+              await offlineCoordinator.wallet.forceRefresh().catch(() => {});
+            }
+            await humanCheckSolver.refreshBalance().catch(() => {});
+          } catch (_) {}
+          const afterSettings = humanCheckSolver.loadSettings();
+          if (Number.isSafeInteger(afterSettings?.balanceUnits)) {
+            result.balanceUnits = afterSettings.balanceUnits;
+            result.totalPoints = afterSettings.points;
+          }
+          const orderId = String(result.order.orderId || "");
+          if (!global.__pmNotifiedPromptPayOrders) global.__pmNotifiedPromptPayOrders = new Set();
+          if (orderId && !global.__pmNotifiedPromptPayOrders.has(orderId) && discordService && typeof discordService.notifyMeritTopup === "function") {
+            global.__pmNotifiedPromptPayOrders.add(orderId);
+            const pointsAdded = Number(result.pointsAdded ?? result.order.amountBaht ?? 0);
+            const amountBaht = Number(result.amount ?? result.order.amountBaht ?? pointsAdded ?? 0);
+            const netPoints = Number.isFinite(Number(afterSettings?.points))
+              ? Number(afterSettings.points)
+              : (Number.isFinite(Number(result.totalPoints)) ? Number(result.totalPoints) : pointsAdded);
+            const previousPoints = Number((netPoints - pointsAdded).toFixed(2));
+            discordService.notifyMeritTopup({
+              amount: amountBaht,
+              pointsAdded,
+              previousPoints,
+              totalPoints: netPoints,
+              balanceUnits: afterSettings?.balanceUnits ?? result.balanceUnits,
+              accountId: afterSettings?.accountId || beforeSettings?.accountId || "",
+              machineHwid: afterSettings?.machineHwid || beforeSettings?.machineHwid || ""
+            }).catch(err => {
+              console.warn("[Discord] PromptPay Merit top-up notification failed:", err?.message || err);
+            });
+          }
+        }
+        sendJSON(result, result && result.success ? 200 : 400);
+      } catch (e) {
+        sendJSON({ success: false, message: e?.message || "ไม่สามารถติดต่อเซิร์ฟเวอร์พร้อมเพย์ได้" }, 400);
+      }
+    });
+    return;
+  }
+
+  // LAN Webhook relay for PmheePayBridge Android NotificationListenerService -> local owner-host
+  if (pathname === "/api/promptpay/webhook" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => {
+      body += c;
+      if (Buffer.byteLength(body, "utf8") > 32768) req.destroy();
+    });
+    req.on("end", () => {
+      try {
+        const dataBuf = Buffer.from(body || "{}", "utf8");
+        const forwardReq = http.request({
+          hostname: "127.0.0.1",
+          port: 5290,
+          path: "/v1/aetheria/machine/promptpay-webhook",
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": dataBuf.length
+          },
+          timeout: 8000
+        }, forwardRes => {
+          let respBody = "";
+          forwardRes.setEncoding("utf8");
+          forwardRes.on("data", chunk => { respBody += chunk; });
+          forwardRes.on("end", () => {
+            try {
+              sendJSON(JSON.parse(respBody), forwardRes.statusCode || 200);
+            } catch (_) {
+              sendJSON({ success: true }, 200);
+            }
+          });
+        });
+        forwardReq.on("error", err => {
+          sendJSON({ success: false, message: err.message }, 502);
+        });
+        forwardReq.end(dataBuf);
+      } catch (e) {
+        sendJSON({ success: false, message: e.message }, 400);
+      }
+    });
+    return;
+  }
+
   // Proxy Registration Endpoints (0.1 pt / registered account, Cloudflare IP slot coordination)
   if (pathname === "/api/proxy-register/settings") {
     if (req.method === "GET") {

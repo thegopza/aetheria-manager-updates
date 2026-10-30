@@ -3447,9 +3447,250 @@ function initTopupCaptchaModal() {
   btnTopup.addEventListener("click", () => {
     modal.style.display = "flex";
     refreshTopupData();
+    syncActivePromptPayOrder();
   });
 
-  const closeModal = () => { modal.style.display = "none"; };
+  // --- PromptPay QR Auto Top-up Controls ---
+  const ppAmountInput = document.getElementById("topup-pp-amount-input");
+  const btnPpCreate = document.getElementById("topup-pp-create") || document.getElementById("btn-topup-pp-create");
+  const ppQrPanel = document.getElementById("topup-pp-qr-panel");
+  const ppQrSvg = document.getElementById("topup-pp-qr-svg");
+  const ppExactAmount = document.getElementById("topup-pp-exact-amount");
+  const ppPointsPreview = document.getElementById("topup-pp-points-preview");
+  const ppStatusLine = document.getElementById("topup-pp-status-line");
+  const btnPpCheck = document.getElementById("btn-topup-pp-check");
+  const btnPpCancel = document.getElementById("btn-topup-pp-cancel");
+  const ppMsg = document.getElementById("topup-pp-msg");
+  const ppPresetBtns = document.querySelectorAll(".btn-pp-preset");
+
+  let activePpOrder = null;
+  let ppPollInterval = null;
+  let ppCountdownInterval = null;
+  let ppPollInFlight = false;
+
+  function showPpMsg(text, isError = false) {
+    if (!ppMsg) return;
+    ppMsg.style.display = "block";
+    ppMsg.style.background = isError ? "rgba(239, 68, 68, 0.18)" : "rgba(16, 185, 129, 0.18)";
+    ppMsg.style.color = isError ? "#f87171" : "#34d399";
+    ppMsg.style.border = isError ? "1px solid rgba(239, 68, 68, 0.35)" : "1px solid rgba(16, 185, 129, 0.35)";
+    ppMsg.innerText = text;
+    setTimeout(() => { if (ppMsg) ppMsg.style.display = "none"; }, 9000);
+  }
+
+  function highlightPresetAmount(val) {
+    const num = parseInt(val, 10);
+    ppPresetBtns.forEach(btn => {
+      const bAmt = parseInt(btn.dataset.amount, 10);
+      if (bAmt === num) {
+        btn.style.borderColor = "rgba(16, 185, 129, 0.65)";
+        btn.style.background = "rgba(16, 185, 129, 0.18)";
+        btn.style.color = "#34d399";
+        btn.style.fontWeight = "700";
+      } else {
+        btn.style.borderColor = "";
+        btn.style.background = "";
+        btn.style.color = "";
+        btn.style.fontWeight = "600";
+      }
+    });
+  }
+
+  function stopPpTimers() {
+    if (ppPollInterval) { clearInterval(ppPollInterval); ppPollInterval = null; }
+    if (ppCountdownInterval) { clearInterval(ppCountdownInterval); ppCountdownInterval = null; }
+  }
+
+  function formatRemainTime(expiresAt) {
+    const remainSec = Math.max(0, Math.floor((Number(expiresAt || 0) - Date.now()) / 1000));
+    const m = String(Math.floor(remainSec / 60)).padStart(2, "0");
+    const s = String(remainSec % 60).padStart(2, "0");
+    return { remainSec, text: `${m}:${s}` };
+  }
+
+  function renderPpOrder(order) {
+    activePpOrder = order || null;
+    if (!order || order.state === "cancelled" || order.state === "expired") {
+      stopPpTimers();
+      if (ppQrPanel) ppQrPanel.style.display = "none";
+      return;
+    }
+    if (ppQrPanel) ppQrPanel.style.display = "block";
+    if (ppQrSvg && order.qrSvg) {
+      ppQrSvg.innerHTML = order.qrSvg;
+    }
+    const amtFormatted = order.amountFormatted || Number(order.amountBaht || 0).toFixed(2);
+    if (ppExactAmount) ppExactAmount.innerText = amtFormatted;
+    if (ppPointsPreview) ppPointsPreview.innerText = `ได้รับส่วนบุญเต็มจำนวน: +${amtFormatted} ส่วนบุญ`;
+
+    if (order.state === "paid") {
+      stopPpTimers();
+      if (ppStatusLine) {
+        ppStatusLine.style.background = "rgba(16, 185, 129, 0.22)";
+        ppStatusLine.style.borderColor = "rgba(16, 185, 129, 0.48)";
+        ppStatusLine.style.color = "#34d399";
+        ppStatusLine.innerText = `✅ ชำระเงินสำเร็จ! เติม +${amtFormatted} ส่วนบุญ เข้าเครื่องเรียบร้อยแล้ว`;
+      }
+      return;
+    }
+
+    const updateCountdown = () => {
+      if (!activePpOrder || activePpOrder.state !== "pending") return;
+      const { remainSec, text } = formatRemainTime(activePpOrder.expiresAt);
+      if (remainSec <= 0) {
+        stopPpTimers();
+        if (ppStatusLine) {
+          ppStatusLine.style.background = "rgba(239, 68, 68, 0.18)";
+          ppStatusLine.style.borderColor = "rgba(239, 68, 68, 0.35)";
+          ppStatusLine.style.color = "#f87171";
+          ppStatusLine.innerText = "⌛ QR Code หมดอายุแล้ว กรุณากดสร้าง QR ใหม่อีกครั้ง";
+        }
+        return;
+      }
+      if (ppStatusLine) {
+        ppStatusLine.style.background = "rgba(14, 116, 144, 0.22)";
+        ppStatusLine.style.borderColor = "rgba(56, 189, 248, 0.35)";
+        ppStatusLine.style.color = "#7dd3fc";
+        ppStatusLine.innerText = `⏳ รอสแกนโอนยอด ${amtFormatted} บาท... (เหลือเวลา ${text})`;
+      }
+    };
+    updateCountdown();
+
+    stopPpTimers();
+    ppCountdownInterval = setInterval(updateCountdown, 1000);
+    ppPollInterval = setInterval(() => {
+      if (modal.style.display === "none") return;
+      pollPromptPayOrderStatus(false);
+    }, 2500);
+  }
+
+  async function pollPromptPayOrderStatus(manual = false) {
+    if (ppPollInFlight || !activePpOrder) return;
+    ppPollInFlight = true;
+    if (manual && btnPpCheck) {
+      btnPpCheck.disabled = true;
+      btnPpCheck.innerText = "⏳ กำลังเช็ก...";
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/human-check/promptpay-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "status", orderId: activePpOrder.orderId })
+      }).then(r => r.json());
+      if (res && res.success && res.order) {
+        const prevState = activePpOrder?.state;
+        renderPpOrder(res.order);
+        if (res.order.state === "paid" && prevState !== "paid") {
+          const added = res.order.amountFormatted || Number(res.order.amountBaht || 0).toFixed(2);
+          showPpMsg(`🎉 ชำระเงินพร้อมเพย์สำเร็จ! ได้รับ +${added} ส่วนบุญ`);
+          showToast(`💚 พร้อมเพย์เข้าแล้ว: +${added} บ. (+${added} ส่วนบุญ)`, "success");
+          await refreshTopupData();
+        } else if (manual && res.order.state === "pending") {
+          showPpMsg(`⏳ ยังไม่พบยอดโอน ${res.order.amountFormatted} บาท (หากโอนแล้วระบบจะปรับยอดใน 2-5 วินาที)`);
+        }
+      }
+    } catch (_) {
+    } finally {
+      ppPollInFlight = false;
+      if (manual && btnPpCheck) {
+        btnPpCheck.disabled = false;
+        btnPpCheck.innerText = "🔄 เช็กยอดทันที";
+      }
+    }
+  }
+
+  async function syncActivePromptPayOrder() {
+    try {
+      const res = await fetch(`${API_BASE}/api/human-check/promptpay-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "status", orderId: activePpOrder?.orderId || undefined })
+      }).then(r => r.json());
+      if (res && res.success && res.order && res.order.state === "pending") {
+        renderPpOrder(res.order);
+      }
+    } catch (_) {}
+  }
+
+  async function createPromptPayOrder(amountVal) {
+    const baseBaht = Math.floor(Number(amountVal ?? ppAmountInput?.value ?? 0));
+    if (!Number.isFinite(baseBaht) || baseBaht < 1 || baseBaht > 50000) {
+      return showPpMsg("กรุณาระบุจำนวนเงินระหว่าง 1 ถึง 50,000 บาท", true);
+    }
+    if (btnPpCreate) {
+      btnPpCreate.disabled = true;
+      btnPpCreate.innerText = "⏳ กำลังสร้าง QR...";
+    }
+    try {
+      const res = await fetch(`${API_BASE}/api/human-check/promptpay-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "create", baseBaht })
+      }).then(r => r.json());
+      if (res && res.success && res.order) {
+        renderPpOrder(res.order);
+      } else {
+        showPpMsg("❌ " + (res?.message || "ไม่สามารถสร้าง QR พร้อมเพย์ได้"), true);
+      }
+    } catch (e) {
+      showPpMsg("❌ เกิดข้อผิดพลาดในการเชื่อมต่อ: " + e.message, true);
+    } finally {
+      if (btnPpCreate) {
+        btnPpCreate.disabled = false;
+        btnPpCreate.innerText = "📱 สร้าง QR พร้อมเพย์";
+      }
+    }
+  }
+
+  ppPresetBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const amt = btn.dataset.amount;
+      if (ppAmountInput) ppAmountInput.value = amt;
+      highlightPresetAmount(amt);
+      createPromptPayOrder(amt);
+    });
+  });
+
+  if (ppAmountInput) {
+    ppAmountInput.addEventListener("input", () => highlightPresetAmount(ppAmountInput.value));
+    ppAmountInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        createPromptPayOrder(ppAmountInput.value);
+      }
+    });
+  }
+
+  if (btnPpCreate) {
+    btnPpCreate.addEventListener("click", () => createPromptPayOrder(ppAmountInput?.value));
+  }
+
+  if (btnPpCheck) {
+    btnPpCheck.addEventListener("click", () => pollPromptPayOrderStatus(true));
+  }
+
+  if (btnPpCancel) {
+    btnPpCancel.addEventListener("click", async () => {
+      const currentId = activePpOrder?.orderId;
+      stopPpTimers();
+      activePpOrder = null;
+      if (ppQrPanel) ppQrPanel.style.display = "none";
+      if (currentId) {
+        try {
+          await fetch(`${API_BASE}/api/human-check/promptpay-order`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "cancel", orderId: currentId })
+          });
+        } catch (_) {}
+      }
+    });
+  }
+
+  const closeModal = () => {
+    modal.style.display = "none";
+    stopPpTimers();
+  };
   if (btnClose) btnClose.addEventListener("click", closeModal);
   if (btnCancel) btnCancel.addEventListener("click", closeModal);
   modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });

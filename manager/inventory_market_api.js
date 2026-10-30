@@ -12,10 +12,52 @@ const path = require('path');
 
 const HALLOWEEN_STORE_PATH = path.join(__dirname, 'data', 'halloween_exchange.json');
 const AUTOSELL_STORE_PATH = path.join(__dirname, 'data', 'autosell_configs.json');
+const MARKET_GLOBAL_SETTINGS_PATH = path.join(__dirname, 'data', 'market_global_settings.json');
 const BROWSER_STORAGE_DIR = path.join(__dirname, '..', 'sessions', '_browser_storage');
+
+function sanitizeGlobalMarketSettings(raw) {
+  const cfg = raw && typeof raw === 'object' ? raw : {};
+  const dh = Number(cfg.durationHours);
+  const durationHours = [12, 24, 48].includes(dh) ? dh : 24;
+  const autoCancelEnabled = Boolean(cfg.autoCancelEnabled);
+  const cuh = Number(cfg.cancelUnderHours);
+  const cancelUnderHours = Number.isFinite(cuh) && cuh >= 1 && cuh <= 47 ? Math.round(cuh * 10) / 10 : 6;
+  const autoCollectAfterCancel = cfg.autoCollectAfterCancel !== false;
+  return {
+    durationHours,
+    autoCancelEnabled,
+    cancelUnderHours,
+    autoCollectAfterCancel,
+    updatedAt: Number(cfg.updatedAt) || Date.now()
+  };
+}
+
+function loadGlobalMarketSettings() {
+  try {
+    if (fs.existsSync(MARKET_GLOBAL_SETTINGS_PATH)) {
+      const parsed = JSON.parse(fs.readFileSync(MARKET_GLOBAL_SETTINGS_PATH, 'utf8'));
+      if (parsed && typeof parsed === 'object') return sanitizeGlobalMarketSettings(parsed);
+    }
+  } catch (_) {}
+  return sanitizeGlobalMarketSettings({});
+}
+
+function saveGlobalMarketSettings(raw) {
+  const current = loadGlobalMarketSettings();
+  const merged = Object.assign({}, current, raw || {}, { updatedAt: Date.now() });
+  const clean = sanitizeGlobalMarketSettings(merged);
+  try {
+    fs.mkdirSync(path.dirname(MARKET_GLOBAL_SETTINGS_PATH), { recursive: true });
+    fs.writeFileSync(MARKET_GLOBAL_SETTINGS_PATH, JSON.stringify(clean, null, 2), 'utf8');
+  } catch (_) {}
+  return clean;
+}
 
 function sanitizeAutoSellConfig(raw) {
   const cfg = raw && typeof raw === 'object' ? raw : {};
+  const globalMkt = loadGlobalMarketSettings();
+  const dh = Number(cfg.durationHours);
+  const durationHours = [12, 24, 48].includes(dh) ? dh : (globalMkt.durationHours || 24);
   const rawRules = Array.isArray(cfg.rules) ? cfg.rules : [];
   const seen = new Set();
   const rules = [];
@@ -34,6 +76,7 @@ function sanitizeAutoSellConfig(raw) {
   return {
     enabled: Boolean(cfg.enabled),
     priceStrategy: String(cfg.priceStrategy || 'median'),
+    durationHours,
     checkIntervalSec: Number(cfg.checkIntervalSec) || 25,
     maxActiveListings: Number(cfg.maxActiveListings) || 10,
     rules
@@ -149,11 +192,15 @@ function buildAutoSellReadCode() {
     }
     const activeCount = Number(window.__myMarketActiveCount) || 0;
     const maxListings = (typeof window.getEffectiveMarketMaxListings === 'function') ? Number(window.getEffectiveMarketMaxListings()) : (Number(cfg.maxActiveListings) || 8);
+    const globalHours = Number(window.__pmMarketGlobalSettings && window.__pmMarketGlobalSettings.durationHours);
+    const cfgHours = Number(cfg.durationHours);
+    const durationHours = [12, 24, 48].includes(globalHours) ? globalHours : ([12, 24, 48].includes(cfgHours) ? cfgHours : 24);
     return {
       success: true,
       config: {
         enabled: Boolean(cfg.enabled),
         priceStrategy: cfg.priceStrategy || 'median',
+        durationHours,
         checkIntervalSec: Number(cfg.checkIntervalSec) || 25,
         maxActiveListings: Number(cfg.maxActiveListings) || 10,
         rules: rules.map(r => ({
@@ -174,8 +221,13 @@ function buildAutoSellReadCode() {
 }
 
 function buildAutoSellSaveCode(cleanCfg) {
+  const globalSettings = loadGlobalMarketSettings();
   return `(() => {
+    ${buildMarketGlobalRuntimeSnippet(globalSettings)};
     const next = ${JSON.stringify(cleanCfg)};
+    if ([12, 24, 48].includes(Number(window.__pmMarketGlobalSettings && window.__pmMarketGlobalSettings.durationHours))) {
+      next.durationHours = Number(window.__pmMarketGlobalSettings.durationHours);
+    }
     window.__autoMarketSellConfig = Object.assign({}, window.__autoMarketSellConfig || {}, next);
     try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch (e) {}
     const en = Boolean(window.__autoMarketSellConfig.enabled);
@@ -183,6 +235,10 @@ function buildAutoSellSaveCode(cleanCfg) {
     if (t1) t1.checked = en;
     const t2 = document.getElementById('p-autosell-toggle-hud');
     if (t2) t2.checked = en;
+    const durSel1 = document.getElementById('p-autosell-duration-select');
+    if (durSel1 && window.__autoMarketSellConfig.durationHours) durSel1.value = String(window.__autoMarketSellConfig.durationHours);
+    const durSel2 = document.getElementById('p-autosell-duration-select-hud');
+    if (durSel2 && window.__autoMarketSellConfig.durationHours) durSel2.value = String(window.__autoMarketSellConfig.durationHours);
     const badge = document.getElementById('p-subtab-autosell-count');
     if (badge && Array.isArray(window.__autoMarketSellConfig.rules)) badge.innerText = String(window.__autoMarketSellConfig.rules.length);
     if (typeof window.renderAutoSellHudRulesHtml === 'function') {
@@ -574,7 +630,12 @@ function buildMarketCode(p) {
         if (found.raw.locked) return { success: false, error: 'ไอเทมถูกล็อคอยู่ ปลดล็อคก่อนลงขาย' };
         const before = Number(found.b.qty) || 0;
         if (${qty} > before) return { success: false, error: 'จำนวนเกินที่มีในกระเป๋า' };
-        room.send('market', { op: 'list', slot: ${slot}, qty: ${qty}, price: ${price}, hours: ${hours} });
+        window.__pmExplicitHoursOnce = true;
+        try {
+          room.send('market', { op: 'list', slot: ${slot}, qty: ${qty}, price: ${price}, hours: ${hours} });
+        } finally {
+          window.__pmExplicitHoursOnce = false;
+        }
         // Confirm by watching the bag: the listed quantity leaves the slot when the server accepts it.
         for (let i = 0; i < 12; i++) {
           await new Promise(r => setTimeout(r, 250));
@@ -1138,8 +1199,194 @@ function buildHalloweenExchangeNowCode(payload) {
 // ==========================================================================
 const overviewMarketCache = new Map(); // profileId -> { updatedAt, active, closed, deliveries, activeLimit, premium, zeny }
 
-function buildOverviewProfileCode(fetchMine = true) {
+function buildMarketGlobalRuntimeSnippet(globalSettings) {
+  const gs = sanitizeGlobalMarketSettings(globalSettings);
+  return `(() => {
+    const gs = ${JSON.stringify(gs)};
+    window.__pmMarketGlobalSettings = gs;
+    if (!window.__autoMarketSellConfig || typeof window.__autoMarketSellConfig !== 'object') {
+      window.__autoMarketSellConfig = { enabled: false, priceStrategy: 'median', durationHours: gs.durationHours, rules: [] };
+    } else {
+      window.__autoMarketSellConfig.durationHours = gs.durationHours;
+    }
+    try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch (_) {}
+    const durSel1 = document.getElementById('p-autosell-duration-select');
+    if (durSel1) durSel1.value = String(gs.durationHours);
+    const durSel2 = document.getElementById('p-autosell-duration-select-hud');
+    if (durSel2) durSel2.value = String(gs.durationHours);
+
+    window.__pmHookMarketRoomSend = function(rm) {
+      if (!rm || typeof rm.send !== 'function' || rm.__pmMarketDurationHooked) return;
+      const origSend = rm.send.bind(rm);
+      rm.send = function(type, payload, ...rest) {
+        try {
+          if (type === 'market' && payload && typeof payload === 'object' && payload.op === 'list' && !window.__pmExplicitHoursOnce) {
+            const gHours = Number((window.__pmMarketGlobalSettings && window.__pmMarketGlobalSettings.durationHours) || (window.__autoMarketSellConfig && window.__autoMarketSellConfig.durationHours));
+            if ([12, 24, 48].includes(gHours)) {
+              payload = Object.assign({}, payload, { hours: gHours });
+            }
+          }
+        } catch (_) {}
+        return origSend(type, payload, ...rest);
+      };
+      rm.__pmMarketDurationHooked = true;
+    };
+
+    const curRoom = ${ROOM_JS};
+    if (curRoom) window.__pmHookMarketRoomSend(curRoom);
+
+    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 2) {
+      if (window.__pmMarketGlobalTimer) { try { clearInterval(window.__pmMarketGlobalTimer); } catch (_) {} }
+      window.__pmMarketGlobalTimerVer = 2;
+      window.__pmMarketGlobalTimer = setInterval(async () => {
+        try {
+          const rm = ${ROOM_JS};
+          if (rm && window.__pmHookMarketRoomSend) window.__pmHookMarketRoomSend(rm);
+          const cfg = window.__pmMarketGlobalSettings;
+          if (!cfg || !cfg.autoCancelEnabled || window.__pmAutoCancellingMarketNow) return;
+          if (!rm || !rm.connection || !rm.connection.isOpen) return;
+          const underH = Number(cfg.cancelUnderHours) || 6;
+          const now = Date.now();
+          let mine = window.__lastMarketMine;
+          if (!mine || !Array.isArray(mine.active) || (now - (window.__lastMarketMineCheckTs || 0) > 60000)) {
+            window.__lastMarketMineCheckTs = now;
+            const awaitReply = ${AWAIT_REPLY_JS};
+            const fresh = await awaitReply(rm, 'market_mine', () => {
+              try { rm.send('market', { op: 'mine' }); } catch (_) {}
+            }, 3000);
+            if (fresh && Array.isArray(fresh.active)) {
+              mine = fresh;
+              window.__lastMarketMine = fresh;
+            }
+          }
+          if (!mine || !Array.isArray(mine.active) || mine.active.length === 0) return;
+          const thresholdMs = underH * 3600000;
+          const targets = mine.active.filter(e => {
+            const lid = Number(e && (e.listingId ?? e.id));
+            const exp = Number(e && e.expiresAt);
+            return lid > 0 && exp > 0 && (exp - Date.now()) < thresholdMs;
+          });
+          if (targets.length === 0) return;
+          window.__pmAutoCancellingMarketNow = true;
+          try {
+            for (const t of targets) {
+              const lid = Number(t.listingId ?? t.id);
+              try { rm.send('market', { op: 'cancel', listingId: lid }); } catch (_) {}
+              await new Promise(r => setTimeout(r, 260));
+            }
+            if (cfg.autoCollectAfterCancel !== false) {
+              await new Promise(r => setTimeout(r, 420));
+              try { rm.send('market', { op: 'collect_all' }); } catch (_) {}
+            }
+            await new Promise(r => setTimeout(r, 380));
+            const awaitReply = ${AWAIT_REPLY_JS};
+            const afterMine = await awaitReply(rm, 'market_mine', () => {
+              try { rm.send('market', { op: 'mine' }); } catch (_) {}
+            }, 3000);
+            if (afterMine && Array.isArray(afterMine.active)) {
+              window.__lastMarketMine = afterMine;
+              window.__myMarketActiveCount = afterMine.active.length;
+            }
+          } finally {
+            window.__pmAutoCancellingMarketNow = false;
+          }
+        } catch (_) {}
+      }, 30000);
+    }
+  })()`;
+}
+
+function buildCancelUnderHoursProfileCode(underHours, autoCollect = true) {
+  const safeHours = Math.max(1, Math.min(47, Number(underHours) || 6));
+  const globalSettings = loadGlobalMarketSettings();
   return `(async () => {
+    ${buildMarketGlobalRuntimeSnippet(globalSettings)};
+    const room = ${ROOM_JS};
+    if (!room || !room.connection?.isOpen) return { success: false, error: 'ไม่ได้เชื่อมต่อเกม' };
+    const awaitReply = ${AWAIT_REPLY_JS};
+    const icon = ${ICON_JS};
+    let mine = await awaitReply(room, 'market_mine', () => {
+      try { room.send('market', { op: 'mine' }); } catch (_) {}
+    }, 3500);
+    if (!mine && window.__lastMarketMine) mine = window.__lastMarketMine;
+    if (!mine) return { success: false, error: 'เซิร์ฟเวอร์ตลาดไม่ตอบกลับ' };
+
+    const thresholdMs = ${safeHours} * 3600000;
+    const activeList = Array.isArray(mine.active) ? mine.active : [];
+    const targets = activeList.filter(e => {
+      const lid = Number(e && (e.listingId ?? e.id));
+      const exp = Number(e && e.expiresAt);
+      return lid > 0 && exp > 0 && (exp - Date.now()) < thresholdMs;
+    });
+
+    const cancelledItems = [];
+    if (targets.length > 0) {
+      window.__pmAutoCancellingMarketNow = true;
+      try {
+        for (const t of targets) {
+          const lid = Number(t.listingId ?? t.id);
+          cancelledItems.push({
+            listingId: lid,
+            name: (t.item && t.item.name) || 'Item',
+            qty: Number(t.qty ?? (t.item && t.item.qty)) || 1,
+            price: Number(t.price) || 0,
+            expiresAt: Number(t.expiresAt) || 0
+          });
+          try { room.send('market', { op: 'cancel', listingId: lid }); } catch (_) {}
+          await new Promise(r => setTimeout(r, 260));
+        }
+        if (${Boolean(autoCollect)}) {
+          await new Promise(r => setTimeout(r, 450));
+          try { room.send('market', { op: 'collect_all' }); } catch (_) {}
+        }
+        await new Promise(r => setTimeout(r, 420));
+        const refreshed = await awaitReply(room, 'market_mine', () => {
+          try { room.send('market', { op: 'mine' }); } catch (_) {}
+        }, 3800);
+        if (refreshed) mine = refreshed;
+      } finally {
+        window.__pmAutoCancellingMarketNow = false;
+      }
+    }
+
+    const enrich = list => (Array.isArray(list) ? list : []).map(entry => {
+      if (entry && entry.item) {
+        entry.item.icon = entry.item.icon || icon(entry.item, entry.item.name);
+      }
+      if (entry && entry.id === undefined) {
+        if (entry.listingId !== undefined) entry.id = entry.listingId;
+        else if (entry.deliveryId !== undefined) entry.id = entry.deliveryId;
+      }
+      return entry;
+    });
+    const cancelledIdSet = new Set(cancelledItems.map(x => Number(x.listingId)));
+    const active = enrich(mine.active).filter(e => !cancelledIdSet.has(Number(e && (e.listingId ?? e.id))));
+    const closed = enrich(mine.closed);
+    const deliveries = ${Boolean(autoCollect)} && cancelledItems.length > 0 ? [] : enrich(mine.deliveries);
+    window.__lastMarketMine = { active, closed, deliveries };
+    window.__myMarketActiveCount = active.length;
+    const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
+    const premium = Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token');
+    const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : 0);
+    const activeLimit = premium ? 20 : 5;
+    return {
+      success: true,
+      cancelledCount: cancelledItems.length,
+      cancelledItems,
+      active,
+      closed,
+      deliveries,
+      activeLimit,
+      premium,
+      zeny
+    };
+  })()`;
+}
+
+function buildOverviewProfileCode(fetchMine = true) {
+  const globalSettings = loadGlobalMarketSettings();
+  return `(async () => {
+    ${buildMarketGlobalRuntimeSnippet(globalSettings)};
     const room = ${ROOM_JS};
     const awaitReply = ${AWAIT_REPLY_JS};
     const icon = ${ICON_JS};
@@ -1156,7 +1403,49 @@ function buildOverviewProfileCode(fetchMine = true) {
       if (fresh) {
         mine = fresh;
         window.__lastMarketMine = fresh;
+        window.__lastMarketMineCheckTs = Date.now();
         fetchedMine = true;
+      }
+    }
+    let autoCancelledCount = 0;
+    const gs = window.__pmMarketGlobalSettings;
+    if (gs && gs.autoCancelEnabled && room && room.connection?.isOpen && mine && Array.isArray(mine.active) && !window.__pmAutoCancellingMarketNow) {
+      const thresholdMs = (Number(gs.cancelUnderHours) || 6) * 3600000;
+      const underTargets = mine.active.filter(e => {
+        const lid = Number(e && (e.listingId ?? e.id));
+        const exp = Number(e && e.expiresAt);
+        return lid > 0 && exp > 0 && (exp - Date.now()) < thresholdMs;
+      });
+      if (underTargets.length > 0) {
+        window.__pmAutoCancellingMarketNow = true;
+        try {
+          const cancelledIds = new Set();
+          for (const t of underTargets) {
+            const lid = Number(t.listingId ?? t.id);
+            cancelledIds.add(lid);
+            try { room.send('market', { op: 'cancel', listingId: lid }); } catch (_) {}
+            autoCancelledCount++;
+            await new Promise(r => setTimeout(r, 240));
+          }
+          if (gs.autoCollectAfterCancel !== false) {
+            await new Promise(r => setTimeout(r, 420));
+            try { room.send('market', { op: 'collect_all' }); } catch (_) {}
+          }
+          await new Promise(r => setTimeout(r, 380));
+          const afterMine = await awaitReply(room, 'market_mine', () => {
+            try { room.send('market', { op: 'mine' }); } catch (_) {}
+          }, 3200);
+          if (afterMine) {
+            afterMine.active = (Array.isArray(afterMine.active) ? afterMine.active : []).filter(e => !cancelledIds.has(Number(e && (e.listingId ?? e.id))));
+            mine = afterMine;
+          } else {
+            mine.active = mine.active.filter(e => !cancelledIds.has(Number(e && (e.listingId ?? e.id))));
+          }
+          window.__lastMarketMine = mine;
+          fetchedMine = true;
+        } finally {
+          window.__pmAutoCancellingMarketNow = false;
+        }
       }
     }
     const enrich = list => (Array.isArray(list) ? list : []).map(entry => {
@@ -1191,6 +1480,7 @@ function buildOverviewProfileCode(fetchMine = true) {
       isBotRunning: Boolean(window.__isBotRunning),
       hasMine: Boolean(mine),
       fetchedMine,
+      autoCancelledCount,
       active,
       closed,
       deliveries,
@@ -1283,6 +1573,7 @@ async function querySingleProfileOverview(p, evalProfilePort, forceRefresh = fal
       asInfo = {
         enabled: Boolean(d.autoSell.config.enabled),
         priceStrategy: d.autoSell.config.priceStrategy || 'median',
+        durationHours: Number(d.autoSell.config.durationHours) || loadGlobalMarketSettings().durationHours || 24,
         rules,
         ruleStates: rs,
         readyCount,
@@ -1310,6 +1601,7 @@ async function querySingleProfileOverview(p, evalProfilePort, forceRefresh = fal
       closed: closed.slice(0, 15),
       deliveries,
       mineUpdatedAt: nowTs,
+      autoCancelledCount: Number(d.autoCancelledCount) || 0,
       autoSell: asInfo
     };
   } catch (_) {
@@ -1335,6 +1627,7 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
       sendJSON({
         success: true,
         timestamp: Date.now(),
+        globalSettings: loadGlobalMarketSettings(),
         clients
       });
       return true;
@@ -1348,6 +1641,114 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
       }
       const op = payload.op || '';
       const pid = String(payload.profileId || '').trim();
+
+      if (op === 'set_global_settings') {
+        const prevSettings = loadGlobalMarketSettings();
+        const nextSettings = saveGlobalMarketSettings({
+          durationHours: payload.durationHours !== undefined ? payload.durationHours : prevSettings.durationHours,
+          autoCancelEnabled: payload.autoCancelEnabled !== undefined ? payload.autoCancelEnabled : prevSettings.autoCancelEnabled,
+          cancelUnderHours: payload.cancelUnderHours !== undefined ? payload.cancelUnderHours : prevSettings.cancelUnderHours,
+          autoCollectAfterCancel: payload.autoCollectAfterCancel !== undefined ? payload.autoCollectAfterCancel : prevSettings.autoCollectAfterCancel
+        });
+
+        // Also update stored per-profile Auto-Sell configs so offline & future clients inherit durationHours
+        try {
+          const allAs = loadAllAutoSellStore();
+          for (const k of Object.keys(allAs)) {
+            if (allAs[k] && typeof allAs[k] === 'object') {
+              allAs[k].durationHours = nextSettings.durationHours;
+            }
+          }
+          fs.mkdirSync(path.dirname(AUTOSELL_STORE_PATH), { recursive: true });
+          fs.writeFileSync(AUTOSELL_STORE_PATH, JSON.stringify(allAs, null, 2), 'utf8');
+        } catch (_) {}
+
+        const onlineProfiles = profiles.filter(p => p && p.debugPort);
+        const runtimeCode = buildMarketGlobalRuntimeSnippet(nextSettings);
+        await runWithConcurrency(onlineProfiles, 6, async (p) => {
+          try {
+            saveProfileAutoSellStore(p.id, Object.assign({}, loadProfileAutoSellStore(p.id), {
+              durationHours: nextSettings.durationHours
+            }));
+            await evalProfilePort(p.debugPort, runtimeCode, 3000);
+          } catch (_) {}
+        });
+
+        const shouldForceMine = Boolean(nextSettings.autoCancelEnabled);
+        const clients = await runWithConcurrency(profiles, 6, p =>
+          querySingleProfileOverview(p, evalProfilePort, shouldForceMine)
+        );
+        const autoCancelledTotal = clients.reduce((s, c) => s + (Number(c && c.autoCancelledCount) || 0), 0);
+        sendJSON({
+          success: true,
+          globalSettings: nextSettings,
+          appliedClientsCount: onlineProfiles.length,
+          autoCancelledTotal,
+          clients
+        });
+        return true;
+      }
+
+      if (op === 'cancel_under_hours') {
+        const curGs = loadGlobalMarketSettings();
+        const rawHours = payload.underHours !== undefined ? Number(payload.underHours) : curGs.cancelUnderHours;
+        const underHours = Number.isFinite(rawHours) && rawHours >= 1 && rawHours <= 47
+          ? Math.round(rawHours * 10) / 10
+          : (curGs.cancelUnderHours || 6);
+        const globalSettings = saveGlobalMarketSettings({ cancelUnderHours: underHours });
+        const targets = (pid && pid !== 'all')
+          ? profiles.filter(p => p && p.id === pid && p.debugPort)
+          : profiles.filter(p => p && p.debugPort);
+        if (targets.length === 0) {
+          sendJSON({ success: false, error: 'ไม่มีจอที่ออนไลน์อยู่' }, 400);
+          return true;
+        }
+        const cancelCode = buildCancelUnderHoursProfileCode(underHours, globalSettings.autoCollectAfterCancel !== false);
+        let totalCancelled = 0;
+        let affectedProfilesCount = 0;
+        const cancelledDetails = [];
+        await runWithConcurrency(targets, 5, async (p) => {
+          try {
+            const r = await evalProfilePort(p.debugPort, cancelCode, 12000);
+            const resObj = r && r.result;
+            if (resObj && resObj.success) {
+              const cnt = Number(resObj.cancelledCount) || 0;
+              if (cnt > 0) {
+                totalCancelled += cnt;
+                affectedProfilesCount++;
+                cancelledDetails.push({
+                  profileId: p.id,
+                  name: p.name || p.id,
+                  count: cnt,
+                  items: Array.isArray(resObj.cancelledItems) ? resObj.cancelledItems : []
+                });
+              }
+              overviewMarketCache.set(p.id, {
+                updatedAt: Date.now(),
+                active: Array.isArray(resObj.active) ? resObj.active : [],
+                closed: Array.isArray(resObj.closed) ? resObj.closed : [],
+                deliveries: Array.isArray(resObj.deliveries) ? resObj.deliveries : [],
+                activeLimit: Number(resObj.activeLimit) || (resObj.premium ? 20 : 5),
+                premium: Boolean(resObj.premium),
+                zeny: Number(resObj.zeny) || 0
+              });
+            }
+          } catch (_) {}
+        });
+        const clients = await runWithConcurrency(profiles, 6, p =>
+          querySingleProfileOverview(p, evalProfilePort, false)
+        );
+        sendJSON({
+          success: true,
+          underHours,
+          cancelledCount: totalCancelled,
+          affectedProfilesCount,
+          cancelledDetails,
+          globalSettings,
+          clients
+        });
+        return true;
+      }
 
       if (op === 'cancel' || op === 'collect' || op === 'collect_profile') {
         const profile = profiles.find(p => p && p.id === pid);

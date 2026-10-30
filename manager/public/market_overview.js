@@ -7,11 +7,29 @@
     loading: false,
     lastUpdated: 0,
     searchQuery: '',
-    filterMode: 'all', // 'all' | 'online' | 'selling' | 'deliveries' | 'autosell' | 'full'
+    filterMode: 'all', // 'all' | 'online' | 'selling' | 'deliveries' | 'autosell' | 'full' | 'under_hours'
     viewMode: 'chars', // 'chars' | 'listings'
     listingSort: 'price_desc', // 'price_desc' | 'price_asc' | 'exp_asc' | 'char_asc'
+    globalSettings: {
+      durationHours: 24,
+      autoCancelEnabled: false,
+      cancelUnderHours: 6,
+      autoCollectAfterCancel: true
+    },
     pollTimer: null
   };
+
+  window.getGlobalMarketSettings = function () {
+    return Object.assign({}, state.globalSettings);
+  };
+
+  function isListingUnderHours(l) {
+    if (!l || !l.expiresAt) return false;
+    const exp = Number(l.expiresAt) || 0;
+    if (exp <= 0) return false;
+    const underH = Math.max(1, Math.min(47, Number(state.globalSettings.cancelUnderHours) || 6));
+    return (exp - Date.now()) < underH * 3600000;
+  }
 
   function esc(str) {
     if (typeof escapeHTML === 'function') return escapeHTML(str == null ? '' : String(str));
@@ -74,6 +92,9 @@
       const url = `/api/market/overview${qs.toString() ? '?' + qs.toString() : ''}`;
       const res = await fetch(url);
       const data = await res.json();
+      if (data && data.globalSettings && typeof data.globalSettings === 'object') {
+        state.globalSettings = Object.assign({}, state.globalSettings, data.globalSettings);
+      }
       if (data && data.success && Array.isArray(data.clients)) {
         if (singleProfileId && data.clients.length === 1) {
           const updated = data.clients[0];
@@ -84,6 +105,10 @@
           state.clients = data.clients;
         }
         state.lastUpdated = Number(data.timestamp) || Date.now();
+        const autoCancelled = data.clients.reduce((s, c) => s + (Number(c && c.autoCancelledCount) || 0), 0);
+        if (autoCancelled > 0) {
+          notify(`🚫 ระบบ Auto-Cancel ยกเลิกของเหลือเวลาต่ำกว่า ${state.globalSettings.cancelUnderHours} ชม. ให้แล้ว ${autoCancelled} รายการ (ดึงกลับเข้ากระเป๋าเรียบร้อย)`, 'success');
+        }
       }
     } catch (e) {
       console.warn('[MarketOverview] fetchOverview error:', e);
@@ -110,6 +135,9 @@
     let autoSellReadyChars = 0;
     let totalReadyRules = 0;
 
+    let underHoursCount = 0;
+    let underHoursCharsCount = 0;
+
     for (const c of state.clients) {
       const act = Array.isArray(c.active) ? c.active : [];
       const deliv = Array.isArray(c.deliveries) ? c.deliveries : [];
@@ -122,9 +150,15 @@
       if (act.length > 0) {
         sellingCharsCount++;
         totalActiveListings += act.length;
+        let charHasUnder = false;
         for (const l of act) {
           totalListedValueZeny += Number(l && l.price) || 0;
+          if (isListingUnderHours(l)) {
+            underHoursCount++;
+            charHasUnder = true;
+          }
         }
+        if (charHasUnder) underHoursCharsCount++;
       }
       if (deliv.length > 0) {
         charsWithDeliveries++;
@@ -156,7 +190,9 @@
       charsWithDeliveries,
       autoSellEnabledCount,
       autoSellReadyChars,
-      totalReadyRules
+      totalReadyRules,
+      underHoursCount,
+      underHoursCharsCount
     };
   }
 
@@ -223,7 +259,15 @@
   function renderHeaderOnly() {
     const grid = document.getElementById('mko-summary-grid');
     if (!grid) return;
+    const activeElId = document.activeElement && document.activeElement.id;
+    if (activeElId === 'mko-cancel-under-hours' || activeElId === 'mko-global-duration') {
+      return;
+    }
     const s = computeSummary();
+    const gs = state.globalSettings || {};
+    const durH = [12, 24, 48].includes(Number(gs.durationHours)) ? Number(gs.durationHours) : 24;
+    const underH = Math.max(1, Math.min(47, Number(gs.cancelUnderHours) || 6));
+    const autoCancelOn = Boolean(gs.autoCancelEnabled);
 
     grid.innerHTML = `
       <div class="mko-stat-card">
@@ -234,6 +278,7 @@
         <div class="mko-stat-main">${s.totalActiveListings} <small style="font-size:13px; color:#94a3b8; font-weight:600;">/ ${s.totalActiveSlots || '--'} ช่อง</small></div>
         <div class="mko-stat-sub">
           <span>มูลค่าตั้งขายรวม: <b style="color:#fde047;">${fmtZ(s.totalListedValueZeny)}</b></span>
+          ${s.underHoursCount > 0 ? `<span style="color:#fbbf24;">⚠️ เหลือ &lt; ${underH} ชม.: <b>${s.underHoursCount} ชิ้น</b></span>` : ''}
         </div>
       </div>
 
@@ -253,7 +298,7 @@
           <span>🤖 ระบบ Auto-Sell ตลาดกลาง</span>
           <span class="mko-stat-chip">ออนไลน์ ${s.onlineCount}/${s.totalChars} จอ</span>
         </div>
-        <div class="mko-stat-main emerald">${s.autoSellEnabledCount} <small style="font-size:13px; color:#94a3b8; font-weight:600;">/ ${s.totalChars} จอเปิดใช้</small></div>
+        <div class="mko-stat-main emerald">${s.autoSellEnabledCount} <small style="font-size:13px; color:#94a3b8; font-weight:600;">/ ${s.totalChars} จอเปิดใช้ (ตั้ง ${durH} ชม.)</small></div>
         <div class="mko-stat-sub">
           <span>พร้อมลงขายในกระเป๋าตอนนี้: <b style="color:#34d399;">${s.autoSellReadyChars} จอ (${s.totalReadyRules} รายการ)</b></span>
         </div>
@@ -271,9 +316,33 @@
           <button type="button" class="mko-btn emerald" data-mko-act="autosell-all" ${s.onlineCount === 0 ? 'disabled' : ''} title="สั่งให้ทุกจอที่ออนไลน์ตรวจสอบกระเป๋าและนำไอเทมตามรายการ Auto-Sell ขึ้นวางขายทันที">
             ⚡ สั่งเช็ค Auto-Sell ทุกจอ
           </button>
+          <button type="button" class="mko-btn ${s.underHoursCount > 0 ? 'danger' : ''}" data-mko-act="cancel-under-hours" ${s.onlineCount === 0 ? 'disabled' : ''} title="ยกเลิกรายการขายทุกจอที่เหลือเวลาในตลาดต่ำกว่า ${underH} ชั่วโมง และรับของกลับเข้ากระเป๋าทันที">
+            🚫 ยกเลิกของ &lt; ${underH} ชม. ${s.underHoursCount > 0 ? `(${s.underHoursCount})` : '(0)'}
+          </button>
           <button type="button" class="mko-btn sky" data-mko-act="refresh" ${state.loading ? 'disabled' : ''} title="ดึงรายการวางขายและสถานะตลาดล่าสุดจากทุกจอ">
             🔄 ${state.loading ? 'กำลังโหลด...' : 'รีเฟรชตลาด'}
           </button>
+        </div>
+        <div class="mko-global-settings-bar">
+          <div class="mko-global-setting-group" title="เลือกระยะเวลาตั้งลงขายในตลาดกลาง มีผลกับทุกจอทันทีเวลาบอทลงขาย Auto-Sell">
+            <span class="mko-gs-label">⏱️ ระยะเวลาตั้งขาย (ทุกจอ):</span>
+            <select id="mko-global-duration" class="mko-global-select" data-mko-global-duration>
+              <option value="12" ${durH === 12 ? 'selected' : ''}>12 ชั่วโมง</option>
+              <option value="24" ${durH === 24 ? 'selected' : ''}>24 ชั่วโมง</option>
+              <option value="48" ${durH === 48 ? 'selected' : ''}>48 ชั่วโมง</option>
+            </select>
+          </div>
+
+          <div class="mko-global-setting-group" title="ยกเลิกการขายทันทีเมื่อไอเทมในตลาดเหลือเวลาต่ำกว่าชั่วโมงที่กำหนด (พร้อมรับของคืนเข้ากระเป๋าอัตโนมัติ)">
+            <label class="mko-autocancel-toggle ${autoCancelOn ? 'on' : ''}">
+              <input type="checkbox" id="mko-autocancel-toggle" data-mko-autocancel-toggle ${autoCancelOn ? 'checked' : ''}>
+              <span>🚫 ยกเลิกอัตโนมัติเมื่อเหลือ &lt;</span>
+            </label>
+            <div class="mko-hours-input-wrap">
+              <input type="number" id="mko-cancel-under-hours" class="mko-hours-input" data-mko-cancel-hours min="1" max="47" step="1" value="${underH}">
+              <span>ชม.</span>
+            </div>
+          </div>
         </div>
       </div>
     `;
@@ -284,6 +353,7 @@
         all: state.clients.length,
         online: state.clients.filter(c => c.online).length,
         selling: state.clients.filter(c => (c.active || []).length > 0).length,
+        under_hours: state.clients.filter(c => (c.active || []).some(isListingUnderHours)).length,
         deliveries: state.clients.filter(c => (c.deliveries || []).length > 0).length,
         autosell: state.clients.filter(c => c.autoSell && c.autoSell.enabled).length,
         full: state.clients.filter(c => c.online && (c.active || []).length >= (Number(c.activeLimit) || 5)).length
@@ -292,6 +362,7 @@
         ['all', `ทั้งหมด (${counts.all})`],
         ['online', `🟢 ออนไลน์ (${counts.online})`],
         ['selling', `📦 กำลังขาย (${counts.selling})`],
+        ['under_hours', `⚠️ เหลือ < ${underH} ชม. (${counts.under_hours})`],
         ['deliveries', `📬 มีของ/เงินรอรับ (${counts.deliveries})`],
         ['autosell', `🤖 เปิด Auto-Sell (${counts.autosell})`],
         ['full', `🔴 ช่องขายเต็ม (${counts.full})`]
@@ -314,6 +385,7 @@
 
       if (state.filterMode === 'online' && !c.online) return false;
       if (state.filterMode === 'selling' && act.length === 0) return false;
+      if (state.filterMode === 'under_hours' && !act.some(isListingUnderHours)) return false;
       if (state.filterMode === 'deliveries' && deliv.length === 0) return false;
       if (state.filterMode === 'autosell' && !(c.autoSell && c.autoSell.enabled)) return false;
       if (state.filterMode === 'full' && !(c.online && act.length >= lim)) return false;
@@ -395,6 +467,7 @@
       }
 
       // Active listings
+      const underH = Math.max(1, Math.min(47, Number(state.globalSettings.cancelUnderHours) || 6));
       for (const l of act) {
         const it = l.item || {};
         const lid = l.listingId ?? l.id;
@@ -402,8 +475,9 @@
         const total = Number(l.price) || 0;
         const unit = Math.round(total / qty);
         const affixCount = Array.isArray(it.affixes) ? it.affixes.length : 0;
+        const isUnder = isListingUnderHours(l);
         itemCards.push(`
-          <div class="mko-item-card">
+          <div class="mko-item-card ${isUnder ? 'under-hours' : ''}">
             <div class="mko-item-left">
               <div class="mko-item-icon" style="--rc:${rarityCol(it.rarity)};">
                 ${it.icon ? `<img src="${esc(iconUrl(it.icon))}" alt="">` : '📦'}
@@ -413,7 +487,9 @@
                   ${esc(itemDisplayName(it))} ${qty > 1 ? `<span style="color:#38bdf8;">x${qty.toLocaleString()}</span>` : ''}
                 </div>
                 <div class="mko-item-sub">
-                  <span>⏳ ${timeLeft(l.expiresAt)}</span>
+                  ${isUnder
+                    ? `<span class="mko-time-warn" title="เวลาที่เหลือต่ำกว่า ${underH} ชม. ที่ตั้งไว้">⚠️ ⏳ ${timeLeft(l.expiresAt)} (&lt;${underH}ชม.)</span>`
+                    : `<span>⏳ ${timeLeft(l.expiresAt)}</span>`}
                   ${affixCount > 0 ? `<span style="color:#a78bfa;">✨ ${affixCount} ออฟ</span>` : ''}
                 </div>
               </div>
@@ -466,6 +542,9 @@
       `;
     }
 
+    const charUnderCount = act.filter(isListingUnderHours).length;
+    const underHLabel = Math.max(1, Math.min(47, Number(state.globalSettings.cancelUnderHours) || 6));
+
     return `
       <div class="mko-char-card ${deliv.length > 0 ? 'has-deliveries' : ''} ${c.online ? '' : 'offline'}" data-profile-id="${esc(c.id)}">
         <div class="mko-char-top">
@@ -478,6 +557,7 @@
             ${c.premium ? `<span class="mko-badge vip">💎 VIP (20 ช่อง)</span>` : `<span class="mko-badge">ทั่วไป (${lim} ช่อง)</span>`}
             <span class="mko-badge zeny">💰 ${fmtZ(c.zeny)}</span>
             <span class="mko-badge slots ${isFull ? 'full' : ''}">📦 วางขาย ${act.length}/${lim} ช่อง</span>
+            ${charUnderCount > 0 ? `<span class="mko-badge slots full">⚠️ เหลือ &lt; ${underHLabel} ชม. (${charUnderCount})</span>` : ''}
             ${deliv.length > 0 ? `<span class="mko-badge deliv">📬 รอรับ ${deliv.length} รายการ${pendingZeny > 0 ? ` (+${fmtZ(pendingZeny)})` : ''}</span>` : ''}
           </div>
 
@@ -494,6 +574,12 @@
             <button type="button" class="mko-btn sky sm" data-mko-open-bag-sell="${esc(c.id)}" ${c.online ? '' : 'disabled'} title="เปิดกระเป๋าของตัวละครนี้เพื่อเลือกไอเทมตั้งราคาขายลงตลาดกลาง">
               🎒 ขายของ (กระเป๋า)
             </button>
+
+            ${charUnderCount > 0 ? `
+              <button type="button" class="mko-btn danger sm" data-mko-cancel-under-profile="${esc(c.id)}" ${c.online ? '' : 'disabled'} title="ยกเลิกเฉพาะรายการของตัวละครนี้ที่เหลือเวลาต่ำกว่า ${underHLabel} ชั่วโมง และดึงกลับเข้ากระเป๋า">
+                🚫 ยกเลิก &lt; ${underHLabel} ชม. (${charUnderCount})
+              </button>
+            ` : ''}
 
             ${deliv.length > 0 ? `
               <button type="button" class="mko-btn gold sm" data-mko-collect-profile="${esc(c.id)}" ${c.online ? '' : 'disabled'} title="กดรับเงินและไอเทมที่ค้างในตลาดของตัวละครนี้ทั้งหมด">
@@ -559,8 +645,10 @@
             ${rows.map(r => {
               const lid = r.listing.listingId ?? r.listing.id;
               const charLabel = r.client.charName ? `${r.client.charName} (${r.client.name})` : r.client.name;
+              const isUnder = isListingUnderHours(r.listing);
+              const underH = Math.max(1, Math.min(47, Number(state.globalSettings.cancelUnderHours) || 6));
               return `
-                <tr>
+                <tr class="${isUnder ? 'mko-row-under-hours' : ''}">
                   <td>
                     <div style="display:flex; align-items:center; gap:9px;">
                       <div class="mko-item-icon" style="--rc:${rarityCol(r.item.rarity)}; width:32px; height:32px;">
@@ -578,7 +666,7 @@
                   <td><b>x${r.qty.toLocaleString()}</b></td>
                   <td style="font-family:'JetBrains Mono',monospace;">${fmtZ(r.unit)}</td>
                   <td style="font-family:'JetBrains Mono',monospace; color:#fde047; font-weight:700;">${fmtZ(r.total)}</td>
-                  <td>⏳ ${timeLeft(r.expiresAt)}</td>
+                  <td>${isUnder ? `<span class="mko-time-warn">⚠️ ⏳ ${timeLeft(r.expiresAt)} (&lt;${underH}ชม.)</span>` : `⏳ ${timeLeft(r.expiresAt)}`}</td>
                   <td style="text-align:right;">
                     <div style="display:inline-flex; gap:6px;">
                       <button type="button" class="mko-btn sky sm" data-mko-open-bag-sell="${esc(r.client.id)}" ${r.client.online ? '' : 'disabled'}>🎒 กระเป๋า</button>
@@ -738,6 +826,39 @@
       return;
     }
 
+    // Cancel listings under X hours for a single character
+    const cancelUnderProfBtn = e.target.closest('[data-mko-cancel-under-profile]');
+    if (cancelUnderProfBtn) {
+      const profileId = cancelUnderProfBtn.dataset.mkoCancelUnderProfile;
+      const underH = Math.max(1, Math.min(47, Number(state.globalSettings.cancelUnderHours) || 6));
+      cancelUnderProfBtn.disabled = true;
+      const orig = cancelUnderProfBtn.textContent;
+      cancelUnderProfBtn.textContent = '⏳ กำลังยกเลิก...';
+      try {
+        const res = await fetch('/api/market/overview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ op: 'cancel_under_hours', profileId, underHours: underH })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          if (data.globalSettings) state.globalSettings = Object.assign({}, state.globalSettings, data.globalSettings);
+          if (Array.isArray(data.clients)) state.clients = data.clients;
+          notify(`🚫 ยกเลิกของที่เหลือต่ำกว่า ${underH} ชม. สำเร็จ ${data.cancelledCount || 0} รายการ (รับกลับเข้ากระเป๋าแล้ว)!`, 'success');
+          updateMainTabBadges();
+          renderAll();
+        } else {
+          notify(`❌ ยกเลิกไม่สำเร็จ: ${(data && data.error) || ''}`, 'error');
+        }
+      } catch (err) {
+        notify(`❌ เกิดข้อผิดพลาด: ${err.message}`, 'error');
+      } finally {
+        cancelUnderProfBtn.disabled = false;
+        cancelUnderProfBtn.textContent = orig;
+      }
+      return;
+    }
+
     // Collect all deliveries for one character
     const collectProfBtn = e.target.closest('[data-mko-collect-profile]');
     if (collectProfBtn) {
@@ -781,6 +902,48 @@
     if (act === 'refresh') {
       await fetchOverview(true);
       notify('🔄 อัปเดตข้อมูลตลาดกลางทุกจอเรียบร้อยแล้ว', 'success');
+      return;
+    }
+
+    if (act === 'cancel-under-hours') {
+      const hoursInp = document.getElementById('mko-cancel-under-hours');
+      const underH = Math.max(1, Math.min(47, Number(hoursInp ? hoursInp.value : state.globalSettings.cancelUnderHours) || 6));
+      state.globalSettings.cancelUnderHours = underH;
+      const s = computeSummary();
+      if (s.underHoursCount > 0) {
+        if (!confirm(`ยืนยันยกเลิกรายการขายที่เหลือเวลาต่ำกว่า ${underH} ชั่วโมง ทั้งหมด ${s.underHoursCount} รายการ (${s.underHoursCharsCount} ตัวละคร) และดึงของกลับเข้ากระเป๋าทันที?`)) {
+          return;
+        }
+      }
+      actBtn.disabled = true;
+      const orig = actBtn.textContent;
+      actBtn.textContent = `⏳ กำลังยกเลิก < ${underH} ชม....`;
+      try {
+        const res = await fetch('/api/market/overview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ op: 'cancel_under_hours', profileId: 'all', underHours: underH })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          if (data.globalSettings) state.globalSettings = Object.assign({}, state.globalSettings, data.globalSettings);
+          if (Array.isArray(data.clients)) state.clients = data.clients;
+          if ((data.cancelledCount || 0) > 0) {
+            notify(`🚫 ยกเลิกไอเทมที่เหลือเวลาต่ำกว่า ${underH} ชม. สำเร็จ ${data.cancelledCount} รายการ (${data.affectedProfilesCount || 0} จอ) และดึงของกลับเข้ากระเป๋าแล้ว!`, 'success');
+          } else {
+            notify(`✅ ไม่มีไอเทมที่เหลือเวลาต่ำกว่า ${underH} ชั่วโมงในขณะนี้`, 'info');
+          }
+          updateMainTabBadges();
+          renderAll();
+        } else {
+          notify(`❌ ยกเลิกไม่สำเร็จ: ${(data && data.error) || ''}`, 'error');
+        }
+      } catch (err) {
+        notify(`❌ เกิดข้อผิดพลาด: ${err.message}`, 'error');
+      } finally {
+        actBtn.disabled = false;
+        actBtn.textContent = orig;
+      }
       return;
     }
 
@@ -836,7 +999,76 @@
     }
   }
 
+  async function saveGlobalMarketSettingsToServer(patch, toastMsg) {
+    state.globalSettings = Object.assign({}, state.globalSettings, patch);
+    try {
+      const res = await fetch('/api/market/overview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ op: 'set_global_settings' }, state.globalSettings))
+      });
+      const data = await res.json();
+      if (data && data.success) {
+        if (data.globalSettings) state.globalSettings = Object.assign({}, state.globalSettings, data.globalSettings);
+        if (Array.isArray(data.clients)) state.clients = data.clients;
+        const extraCancel = Number(data.autoCancelledTotal) || 0;
+        if (toastMsg) {
+          notify(
+            extraCancel > 0
+              ? `${toastMsg} (พร้อมยกเลิกของเหลือ < ${state.globalSettings.cancelUnderHours} ชม. ให้ทันที ${extraCancel} รายการ)`
+              : toastMsg,
+            'success'
+          );
+        }
+        updateMainTabBadges();
+        renderAll();
+      } else {
+        notify(`❌ บันทึกตั้งค่าตลาดส่วนกลางไม่สำเร็จ: ${(data && data.error) || ''}`, 'error');
+      }
+    } catch (err) {
+      notify(`❌ เกิดข้อผิดพลาด: ${err.message}`, 'error');
+    }
+  }
+
   async function onPaneChange(e) {
+    const durSel = e.target.closest('[data-mko-global-duration]');
+    if (durSel) {
+      const dh = Number(durSel.value);
+      const durationHours = [12, 24, 48].includes(dh) ? dh : 24;
+      durSel.blur();
+      await saveGlobalMarketSettingsToServer(
+        { durationHours },
+        `⏱️ ตั้งค่าระยะเวลาลงขายเป็น ${durationHours} ชั่วโมง ให้ทุกจอเรียบร้อยแล้ว!`
+      );
+      return;
+    }
+
+    const autoCancelChk = e.target.closest('[data-mko-autocancel-toggle]');
+    if (autoCancelChk) {
+      const autoCancelEnabled = Boolean(autoCancelChk.checked);
+      const hoursInp = document.getElementById('mko-cancel-under-hours');
+      const cancelUnderHours = Math.max(1, Math.min(47, Number(hoursInp ? hoursInp.value : state.globalSettings.cancelUnderHours) || 6));
+      await saveGlobalMarketSettingsToServer(
+        { autoCancelEnabled, cancelUnderHours },
+        autoCancelEnabled
+          ? `🚫 เปิดระบบยกเลิกการขายอัตโนมัติเมื่อไอเทมเหลือเวลาต่ำกว่า ${cancelUnderHours} ชั่วโมง แล้ว!`
+          : `⚪ ปิดระบบยกเลิกการขายอัตโนมัติแล้ว`
+      );
+      return;
+    }
+
+    const cancelHoursInp = e.target.closest('[data-mko-cancel-hours]');
+    if (cancelHoursInp) {
+      const cancelUnderHours = Math.max(1, Math.min(47, Math.round((Number(cancelHoursInp.value) || 6) * 10) / 10));
+      cancelHoursInp.value = String(cancelUnderHours);
+      cancelHoursInp.blur();
+      await saveGlobalMarketSettingsToServer(
+        { cancelUnderHours },
+        `⏳ ตั้งค่าเกณฑ์ยกเลิกการขายเมื่อเหลือเวลาต่ำกว่า ${cancelUnderHours} ชั่วโมง แล้ว!`
+      );
+      return;
+    }
+
     const toggleAs = e.target.closest('[data-mko-toggle-as]');
     if (toggleAs) {
       const profileId = toggleAs.dataset.mkoToggleAs;

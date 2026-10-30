@@ -2596,7 +2596,12 @@
     const changed = !market.item || market.item.itemId !== item.itemId || market.item.slot !== item.slot;
     market.item = item;
     if (changed) {
-      market.form = { qty: item.qty > 1 ? String(item.qty) : '1', unit: '', hours: market.form.hours || 24 };
+      const globalHours = (typeof window.getGlobalMarketSettings === 'function' && window.getGlobalMarketSettings().durationHours) || 0;
+      market.form = {
+        qty: item.qty > 1 ? String(item.qty) : '1',
+        unit: '',
+        hours: [12, 24, 48].includes(Number(globalHours)) ? Number(globalHours) : (market.form.hours || 24)
+      };
       market.listings = null;
       market.history = null;
     }

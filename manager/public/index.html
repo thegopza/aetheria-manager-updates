@@ -11,9 +11,11 @@
   <link rel="stylesheet" href="inventory_market.css?v=4.44.23">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=4.45.0">
-  <link rel="stylesheet" href="party_manager.css?v=4.44.21">
-  <link rel="stylesheet" href="premium_manager.css?v=4.48.2">
-  <link rel="stylesheet" href="guild_manager.css?v=4.44.26">
+  <link rel="stylesheet" href="party_manager.css?v=4.49.0">
+  <link rel="stylesheet" href="premium_manager.css?v=4.49.0">
+  <link rel="stylesheet" href="card_manager.css?v=4.49.5">
+  <link rel="stylesheet" href="market_overview.css?v=4.49.1">
+  <link rel="stylesheet" href="guild_manager.css?v=4.49.0">
   <link rel="stylesheet" href="jail_manager.css?v=44003">
   <link rel="stylesheet" href="device_manager.css?v=4.46.2">
 </head>
@@ -129,6 +131,9 @@
             </button>
             <button type="button" class="tab-btn" data-tab="zeny" role="tab">
               <span class="icon">💰</span> ระบบรวมเงิน
+            </button>
+            <button type="button" class="tab-btn" data-tab="market" id="tab-btn-market" role="tab">
+              <span class="icon">🏪</span> ตลาดกลาง <span class="tab-count" id="tab-count-market">0</span><span class="tab-alert-dot" id="tab-alert-market" style="display:none;"></span>
             </button>
           </nav>
           <span class="live-pill" id="live-polling-badge"><i></i> Realtime Sync · 2s</span>
@@ -423,6 +428,9 @@
           </div>
         </div>
       </section>
+
+      <!-- TAB: GLOBAL MARKET OVERVIEW (ตลาดกลางรวมทุกตัวละคร) -->
+      <section class="tab-pane" data-pane="market" id="market-overview-pane"></section>
     </main>
   </div>
 
@@ -1157,19 +1165,21 @@
   </div>
 
   <script src="image_board_solver.js?v=4381"></script>
-  <script src="app.js?v=4.48.0"></script>
+  <script src="app.js?v=4.49.1"></script>
   <script src="patcher_module.js?v=41744"></script>
   <script src="builder_module.js?v=4.45.0"></script>
   <script src="gear_builder.js?v=4.47.1"></script>
   <script src="inventory_market.js?v=4.44.23"></script>
   <script src="bot_update.js?v=44002"></script>
   <script src="config_copy.js?v=4400"></script>
-  <script src="party_manager.js?v=4.44.21"></script>
-  <script src="premium_manager.js?v=4.48.2"></script>
-  <script src="guild_manager.js?v=4.44.26"></script>
+  <script src="party_manager.js?v=4.49.1"></script>
+  <script src="premium_manager.js?v=4.49.0"></script>
+  <script src="card_manager.js?v=4.49.6"></script>
+  <script src="market_overview.js?v=4.49.4"></script>
+  <script src="guild_manager.js?v=4.49.0"></script>
   <script src="jail_manager.js?v=4.46.2"></script>
   <script src="device_manager.js?v=4.46.2"></script>
-  <script src="update_log.js?v=4.48.3"></script>
+  <script src="update_log.js?v=4.49.7"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

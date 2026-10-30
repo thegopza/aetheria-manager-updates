@@ -35,7 +35,7 @@
   box-shadow: 0 0 0 2px #120e05;
 }
 .pt-tab .pt-tab-badge:empty { display: none; }
-body.pt-open .pt-tab { transform: translateX(-60px); pointer-events: none; }
+body.pt-open .pt-tab, body.pm-open .pt-tab, body.cd-open .pt-tab { transform: translateX(-60px); pointer-events: none; }
 
 /* ---------- drawer ---------- */
 .pt-scrim {

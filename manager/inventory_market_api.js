@@ -400,19 +400,23 @@ function buildMarketCode(p) {
 
   if (p.op === 'mine' || p.op === 'collect' || p.op === 'collect_all' || p.op === 'cancel') {
     let actionJs = `room.send('market', { op: 'mine' });`;
+    let targetCancelId = 0;
+    let targetCollectId = 0;
     if (p.op === 'collect') {
       const deliveryId = toInt(p.deliveryId ?? p.id, 1, 2000000000);
       if (deliveryId === null) return { error: 'deliveryId ไม่ถูกต้อง' };
+      targetCollectId = deliveryId;
       actionJs = `room.send('market', { op: 'collect', deliveryId: ${deliveryId} });`;
     } else if (p.op === 'collect_all') {
       actionJs = `room.send('market', { op: 'collect_all' });`;
     } else if (p.op === 'cancel') {
       const listingId = toInt(p.listingId ?? p.id, 1, 2000000000);
       if (listingId === null) return { error: 'listingId ไม่ถูกต้อง' };
+      targetCancelId = listingId;
       actionJs = `room.send('market', { op: 'cancel', listingId: ${listingId} });`;
     }
     return {
-      timeout: 7000,
+      timeout: 8000,
       code: `(async () => {
         const room = ${ROOM_JS};
         if (!room || !room.connection?.isOpen) return { success: false, error: 'ไม่ได้เชื่อมต่อเกม' };
@@ -422,12 +426,29 @@ function buildMarketCode(p) {
         if (${JSON.stringify(p.op)} === 'mine') {
           mine = await awaitReply(room, 'market_mine', () => { ${actionJs} }, 4500);
         } else {
+          try { ${actionJs} } catch (_) {}
+          await new Promise(r => setTimeout(r, 420));
           mine = await awaitReply(room, 'market_mine', () => {
-            ${actionJs}
-            setTimeout(() => { try { room.send('market', { op: 'mine' }); } catch (_) {} }, 350);
-          }, 5000);
+            try { room.send('market', { op: 'mine' }); } catch (_) {}
+          }, 4000);
+          if (${targetCancelId} > 0 && mine && Array.isArray(mine.active) && mine.active.some(e => Number(e && (e.listingId ?? e.id)) === ${targetCancelId})) {
+            await new Promise(r => setTimeout(r, 450));
+            const retryMine = await awaitReply(room, 'market_mine', () => {
+              try { room.send('market', { op: 'mine' }); } catch (_) {}
+            }, 3500);
+            if (retryMine) mine = retryMine;
+          }
+          if (${targetCollectId} > 0 && mine && Array.isArray(mine.deliveries) && mine.deliveries.some(e => Number(e && (e.deliveryId ?? e.id)) === ${targetCollectId})) {
+            await new Promise(r => setTimeout(r, 400));
+            const retryMine = await awaitReply(room, 'market_mine', () => {
+              try { room.send('market', { op: 'mine' }); } catch (_) {}
+            }, 3500);
+            if (retryMine) mine = retryMine;
+          }
           if (!mine) {
-            mine = await awaitReply(room, 'market_mine', () => room.send('market', { op: 'mine' }), 3500);
+            mine = await awaitReply(room, 'market_mine', () => {
+              try { room.send('market', { op: 'mine' }); } catch (_) {}
+            }, 3500);
           }
         }
         if (!mine) return { success: false, error: 'เซิร์ฟเวอร์ตลาดไม่ตอบกลับ (ลองใหม่อีกครั้ง)' };
@@ -444,9 +465,17 @@ function buildMarketCode(p) {
         const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
         const premium = Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token');
         const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : 0);
-        const active = enrich(mine.active);
+        let active = enrich(mine.active);
         const closed = enrich(mine.closed);
-        const deliveries = enrich(mine.deliveries);
+        let deliveries = enrich(mine.deliveries);
+        if (${targetCancelId} > 0) {
+          active = active.filter(e => Number(e && (e.listingId ?? e.id)) !== ${targetCancelId});
+        }
+        if (${targetCollectId} > 0) {
+          deliveries = deliveries.filter(e => Number(e && (e.deliveryId ?? e.id)) !== ${targetCollectId});
+        }
+        window.__lastMarketMine = { active, closed, deliveries };
+        window.__myMarketActiveCount = active.length;
         const activeLimit = premium ? 20 : 5;
         return {
           success: true,
@@ -1104,8 +1133,351 @@ function buildHalloweenExchangeNowCode(payload) {
   })()`;
 }
 
+// ==========================================================================
+// GLOBAL MARKET OVERVIEW ACROSS ALL PROFILES (/api/market/overview)
+// ==========================================================================
+const overviewMarketCache = new Map(); // profileId -> { updatedAt, active, closed, deliveries, activeLimit, premium, zeny }
+
+function buildOverviewProfileCode(fetchMine = true) {
+  return `(async () => {
+    const room = ${ROOM_JS};
+    const awaitReply = ${AWAIT_REPLY_JS};
+    const icon = ${ICON_JS};
+    const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
+    const premium = Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token');
+    const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : 0);
+    const activeLimit = premium ? 20 : 5;
+    let mine = window.__lastMarketMine || null;
+    let fetchedMine = false;
+    if (${Boolean(fetchMine)} && room && room.connection?.isOpen) {
+      const fresh = await awaitReply(room, 'market_mine', () => {
+        try { room.send('market', { op: 'mine' }); } catch (_) {}
+      }, 3200);
+      if (fresh) {
+        mine = fresh;
+        window.__lastMarketMine = fresh;
+        fetchedMine = true;
+      }
+    }
+    const enrich = list => (Array.isArray(list) ? list : []).map(entry => {
+      if (entry && entry.item) {
+        entry.item.icon = entry.item.icon || icon(entry.item, entry.item.name);
+      }
+      if (entry && entry.id === undefined) {
+        if (entry.listingId !== undefined) entry.id = entry.listingId;
+        else if (entry.deliveryId !== undefined) entry.id = entry.deliveryId;
+      }
+      return entry;
+    });
+    const active = mine ? enrich(mine.active) : null;
+    const closed = mine ? enrich(mine.closed) : null;
+    const deliveries = mine ? enrich(mine.deliveries) : null;
+    if (Array.isArray(active)) window.__myMarketActiveCount = active.length;
+    const autoSell = (${buildAutoSellReadCode()});
+    const inv = window.__latestInventory || {};
+    const curMap = (typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '') || (room && room.state && room.state.mapId) || '';
+    return {
+      success: true,
+      charName: ch.name || window.__myCharName || '',
+      job: ch.job || ch.classId || '',
+      baseLv: Number(ch.level ?? ch.baseLv) || 0,
+      jobLv: Number(ch.jobLevel ?? ch.jobLv) || 0,
+      currentMap: String(curMap || ''),
+      zeny,
+      premium,
+      activeLimit,
+      weight: Number(inv.weight ?? ch.weight) || 0,
+      weightLimit: Number(inv.weightLimit ?? ch.maxWeight) || 0,
+      isBotRunning: Boolean(window.__isBotRunning),
+      hasMine: Boolean(mine),
+      fetchedMine,
+      active,
+      closed,
+      deliveries,
+      autoSell
+    };
+  })()`;
+}
+
+async function runWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let idx = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (idx < items.length) {
+      const cur = idx++;
+      results[cur] = await worker(items[cur], cur);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+async function querySingleProfileOverview(p, evalProfilePort, forceRefresh = false) {
+  const storedAs = loadProfileAutoSellStore(p.id);
+  const cached = overviewMarketCache.get(p.id) || null;
+  const liveSt = p.liveState || {};
+  const base = {
+    id: p.id,
+    name: p.name || p.id,
+    charName: liveSt.charName || p.lastCharName || '',
+    job: liveSt.job || p.lastJob || '',
+    baseLv: Number(liveSt.baseLv || p.lastBaseLv) || 0,
+    jobLv: Number(liveSt.jobLv || p.lastJobLv) || 0,
+    currentMap: liveSt.currentMap || p.targetMap || '',
+    online: Boolean(p.debugPort),
+    isBotRunning: Boolean(liveSt.isBotRunning),
+    zeny: Number(liveSt.zeny ?? p.lastZeny ?? (cached && cached.zeny)) || 0,
+    premium: Boolean(cached && cached.premium),
+    activeLimit: (cached && cached.activeLimit) || 5,
+    weight: Number(liveSt.weight) || 0,
+    weightLimit: Number(liveSt.weightLimit) || 0,
+    active: (cached && Array.isArray(cached.active)) ? cached.active : [],
+    closed: (cached && Array.isArray(cached.closed)) ? cached.closed : [],
+    deliveries: (cached && Array.isArray(cached.deliveries)) ? cached.deliveries : [],
+    mineUpdatedAt: (cached && cached.updatedAt) || 0,
+    autoSell: {
+      enabled: Boolean(storedAs.enabled),
+      priceStrategy: storedAs.priceStrategy || 'median',
+      rules: Array.isArray(storedAs.rules) ? storedAs.rules : [],
+      ruleStates: {},
+      readyCount: 0,
+      bagTradableCount: 0,
+      bagItemsSummary: []
+    }
+  };
+
+  if (!p.debugPort) return base;
+
+  const needMineFetch = forceRefresh || !cached || (Date.now() - cached.updatedAt > 18000);
+  try {
+    const r = await evalProfilePort(p.debugPort, buildOverviewProfileCode(needMineFetch), needMineFetch ? 4800 : 2800);
+    const d = r && r.result && r.result.success ? r.result : null;
+    if (!d) return base;
+
+    const useFreshMine = Boolean(d.fetchedMine) || (!cached && Array.isArray(d.active));
+    const active = useFreshMine && Array.isArray(d.active) ? d.active : base.active;
+    const closed = useFreshMine && Array.isArray(d.closed) ? d.closed : base.closed;
+    const deliveries = useFreshMine && Array.isArray(d.deliveries) ? d.deliveries : base.deliveries;
+    const activeLimit = Number(d.activeLimit) || (d.premium ? 20 : 5);
+    const nowTs = useFreshMine ? Date.now() : base.mineUpdatedAt;
+
+    if (useFreshMine && Array.isArray(d.active)) {
+      overviewMarketCache.set(p.id, {
+        updatedAt: nowTs,
+        active,
+        closed,
+        deliveries,
+        activeLimit,
+        premium: Boolean(d.premium),
+        zeny: Number(d.zeny) || 0
+      });
+    }
+
+    let asInfo = base.autoSell;
+    if (d.autoSell && d.autoSell.config) {
+      saveProfileAutoSellStore(p.id, d.autoSell.config);
+      const rs = d.autoSell.ruleStates || {};
+      const rules = Array.isArray(d.autoSell.config.rules) ? d.autoSell.config.rules : [];
+      const readyCount = rules.filter(ru => ru && ru.enabled !== false && rs[ru.id] && rs[ru.id].ready).length;
+      const bagSummary = Array.isArray(d.autoSell.bagItemsSummary) ? d.autoSell.bagItemsSummary : [];
+      asInfo = {
+        enabled: Boolean(d.autoSell.config.enabled),
+        priceStrategy: d.autoSell.config.priceStrategy || 'median',
+        rules,
+        ruleStates: rs,
+        readyCount,
+        bagTradableCount: bagSummary.reduce((s, x) => s + (Number(x.qty) || 0), 0),
+        bagItemsSummary: bagSummary.slice(0, 12)
+      };
+    }
+
+    return {
+      id: p.id,
+      name: p.name || p.id,
+      charName: d.charName || base.charName,
+      job: d.job || base.job,
+      baseLv: Number(d.baseLv) || base.baseLv,
+      jobLv: Number(d.jobLv) || base.jobLv,
+      currentMap: d.currentMap || base.currentMap,
+      online: true,
+      isBotRunning: Boolean(d.isBotRunning),
+      zeny: typeof d.zeny === 'number' ? d.zeny : base.zeny,
+      premium: Boolean(d.premium),
+      activeLimit,
+      weight: Number(d.weight) || base.weight,
+      weightLimit: Number(d.weightLimit) || base.weightLimit,
+      active,
+      closed: closed.slice(0, 15),
+      deliveries,
+      mineUpdatedAt: nowTs,
+      autoSell: asInfo
+    };
+  } catch (_) {
+    return base;
+  }
+}
+
 async function handleInventoryMarketRoute(req, res, pathname, ctx) {
   const { loadProfiles, evalProfilePort, sendJSON } = ctx;
+
+  // Global Market Overview endpoint across all profiles (/api/market/overview)
+  if (pathname === '/api/market/overview') {
+    const profiles = loadProfiles() || [];
+    const urlObj = new URL(req.url, 'http://127.0.0.1');
+
+    if (req.method === 'GET') {
+      const forceRefresh = urlObj.searchParams.get('refresh') === '1';
+      const singleId = urlObj.searchParams.get('profileId') || '';
+      const targetList = singleId ? profiles.filter(p => p && p.id === singleId) : profiles;
+      const clients = await runWithConcurrency(targetList, 6, p =>
+        querySingleProfileOverview(p, evalProfilePort, forceRefresh || Boolean(singleId))
+      );
+      sendJSON({
+        success: true,
+        timestamp: Date.now(),
+        clients
+      });
+      return true;
+    }
+
+    if (req.method === 'POST') {
+      const payload = await readBody(req);
+      if (!payload) {
+        sendJSON({ success: false, error: 'Invalid JSON' }, 400);
+        return true;
+      }
+      const op = payload.op || '';
+      const pid = String(payload.profileId || '').trim();
+
+      if (op === 'cancel' || op === 'collect' || op === 'collect_profile') {
+        const profile = profiles.find(p => p && p.id === pid);
+        if (!profile) {
+          sendJSON({ success: false, error: 'ไม่พบโปรไฟล์ที่ระบุ' }, 404);
+          return true;
+        }
+        if (!profile.debugPort) {
+          sendJSON({ success: false, error: 'จอนี้ออฟไลน์อยู่ ไม่สามารถสั่งงานตลาดได้' }, 400);
+          return true;
+        }
+        const marketOp = op === 'collect_profile' ? 'collect_all' : op;
+        const built = buildMarketCode({
+          op: marketOp,
+          listingId: payload.listingId,
+          deliveryId: payload.deliveryId
+        });
+        if (built.error) {
+          sendJSON({ success: false, error: built.error }, 400);
+          return true;
+        }
+        const r = await evalProfilePort(profile.debugPort, built.code, built.timeout || 7000);
+        const resObj = r && r.result ? r.result : { success: false, error: r?.error || 'สั่งงานตลาดไม่สำเร็จ' };
+        if (resObj && resObj.success) {
+          overviewMarketCache.set(profile.id, {
+            updatedAt: Date.now(),
+            active: Array.isArray(resObj.active) ? resObj.active : [],
+            closed: Array.isArray(resObj.closed) ? resObj.closed : [],
+            deliveries: Array.isArray(resObj.deliveries) ? resObj.deliveries : [],
+            activeLimit: Number(resObj.activeLimit) || (resObj.premium ? 20 : 5),
+            premium: Boolean(resObj.premium),
+            zeny: Number(resObj.zeny) || 0
+          });
+        }
+        const updatedClient = await querySingleProfileOverview(profile, evalProfilePort, false);
+        sendJSON(Object.assign({}, resObj, { client: updatedClient }));
+        return true;
+      }
+
+      if (op === 'collect_all_profiles') {
+        const onlineProfiles = profiles.filter(p => p && p.debugPort);
+        if (onlineProfiles.length === 0) {
+          sendJSON({ success: false, error: 'ไม่มีจอที่ออนไลน์อยู่' }, 400);
+          return true;
+        }
+        const built = buildMarketCode({ op: 'collect_all' });
+        let claimedCount = 0;
+        await runWithConcurrency(onlineProfiles, 6, async (p) => {
+          try {
+            const r = await evalProfilePort(p.debugPort, built.code, built.timeout || 7000);
+            const resObj = r && r.result;
+            if (resObj && resObj.success) {
+              claimedCount++;
+              overviewMarketCache.set(p.id, {
+                updatedAt: Date.now(),
+                active: Array.isArray(resObj.active) ? resObj.active : [],
+                closed: Array.isArray(resObj.closed) ? resObj.closed : [],
+                deliveries: Array.isArray(resObj.deliveries) ? resObj.deliveries : [],
+                activeLimit: Number(resObj.activeLimit) || (resObj.premium ? 20 : 5),
+                premium: Boolean(resObj.premium),
+                zeny: Number(resObj.zeny) || 0
+              });
+            }
+          } catch (_) {}
+        });
+        const clients = await runWithConcurrency(profiles, 6, p =>
+          querySingleProfileOverview(p, evalProfilePort, false)
+        );
+        sendJSON({
+          success: true,
+          claimedProfilesCount: claimedCount,
+          clients
+        });
+        return true;
+      }
+
+      if (op === 'toggle_autosell') {
+        const profile = profiles.find(p => p && p.id === pid);
+        if (!profile) {
+          sendJSON({ success: false, error: 'ไม่พบโปรไฟล์ที่ระบุ' }, 404);
+          return true;
+        }
+        const stored = loadProfileAutoSellStore(profile.id);
+        stored.enabled = Boolean(payload.enabled);
+        const cleanCfg = saveProfileAutoSellStore(profile.id, stored);
+        if (profile.debugPort) {
+          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg), 4000).catch(() => {});
+        }
+        const updatedClient = await querySingleProfileOverview(profile, evalProfilePort, false);
+        sendJSON({ success: true, enabled: cleanCfg.enabled, client: updatedClient });
+        return true;
+      }
+
+      if (op === 'trigger_autosell') {
+        const targets = (pid && pid !== 'all')
+          ? profiles.filter(p => p && p.id === pid && p.debugPort)
+          : profiles.filter(p => p && p.debugPort);
+        if (targets.length === 0) {
+          sendJSON({ success: false, error: 'ไม่มีจอเป้าหมายที่ออนไลน์อยู่' }, 400);
+          return true;
+        }
+        const code = `(async () => {
+          if (typeof window.runAutoMarketSellCycle === 'function') {
+            await window.runAutoMarketSellCycle(true);
+          }
+          return { success: true };
+        })()`;
+        let triggered = 0;
+        await runWithConcurrency(targets, 5, async (p) => {
+          try {
+            const r = await evalProfilePort(p.debugPort, code, 18000);
+            if (r && r.result && r.result.success) triggered++;
+          } catch (_) {}
+        });
+        const clients = await runWithConcurrency(profiles, 6, p =>
+          querySingleProfileOverview(p, evalProfilePort, true)
+        );
+        sendJSON({
+          success: true,
+          triggeredCount: triggered,
+          clients
+        });
+        return true;
+      }
+
+      sendJSON({ success: false, error: 'ไม่รู้จักคำสั่งตลาดส่วนกลาง: ' + op }, 400);
+      return true;
+    }
+    return false;
+  }
 
   // Global Halloween Exchange endpoint for the main-screen left drawer (/api/halloween)
   if (pathname === '/api/halloween') {
@@ -1572,6 +1944,21 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
     return true;
   }
   const r = await evalProfilePort(profile.debugPort, built.code, built.timeout || 5000);
+  if (kind === 'market' && r && r.result && r.result.success) {
+    if (Array.isArray(r.result.active)) {
+      overviewMarketCache.set(profile.id, {
+        updatedAt: Date.now(),
+        active: r.result.active,
+        closed: Array.isArray(r.result.closed) ? r.result.closed : [],
+        deliveries: Array.isArray(r.result.deliveries) ? r.result.deliveries : [],
+        activeLimit: Number(r.result.activeLimit) || (r.result.premium ? 20 : 5),
+        premium: Boolean(r.result.premium),
+        zeny: Number(r.result.zeny) || 0
+      });
+    } else if (payload && payload.op === 'list') {
+      overviewMarketCache.delete(profile.id);
+    }
+  }
   sendJSON(r && r.result ? r.result : { success: false, error: r?.error || 'สั่งงานในเกมไม่สำเร็จ' });
   return true;
 }

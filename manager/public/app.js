@@ -3823,6 +3823,10 @@ function switchMainTab(tabName) {
   if (tabName === "zeny") {
     updateZenyConsolidationView();
     pollConsolidationStatus();
+  } else if (tabName === "market") {
+    if (window.MarketOverview && typeof window.MarketOverview.onTabShown === "function") {
+      window.MarketOverview.onTabShown();
+    }
   }
 }
 
@@ -9755,10 +9759,10 @@ function isItemMatchingSlot(item, slotDef, classId) {
   return false;
 }
 
-function openCharacterModal(profileId) {
+function openCharacterModal(profileId, initialTab, initialMarketSubTab) {
   currentCharProfileId = profileId;
   selectedSlotDef = null;
-  currentCharTab = 'equip';
+  currentCharTab = initialTab || 'equip';
   
   const modal = document.getElementById('char-detail-modal');
   if (!modal) return;
@@ -9767,30 +9771,55 @@ function openCharacterModal(profileId) {
   const nameEl = document.getElementById('char-modal-name');
   if (nameEl) nameEl.innerText = 'กำลังโหลดข้อมูลตัวละคร...';
   
-  loadCharacterDetail(profileId, false);
-  if (window.InvMarket) window.InvMarket.open(profileId);  // bag panel + market window
+  loadCharacterDetail(profileId, false, initialMarketSubTab);
+  if (window.InvMarket) {
+    window.InvMarket.open(profileId);  // bag panel + market window
+    if (currentCharTab === 'market' && typeof window.InvMarket.openMarketTab === 'function') {
+      window.InvMarket.openMarketTab(profileId, initialMarketSubTab || 'sell');
+    }
+  }
 }
 
 function closeCharacterModal() {
+  const prevId = currentCharProfileId;
   const modal = document.getElementById('char-detail-modal');
   if (modal) modal.style.display = 'none';
   if (window.InvMarket) window.InvMarket.close();
   currentCharProfileId = null;
   currentCharData = null;
   selectedSlotDef = null;
+  if (window.MarketOverview && typeof window.MarketOverview.onModalClosed === 'function') {
+    window.MarketOverview.onModalClosed(prevId);
+  }
 }
 
-async function loadCharacterDetail(profileId, keepSelectedSlot = true) {
+async function loadCharacterDetail(profileId, keepSelectedSlot = true, initialMarketSubTab = null) {
   try {
     const res = await fetch(`/api/profiles/${encodeURIComponent(profileId)}/character`);
     const data = await res.json();
     if (!data.success) {
+      if (currentCharTab === 'market') {
+        const prof = (typeof currentProfiles !== 'undefined' && Array.isArray(currentProfiles)) ? currentProfiles.find(x => x.id === profileId) : null;
+        const nameEl = document.getElementById('char-modal-name');
+        if (nameEl) nameEl.innerText = prof ? `${prof.lastCharName || prof.name} (จอออฟไลน์ — แก้ไข Auto-Sell ได้)` : 'จอออฟไลน์';
+        document.querySelectorAll('.char-tab-btn').forEach(btn => {
+          btn.classList.toggle('active', btn.dataset.charTab === 'market');
+        });
+        const charBodyEl = document.querySelector('#char-detail-modal .char-modal-body');
+        const marketViewEl = document.getElementById('char-market-view');
+        if (charBodyEl) charBodyEl.style.display = 'none';
+        if (marketViewEl) marketViewEl.style.display = 'flex';
+        if (window.InvMarket && typeof window.InvMarket.openMarketTab === 'function') {
+          window.InvMarket.openMarketTab(profileId, initialMarketSubTab || 'autosell');
+        }
+        return;
+      }
       alert(`ไม่สามารถดึงข้อมูลตัวละครได้: ${data.error || 'บอทอาจจะยังไม่เชื่อมต่อหรืออยู่ในหน้าเลือกตัวละคร'}`);
       closeCharacterModal();
       return;
     }
     currentCharData = data;
-    renderCharacterModal(data);
+    renderCharacterModal(data, initialMarketSubTab);
     if (keepSelectedSlot && selectedSlotDef) {
       selectCharSlot(selectedSlotDef);
     }
@@ -10040,7 +10069,7 @@ function renderGearScanner(slotDef, data) {
   }
 }
 
-function renderCharacterModal(data) {
+function renderCharacterModal(data, subTab = null) {
   if (!data) return;
   
   // Header

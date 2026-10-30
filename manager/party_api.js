@@ -238,6 +238,8 @@ const ACTIONS = {
   setMap: (map, walkNow) => `(() => {
     const map = ${JSON.stringify(map)};
     if (typeof window.clearSafeMap === 'function') window.clearSafeMap('ปาร์ตี้: ตามแมพหัวตี้');
+    window.__overrideFarmMap = '';
+    try { localStorage.removeItem('pelican_override_farm_map'); } catch (e) {}
     window.__partyForcedMap = map;
     if (typeof window.setPlanManualMap === 'function') window.setPlanManualMap(map);
     window.__targetFarmMap = map;
@@ -902,8 +904,12 @@ function createPartyService(opts) {
         const P = profiles.get(id), S = states.get(id), m = mrt(party.id, id);
         if (!S || !S.ok || !S.name || !inGame.has(S.name)) continue;
         if (planBlocked(S)) continue; // the plan still levels this character on its own maps
-        if (S.busy && S.busy.length) continue;
-        const wrongTarget = Boolean(leaderMap && S.targetMap !== leaderMap);
+        const nonNavBusy = Array.isArray(S.busy)
+          ? S.busy.filter(f => f !== '__isNavigating' && f !== '__isWalkingToMap')
+          : [];
+        if (nonNavBusy.length) continue;
+        const wrongTarget = Boolean(leaderMap && S.targetMap !== leaderMap && !isCityMapName(S.targetMap));
+        if (!wrongTarget && S.busy && S.busy.length) continue;
         const wrongCurrentMap = Boolean(
           leaderMap &&
           !isCityMapName(leaderMap) &&
@@ -916,7 +922,7 @@ function createPartyService(opts) {
           m.mapAt = now();
           await act(P, ACTIONS.setMap(leaderMap, S.botRunning), 'set-map');
         }
-        if (anchorSnap && !anchorInPk && S.mapId && S.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && (S.channel !== desiredCh || S.pkChannel) && S.helpers && S.helpers.moveToChannel) {
+        if (!(S.busy && S.busy.length) && anchorSnap && !anchorInPk && S.mapId && S.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && (S.channel !== desiredCh || S.pkChannel) && S.helpers && S.helpers.moveToChannel) {
           movers.push(id);
         }
       }

@@ -32,7 +32,7 @@
   font: 700 11px/18px var(--font-sans, sans-serif); text-align: center; box-shadow: 0 0 0 2px #0b0a1c;
 }
 .pm-tab .pm-tab-badge:empty { display: none; }
-body.pm-open .pm-tab, body.pm-open .pt-tab, body.pt-open .pm-tab { transform: translateX(-60px); pointer-events: none; }
+body.pm-open .pm-tab, body.pm-open .pt-tab, body.pt-open .pm-tab, body.cd-open .pm-tab { transform: translateX(-60px); pointer-events: none; }
 
 /* ---------- drawer ---------- */
 .pm-scrim {

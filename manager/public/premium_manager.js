@@ -197,7 +197,7 @@
 
   function setOpen(v) {
     open = v;
-    if (v) document.body.classList.remove('pt-open', 'gd-open', 'hw-open');
+    if (v) document.body.classList.remove('pt-open', 'gd-open', 'hw-open', 'cd-open');
     document.body.classList.toggle('pm-open', v);
     clearInterval(pollTimer);
     if (v) {

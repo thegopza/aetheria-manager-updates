@@ -1,0 +1,637 @@
+/* ==========================================================================
+   MARKET OVERVIEW TAB (🏪 ตลาดกลางรวมทุกตัวละคร)
+   ========================================================================== */
+
+#tab-btn-market {
+  position: relative;
+}
+
+.tab-alert-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #facc15;
+  box-shadow: 0 0 8px rgba(250, 204, 21, 0.9);
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+.mko-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-bottom: 32px;
+}
+
+/* ---------- Top Summary & Global Controls ---------- */
+.mko-top-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(210px, 1fr)) minmax(300px, 1.25fr);
+  gap: 12px;
+}
+
+@media (max-width: 1280px) {
+  .mko-top-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .mko-top-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.mko-stat-card {
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.92), rgba(30, 41, 59, 0.78));
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.22);
+}
+
+.mko-stat-card.highlight-gold {
+  border-color: rgba(250, 204, 21, 0.38);
+  background: linear-gradient(145deg, rgba(28, 25, 16, 0.92), rgba(45, 35, 15, 0.78));
+}
+
+.mko-stat-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+}
+
+.mko-stat-main {
+  font-size: 22px;
+  font-weight: 800;
+  color: #f8fafc;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: -0.02em;
+}
+
+.mko-stat-main.gold {
+  color: #fde047;
+}
+
+.mko-stat-main.emerald {
+  color: #34d399;
+}
+
+.mko-stat-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #cbd5e1;
+}
+
+.mko-stat-chip {
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+
+.mko-actions-card {
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.95), rgba(23, 37, 84, 0.55));
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  border-radius: 12px;
+  padding: 13px 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mko-actions-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.mko-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(30, 41, 59, 0.85);
+  color: #e2e8f0;
+  transition: all 0.16s ease;
+  white-space: nowrap;
+}
+
+.mko-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(248, 250, 252, 0.45);
+  background: rgba(51, 65, 85, 0.92);
+}
+
+.mko-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.mko-btn.gold {
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  border-color: #fbbf24;
+  color: #0f172a;
+}
+
+.mko-btn.gold:hover:not(:disabled) {
+  background: linear-gradient(135deg, #fbbf24, #f59e0b);
+}
+
+.mko-btn.emerald {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.25), rgba(5, 150, 105, 0.35));
+  border-color: rgba(52, 211, 153, 0.55);
+  color: #6ee7b7;
+}
+
+.mko-btn.emerald:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.38), rgba(5, 150, 105, 0.5));
+}
+
+.mko-btn.sky {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.22), rgba(37, 99, 235, 0.32));
+  border-color: rgba(56, 189, 248, 0.5);
+  color: #7dd3fc;
+}
+
+.mko-btn.sky:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.35), rgba(37, 99, 235, 0.45));
+}
+
+.mko-btn.purple {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.22), rgba(109, 40, 217, 0.32));
+  border-color: rgba(167, 139, 250, 0.5);
+  color: #ddd6fe;
+}
+
+.mko-btn.purple:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.36), rgba(109, 40, 217, 0.45));
+}
+
+.mko-btn.danger {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fca5a5;
+}
+
+.mko-btn.danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.3);
+  color: #fecaca;
+}
+
+.mko-btn.sm {
+  padding: 4px 9px;
+  font-size: 11.5px;
+  border-radius: 6px;
+}
+
+/* ---------- Filter & Search Toolbar ---------- */
+.mko-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 11px;
+  padding: 10px 14px;
+}
+
+.mko-toolbar-left {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.mko-search-input {
+  min-width: 260px;
+  flex: 1;
+  max-width: 360px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.26);
+  background: rgba(2, 6, 23, 0.65);
+  color: #f8fafc;
+  font-size: 12.5px;
+}
+
+.mko-search-input:focus {
+  outline: none;
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+.mko-filter-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mko-pill {
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(30, 41, 59, 0.65);
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.mko-pill:hover {
+  border-color: rgba(148, 163, 184, 0.45);
+  color: #f8fafc;
+}
+
+.mko-pill.active {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: #38bdf8;
+  color: #7dd3fc;
+}
+
+.mko-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mko-view-switch {
+  display: inline-flex;
+  background: rgba(2, 6, 23, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  padding: 2px;
+}
+
+.mko-view-btn {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.mko-view-btn.active {
+  background: rgba(56, 189, 248, 0.22);
+  color: #f8fafc;
+}
+
+/* ---------- Character Market Cards Grid ---------- */
+.mko-char-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.mko-char-card {
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(15, 23, 42, 0.78));
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  padding: 13px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  transition: border-color 0.16s ease;
+}
+
+.mko-char-card:hover {
+  border-color: rgba(148, 163, 184, 0.35);
+}
+
+.mko-char-card.has-deliveries {
+  border-color: rgba(250, 204, 21, 0.42);
+  box-shadow: 0 0 18px rgba(250, 204, 21, 0.08);
+}
+
+.mko-char-card.offline {
+  opacity: 0.78;
+}
+
+.mko-char-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.mko-char-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mko-online-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #64748b;
+}
+
+.mko-online-dot.online {
+  background: #22c55e;
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.8);
+}
+
+.mko-char-name {
+  font-size: 14.5px;
+  font-weight: 800;
+  color: #f8fafc;
+}
+
+.mko-prof-sub {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.mko-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(30, 41, 59, 0.85);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  color: #cbd5e1;
+}
+
+.mko-badge.vip {
+  background: rgba(168, 85, 247, 0.18);
+  border-color: rgba(192, 132, 252, 0.45);
+  color: #e9d5ff;
+}
+
+.mko-badge.zeny {
+  background: rgba(234, 179, 8, 0.12);
+  border-color: rgba(250, 204, 21, 0.35);
+  color: #fde047;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.mko-badge.slots {
+  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #7dd3fc;
+}
+
+.mko-badge.slots.full {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fca5a5;
+}
+
+.mko-badge.deliv {
+  background: rgba(245, 158, 11, 0.22);
+  border-color: rgba(251, 191, 36, 0.55);
+  color: #fef08a;
+}
+
+.mko-char-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mko-autosell-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #cbd5e1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.mko-autosell-toggle.on {
+  border-color: rgba(52, 211, 153, 0.45);
+  background: rgba(16, 185, 129, 0.12);
+  color: #6ee7b7;
+}
+
+.mko-autosell-toggle input {
+  accent-color: #10b981;
+  cursor: pointer;
+}
+
+/* ---------- Active Listings Grid inside Character Card ---------- */
+.mko-listings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(365px, 1fr));
+  gap: 8px;
+}
+
+.mko-item-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: rgba(2, 6, 23, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.16);
+}
+
+.mko-item-card.delivery {
+  background: rgba(66, 32, 6, 0.35);
+  border-color: rgba(250, 204, 21, 0.38);
+}
+
+.mko-item-left {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  flex: 1;
+}
+
+.mko-item-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 7px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid var(--rc, rgba(148, 163, 184, 0.3));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.mko-item-icon img {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.mko-item-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.mko-item-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #f8fafc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mko-item-sub {
+  font-size: 11px;
+  color: #94a3b8;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.mko-item-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mko-item-price-box {
+  text-align: right;
+}
+
+.mko-item-price {
+  font-size: 12.5px;
+  font-weight: 800;
+  color: #fde047;
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.mko-item-unit {
+  font-size: 10.5px;
+  color: #94a3b8;
+}
+
+.mko-empty-inline {
+  font-size: 12px;
+  color: #64748b;
+  padding: 6px 2px;
+}
+
+/* ---------- Auto-Sell Footer Strip inside Character Card ---------- */
+.mko-autosell-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding-top: 7px;
+  border-top: 1px dashed rgba(148, 163, 184, 0.14);
+  font-size: 11.5px;
+}
+
+.mko-as-lbl {
+  color: #94a3b8;
+  font-weight: 600;
+  margin-right: 2px;
+}
+
+.mko-as-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(30, 41, 59, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #cbd5e1;
+  font-size: 11px;
+}
+
+.mko-as-chip img {
+  width: 15px;
+  height: 15px;
+  object-fit: contain;
+}
+
+.mko-as-chip.ready {
+  background: rgba(16, 185, 129, 0.16);
+  border-color: rgba(52, 211, 153, 0.45);
+  color: #6ee7b7;
+}
+
+.mko-as-chip.inbag {
+  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: #bae6fd;
+}
+
+/* ---------- All Active Listings Table View ---------- */
+.mko-table-wrap {
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  overflow-x: auto;
+}
+
+.mko-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.mko-table th {
+  text-align: left;
+  padding: 11px 14px;
+  background: rgba(2, 6, 23, 0.65);
+  color: #94a3b8;
+  font-weight: 700;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  white-space: nowrap;
+}
+
+.mko-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
+  color: #e2e8f0;
+  vertical-align: middle;
+}
+
+.mko-table tr:hover td {
+  background: rgba(30, 41, 59, 0.45);
+}

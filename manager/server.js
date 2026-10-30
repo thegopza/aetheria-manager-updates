@@ -88,6 +88,7 @@ const { handleInventoryMarketRoute } = require("./inventory_market_api");
 const { createPartyService } = require("./party_api");
 const { createPremiumService } = require("./premium_api");
 const { createGuildService } = require("./guild_api");
+const { createCardMarketService } = require("./card_market_api");
 const { createBotAutoUpdater } = require("./bot_auto_update");
 const { createManagerSelfUpdater } = require("./manager_self_update");
 const { handleConfigCopyRoute } = require("./config_copy_api");
@@ -1472,7 +1473,7 @@ function getUrlJson(url) {
   });
 }
 async function getGameItems() {
-  const fresh = x => x && Date.now() - (x.retryAt || x.fetchedAt + 6 * 3600 * 1000) < 0;
+  const fresh = x => x && Array.isArray(x.cards) && x.cards[0] && Array.isArray(x.cards[0].maps) && Date.now() - (x.retryAt || x.fetchedAt + 6 * 3600 * 1000) < 0;
   if (fresh(gameItemsMem)) return gameItemsMem;
   if (!gameItemsLoading) gameItemsLoading = fetchGameItems().finally(() => { gameItemsLoading = null; });
   return gameItemsLoading;
@@ -1481,6 +1482,7 @@ async function fetchGameItems() {
   try {
     const [wiki, icons] = await Promise.all([getUrlJson(`${GAME_SITE}/wiki-data`), getUrlJson(`${GAME_SITE}/art/icons/manifest.json`).catch(() => ({}))]);
     const iconOf = id => { const p = icons && icons.items && icons.items[id]; return p ? `${GAME_SITE}/art/icons/${p}` : null; };
+    const monsterById = new Map((wiki.monsters || []).map(m => [Number(m.id), m]));
     const items = (wiki.items || []).filter(i => i.type === "Equipment" && i.equipmentType && i.equipmentType !== "Ammo" && !/^Costume/.test(i.equipmentType))
       .map(i => ({
         id: i.id, name: i.name, slotType: i.equipmentType, weaponType: i.weaponType, level: i.equipLevelMin || 0,
@@ -1489,10 +1491,54 @@ async function fetchGameItems() {
         specials: (i.specials || []).slice(0, 2), soldBy: (i.soldBy || []).map(x => x.shop).slice(0, 1), icon: iconOf(i.id)
       }));
     const classes = (wiki.classes || []).map(c => ({ id: c.id, name: c.name, tier: c.tier }));
-    const cards = (wiki.items || []).filter(i => i.type === "Card").map(i => ({
-      id: i.id, name: i.name, rarity: i.rarity, cardSlotTypes: i.cardSlotTypes || [],
-      attributes: (i.attributes || []).slice(0, 4).map(a => ({ type: a.type, value: a.value })), icon: iconOf(i.id)
-    }));
+    const cards = (wiki.items || []).filter(i => i.type === "Card").map(i => {
+      const monsters = [];
+      const mapAcc = new Map();
+      for (const db of (i.droppedBy || [])) {
+        const m = monsterById.get(Number(db.monsterId));
+        if (!m) continue;
+        const mMaps = new Map();
+        for (const sp of (m.spawns || [])) {
+          if (!sp || !sp.map) continue;
+          const key = String(sp.map).trim();
+          const prev = mMaps.get(key) || { map: key, mapId: sp.mapId || '', count: 0 };
+          prev.count += (Number(sp.count) || 0);
+          mMaps.set(key, prev);
+          const gPrev = mapAcc.get(key) || {
+            map: key,
+            mapId: sp.mapId || '',
+            count: 0,
+            monsterName: m.name,
+            monsterLevel: m.level || 1,
+            boss: !!m.boss
+          };
+          gPrev.count += (Number(sp.count) || 0);
+          mapAcc.set(key, gPrev);
+        }
+        monsters.push({
+          id: m.id,
+          name: m.name,
+          level: m.level || 1,
+          boss: !!m.boss,
+          element: m.element || null,
+          race: m.race || null,
+          chance: db.chance || 0.0001,
+          maps: Array.from(mMaps.values()).sort((a, b) => b.count - a.count)
+        });
+      }
+      return {
+        id: i.id,
+        name: i.name,
+        rarity: i.rarity,
+        cardSlotTypes: i.cardSlotTypes || [],
+        attributes: (i.attributes || []).slice(0, 6).map(a => ({ type: a.type, value: a.value, perRefine: a.perRefine || 0, mode: a.mode || null })),
+        specials: (i.specials || []).slice(0, 4),
+        album: (i.album || []).slice(0, 4),
+        monsters,
+        maps: Array.from(mapAcc.values()).sort((a, b) => b.count - a.count),
+        icon: iconOf(i.id)
+      };
+    });
     gameItemsMem = { fetchedAt: Date.now(), items, classes, cards };
     try { fs.mkdirSync(path.dirname(GAME_ITEMS_CACHE), { recursive: true }); fs.writeFileSync(GAME_ITEMS_CACHE, JSON.stringify(gameItemsMem)); } catch (e) {}
     return gameItemsMem;
@@ -1554,12 +1600,14 @@ function buildClientActionEvalCode(payload) {
     return `(() => {
       const map = ${JSON.stringify(payload.map)};
       if (typeof window.clearSafeMap === 'function') window.clearSafeMap('เลือกแมพจาก Manager');
+      window.__overrideFarmMap = '';
+      try { localStorage.removeItem('pelican_override_farm_map'); } catch(e){}
       window.__targetFarmMap = map;
       try { localStorage.setItem('pelican_farm_map', map); } catch(e){}
       const mapSelect = document.getElementById('p-target-map-select');
       if (mapSelect) mapSelect.value = map;
       if (typeof window.rememberFarmMap === 'function') window.rememberFarmMap(map);
-      if (window.__planScriptEnabled && typeof window.setPlanManualMap === 'function') window.setPlanManualMap(map);
+      if (typeof window.setPlanManualMap === 'function') window.setPlanManualMap(map);
       if (typeof window.setTargetFarmMap === 'function') window.setTargetFarmMap(map);
       if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
       return { success: true };
@@ -4389,6 +4437,17 @@ const guildService = createGuildService({
 });
 guildService.start();
 
+// Card Market Price & Velocity Tracker + Farm Map Switcher (manager/card_market_api.js)
+const cardMarketService = createCardMarketService({
+  loadProfiles,
+  saveProfiles,
+  evalProfilePort,
+  queryProfileState: async (p) => (p && p.debugPort) ? await queryClientState(p.debugPort) : null,
+  getGameItems,
+  humanCheckSolver
+});
+cardMarketService.start();
+
 function getDefaultDeviceNickname() {
   return process.env.USERNAME || (typeof os.userInfo === 'function' ? os.userInfo()?.username : '') || os.hostname() || 'PmheeUser';
 }
@@ -5351,6 +5410,8 @@ const server = http.createServer(async (req, res) => {
   if (await premiumService.handleRoute(req, res, pathname, sendJSON)) return;
   // Guild Manager & Auto Daily Donation — see guild_api.js
   if (await guildService.handleRoute(req, res, pathname, sendJSON)) return;
+  // Card Market Price & Farm Map Switcher — see card_market_api.js
+  if (await cardMarketService.handleRoute(req, res, pathname, sendJSON)) return;
 
   // Discord Bot & Webhook Settings & Controls
   if (pathname === "/api/discord/settings") {

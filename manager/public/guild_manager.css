@@ -3,7 +3,7 @@
 #gd-tab {
   position: fixed;
   left: 0;
-  top: calc(50% + 184px);
+  top: calc(46% + 244px);
   transform: translateY(-50%);
   z-index: 1200;
   display: flex;
@@ -27,11 +27,13 @@
 }
 body.gd-open #gd-tab,
 body.pt-open #gd-tab,
-body.pm-open #gd-tab {
+body.pm-open #gd-tab,
+body.cd-open #gd-tab {
   transform: translate(-110%, -50%);
 }
 body.gd-open #pt-tab,
-body.gd-open #pm-tab {
+body.gd-open #pm-tab,
+body.gd-open #cd-tab {
   transform: translate(-110%, -50%);
 }
 .gd-tab-icon {

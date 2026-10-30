@@ -84,7 +84,7 @@
 
   function setOpen(v) {
     open = v;
-    if (v) document.body.classList.remove('pm-open', 'gd-open', 'hw-open');
+    if (v) document.body.classList.remove('pm-open', 'gd-open', 'hw-open', 'cd-open');
     document.body.classList.toggle('pt-open', v);
     clearInterval(pollTimer);
     if (v) { load(); pollTimer = setInterval(load, 5000); }

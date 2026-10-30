@@ -830,30 +830,33 @@ function loadProfiles() {
     if (lastValidProfilesCache && lastValidProfilesCache.length > 0) {
       return lastValidProfilesCache.map(p => ({ ...p }));
     }
-    const recoveredOnCorrupt = recoverProfilesFromLocalEvidence();
-    if (recoveredOnCorrupt && recoveredOnCorrupt.length > 0) {
-      lastValidProfilesCache = recoveredOnCorrupt.map(p => ({ ...p }));
-      try { writeJsonAtomic(PROFILES_FILE, recoveredOnCorrupt); } catch (_) {}
-      try { writeJsonAtomic(PROFILES_BACKUP_FILE, recoveredOnCorrupt); } catch (_) {}
-      return recoveredOnCorrupt;
+    if (fs.existsSync(PROFILES_BACKUP_FILE)) {
+      try {
+        const backup = JSON.parse(fs.readFileSync(PROFILES_BACKUP_FILE, "utf8"));
+        if (Array.isArray(backup) && backup.length > 0) {
+          lastValidProfilesCache = backup.map(p => ({ ...p }));
+          try { writeJsonAtomic(PROFILES_FILE, backup); } catch (_) {}
+          return backup;
+        }
+      } catch (_) {}
     }
   }
 
-  // If file does not exist OR contains only the 2 untouched install-time mock profiles, attempt auto-recovery
-  if (!parsed || isUntouchedDefaultMockProfiles(parsed)) {
-    const recovered = recoverProfilesFromLocalEvidence();
-    if (recovered && recovered.length > 0) {
-      lastValidProfilesCache = recovered.map(p => ({ ...p }));
-      try { writeJsonAtomic(PROFILES_FILE, recovered); } catch (_) {}
-      try { writeJsonAtomic(PROFILES_BACKUP_FILE, recovered); } catch (_) {}
-      return recovered;
+  // If file does not exist yet (fresh unzip), check local backup file in the same folder or initialize default profiles
+  if (!parsed) {
+    if (fs.existsSync(PROFILES_BACKUP_FILE)) {
+      try {
+        const backup = JSON.parse(fs.readFileSync(PROFILES_BACKUP_FILE, "utf8"));
+        if (Array.isArray(backup) && backup.length > 0) {
+          lastValidProfilesCache = backup.map(p => ({ ...p }));
+          try { writeJsonAtomic(PROFILES_FILE, backup); } catch (_) {}
+          return backup;
+        }
+      } catch (_) {}
     }
-    if (!parsed) {
-      const defaultProfiles = getDefaultMockProfiles();
-      writeJsonAtomic(PROFILES_FILE, defaultProfiles);
-      return defaultProfiles;
-    }
-    return parsed;
+    const defaultProfiles = getDefaultMockProfiles();
+    writeJsonAtomic(PROFILES_FILE, defaultProfiles);
+    return defaultProfiles;
   }
 
   lastValidProfilesCache = parsed.map(p => ({ ...p }));
@@ -4864,9 +4867,6 @@ async function syncProfileBackupToCentral() {
       deletedProfileIds,
       syncExact: true
     });
-    if (res && res.foreignProfilesDetected === true) {
-      await restoreProfilesFromCentral({ replaceExisting: true }).catch(() => {});
-    }
     return res;
   } catch (_) {
     return null;
@@ -4907,12 +4907,6 @@ async function restoreProfilesFromCentral(options = {}) {
   } catch (err) {
     return { success: false, error: err.message };
   }
-}
-
-if (typeof humanCheckSolver.setOnAccountChanged === "function") {
-  humanCheckSolver.setOnAccountChanged(() => {
-    restoreProfilesFromCentral({ replaceExisting: true }).catch(() => {});
-  });
 }
 
 let diskEvidenceImportedOnce = false;
@@ -5138,14 +5132,9 @@ function hasProfilesMissingCredentialsOrAccount(list) {
 
 async function recoverAndEnrichProfilesFromBrowserAndLocal() {
   try {
-    let current = loadProfiles() || [];
-    if (isUntouchedDefaultMockProfiles(current)) {
-      await restoreProfilesFromCentral().catch(() => {});
-      current = loadProfiles() || [];
-    }
-    if (isUntouchedDefaultMockProfiles(current)) {
-      importEvidenceFromOtherManagerDirsOnDisk();
-      current = loadProfiles() || [];
+    const current = loadProfiles() || [];
+    if (current.length === 0 || isUntouchedDefaultMockProfiles(current)) {
+      return;
     }
     const harvestedAuthHistory = {};
     const mergeHistoryList = (pid, list) => {
@@ -5194,85 +5183,68 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
     if (typeof browserMode?.harvestAllFromBrowserLevelDb === "function") {
       await browserMode.harvestAllFromBrowserLevelDb().catch(() => {});
     }
-    if (isUntouchedDefaultMockProfiles(current)) {
-      const localRec = recoverProfilesFromLocalEvidence();
-      if (localRec && localRec.length > 0) {
-        saveProfiles(localRec);
-        current = localRec;
-      } else {
-        await restoreProfilesFromCentral().catch(() => {});
-        current = loadProfiles() || [];
-      }
-    }
-    if (!isUntouchedDefaultMockProfiles(current)) {
-      const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
-      let changed = false;
-      let authChanged = false;
-      for (const p of current) {
-        if (!p || !p.id) continue;
-        const f = path.join(bsDir, `${p.id}.json`);
-        if (!fs.existsSync(f)) continue;
-        try {
-          const d = JSON.parse(fs.readFileSync(f, "utf8"));
-          const pfx = `pelican_${p.id}__`;
-          const rawAuth = d[`${pfx}auth_cfg`] || d["pelican_auth_cfg"];
-          if (harvestedAuthHistory[p.id] && harvestedAuthHistory[p.id].length > 0) {
-            const prevJson = JSON.stringify(p.authHistory || []);
-            const nextJson = JSON.stringify(harvestedAuthHistory[p.id]);
-            if (prevJson !== nextJson) {
-              p.authHistory = harvestedAuthHistory[p.id];
-              changed = true;
-            }
-          }
-          if (rawAuth) {
-            const auth = JSON.parse(rawAuth);
-            if (auth && typeof auth === "object") {
-              const verified = isVerifiedAuthConfig(auth);
-              const clientEditStamp = Math.max(Number(auth.userEditedAt) || 0, Number(auth.verifiedLoginAt) || 0);
-              const managerPushStamp = Number(auth.lastManagerPushAt) || 0;
-              const isNewerUserCred = verified && !auth.generatedUser && clientEditStamp > 0 && clientEditStamp > managerPushStamp;
-              if (verified && auth.username && String(auth.username).trim() && (!p.account || isNewerUserCred)) {
-                const nextU = String(auth.username).trim();
-                if (p.account !== nextU) {
-                  p.account = nextU;
-                  p.autoRegister = false;
-                  p.generatedAccount = Boolean(auth.generatedUser);
-                  p.loginSyncPending = true;
-                  changed = true;
-                  authChanged = true;
-                }
-              }
-              if (auth.charName && String(auth.charName).trim() && !p.lastCharName) {
-                p.lastCharName = String(auth.charName).trim();
-                if (/^Client \d+$/.test(p.name || "")) p.name = p.lastCharName;
-                changed = true;
-              }
-              if (verified && auth.password && String(auth.password).trim() && (!credentials.getPassword(p.id) || isNewerUserCred)) {
-                const nextPw = String(auth.password).trim();
-                if (credentials.getPassword(p.id) !== nextPw) {
-                  credentials.setPassword(p.id, nextPw);
-                  p.loginSyncPending = true;
-                  changed = true;
-                  authChanged = true;
-                }
-              }
-            }
-          }
-          const farmMap = d[`${pfx}farm_map`] || d[`${pfx}target_map`] || d[`${pfx}last_farm_map`];
-          if (farmMap && typeof farmMap === "string" && farmMap.trim() && (!p.targetMap || p.targetMap === "ถนนต้นหลิว")) {
-            p.targetMap = farmMap.trim();
+    const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
+    let changed = false;
+    let authChanged = false;
+    for (const p of current) {
+      if (!p || !p.id) continue;
+      const f = path.join(bsDir, `${p.id}.json`);
+      if (!fs.existsSync(f)) continue;
+      try {
+        const d = JSON.parse(fs.readFileSync(f, "utf8"));
+        const pfx = `pelican_${p.id}__`;
+        const rawAuth = d[`${pfx}auth_cfg`] || d["pelican_auth_cfg"];
+        if (harvestedAuthHistory[p.id] && harvestedAuthHistory[p.id].length > 0) {
+          const prevJson = JSON.stringify(p.authHistory || []);
+          const nextJson = JSON.stringify(harvestedAuthHistory[p.id]);
+          if (prevJson !== nextJson) {
+            p.authHistory = harvestedAuthHistory[p.id];
             changed = true;
           }
-        } catch (_) {}
-      }
-      if (changed) {
-        saveProfiles(current);
-      }
-      if (authChanged && typeof authSync?.tick === "function") {
-        authSync.tick().catch(() => {});
-      }
-      await syncProfileBackupToCentral().catch(() => {});
+        }
+        if (rawAuth) {
+          const auth = JSON.parse(rawAuth);
+          if (auth && typeof auth === "object") {
+            const verified = isVerifiedAuthConfig(auth);
+            const clientEditStamp = Math.max(Number(auth.userEditedAt) || 0, Number(auth.verifiedLoginAt) || 0);
+            const managerPushStamp = Number(auth.lastManagerPushAt) || 0;
+            const isNewerUserCred = verified && !auth.generatedUser && clientEditStamp > 0 && clientEditStamp > managerPushStamp;
+            if (verified && auth.username && String(auth.username).trim() && (!p.account || isNewerUserCred)) {
+              const nextU = String(auth.username).trim();
+              if (p.account !== nextU) {
+                p.account = nextU;
+                p.autoRegister = false;
+                p.generatedAccount = Boolean(auth.generatedUser);
+                p.loginSyncPending = true;
+                changed = true;
+                authChanged = true;
+              }
+            }
+            if (auth.charName && String(auth.charName).trim() && !p.lastCharName) {
+              p.lastCharName = String(auth.charName).trim();
+              if (/^Client \d+$/.test(p.name || "")) p.name = p.lastCharName;
+              changed = true;
+            }
+            if (verified && auth.password && String(auth.password).trim() && (!credentials.getPassword(p.id) || isNewerUserCred)) {
+              const nextPw = String(auth.password).trim();
+              if (credentials.getPassword(p.id) !== nextPw) {
+                credentials.setPassword(p.id, nextPw);
+                p.loginSyncPending = true;
+                changed = true;
+                authChanged = true;
+              }
+            }
+          }
+        }
+      } catch (_) {}
     }
+    if (changed) {
+      saveProfiles(current);
+    }
+    if (authChanged && typeof authSync?.tick === "function") {
+      authSync.tick().catch(() => {});
+    }
+    await syncProfileBackupToCentral().catch(() => {});
   } catch (_) {}
 }
 

@@ -4854,7 +4854,11 @@ async function syncProfileBackupToCentral() {
   if (TEST_INSTANCE || centralProfileBackupInFlight) return null;
   centralProfileBackupInFlight = true;
   try {
-    const accountSettings = humanCheckSolver.loadSettings();
+    let accountSettings = humanCheckSolver.loadSettings();
+    if (!accountSettings || !accountSettings.accountId) {
+      await humanCheckSolver.refreshBalance().catch(() => {});
+      accountSettings = humanCheckSolver.loadSettings();
+    }
     if (!accountSettings || !accountSettings.accountId) return null;
     const currentProfiles = loadProfiles() || [];
     const deletedProfileIds = Array.from(loadDeletedProfileIds());
@@ -4864,8 +4868,7 @@ async function syncProfileBackupToCentral() {
       machineId: payload.machineId,
       machineName: payload.machineName,
       profiles: payload.profiles,
-      deletedProfileIds,
-      syncExact: true
+      deletedProfileIds
     });
     return res;
   } catch (_) {

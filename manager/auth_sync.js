@@ -598,10 +598,10 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     const profiles = loadProfiles();
     let changed = false;
     for (const p of profiles) {
-      if (p.autoRegister && (p.proxyFallbackBrowser || p.proxyRegistrationState === 'known-rejected')) {
+      if (p.autoRegister && (p.proxyFallbackBrowser || p.proxyRegistrationState === 'known-rejected' || p.proxyRegistrationState === 'review-required' || p.proxyRegistrationState === 'retry-pending')) {
         delete p.proxyFallbackBrowser;
-        if (p.proxyRegistrationState === 'known-rejected') delete p.proxyRegistrationState;
-        if (p.registerError && (p.registerError.includes('Proxy') || p.registerError.includes('เปลี่ยนไปสมัครผ่านหน้าเกมแทน'))) {
+        delete p.proxyRegistrationState;
+        if (p.registerError && (p.registerError.includes('Proxy') || p.registerError.includes('เปลี่ยนไปสมัครผ่านหน้าเกมแทน') || p.registerError.includes('รายการสมัครยังรอตรวจสอบ'))) {
           p.registerError = '';
         }
         changed = true;
@@ -629,6 +629,9 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
   }
 
   function start() {
+    if (proxyRegister?.isEnabled?.()) {
+      try { resetProxyFallback(); } catch (_) {}
+    }
     setTimeout(() => { tick(); setInterval(tick, SYNC_MS); }, 8000);
   }
 

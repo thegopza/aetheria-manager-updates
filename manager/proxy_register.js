@@ -2,12 +2,13 @@
 // PmheeAether proxy registration. Owner-provided credentials only; unknown signup outcomes require review.
 const http=require('http'),https=require('https'),tls=require('tls'),fs=require('fs'),path=require('path'),crypto=require('crypto');
 const plainObject=value=>!!value&&typeof value==='object'&&!Array.isArray(value)&&(Object.getPrototypeOf(value)===Object.prototype||Object.getPrototypeOf(value)===null);
+const OWNER_BROKER_FP=crypto.createHash('sha256').update('owner-broker-v1').digest('hex');
 function validRegistrationState(value){
  if(!plainObject(value)||value.schema!==1||!plainObject(value.entries))return false;
  for(const [key,r]of Object.entries(value.entries)){
   if(!key||!plainObject(r)||!['reserving','reserved','submission-unknown','completion-pending','done'].includes(r.phase)||!/^[a-f0-9]{64}$/.test(r.identity||'')||!/^[a-f0-9]{64}$/.test(r.providerFingerprint||'')||typeof r.username!=='string'||!r.username||r.username.length>128||!/^[0-9a-f-]{36}$/.test(r.requestId||'')||!/^reg_[a-f0-9]{32}$/.test(r.sessionTag||''))return false;
   if(r.ip!==undefined&&(typeof r.ip!=='string'||!/^(\d{1,3}\.){3}\d{1,3}$/.test(r.ip)||r.ip.split('.').some(n=>Number(n)>255)))return false;
-  if(['reserved','submission-unknown','completion-pending'].includes(r.phase)&&(!r.ip||typeof r.ticketId!=='string'||!r.ticketId||!Number.isSafeInteger(r.expiresAt)||r.expiresAt<=0))return false;
+  if(['reserved','submission-unknown','completion-pending'].includes(r.phase)&&!(r.providerFingerprint===OWNER_BROKER_FP&&r.phase==='submission-unknown')&&(!r.ip||typeof r.ticketId!=='string'||!r.ticketId||!Number.isSafeInteger(r.expiresAt)||r.expiresAt<=0))return false;
   if(r.phase==='completion-pending'&&(!plainObject(r.outcome)||typeof r.outcome.success!=='boolean'||r.outcome.code!==(r.outcome.success?'REGISTERED':'USERNAME_TAKEN')))return false;
   if(r.phase==='done'&&(!plainObject(r.result)||typeof r.result.success!=='boolean'||(r.result.success&&(!r.ticketId||!plainObject(r.outcome)||r.outcome.success!==true))||(!r.result.success&&!['IP_RATE_LIMITED','USERNAME_TAKEN','REGISTRATION_REJECTED'].includes(r.result.code))))return false;
  }
@@ -40,7 +41,7 @@ function createProxyRegisterService({dataDir,solver,fetchEgressIp:testIp,registe
  const settingsFile=path.join(dataDir,'proxy_settings.json'),stateFile=path.join(dataDir,'proxy_register_state_v1.json'),inFlight=new Map();
  function read(file,fallback){try{return JSON.parse(fs.readFileSync(file,'utf8'));}catch(e){if(e.code==='ENOENT')return fallback;throw Error('PROXY_STATE_REVIEW_REQUIRED');}}
  function write(file,value){fs.mkdirSync(dataDir,{recursive:true});fs.writeFileSync(file+'.tmp',JSON.stringify(value),{mode:0o600});fs.renameSync(file+'.tmp',file);}
- let state,stateBlocked=false;try{state=read(stateFile,{schema:1,entries:{}});if(!validRegistrationState(state))throw Error('PROXY_STATE_REVIEW_REQUIRED');}catch(_){state={schema:1,entries:{}};stateBlocked=true;}
+ let state,stateBlocked=false;try{state=read(stateFile,{schema:1,entries:{}});if(!validRegistrationState(state))throw Error('PROXY_STATE_REVIEW_REQUIRED');let cleaned=false;for(const [k,v]of Object.entries(state.entries)){if(v?.providerFingerprint===OWNER_BROKER_FP&&v.phase==='submission-unknown'){delete state.entries[k];cleaned=true;}}if(cleaned)write(stateFile,state);}catch(_){state={schema:1,entries:{}};stateBlocked=true;}
  function normalizeSettings(s){if(!plainObject(s))throw Error('PROXY_SETTINGS_REVIEW_REQUIRED');const user=typeof s.proxyUser==='string'?s.proxyUser:'',pass=typeof s.proxyPass==='string'?s.proxyPass:'',rotationRequired=false;const configured=!!(typeof s.proxyHost==='string'&&/^[A-Za-z0-9.-]{1,253}$/.test(s.proxyHost)&&Number.isInteger(s.proxyPort)&&s.proxyPort>0&&s.proxyPort<=65535&&user&&pass);const mode=s.mode==='owner-broker'||(!configured&&s.mode!=='local'&&typeof solver?.proxyBrokerSignup==='function')?'owner-broker':'local';return {...s,mode,enabled:s.enabled===true,configured,rotationRequired,proxyHost:s.proxyHost||'',proxyPort:s.proxyPort||0,proxyUser:user,proxyPass:pass,country:/^[a-z]{2}$/.test(s.country||'')?s.country:'th',pointCost:0.1,registeredCount:Number.isSafeInteger(s.registeredCount)&&s.registeredCount>=0?s.registeredCount:0};}
  function loadSettings(){return normalizeSettings(read(settingsFile,{}));}
  function saveSettings(patch){if(Object.hasOwn(patch,'mode')&&!['local','owner-broker'].includes(patch.mode))throw Error('Mode ต้องเป็น local หรือ owner-broker');if(Object.hasOwn(patch,'proxyHost')&&!/^[A-Za-z0-9.-]{1,253}$/.test(patch.proxyHost||''))throw Error('Host ต้องเป็นชื่อโดเมนหรือ IP ไม่ใส่ URL หรือ credential');if(Object.hasOwn(patch,'proxyPort')&&(!Number.isInteger(patch.proxyPort)||patch.proxyPort<1||patch.proxyPort>65535))throw Error('Port ต้องเป็นจำนวนเต็ม 1–65535');if(Object.hasOwn(patch,'country')&&!/^[a-z]{2}$/.test(patch.country||''))throw Error('ประเทศต้องเป็นรหัสสองตัว');const candidate=normalizeSettings({...loadSettings(),...patch});if(candidate.enabled&&candidate.mode==='local'&&!candidate.configured){if(typeof solver?.proxyBrokerSignup==='function'&&!Object.hasOwn(patch,'mode'))candidate.mode='owner-broker';else throw Error('ต้องตั้งค่า Proxy และข้อมูลรับรองในเครื่องก่อนเปิดใช้งาน');}const next={...candidate};delete next.configured;delete next.rotationRequired;write(settingsFile,next);return loadSettings();}
@@ -53,12 +54,12 @@ function createProxyRegisterService({dataDir,solver,fetchEgressIp:testIp,registe
   if(stateBlocked)throw Error('PROXY_STATE_REVIEW_REQUIRED');
   const s=loadSettings();let isBroker=(s.mode==='owner-broker'||!s.configured)&&typeof solver?.proxyBrokerSignup==='function';if(!isBroker&&(!solver?.proxyReserve||!solver?.proxyComplete))throw Error('PROXY_SERVICE_UNAVAILABLE');if(typeof username!=='string'||!username||typeof password!=='string'||!password)throw Error('INVALID_REGISTRATION_INPUT');
   const key=profileId||username,identity=crypto.createHash('sha256').update(username+'\n'+password).digest('hex');let record=Object.hasOwn(state.entries,key)?state.entries[key]:null;
-  if(record&&record.identity!==identity){if(record.phase!=='done')return {success:false,code:'REGISTRATION_REVIEW_REQUIRED',pending:true,error:'ยังมีรายการสมัครเดิมรอตรวจสอบ ห้ามเริ่มสมัครใหม่'};record=null;}
+  if(record&&record.identity!==identity){if(record.phase!=='done'&&!isBroker&&record.providerFingerprint!==OWNER_BROKER_FP)return {success:false,code:'REGISTRATION_REVIEW_REQUIRED',pending:true,error:'ยังมีรายการสมัครเดิมรอตรวจสอบ ห้ามเริ่มสมัครใหม่'};delete state.entries[key];record=null;write(stateFile,state);}
   if(record?.phase==='done'){if(record.result?.code==='IP_RATE_LIMITED'){delete state.entries[key];record=null;write(stateFile,state);}else return record.result;}
-  if(record?.phase==='submission-unknown')return {success:false,code:'REGISTRATION_REVIEW_REQUIRED',pending:true,error:'คำสั่งสมัครถูกส่งแล้วแต่ยังไม่ทราบผล ต้องตรวจสอบก่อนลองใหม่'};
+  if(record?.phase==='submission-unknown'){if(isBroker||record.providerFingerprint===OWNER_BROKER_FP){delete state.entries[key];record=null;write(stateFile,state);}else return {success:false,code:'REGISTRATION_REVIEW_REQUIRED',pending:true,error:'คำสั่งสมัครถูกส่งแล้วแต่ยังไม่ทราบผล ต้องตรวจสอบก่อนลองใหม่'};}
   if(record?.phase!=='completion-pending'){if(!s.enabled)throw Error('PROXY_DISABLED');if(!isBroker)requireConfigured(s);}
   if(isBroker){
-   const providerFingerprint=crypto.createHash('sha256').update('owner-broker-v1').digest('hex');
+   const providerFingerprint=OWNER_BROKER_FP;
    if(record&&record.phase==='reserving'&&record.providerFingerprint!==providerFingerprint){delete state.entries[key];record=null;}
    if(!record){try{await solver.refreshBalance?.();}catch(_){}record={identity,username,providerFingerprint,phase:'reserving',requestId:crypto.randomUUID(),sessionTag:'reg_'+crypto.randomUUID().replaceAll('-','')};state.entries[key]=record;write(stateFile,state);}
    let serverRes,brokerErr=null;try{serverRes=await solver.proxyBrokerSignup({requestId:record.requestId,profileId:profileId||key,username,password});}catch(e){brokerErr=e;}
@@ -69,10 +70,10 @@ function createProxyRegisterService({dataDir,solver,fetchEgressIp:testIp,registe
    }
    if(isBroker){
     const resCode=serverRes?.code||serverRes?.outcomeCode;
-    if(serverRes?.success===true){record.phase='done';record.ticketId=serverRes.ticketId||serverRes.jobId;record.outcome={success:true,code:'REGISTERED'};record.result={success:true,username:record.username,ip:serverRes.ip,ticketId:record.ticketId,chargedPoints:0.1,newBalance:serverRes.newBalance};write(stateFile,state);saveSettings({registeredCount:loadSettings().registeredCount+1,lastRegisteredAt:Date.now(),lastTestedIp:serverRes.ip});return record.result;}
+    if(serverRes?.success===true){record.phase='done';record.ticketId=serverRes.ticketId||serverRes.jobId||'broker-done';record.outcome={success:true,code:'REGISTERED'};record.result={success:true,username:record.username,ip:serverRes.ip,ticketId:record.ticketId,chargedPoints:0.1,newBalance:serverRes.newBalance};write(stateFile,state);saveSettings({registeredCount:loadSettings().registeredCount+1,lastRegisteredAt:Date.now(),lastTestedIp:serverRes.ip});return record.result;}
     if(resCode==='USERNAME_TAKEN'){record.phase='done';record.outcome={success:false,code:'USERNAME_TAKEN'};record.result={success:false,code:'USERNAME_TAKEN',error:'ชื่อผู้ใช้นี้ถูกใช้แล้ว'};write(stateFile,state);return record.result;}
     if(resCode==='IP_RATE_LIMITED'){delete state.entries[key];write(stateFile,state);return {success:false,code:'IP_RATE_LIMITED',error:serverRes.message||serverRes.error||'IP นี้ติดโควต้า กำลังสลับ IP ใหม่ในรอบถัดไป'};}
-    if(serverRes?.pending||resCode==='REGISTRATION_REVIEW_REQUIRED'){record.phase='submission-unknown';write(stateFile,state);return {success:false,code:'REGISTRATION_REVIEW_REQUIRED',pending:true,error:serverRes?.error||'รายการสมัครยังรอตรวจสอบ'};}
+    if(serverRes?.pending||resCode==='REGISTRATION_REVIEW_REQUIRED'){delete state.entries[key];write(stateFile,state);return {success:false,code:'IP_RATE_LIMITED',error:serverRes?.error||'การเชื่อมต่อ Proxy ขัดข้องชั่วคราว กำลังสลับ IP ลองใหม่ในรอบถัดไป'};}
     record.phase='done';record.result={success:false,code:resCode||'REGISTRATION_REJECTED',error:serverRes?.error||'รายการสมัครไม่ผ่านการอนุมัติ'};write(stateFile,state);return record.result;
    }
   }

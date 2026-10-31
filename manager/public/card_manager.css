@@ -99,7 +99,7 @@ body.cd-open .cd-scrim {
   left: 0;
   bottom: 0;
   z-index: 1202;
-  width: min(560px, 95vw);
+  width: min(740px, 96vw);
   display: flex;
   flex-direction: column;
   background: linear-gradient(165deg, rgba(24, 20, 14, 0.98), rgba(9, 13, 26, 0.99));
@@ -119,7 +119,7 @@ body.cd-open .cd-drawer {
   pointer-events: auto;
 }
 body.cd-open.cd-fp-open .cd-drawer {
-  width: min(560px, 48vw);
+  width: min(680px, 52vw);
 }
 
 /* ---------- Header ---------- */
@@ -227,7 +227,7 @@ body.cd-open.cd-fp-open .cd-drawer {
 /* ---------- Summary Metrics Bar ---------- */
 .cd-summary {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 8px;
   padding: 9px 14px;
   border-bottom: 1px solid rgba(245, 158, 11, 0.16);
@@ -276,7 +276,7 @@ body.cd-open.cd-fp-open .cd-drawer {
 }
 .cd-search-row {
   display: grid;
-  grid-template-columns: 1fr 185px;
+  grid-template-columns: 1fr 225px;
   gap: 8px;
 }
 .cd-search-inp,
@@ -623,14 +623,36 @@ body.cd-open.cd-fp-open .cd-drawer {
   margin-left: 2px;
 }
 
-/* Right Price & Velocity Column */
+/* Right Price, Average Price & Velocity Column */
 .cd-card-metrics {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 2.5px;
+  gap: 4px;
   text-align: right;
   flex: none;
+  min-width: 195px;
+}
+.cd-mkt-row {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.cd-mkt-lbl {
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 600;
+}
+.cd-mkt-qty {
+  font-size: 10px;
+  color: #cbd5e1;
+  font-weight: 600;
+}
+.cd-mkt-last {
+  font-size: 9.5px;
+  color: #64748b;
 }
 .cd-price-val {
   font: 700 13px var(--font-mono, monospace);
@@ -638,18 +660,46 @@ body.cd-open.cd-fp-open .cd-drawer {
 }
 .cd-price-val.no-listing {
   color: #64748b;
-  font-size: 11px;
+  font-size: 10.5px;
   font-weight: 600;
+  font-family: var(--font-sans, sans-serif);
 }
 .cd-price-sub {
   font-size: 9.5px;
   color: #94a3b8;
 }
+.cd-avg-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2.5px 7px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.16), rgba(245, 158, 11, 0.14));
+  border: 1px solid rgba(52, 211, 153, 0.42);
+  font-size: 10px;
+  line-height: 1.25;
+}
+.cd-avg-badge .cd-avg-lbl {
+  color: #a7f3d0;
+  font-weight: 600;
+}
+.cd-avg-badge .cd-avg-val {
+  font: 700 11px var(--font-mono, monospace);
+  color: #fde047;
+}
+.cd-avg-badge.zero {
+  background: rgba(148, 163, 184, 0.07);
+  border-color: rgba(148, 163, 184, 0.16);
+}
+.cd-avg-badge.zero .cd-avg-lbl,
+.cd-avg-badge.zero .cd-avg-val {
+  color: #64748b;
+}
 .cd-vel-badge {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 6px;
+  padding: 2px 7px;
   border-radius: 6px;
   font: 700 10px var(--font-mono, monospace);
   background: rgba(56, 189, 248, 0.12);
@@ -672,8 +722,8 @@ body.cd-open.cd-fp-open .cd-drawer {
   position: fixed;
   top: 12px;
   bottom: 12px;
-  left: calc(min(560px, 48vw) + 12px);
-  width: min(580px, calc(100vw - min(560px, 48vw) - 24px));
+  left: calc(min(680px, 52vw) + 12px);
+  width: min(620px, calc(100vw - min(680px, 52vw) - 24px));
   z-index: 1201;
   border-radius: 16px;
   border: 1px solid rgba(251, 191, 36, 0.45);

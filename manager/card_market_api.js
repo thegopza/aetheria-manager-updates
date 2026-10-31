@@ -477,7 +477,7 @@ function buildHistoryBatchCode(cardItems, alsoSearchListingsForSingle = false) {
     });
 
     const computePriceStats = (msg, windowMs) => {
-      if (!msg) return { median: 0, min: 0, max: 0, lastPrice: 0, lastMs: 0, trades: 0, soldQty: 0 };
+      if (!msg) return { avg: 0, median: 0, min: 0, max: 0, lastPrice: 0, lastMs: 0, trades: 0, soldQty: 0 };
       const recent = Array.isArray(msg.recent) ? msg.recent : [];
       const points = Array.isArray(msg.points) ? msg.points : [];
       const now = Date.now();
@@ -507,18 +507,30 @@ function buildHistoryBatchCode(cardItems, alsoSearchListingsForSingle = false) {
       }
       let pointsQty = 0;
       let pointBucketsWithSales = 0;
+      let pointsValueSum = 0;
+      let pointsWeightedQty = 0;
       let fallbackAvg = 0;
       for (const pt of points) {
         if (!pt) continue;
         const pq = Number(pt.pieces ?? pt.qty ?? pt.volume ?? pt.count ?? pt.sold ?? 0) || 0;
+        const pAvg = Number(pt.avg) || 0;
         pointsQty += pq;
-        if (pq > 0 || (Number(pt.avg) || 0) > 0) pointBucketsWithSales++;
-        if ((Number(pt.avg) || 0) > 0) fallbackAvg = Math.round(Number(pt.avg));
+        if (pq > 0 || pAvg > 0) pointBucketsWithSales++;
+        if (pAvg > 0) {
+          fallbackAvg = Math.round(pAvg);
+          const w = pq > 0 ? pq : 1;
+          pointsValueSum += pAvg * w;
+          pointsWeightedQty += w;
+        }
+      }
+      if (pointsWeightedQty > 0) {
+        fallbackAvg = Math.round(pointsValueSum / pointsWeightedQty);
       }
       const soldQty = pointsQty > 0 ? pointsQty : recentQtyInWindow;
       const trades = pointBucketsWithSales > 0 ? Math.max(pointBucketsWithSales, recentTradesInWindow) : recentTradesInWindow;
       if (unitPrices.length === 0) {
         return {
+          avg: fallbackAvg,
           median: fallbackAvg,
           min: fallbackAvg,
           max: fallbackAvg,
@@ -543,7 +555,14 @@ function buildHistoryBatchCode(cardItems, alsoSearchListingsForSingle = false) {
       const median = (clean.length % 2 === 0 && clean.length > 1)
         ? Math.round((clean[mid - 1] + clean[mid]) / 2)
         : clean[mid];
+      const cleanAvg = clean.length > 0
+        ? Math.round(clean.reduce((s, v) => s + v, 0) / clean.length)
+        : fallbackAvg;
+      const avg = pointsWeightedQty > 0 && cleanAvg > 0
+        ? Math.round((cleanAvg + fallbackAvg) / 2)
+        : (cleanAvg > 0 ? cleanAvg : (fallbackAvg > 0 ? fallbackAvg : median));
       return {
+        avg,
         median,
         min: clean[0] || 0,
         max: clean[clean.length - 1] || 0,
@@ -564,7 +583,7 @@ function buildHistoryBatchCode(cardItems, alsoSearchListingsForSingle = false) {
 
       const msg24 = await awaitHistory(itemId, '24h', 3200);
       const st24 = computePriceStats(msg24, 24 * 3600 * 1000);
-      let st7d = { median: 0, min: 0, max: 0, lastPrice: 0, lastMs: 0, trades: 0, soldQty: 0 };
+      let st7d = { avg: 0, median: 0, min: 0, max: 0, lastPrice: 0, lastMs: 0, trades: 0, soldQty: 0 };
       if (st24.soldQty === 0 || st24.median === 0) {
         await new Promise(r => setTimeout(r, 250));
         const msg7d = await awaitHistory(itemId, '7d', 3200);
@@ -577,10 +596,14 @@ function buildHistoryBatchCode(cardItems, alsoSearchListingsForSingle = false) {
         ? Math.round((soldQty24h / 24) * 100) / 100
         : (soldQty7d > 0 ? Math.round((soldQty7d / 168) * 100) / 100 : 0);
 
+      const resolvedMedian = st24.median > 0 ? st24.median : st7d.median;
+      const resolvedAvg = st24.avg > 0 ? st24.avg : (st7d.avg > 0 ? st7d.avg : resolvedMedian);
+
       const entry = {
         itemId,
         itemName,
-        medianPrice: st24.median > 0 ? st24.median : st7d.median,
+        avgPrice: resolvedAvg,
+        medianPrice: resolvedMedian,
         minTradePrice: st24.min > 0 ? st24.min : st7d.min,
         maxTradePrice: st24.max > 0 ? st24.max : st7d.max,
         trades24h: st24.trades,
@@ -750,6 +773,7 @@ function createCardMarketService({
         itemId: id,
         itemName: r.itemName || prev.itemName || '',
         lowestPrice: r.lowestPrice !== undefined ? Number(r.lowestPrice) || 0 : (Number(prev.lowestPrice) || 0),
+        avgPrice: r.avgPrice !== undefined && Number(r.avgPrice) > 0 ? Number(r.avgPrice) : (Number(prev.avgPrice) || Number(r.medianPrice) || Number(prev.medianPrice) || 0),
         medianPrice: r.medianPrice !== undefined && Number(r.medianPrice) > 0 ? Number(r.medianPrice) : (Number(prev.medianPrice) || 0),
         minTradePrice: r.minTradePrice !== undefined && Number(r.minTradePrice) > 0 ? Number(r.minTradePrice) : (Number(prev.minTradePrice) || 0),
         maxTradePrice: r.maxTradePrice !== undefined && Number(r.maxTradePrice) > 0 ? Number(r.maxTradePrice) : (Number(prev.maxTradePrice) || 0),
@@ -982,10 +1006,12 @@ function createCardMarketService({
       const lowestPrice = Number(p.lowestPrice) || 0;
       const medianPrice = Number(p.medianPrice) || 0;
       const lastTradePrice = Number(p.lastTradePrice) || 0;
-      const displayPrice = lowestPrice > 0 ? lowestPrice : (medianPrice > 0 ? medianPrice : lastTradePrice);
+      const avgPrice = Number(p.avgPrice) > 0 ? Number(p.avgPrice) : (medianPrice > 0 ? medianPrice : lastTradePrice);
+      const displayPrice = lowestPrice > 0 ? lowestPrice : (avgPrice > 0 ? avgPrice : (medianPrice > 0 ? medianPrice : lastTradePrice));
       const priceObj = {
         displayPrice,
         lowestPrice,
+        avgPrice,
         medianPrice,
         lastTradePrice,
         minTradePrice: Number(p.minTradePrice) || 0,

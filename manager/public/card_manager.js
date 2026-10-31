@@ -405,6 +405,11 @@
           <small id="cd-sum-top-vel">เฉลี่ย — ใบ/ชม.</small>
         </div>
         <div class="cd-sum-box">
+          <span>ราคาขายเฉลี่ยสูงสุด</span>
+          <b id="cd-sum-top-avg-card">—</b>
+          <small id="cd-sum-top-avg-val">ราคาเฉลี่ย — z</small>
+        </div>
+        <div class="cd-sum-box">
           <span>จอที่ฟาร์มแมพการ์ด</span>
           <b id="cd-sum-farming">0 จอ</b>
           <small id="cd-sum-farming-sub">ติ๊กเลือกการ์ดเพื่อเฉลี่ยจอไปฟาร์ม</small>
@@ -416,6 +421,8 @@
           <input type="text" class="cd-search-inp" id="cd-search-inp" placeholder="🔍 ค้นหาชื่อการ์ด, มอนสเตอร์, แมพ, หรือสเตตัส..." autocomplete="off">
           <select class="cd-sort-sel" id="cd-sort-sel" title="เรียงลำดับรายการการ์ด">
             <option value="velocity_desc">🔥 ขายออกถี่สุด (เฉลี่ย/ชม.)</option>
+            <option value="avg_price_desc">📊 ราคาเฉลี่ย: แพง → ถูก</option>
+            <option value="avg_price_asc">📊 ราคาเฉลี่ย: ถูก → แพง</option>
             <option value="price_asc">💰 ราคาถูก → แพง</option>
             <option value="price_desc">💎 ราคาแพง → ถูก</option>
             <option value="listings_desc">📦 วางขายมากสุด</option>
@@ -905,11 +912,18 @@
     }
   }
 
-  function getCardEffectivePrice(c) {
-    const m = c.market || {};
-    if (Number(m.lowestPrice) > 0) return Number(m.lowestPrice);
+  function getCardAveragePrice(c) {
+    const m = (c && c.market) || {};
+    if (Number(m.avgPrice) > 0) return Number(m.avgPrice);
     if (Number(m.medianPrice) > 0) return Number(m.medianPrice);
+    if (Number(m.lastTradePrice) > 0) return Number(m.lastTradePrice);
     return 0;
+  }
+
+  function getCardEffectivePrice(c) {
+    const m = (c && c.market) || {};
+    if (Number(m.lowestPrice) > 0) return Number(m.lowestPrice);
+    return getCardAveragePrice(c);
   }
 
   function getFarmingCountForCard(c) {
@@ -938,17 +952,19 @@
     const totalCards = state.cards.length || 66;
     const listedCards = state.cards.filter(c => c.market && Number(c.market.lowestPrice) > 0).length;
     const pricedOrHistoryCards = state.cards.filter(
-      c => c.market && (Number(c.market.lowestPrice) > 0 || Number(c.market.medianPrice) > 0 || Number(c.market.soldQty7d) > 0)
+      c => c.market && (Number(c.market.lowestPrice) > 0 || getCardAveragePrice(c) > 0 || Number(c.market.soldQty7d) > 0)
     ).length;
 
     let latestUpdate = state.lastFullSweepAt || 0;
     let topVelCard = null;
+    let topAvgCard = null;
     for (const c of state.cards) {
       const m = c.market || {};
       if (Number(m.updatedAt) > latestUpdate) latestUpdate = Number(m.updatedAt);
       const vel = Number(m.avgSoldPerHour) || 0;
       const sold24 = Number(m.soldQty24h) || 0;
       const sold7 = Number(m.soldQty7d) || 0;
+      const avgP = getCardAveragePrice(c);
       if (vel > 0 || sold24 > 0 || sold7 > 0) {
         if (
           !topVelCard ||
@@ -958,6 +974,9 @@
           topVelCard = c;
         }
       }
+      if (avgP > 0 && (!topAvgCard || avgP > getCardAveragePrice(topAvgCard))) {
+        topAvgCard = c;
+      }
     }
 
     const farmingClients = state.clients.filter(c => String(c.overrideFarmMap || '').trim());
@@ -966,6 +985,8 @@
     const elUpdated = document.getElementById('cd-sum-updated');
     const elTopCard = document.getElementById('cd-sum-top-card');
     const elTopVel = document.getElementById('cd-sum-top-vel');
+    const elTopAvgCard = document.getElementById('cd-sum-top-avg-card');
+    const elTopAvgVal = document.getElementById('cd-sum-top-avg-val');
     const elFarming = document.getElementById('cd-sum-farming');
     const elFarmingSub = document.getElementById('cd-sum-farming-sub');
 
@@ -978,13 +999,27 @@
 
     if (topVelCard) {
       const m = topVelCard.market || {};
+      const topAvg = getCardAveragePrice(topVelCard);
       if (elTopCard) elTopCard.textContent = topVelCard.name.replace(/ Card$/i, '');
       if (elTopVel) {
-        elTopVel.textContent = `เฉลี่ย ${Number(m.avgSoldPerHour || 0).toFixed(2)} ใบ/ชม. (24ชม.: ${m.soldQty24h || 0} ใบ)`;
+        elTopVel.textContent = `⚡ ${Number(m.avgSoldPerHour || 0).toFixed(2)} ใบ/ชม.${topAvg > 0 ? ` · เฉลี่ย ${fmt(topAvg)} z` : ` (${m.soldQty24h || 0}/วัน)`}`;
       }
     } else {
       if (elTopCard) elTopCard.textContent = 'ยังไม่มีประวัติขาย';
       if (elTopVel) elTopVel.textContent = 'คลิกการ์ดหรือกดเช็คราคา';
+    }
+
+    if (topAvgCard) {
+      const m = topAvgCard.market || {};
+      const topAvg = getCardAveragePrice(topAvgCard);
+      const sold = Number(m.soldQty24h) || Number(m.soldQty7d) || 0;
+      if (elTopAvgCard) elTopAvgCard.textContent = topAvgCard.name.replace(/ Card$/i, '');
+      if (elTopAvgVal) {
+        elTopAvgVal.textContent = `💰 เฉลี่ย ${fmt(topAvg)} z${sold > 0 ? ` (${sold} ใบ)` : ''}`;
+      }
+    } else {
+      if (elTopAvgCard) elTopAvgCard.textContent = 'ยังไม่มีข้อมูล';
+      if (elTopAvgVal) elTopAvgVal.textContent = 'ราคาเฉลี่ย — z';
     }
 
     if (elFarming) elFarming.textContent = `${farmingClients.length} จอ`;
@@ -1080,7 +1115,21 @@
       const mb = b.market || {};
       const pa = getCardEffectivePrice(a);
       const pb = getCardEffectivePrice(b);
+      const avgA = getCardAveragePrice(a);
+      const avgB = getCardAveragePrice(b);
 
+      if (sortMode === 'avg_price_desc') {
+        if (avgA > 0 && avgB > 0 && avgB !== avgA) return avgB - avgA;
+        if (avgA > 0) return -1;
+        if (avgB > 0) return 1;
+        return a.name.localeCompare(b.name);
+      }
+      if (sortMode === 'avg_price_asc') {
+        if (avgA > 0 && avgB > 0 && avgA !== avgB) return avgA - avgB;
+        if (avgA > 0) return -1;
+        if (avgB > 0) return 1;
+        return a.name.localeCompare(b.name);
+      }
       if (sortMode === 'price_asc') {
         if (pa > 0 && pb > 0) return pa - pb;
         if (pa > 0) return -1;
@@ -1139,7 +1188,11 @@
       .map(c => {
         const m = c.market || {};
         const lowest = Number(m.lowestPrice) || 0;
+        const avgPrice = getCardAveragePrice(c);
         const median = Number(m.medianPrice) || 0;
+        const minTrade = Number(m.minTradePrice) || 0;
+        const maxTrade = Number(m.maxTradePrice) || 0;
+        const lastTrade = Number(m.lastTradePrice) || 0;
         const activeQty = Number(m.activeQty || m.activeListings || 0);
         const vel = Number(m.avgSoldPerHour) || 0;
         const sold24 = Number(m.soldQty24h) || 0;
@@ -1160,21 +1213,46 @@
                 .join(' ')
             : `<span style="color:#64748b;">ไม่มีแมพเกิดประจำ</span>`;
 
-        let priceHtml = '';
-        let priceSubHtml = '';
+        let marketListingHtml = '';
         if (lowest > 0) {
-          priceHtml = `<div class="cd-price-val">${fmt(lowest)} z</div>`;
-          priceSubHtml = `<div class="cd-price-sub">วางขาย ${activeQty} ใบ${median > 0 ? ` · กลาง ${fmt(median)} z` : ''}</div>`;
-        } else if (median > 0) {
-          priceHtml = `<div class="cd-price-val" style="color:#93c5fd;">~${fmt(median)} z</div>`;
-          priceSubHtml = `<div class="cd-price-sub">ไม่มีวางขาย (ราคากลาง)</div>`;
+          marketListingHtml = `
+            <div class="cd-mkt-row" title="ราคาต่ำสุดที่วางขายในตลาดกลางตอนนี้ (มีวางขาย ${activeQty} ใบ)">
+              <span class="cd-mkt-lbl">วางขายต่ำสุด</span>
+              <span class="cd-price-val">${fmt(lowest)} z</span>
+              <span class="cd-mkt-qty">(${activeQty} ใบ)</span>
+            </div>
+          `;
         } else {
-          priceHtml = `<div class="cd-price-val no-listing">ไม่มีวางขาย</div>`;
-          priceSubHtml = `<div class="cd-price-sub">คลิกเพื่อเช็คราคา/ฟาร์ม</div>`;
+          marketListingHtml = `
+            <div class="cd-mkt-row" title="ขณะนี้ไม่มีผู้เล่นวางขายการ์ดใบนี้ในตลาดกลาง">
+              <span class="cd-price-val no-listing">ไม่มีวางขายในตลาด</span>
+              ${lastTrade > 0 ? `<span class="cd-mkt-last">· ล่าสุด ${fmt(lastTrade)} z</span>` : ''}
+            </div>
+          `;
         }
 
+        const avgTooltipParts = [];
+        if (avgPrice > 0) {
+          avgTooltipParts.push(`ราคาขายเฉลี่ย: ${fmt(avgPrice)} z`);
+          if (median > 0 && median !== avgPrice) avgTooltipParts.push(`ราคากลาง: ${fmt(median)} z`);
+          if (minTrade > 0 && maxTrade > 0) avgTooltipParts.push(`ช่วงราคาขาย: ${fmt(minTrade)} – ${fmt(maxTrade)} z`);
+          if (lastTrade > 0) avgTooltipParts.push(`ขายออกล่าสุด: ${fmt(lastTrade)} z`);
+        } else {
+          avgTooltipParts.push('ยังไม่มีประวัติราคาซื้อขายในช่วง 24 ชม. / 7 วันที่ผ่านมา');
+        }
+        const avgBadgeHtml =
+          avgPrice > 0
+            ? `<div class="cd-avg-badge" title="${esc(avgTooltipParts.join(' | '))}">
+                 <span class="cd-avg-lbl">💰 ราคาเฉลี่ย</span>
+                 <b class="cd-avg-val">${fmt(avgPrice)} z</b>
+               </div>`
+            : `<div class="cd-avg-badge zero" title="${esc(avgTooltipParts.join(' | '))}">
+                 <span class="cd-avg-lbl">💰 ราคาเฉลี่ย</span>
+                 <b class="cd-avg-val">—</b>
+               </div>`;
+
         let velClass = 'cd-vel-badge zero';
-        let velText = '0 ใบ/ชม.';
+        let velText = '⚡ 0 ใบ/ชม.';
         if (vel > 0 || sold24 > 0) {
           velClass = vel >= 0.25 || sold24 >= 5 ? 'cd-vel-badge hot' : 'cd-vel-badge';
           velText = `⚡ ${vel.toFixed(2)} ใบ/ชม. (${sold24}/วัน)`;
@@ -1206,8 +1284,8 @@
               </div>
             </div>
             <div class="cd-card-metrics">
-              ${priceHtml}
-              ${priceSubHtml}
+              ${marketListingHtml}
+              ${avgBadgeHtml}
               <div class="${velClass}" title="ความถี่การขายออกในตลาดกลาง (24 ชั่วโมงล่าสุดขายออก ${sold24} ใบ / 7 วันล่าสุดขายออก ${sold7} ใบ)">
                 ${esc(velText)}
               </div>
@@ -1239,15 +1317,15 @@
         const card = buckets[0].card;
         const m = card.market || {};
         const lowest = Number(m.lowestPrice) || 0;
-        const median = Number(m.medianPrice) || 0;
+        const avgPrice = getCardAveragePrice(card);
         const vel = Number(m.avgSoldPerHour) || 0;
-        const sold24 = Number(m.soldQty24h) || 0;
-        const priceStr = lowest > 0 ? `ต่ำสุด ${fmt(lowest)} z` : median > 0 ? `ราคากลาง ~${fmt(median)} z` : 'ไม่มีวางขาย';
+        const priceStr = lowest > 0 ? `วางขายต่ำสุด ${fmt(lowest)} z` : 'ไม่มีวางขาย';
+        const avgStr = avgPrice > 0 ? `💰 ราคาเฉลี่ย ${fmt(avgPrice)} z` : 'ราคาเฉลี่ย —';
         titleEl.innerHTML = `
           ${card.icon ? `<img src="${esc(card.icon)}" alt="">` : '🃏'}
           <div>
             <b>${esc(card.name)}</b>
-            <small>${esc(priceStr)} · เฉลี่ย ${vel.toFixed(2)} ใบ/ชม. · <span style="color:#34d399;font-weight:700;">🏷️ เพิ่มเข้า Auto-Sell (≥1 ใบ ขายทันที) อัตโนมัติ</span></small>
+            <small>${esc(priceStr)} · <span style="color:#fde047;font-weight:700;">${esc(avgStr)}</span> · ⚡ เฉลี่ย ${vel.toFixed(2)} ใบ/ชม. · <span style="color:#34d399;font-weight:700;">🏷️ Auto-Sell (≥1 ใบ)</span></small>
           </div>
         `;
       } else {

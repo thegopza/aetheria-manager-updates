@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "a4cd0f7275fb3e6245d311679073830c6ed6159f",
+  "sourceCommit": "c1ceeb3a47970b26c614662b0f77120f8f92b493",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -24,7 +24,7 @@
     },
     {
       "path": "manager/card_market_api.js",
-      "sha256": "86bf3a1e68be05fac55f201d6eb6c8504a59b74a50d1bd6016764e264334cc45"
+      "sha256": "2c2f0bdcfb22350f222be2a22c14943c300310c35adef40ac5d3884ab0ac1ce1"
     },
     {
       "path": "manager/config_copy_api.js",
@@ -140,11 +140,11 @@
     },
     {
       "path": "manager/public/card_manager.css",
-      "sha256": "fbc3274391a8f0fff9d83d06f0fd18581cb4b4ca141cb17f56389211cef4bfd0"
+      "sha256": "46e00b171d4a2dcd2843c2c8765b9779913fff672de4e985df42fa9493cc24a7"
     },
     {
       "path": "manager/public/card_manager.js",
-      "sha256": "b9c6a24a1ac3ec5b47badf6b94599522bd2e833b444d47e9515eeceb31db4e6a"
+      "sha256": "4fa3e47d61e30dd0fddd500d262d86f9f5dcd17b274b1e70e5f1dd2a0478b857"
     },
     {
       "path": "manager/public/config_copy.js",
@@ -180,7 +180,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "75f9aa956ef0ec804b5bedb2f2e3396c0f98bedb5a6a18b92a80ffef7fee8dc5"
+      "sha256": "209b4e021aae33304137aa0d79c9e9b43c33fedff5a431b06013f85b71a4ab60"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -244,7 +244,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "dea4cef732fb3b330d16266114190fb51e7bdfb100d18fe55c3512d4ed67faa2"
+      "sha256": "2ade65d6ad2e419a035f4b0e89b4c6c1cb8cd2063f20017580b8d64c0dcef4d0"
     },
     {
       "path": "manager/screen_proxy_manager.js",

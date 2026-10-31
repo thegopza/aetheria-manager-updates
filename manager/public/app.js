@@ -207,6 +207,9 @@ async function fetchProfiles() {
       renderProfiles();
       updateMetrics();
       updateActiveWebHuds();
+      if (typeof updateBulkDeleteModalIfOpen === 'function') {
+        updateBulkDeleteModalIfOpen();
+      }
       if (typeof updateZenyConsolidationView === 'function') {
         updateZenyConsolidationView();
       }
@@ -1553,12 +1556,11 @@ function buildProfileCard(p) {
                   <span class="cm-icon">⚙️</span>
                   <span>แก้ไขการตั้งค่าโปรไฟล์</span>
                 </button>
-                ${!p.isMain ? `
                 <div class="card-menu-divider"></div>
                 <button type="button" class="card-menu-item cm-danger" onclick="closeCardMenu(); deleteProfile('${p.id}')">
                   <span class="cm-icon">🗑️</span>
                   <span>ลบโปรไฟล์</span>
-                </button>` : ''}
+                </button>
               </div>
             </div>
           </div>
@@ -8748,12 +8750,291 @@ profileForm.onsubmit = async (e) => {
 };
 
 async function deleteProfile(id) {
-  if (!confirm("คุณแน่ใจว่าต้องการลบโปรไฟล์นี้ใช่หรือไม่?")) return;
+  const p = (currentProfiles || []).find(x => String(x.id) === String(id));
+  const label = p ? `${p.name}${p.lastCharName ? ` (${p.lastCharName})` : ''}` : id;
+  if (!confirm(`คุณแน่ใจว่าต้องการลบโปรไฟล์ "${label}" ใช่หรือไม่?`)) return;
   try {
     await fetch(`${API_BASE}/api/profiles/${id}`, { method: "DELETE" });
     fetchProfiles();
   } catch (err) {}
 }
+
+// ==========================================
+// BULK DELETE PROFILES MODAL (เลือกลบหลายโปรไฟล์ / ลบทั้งหมด)
+// ==========================================
+const bdpSelectedIds = new Set();
+let bdpLastClickedIdx = -1;
+
+function getFilteredBulkDeleteProfiles() {
+  const q = ((document.getElementById("bdp-search-input") || {}).value || "").trim().toLowerCase();
+  const list = Array.isArray(currentProfiles) ? currentProfiles : [];
+  if (!q) return list;
+  return list.filter(p => {
+    const state = p.liveState || {};
+    const charName = String(state.charName || p.lastCharName || "").toLowerCase();
+    const acc = String(p.account || (state.authConfig && state.authConfig.username) || "").toLowerCase();
+    const name = String(p.name || "").toLowerCase();
+    return name.includes(q) || charName.includes(q) || acc.includes(q);
+  });
+}
+
+function updateBulkDeleteCounters() {
+  const all = Array.isArray(currentProfiles) ? currentProfiles : [];
+  const validSet = new Set(all.map(p => String(p.id)));
+  for (const id of Array.from(bdpSelectedIds)) {
+    if (!validSet.has(id)) bdpSelectedIds.delete(id);
+  }
+  const selCount = bdpSelectedIds.size;
+  const totalCount = all.length;
+
+  const selEl = document.getElementById("bdp-selected-count");
+  const totEl = document.getElementById("bdp-total-count");
+  const confCountEl = document.getElementById("bdp-confirm-count");
+  const allCountEl = document.getElementById("bdp-delete-all-count");
+  const confBtn = document.getElementById("btn-bdp-confirm-selected");
+  const delAllBtn = document.getElementById("btn-bdp-delete-all");
+
+  if (selEl) selEl.textContent = String(selCount);
+  if (totEl) totEl.textContent = String(totalCount);
+  if (confCountEl) confCountEl.textContent = String(selCount);
+  if (allCountEl) allCountEl.textContent = String(totalCount);
+  if (confBtn) confBtn.disabled = selCount === 0;
+  if (delAllBtn) delAllBtn.disabled = totalCount === 0;
+}
+
+function updateBulkDeleteModalIfOpen() {
+  const modal = document.getElementById("modal-bulk-delete-profiles");
+  if (modal && modal.style.display && modal.style.display !== "none") {
+    renderBulkDeleteProfileList();
+  }
+}
+
+function renderBulkDeleteProfileList() {
+  const listEl = document.getElementById("bdp-profile-list");
+  if (!listEl) return;
+  updateBulkDeleteCounters();
+  const filtered = getFilteredBulkDeleteProfiles();
+
+  if (!Array.isArray(currentProfiles) || currentProfiles.length === 0) {
+    listEl.innerHTML = `<div style="text-align: center; color: #64748b; padding: 36px 12px; font-size: 13px;">ไม่มีโปรไฟล์ในระบบ</div>`;
+    return;
+  }
+  if (filtered.length === 0) {
+    listEl.innerHTML = `<div style="text-align: center; color: #64748b; padding: 36px 12px; font-size: 13px;">ไม่พบโปรไฟล์ที่ตรงกับคำค้นหา</div>`;
+    return;
+  }
+
+  listEl.innerHTML = filtered.map((p, idx) => {
+    const pid = String(p.id);
+    const checked = bdpSelectedIds.has(pid);
+    const state = p.liveState || {};
+    const isOnline = !!p.isAlive;
+    const charName = state.charName || p.lastCharName || "";
+    const jobClass = state.jobClass || p.lastJobClass || "";
+    const level = state.level || p.lastLevel || "";
+    const zeny = typeof state.zeny === "number" ? state.zeny : (typeof p.lastZeny === "number" ? p.lastZeny : null);
+    const account = p.account || (state.authConfig && state.authConfig.username) || "";
+
+    const charBadge = charName
+      ? `<span style="color: #38bdf8; font-weight: 600;">🧝 ${escapeHTML(charName)}</span>${level ? ` <span style="color:#94a3b8;font-size:11px;">(Lv.${escapeHTML(String(level))}${jobClass ? ' ' + escapeHTML(jobClass) : ''})</span>` : ''}`
+      : `<span style="color: #64748b; font-style: italic;">ยังไม่มีตัวละคร</span>`;
+
+    const accBadge = account
+      ? `<span style="color: #cbd5e1; font-family: 'JetBrains Mono', monospace; font-size: 11px;">🔑 ${escapeHTML(account)}</span>`
+      : (p.autoRegister ? `<span style="color: #facc15; font-size: 11px;">📝 รอสมัครอัตโนมัติ</span>` : `<span style="color: #64748b; font-size: 11px;">ไม่มี ID</span>`);
+
+    const statusBadge = isOnline
+      ? `<span style="font-size: 10.5px; padding: 2px 7px; border-radius: 99px; background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);">🟢 ออนไลน์</span>`
+      : `<span style="font-size: 10.5px; padding: 2px 7px; border-radius: 99px; background: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.22);">⚫ ออฟไลน์</span>`;
+
+    const zenyBadge = zeny !== null && zeny > 0
+      ? `<span style="font-size: 11px; color: #facc15; font-weight: 600;">💰 ${Number(zeny).toLocaleString()} z</span>`
+      : '';
+
+    return `
+      <label class="bdp-row" data-pid="${escapeHTML(pid)}" data-idx="${idx}" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 11px; border-radius: 8px; cursor: pointer; user-select: none; background: ${checked ? 'rgba(239, 68, 68, 0.16)' : 'rgba(15, 23, 42, 0.7)'}; border: 1px solid ${checked ? 'rgba(239, 68, 68, 0.5)' : 'rgba(255, 255, 255, 0.06)'}; transition: background 0.12s, border-color 0.12s;">
+        <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
+          <input type="checkbox" class="bdp-checkbox" data-pid="${escapeHTML(pid)}" data-idx="${idx}" ${checked ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #ef4444; cursor: pointer; flex-shrink: 0;">
+          <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0;">
+            <span style="font-size: 13px; font-weight: 700; color: #f8fafc;">${escapeHTML(p.name || pid)}</span>
+            ${charBadge}
+            ${accBadge}
+          </div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+          ${zenyBadge}
+          ${statusBadge}
+        </div>
+      </label>
+    `;
+  }).join("");
+
+  listEl.querySelectorAll(".bdp-checkbox").forEach(cb => {
+    cb.addEventListener("click", (e) => {
+      const pid = cb.getAttribute("data-pid");
+      const idx = Number(cb.getAttribute("data-idx"));
+      const willCheck = cb.checked;
+
+      if (e.shiftKey && bdpLastClickedIdx >= 0 && bdpLastClickedIdx !== idx) {
+        const start = Math.min(bdpLastClickedIdx, idx);
+        const end = Math.max(bdpLastClickedIdx, idx);
+        for (let i = start; i <= end; i++) {
+          const item = filtered[i];
+          if (!item) continue;
+          if (willCheck) bdpSelectedIds.add(String(item.id));
+          else bdpSelectedIds.delete(String(item.id));
+        }
+      } else {
+        if (willCheck) bdpSelectedIds.add(pid);
+        else bdpSelectedIds.delete(pid);
+      }
+      bdpLastClickedIdx = idx;
+      renderBulkDeleteProfileList();
+    });
+  });
+}
+
+function openBulkDeleteProfilesModal() {
+  const modal = document.getElementById("modal-bulk-delete-profiles");
+  if (!modal) return;
+  bdpSelectedIds.clear();
+  bdpLastClickedIdx = -1;
+  const searchEl = document.getElementById("bdp-search-input");
+  if (searchEl) searchEl.value = "";
+  modal.style.display = "flex";
+  renderBulkDeleteProfileList();
+}
+
+function closeBulkDeleteProfilesModal() {
+  const modal = document.getElementById("modal-bulk-delete-profiles");
+  if (modal) modal.style.display = "none";
+}
+
+(function initBulkDeleteProfilesModal() {
+  const openBtn = document.getElementById("btn-open-bulk-delete-profiles");
+  const closeBtn = document.getElementById("btn-bdp-close");
+  const cancelBtn = document.getElementById("btn-bdp-cancel");
+  const searchInput = document.getElementById("bdp-search-input");
+  const selAllBtn = document.getElementById("btn-bdp-select-all");
+  const clearAllBtn = document.getElementById("btn-bdp-clear-all");
+  const selOfflineBtn = document.getElementById("btn-bdp-select-offline");
+  const selNoCharBtn = document.getElementById("btn-bdp-select-nochar");
+  const confirmSelBtn = document.getElementById("btn-bdp-confirm-selected");
+  const deleteAllBtn = document.getElementById("btn-bdp-delete-all");
+  const modal = document.getElementById("modal-bulk-delete-profiles");
+
+  if (openBtn) openBtn.onclick = openBulkDeleteProfilesModal;
+  if (closeBtn) closeBtn.onclick = closeBulkDeleteProfilesModal;
+  if (cancelBtn) cancelBtn.onclick = closeBulkDeleteProfilesModal;
+  if (modal) {
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) closeBulkDeleteProfilesModal();
+    });
+  }
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      bdpLastClickedIdx = -1;
+      renderBulkDeleteProfileList();
+    });
+  }
+  if (selAllBtn) {
+    selAllBtn.onclick = () => {
+      getFilteredBulkDeleteProfiles().forEach(p => bdpSelectedIds.add(String(p.id)));
+      renderBulkDeleteProfileList();
+    };
+  }
+  if (clearAllBtn) {
+    clearAllBtn.onclick = () => {
+      bdpSelectedIds.clear();
+      bdpLastClickedIdx = -1;
+      renderBulkDeleteProfileList();
+    };
+  }
+  if (selOfflineBtn) {
+    selOfflineBtn.onclick = () => {
+      bdpSelectedIds.clear();
+      (currentProfiles || []).forEach(p => {
+        if (!p.isAlive) bdpSelectedIds.add(String(p.id));
+      });
+      renderBulkDeleteProfileList();
+    };
+  }
+  if (selNoCharBtn) {
+    selNoCharBtn.onclick = () => {
+      bdpSelectedIds.clear();
+      (currentProfiles || []).forEach(p => {
+        const state = p.liveState || {};
+        const charName = state.charName || p.lastCharName || "";
+        if (!charName || p.autoRegister || p.registerError) {
+          bdpSelectedIds.add(String(p.id));
+        }
+      });
+      renderBulkDeleteProfileList();
+    };
+  }
+  if (confirmSelBtn) {
+    confirmSelBtn.onclick = async () => {
+      const ids = Array.from(bdpSelectedIds);
+      if (ids.length === 0) return;
+      const onlineSelected = (currentProfiles || []).filter(p => bdpSelectedIds.has(String(p.id)) && p.isAlive).length;
+      const warnOnline = onlineSelected > 0 ? `\n(มี ${onlineSelected} จอที่กำลังออนไลน์อยู่ ระบบจะปิดหน้าต่างเกมของโปรไฟล์เหล่านั้นให้อัตโนมัติ)` : '';
+      if (!confirm(`ยืนยันการลบโปรไฟล์ที่เลือกจำนวน ${ids.length} โปรไฟล์ ใช่หรือไม่?${warnOnline}`)) return;
+
+      confirmSelBtn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/profiles/bulk-delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ids })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          bdpSelectedIds.clear();
+          await fetchProfiles();
+          if (!currentProfiles || currentProfiles.length === 0) {
+            closeBulkDeleteProfilesModal();
+          } else {
+            renderBulkDeleteProfileList();
+          }
+        } else {
+          alert("ลบโปรไฟล์ไม่สำเร็จ: " + ((data && data.error) || "ไม่ทราบสาเหตุ"));
+        }
+      } catch (err) {
+        alert("เกิดข้อผิดพลาดในการลบโปรไฟล์: " + err.message);
+      } finally {
+        updateBulkDeleteCounters();
+      }
+    };
+  }
+  if (deleteAllBtn) {
+    deleteAllBtn.onclick = async () => {
+      const total = Array.isArray(currentProfiles) ? currentProfiles.length : 0;
+      if (total === 0) return;
+      if (!confirm(`⚠️ คำเตือนสำคัญ: คุณต้องการ "ลบทุกโปรไฟล์ทั้งหมด" จำนวน ${total} โปรไฟล์ ใช่หรือไม่?\n(การกระทำนี้จะปิดจอที่เปิดอยู่และลบโปรไฟล์ทั้งหมดออกจากรายการ)`)) return;
+
+      deleteAllBtn.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/profiles/bulk-delete`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deleteAll: true })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          bdpSelectedIds.clear();
+          closeBulkDeleteProfilesModal();
+          await fetchProfiles();
+        } else {
+          alert("ลบโปรไฟล์ทั้งหมดไม่สำเร็จ: " + ((data && data.error) || "ไม่ทราบสาเหตุ"));
+        }
+      } catch (err) {
+        alert("เกิดข้อผิดพลาดในการลบโปรไฟล์ทั้งหมด: " + err.message);
+      } finally {
+        updateBulkDeleteCounters();
+      }
+    };
+  }
+})();
 
 // Global Poll interval
 fetchProfiles();

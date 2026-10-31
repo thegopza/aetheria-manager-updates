@@ -416,9 +416,15 @@ function loadDeletedProfileIds() {
 }
 function recordDeletedProfileId(id) {
   if (!id) return;
+  recordDeletedProfileIds([id]);
+}
+function recordDeletedProfileIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
   try {
     const set = loadDeletedProfileIds();
-    set.add(String(id));
+    for (const id of ids) {
+      if (id) set.add(String(id));
+    }
     writeJsonAtomic(DELETED_PROFILES_FILE, Array.from(set));
   } catch (_) {}
 }
@@ -6998,6 +7004,62 @@ const server = http.createServer(async (req, res) => {
     return sendJSON({ success: Boolean(resSync && resSync.success), result: resSync });
   }
 
+  // POST /api/profiles/bulk-delete (Delete selected profiles or all profiles at once)
+  if (req.method === "POST" && pathname === "/api/profiles/bulk-delete") {
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", async () => {
+      try {
+        const parsed = JSON.parse(body || "{}");
+        const profiles = loadProfiles();
+        const deleteAll = parsed.deleteAll === true;
+        const targetIds = deleteAll
+          ? profiles.map(p => String(p.id))
+          : (Array.isArray(parsed.ids) ? parsed.ids.map(String).filter(Boolean) : []);
+        const targetSet = new Set(targetIds);
+        if (targetSet.size === 0) {
+          return sendJSON({ success: false, error: "กรุณาเลือกโปรไฟล์ที่ต้องการลบอย่างน้อย 1 โปรไฟล์" }, 400);
+        }
+
+        const toDelete = profiles.filter(p => targetSet.has(String(p.id)));
+        const remaining = profiles.filter(p => !targetSet.has(String(p.id)));
+        const deletedIds = toDelete.map(p => String(p.id));
+
+        recordDeletedProfileIds(deletedIds);
+
+        for (const id of deletedIds) {
+          screenProxy.releaseProfile(id, "deleted").catch(() => {});
+          try { credentials.setPassword(id, ""); } catch (_) {}
+          try {
+            const bsFile = path.join(SESSIONS_DIR, "_browser_storage", `${id}.json`);
+            if (fs.existsSync(bsFile)) fs.unlinkSync(bsFile);
+          } catch (_) {}
+          if (browserMode.isOpen(id)) {
+            await browserMode.stop(id).catch(() => {});
+          }
+          if (runningProcesses[id] && isProcessAlive(runningProcesses[id].pid)) {
+            try { process.kill(runningProcesses[id].pid, "SIGTERM"); } catch (e) {}
+            delete runningProcesses[id];
+          }
+          delete windowStates[id];
+        }
+
+        saveProfiles(remaining, { allowEmpty: true });
+        try { writeJsonAtomic(PROFILES_BACKUP_FILE, remaining); } catch (_) {}
+        scheduleCentralProfileBackupSync(1000);
+        return sendJSON({
+          success: true,
+          deletedCount: deletedIds.length,
+          remainingCount: remaining.length,
+          deletedIds
+        });
+      } catch (err) {
+        return sendJSON({ success: false, error: err.message }, 400);
+      }
+    });
+    return;
+  }
+
   // 4. DELETE /api/profiles/:id
   if (req.method === "DELETE" && pathname.match(/^\/api\/profiles\/[^/]+$/)) {
     const id = pathname.split("/")[3];
@@ -7012,11 +7074,15 @@ const server = http.createServer(async (req, res) => {
       const bsFile = path.join(SESSIONS_DIR, "_browser_storage", `${id}.json`);
       if (fs.existsSync(bsFile)) fs.unlinkSync(bsFile);
     } catch (_) {}
+    if (browserMode.isOpen(id)) {
+      await browserMode.stop(id).catch(() => {});
+    }
     // Stop process if running
     if (runningProcesses[id] && isProcessAlive(runningProcesses[id].pid)) {
       try { process.kill(runningProcesses[id].pid, "SIGTERM"); } catch (e) {}
       delete runningProcesses[id];
     }
+    delete windowStates[id];
 
     profiles.splice(idx, 1);
     saveProfiles(profiles, { allowEmpty: true });

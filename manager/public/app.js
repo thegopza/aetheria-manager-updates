@@ -8802,16 +8802,24 @@ function updateBulkDeleteCounters() {
   if (delAllBtn) delAllBtn.disabled = totalCount === 0;
 }
 
+let bdpLastRenderedSig = "";
+
 function updateBulkDeleteModalIfOpen() {
   const modal = document.getElementById("modal-bulk-delete-profiles");
   if (modal && modal.style.display && modal.style.display !== "none") {
-    renderBulkDeleteProfileList();
+    const sig = (Array.isArray(currentProfiles) ? currentProfiles : []).map(p => `${p.id}:${p.isAlive ? 1 : 0}`).join("|");
+    if (sig !== bdpLastRenderedSig) {
+      renderBulkDeleteProfileList();
+    } else {
+      updateBulkDeleteCounters();
+    }
   }
 }
 
 function renderBulkDeleteProfileList() {
   const listEl = document.getElementById("bdp-profile-list");
   if (!listEl) return;
+  bdpLastRenderedSig = (Array.isArray(currentProfiles) ? currentProfiles : []).map(p => `${p.id}:${p.isAlive ? 1 : 0}`).join("|");
   updateBulkDeleteCounters();
   const filtered = getFilteredBulkDeleteProfiles();
 
@@ -8895,6 +8903,7 @@ function renderBulkDeleteProfileList() {
 }
 
 function openBulkDeleteProfilesModal() {
+  bindBulkDeleteModalEvents();
   const modal = document.getElementById("modal-bulk-delete-profiles");
   if (!modal) return;
   bdpSelectedIds.clear();
@@ -8910,7 +8919,7 @@ function closeBulkDeleteProfilesModal() {
   if (modal) modal.style.display = "none";
 }
 
-(function initBulkDeleteProfilesModal() {
+function bindBulkDeleteModalEvents() {
   const openBtn = document.getElementById("btn-open-bulk-delete-profiles");
   const closeBtn = document.getElementById("btn-bdp-close");
   const cancelBtn = document.getElementById("btn-bdp-cancel");
@@ -8926,12 +8935,14 @@ function closeBulkDeleteProfilesModal() {
   if (openBtn) openBtn.onclick = openBulkDeleteProfilesModal;
   if (closeBtn) closeBtn.onclick = closeBulkDeleteProfilesModal;
   if (cancelBtn) cancelBtn.onclick = closeBulkDeleteProfilesModal;
-  if (modal) {
+  if (modal && !modal.dataset.bdpBound) {
+    modal.dataset.bdpBound = "1";
     modal.addEventListener("click", (e) => {
       if (e.target === modal) closeBulkDeleteProfilesModal();
     });
   }
-  if (searchInput) {
+  if (searchInput && !searchInput.dataset.bdpBound) {
+    searchInput.dataset.bdpBound = "1";
     searchInput.addEventListener("input", () => {
       bdpLastClickedIdx = -1;
       renderBulkDeleteProfileList();
@@ -9034,7 +9045,20 @@ function closeBulkDeleteProfilesModal() {
       }
     };
   }
-})();
+}
+
+bindBulkDeleteModalEvents();
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bindBulkDeleteModalEvents);
+}
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    const modal = document.getElementById("modal-bulk-delete-profiles");
+    if (modal && modal.style.display && modal.style.display !== "none") {
+      closeBulkDeleteProfilesModal();
+    }
+  }
+});
 
 // Global Poll interval
 fetchProfiles();

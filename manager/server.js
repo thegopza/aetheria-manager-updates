@@ -4517,7 +4517,7 @@ const managerUpdater = createManagerSelfUpdater({
   isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
 });
 
-const VALID_CHANNEL_CHECK_MODES = ["always", "all", "party_only", "solo_only", "off"];
+const VALID_CHANNEL_CHECK_MODES = ["no_overlap", "always", "all", "party_only", "solo_only", "off"];
 
 function getEffectiveChannelCheckMode() {
   const st = installer.loadSettings() || {};
@@ -6462,6 +6462,7 @@ const server = http.createServer(async (req, res) => {
           const payload = JSON.parse(body || "{}");
           const saved = saveChannelCheckMode(payload.mode);
           const syncRes = await syncChannelCheckModeToAllClients(saved);
+          setTimeout(() => { try { partyService.tick().catch(() => {}); } catch (_) {} }, 50);
           return sendJSON({
             success: true,
             mode: saved,

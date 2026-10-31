@@ -1770,7 +1770,7 @@ try {
 } catch (_) {}
 
 function syncChannelCheckModeUI(mode) {
-  const valid = ['always', 'all', 'party_only', 'solo_only', 'off'];
+  const valid = ['no_overlap', 'always', 'all', 'party_only', 'solo_only', 'off'];
   const norm = valid.includes(mode) ? mode : 'all';
   currentChannelCheckMode = norm;
   try { localStorage.setItem('pelican_channel_check_mode', norm); } catch (_) {}
@@ -1781,10 +1781,11 @@ function syncChannelCheckModeUI(mode) {
 }
 
 window.setChannelCheckMode = async function (mode) {
-  const valid = ['always', 'all', 'party_only', 'solo_only', 'off'];
+  const valid = ['no_overlap', 'always', 'all', 'party_only', 'solo_only', 'off'];
   const norm = valid.includes(mode) ? mode : 'all';
   syncChannelCheckModeUI(norm);
   const labels = {
+    no_overlap: '🔀 แยก CH ไม่ทับกันเอง: โซโล่ไม่ทับจออื่น / ตี้ไม่ทับตี้อื่น (เลือก CH คนน้อยสุด)',
     always: '⚡ ทุกครั้งที่เข้าแมพฟาร์ม: ย้าย CH คนน้อยสุด + ดึงตี้ตาม (ขายของ/ตาย/กลับจากเมือง)',
     all: '🔄 เช็ค CH คนน้อยสุดหลังขายของ + ดึงตี้ตาม (ทุกจอ)',
     party_only: '👑 เฉพาะปาร์ตี้: หลังขายของย้าย CH คนน้อยสุด + ดึงตี้ตาม',

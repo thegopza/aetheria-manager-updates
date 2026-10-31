@@ -180,7 +180,8 @@ const READ_JS = `(() => {
       findLeast: typeof window.findLeastPopulatedChannel === 'function',
       evaluateAnchorChannel: typeof window.evaluatePartyChannelSwitch === 'function',
       setTargetFarmMap: typeof window.setTargetFarmMap === 'function',
-      updatePartySyncState: typeof window.updatePartySyncState === 'function'
+      updatePartySyncState: typeof window.updatePartySyncState === 'function',
+      updateSoloAvoidState: typeof window.updateSoloAvoidState === 'function'
     }
   };
 })()`;
@@ -275,6 +276,11 @@ const ACTIONS = {
   syncClientPartyState: sync => `(() => {
     if (typeof window.updatePartySyncState === 'function') return window.updatePartySyncState(${JSON.stringify(sync)});
     window.__pmPartySync = ${JSON.stringify(sync)};
+    return { success: true };
+  })()`,
+  syncSoloAvoidState: sync => `(() => {
+    if (typeof window.updateSoloAvoidState === 'function') return window.updateSoloAvoidState(${JSON.stringify(sync)});
+    window.__pmSoloAvoidSync = ${JSON.stringify(sync ? Object.assign({}, sync, { updatedAt: Date.now() }) : null)};
     return { success: true };
   })()`
 };
@@ -460,6 +466,7 @@ function createPartyService(opts) {
 
   const runtime = new Map();     // partyId -> { status, notes, lastTickAt, fallbackAt, ... }
   const memberRt = new Map();    // `${partyId}:${profileId}` -> counters
+  const soloRuntime = new Map(); // profileId -> { settledMapId, settledChannel, settledChannelAt, lastSwitchSeenAt, moving, pendingChannel, gatherAt, lastNoFreeChannelAt }
   const tempExcluded = new Map(); // `${partyId}:${profileId}` -> until
   let states = new Map();        // profileId -> snapshot | null
   let statesAt = 0;
@@ -481,8 +488,13 @@ function createPartyService(opts) {
     return memberRt.get(k);
   };
   const prt = pid => {
-    if (!runtime.has(pid)) runtime.set(pid, { notes: [], settingsAt: 0, fallbackAt: 0, leaveAt: 0, lastTickAt: 0, gatherAt: 0, gathering: false, gatherNote: null, channelNote: null, lastPostSellFollowAt: 0, settledChannelAt: 0, settledByMemberName: null });
+    if (!runtime.has(pid)) runtime.set(pid, { notes: [], settingsAt: 0, fallbackAt: 0, leaveAt: 0, lastTickAt: 0, gatherAt: 0, gathering: false, pendingChannel: null, gatherNote: null, channelNote: null, lastPostSellFollowAt: 0, settledChannelAt: 0, settledByMemberName: null });
     return runtime.get(pid);
+  };
+  const srt = id => {
+    const k = String(id);
+    if (!soloRuntime.has(k)) soloRuntime.set(k, { settledMapId: null, settledChannel: null, settledChannelAt: 0, lastSwitchSeenAt: 0, moving: false, pendingChannel: null, gatherAt: 0, lastNoFreeChannelAt: 0 });
+    return soloRuntime.get(k);
   };
 
   function cleanMapLabel(m) {
@@ -495,6 +507,48 @@ function createPartyService(opts) {
     const cb = cleanMapLabel(mapNameB);
     if (ca && cb) return ca === cb || ca.includes(cb) || cb.includes(ca);
     return false;
+  }
+
+  function isSoloActivelyFarmingMap(S) {
+    if (!S || !S.ok || !S.mapId || isCityMapName(S.mapName)) return false;
+    // Ignore transit maps while travelling to a different non-city target map
+    if (S.botRunning && S.targetMap && !isCityMapName(S.targetMap) && S.mapName && !mapsMatch(null, S.mapName, null, S.targetMap)) {
+      return false;
+    }
+    return true;
+  }
+
+  function getSoloOccupiedInfo(profileId, profiles) {
+    const S = states.get(profileId);
+    if (!S || !S.ok || !S.name) return null;
+    const rt = srt(profileId);
+    const onFarm = isSoloActivelyFarmingMap(S);
+    const mapId = onFarm ? S.mapId : null;
+    const mapName = onFarm ? S.mapName : (!isCityMapName(S.targetMap) ? S.targetMap : null);
+    const cleanMapName = cleanMapLabel(mapName) || null;
+    const primaryChannel = (onFarm && !S.pkChannel && typeof S.channel === 'number') ? S.channel : null;
+    const hasSettled = Boolean(onFarm && rt.settledMapId === mapId && typeof rt.settledChannel === 'number' && rt.settledChannel === primaryChannel);
+    const channels = new Set();
+    if (typeof primaryChannel === 'number') channels.add(primaryChannel);
+    if (typeof rt.pendingChannel === 'number') channels.add(rt.pendingChannel);
+    const inGameLeader = (S.party && Array.isArray(S.party.members) && S.party.members.length > 1 && S.party.leader)
+      ? String(S.party.leader)
+      : null;
+    const orderedIds = profiles ? [...profiles.keys()].map(String) : [];
+    const idx = orderedIds.indexOf(String(profileId));
+    return {
+      unitType: 'solo',
+      profileId: String(profileId),
+      unitIndex: idx >= 0 ? idx : 9999,
+      name: S.name,
+      inGameLeader,
+      mapId,
+      mapName,
+      cleanMapName,
+      primaryChannel,
+      settledAt: hasSettled ? (rt.settledChannelAt || 1) : Infinity,
+      channels: [...channels]
+    };
   }
 
   function getPartyOccupiedInfo(p, profiles) {
@@ -524,8 +578,10 @@ function createPartyService(opts) {
       : (anchorSnap && typeof anchorSnap.channel === 'number' ? anchorSnap.channel : null);
     const channels = new Set();
     if (typeof primaryChannel === 'number') channels.add(primaryChannel);
+    if (typeof rt.pendingChannel === 'number') channels.add(rt.pendingChannel);
     if (anchorSnap && typeof anchorSnap.channel === 'number') channels.add(anchorSnap.channel);
     return {
+      unitType: 'party',
       partyId: p.id,
       partyIndex: parties.indexOf(p),
       mapId,
@@ -566,6 +622,78 @@ function createPartyService(opts) {
         if (sameMapAsMe) avoidSet.add(ch);
       }
     }
+
+    // Also avoid channels occupied by our solo characters on the same map (if a solo character is on the party's current primaryChannel, the party has priority and stays while the solo character moves)
+    const chMode = typeof getChannelCheckMode === 'function' ? (getChannelCheckMode() || 'all') : 'all';
+    if (chMode === 'no_overlap' || chMode === 'always' || chMode === 'all') {
+      const taken = assignedIds(parties);
+      for (const id of profiles.keys()) {
+        if (taken.has(id)) continue;
+        const occ = getSoloOccupiedInfo(id, profiles);
+        if (!occ || (!occ.mapId && !occ.cleanMapName)) continue;
+        const sameMapAsMe = mapsMatch(effMapId, effMapName, occ.mapId, occ.cleanMapName);
+        for (const ch of occ.channels) {
+          if (sameMapAsMe && myInfo.primaryChannel === ch) continue;
+          if (occ.mapId) addMapCh(occ.mapId, ch);
+          if (occ.cleanMapName) addMapCh(occ.cleanMapName, ch);
+          if (sameMapAsMe) avoidSet.add(ch);
+        }
+      }
+    }
+
+    return {
+      avoidChannels: [...avoidSet],
+      otherPartyChannelsByMap
+    };
+  }
+
+  function getAvoidChannelsForSolo(profileId, profiles, targetMapId, targetMapName) {
+    const myInfo = getSoloOccupiedInfo(profileId, profiles);
+    const avoidSet = new Set();
+    const otherPartyChannelsByMap = {};
+    const addMapCh = (key, ch) => {
+      if (!key || typeof ch !== 'number') return;
+      if (!otherPartyChannelsByMap[key]) otherPartyChannelsByMap[key] = [];
+      if (!otherPartyChannelsByMap[key].includes(ch)) otherPartyChannelsByMap[key].push(ch);
+    };
+    const S = states.get(profileId);
+    const effMapId = targetMapId || (myInfo && myInfo.mapId) || (S && !isCityMapName(S.mapName) && S.mapId) || null;
+    const effMapName = cleanMapLabel(targetMapName || (myInfo && myInfo.cleanMapName) || (S && (!isCityMapName(S.mapName) ? S.mapName : S.targetMap)) || '');
+
+    // 1. Avoid all channels occupied by any Party on the same map
+    for (const p of parties) {
+      if (!p) continue;
+      const occ = getPartyOccupiedInfo(p, profiles);
+      if (!occ.mapId && !occ.cleanMapName) continue;
+      const sameMapAsMe = mapsMatch(effMapId, effMapName, occ.mapId, occ.cleanMapName);
+      for (const ch of occ.channels) {
+        if (occ.mapId) addMapCh(occ.mapId, ch);
+        if (occ.cleanMapName) addMapCh(occ.cleanMapName, ch);
+        if (sameMapAsMe) avoidSet.add(ch);
+      }
+    }
+
+    // 2. Avoid channels occupied by other Solo characters on the same map
+    const taken = assignedIds(parties);
+    for (const otherId of profiles.keys()) {
+      if (String(otherId) === String(profileId) || taken.has(otherId)) continue;
+      const occ = getSoloOccupiedInfo(otherId, profiles);
+      if (!occ || (!occ.mapId && !occ.cleanMapName)) continue;
+      if (myInfo && myInfo.inGameLeader && occ.inGameLeader && myInfo.inGameLeader === occ.inGameLeader) continue;
+      const sameMapAsMe = mapsMatch(effMapId, effMapName, occ.mapId, occ.cleanMapName);
+      for (const ch of occ.channels) {
+        if (sameMapAsMe && myInfo && myInfo.primaryChannel === ch && occ.primaryChannel === ch) {
+          const otherHasPriority = (occ.settledAt !== myInfo.settledAt)
+            ? (occ.settledAt < myInfo.settledAt)
+            : (occ.unitIndex < myInfo.unitIndex);
+          if (!otherHasPriority) continue;
+        }
+        if (occ.mapId) addMapCh(occ.mapId, ch);
+        if (occ.cleanMapName) addMapCh(occ.cleanMapName, ch);
+        if (sameMapAsMe) avoidSet.add(ch);
+      }
+    }
+
     return {
       avoidChannels: [...avoidSet],
       otherPartyChannelsByMap
@@ -823,7 +951,7 @@ function createPartyService(opts) {
     if (party.syncMap) {
 
       const chMode = typeof getChannelCheckMode === 'function' ? (getChannelCheckMode() || 'all') : 'all';
-      const partyChannelCheckEnabled = (chMode === 'all' || chMode === 'party_only' || chMode === 'always');
+      const partyChannelCheckEnabled = (chMode === 'no_overlap' || chMode === 'all' || chMode === 'party_only' || chMode === 'always');
       const { avoidChannels, otherPartyChannelsByMap } = getAvoidChannelsForParty(
         party,
         profiles,
@@ -1066,6 +1194,7 @@ function createPartyService(opts) {
           }
         }
         if (typeof wantCh === 'number' && (wantCh !== anchorSnap.channel || anchorSnap.pkChannel)) {
+          rt.pendingChannel = wantCh;
           rt.gatherNote = anchorLabel + ' กำลังย้ายไป CH ' + wantCh + ' (คนน้อยสุด / ไม่ทับตี้อื่น)';
           const am = await act(anchorP, ACTIONS.moveChannelWait(wantCh, T.leaderMoveWaitMs), 'anchor-move-ch', T.leaderMoveWaitMs + 10000);
           const realCh = (am.result && typeof am.result.channel === 'number') ? am.result.channel : anchorSnap.channel;
@@ -1139,13 +1268,131 @@ function createPartyService(opts) {
         : (second.aborted ? null : second.who + ' ย้ายตามไป CH ' + real + ' ไม่ได้ — จะลองใหม่อีกครั้ง');
       if (second.ok) log('party', party.id, 'regrouped on CH', real);
     } finally {
+      rt.pendingChannel = null;
       rt.gathering = false; rt.gatherNote = null; rt.gatherAt = now();
+    }
+  }
+
+  async function gatherSoloChannel(id, P, S, avoidChannels = []) {
+    const rt = srt(id);
+    rt.moving = true;
+    rt.gatherAt = now();
+    const avoidList = Array.isArray(avoidChannels) ? avoidChannels : [];
+    const prevCh = S.channel;
+    try {
+      let wantCh = null;
+      if (S.helpers && S.helpers.evaluateAnchorChannel) {
+        const ev = await act(P, ACTIONS.evaluateAnchorChannel(1, S.name ? [S.name] : [], avoidList), 'eval-solo-ch', 12000);
+        if (ev.ok && ev.result && ev.result.shouldSwitch && typeof ev.result.channel === 'number' && (ev.result.channel !== S.channel || S.pkChannel) && !avoidList.includes(ev.result.channel)) {
+          wantCh = ev.result.channel;
+        }
+      }
+      if (wantCh == null && (avoidList.includes(S.channel) || S.pkChannel) && S.helpers && S.helpers.findLeast) {
+        const least = await act(P, ACTIONS.leastChannel(avoidList), 'least-ch-solo-avoid', 15000);
+        const lch = least.ok && least.result ? least.result.channel : null;
+        if (typeof lch === 'number' && (lch !== S.channel || S.pkChannel) && !avoidList.includes(lch)) {
+          wantCh = lch;
+        }
+      }
+      if (typeof wantCh === 'number' && (wantCh !== S.channel || S.pkChannel)) {
+        rt.pendingChannel = wantCh;
+        const am = await act(P, ACTIONS.moveChannelWait(wantCh, T.leaderMoveWaitMs), 'solo-move-ch', T.leaderMoveWaitMs + 10000);
+        const realCh = (am.result && typeof am.result.channel === 'number') ? am.result.channel : S.channel;
+        S.channel = realCh;
+        S.pkChannel = false;
+      }
+      if (S.mapId && typeof S.channel === 'number' && !S.pkChannel) {
+        rt.settledMapId = S.mapId;
+        rt.settledChannel = S.channel;
+        rt.settledChannelAt = now();
+      }
+      if (avoidList.includes(S.channel) && S.channel === prevCh) {
+        rt.lastNoFreeChannelAt = now();
+      } else {
+        rt.lastNoFreeChannelAt = 0;
+      }
+    } finally {
+      rt.pendingChannel = null;
+      rt.moving = false;
+      rt.gatherAt = now();
+    }
+  }
+
+  async function tickSoloProfiles(profiles) {
+    const chMode = typeof getChannelCheckMode === 'function' ? (getChannelCheckMode() || 'all') : 'all';
+    if (chMode === 'off' || chMode === 'party_only') return;
+    const taken = assignedIds(parties);
+    for (const [id, P] of profiles.entries()) {
+      if (taken.has(id)) continue;
+      const S = states.get(id);
+      if (!P || !S || !S.ok || !S.name) continue;
+      const rt = srt(id);
+      const onFarm = isSoloActivelyFarmingMap(S);
+      if (!onFarm) {
+        if (!S.mapId || isCityMapName(S.mapName)) {
+          rt.settledMapId = null;
+          rt.settledChannel = null;
+          rt.settledChannelAt = 0;
+        }
+      } else if (!S.pkChannel && typeof S.channel === 'number') {
+        const sw = S.lastPostSellChannelSwitch;
+        const swAt = (sw && sw.channel === S.channel && (!sw.mapId || sw.mapId === S.mapId) && typeof sw.at === 'number') ? sw.at : 0;
+        if (swAt && swAt > (rt.lastSwitchSeenAt || 0)) {
+          rt.lastSwitchSeenAt = swAt;
+          rt.settledMapId = S.mapId;
+          rt.settledChannel = S.channel;
+          rt.settledChannelAt = swAt;
+        } else if (chMode !== 'no_overlap' && (rt.settledMapId !== S.mapId || rt.settledChannel !== S.channel)) {
+          rt.settledMapId = S.mapId;
+          rt.settledChannel = S.channel;
+          rt.settledChannelAt = swAt || now();
+        } else if (rt.settledMapId === S.mapId && rt.settledChannel !== S.channel && !rt.moving) {
+          rt.settledChannel = S.channel;
+          rt.settledChannelAt = swAt || now();
+        }
+      }
+
+      const syncAvoidInfo = getAvoidChannelsForSolo(
+        id,
+        profiles,
+        onFarm ? S.mapId : null,
+        onFarm ? S.mapName : S.targetMap
+      );
+
+      if (S.helpers && S.helpers.updateSoloAvoidState) {
+        await act(P, ACTIONS.syncSoloAvoidState({
+          soloMapId: onFarm ? S.mapId : null,
+          soloMapName: (onFarm ? S.mapName : S.targetMap) || null,
+          avoidChannels: syncAvoidInfo.avoidChannels,
+          otherPartyChannelsByMap: syncAvoidInfo.otherPartyChannelsByMap
+        }), 'sync-solo-avoid');
+      }
+
+      if (chMode === 'no_overlap' && onFarm && !planBlocked(S) && !isBusy()) {
+        const inOtherInGameParty = Boolean(S.party && Array.isArray(S.party.members) && S.party.members.length > 1 && S.party.leader && S.party.leader !== S.name);
+        const busyNow = Array.isArray(S.busy) && S.busy.length > 0;
+        if (!inOtherInGameParty && !busyNow && !rt.moving) {
+          const isOverlapped = typeof S.channel === 'number' && syncAvoidInfo.avoidChannels.includes(S.channel);
+          const needsInitialCheck = rt.settledMapId !== S.mapId && Boolean(S.helpers && S.helpers.evaluateAnchorChannel);
+          const noFreeCooldownOk = !rt.lastNoFreeChannelAt || (now() - rt.lastNoFreeChannelAt >= T.gatherCooldownMs);
+          if ((S.pkChannel || (isOverlapped && noFreeCooldownOk) || needsInitialCheck) && (S.helpers && (S.helpers.evaluateAnchorChannel || S.helpers.findLeast)) && S.helpers.moveToChannel) {
+            if (S.pkChannel || isOverlapped || now() - (rt.gatherAt || 0) >= T.gatherCooldownMs) {
+              await gatherSoloChannel(id, P, S, syncAvoidInfo.avoidChannels);
+            }
+          } else if (rt.settledMapId !== S.mapId && typeof S.channel === 'number' && !S.pkChannel) {
+            rt.settledMapId = S.mapId;
+            rt.settledChannel = S.channel;
+            rt.settledChannelAt = now();
+          }
+        }
+      }
     }
   }
 
   async function tick() {
     if (ticking) return;
-    if (!parties.length) return;
+    const chMode = typeof getChannelCheckMode === 'function' ? (getChannelCheckMode() || 'all') : 'all';
+    if (!parties.length && chMode !== 'no_overlap') return;
     if (isBusy()) return;
     ticking = true;
     try {
@@ -1155,6 +1402,7 @@ function createPartyService(opts) {
         if (!parties.includes(party)) continue;
         try { await tickParty(party, profiles); } catch (e) { log('tick error', party.id, e.message); prt(party.id).notes = ['ผิดพลาด: ' + e.message]; }
       }
+      try { await tickSoloProfiles(profiles); } catch (e) { log('solo tick error', e.message); }
     } finally { ticking = false; }
   }
 

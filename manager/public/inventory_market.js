@@ -1021,11 +1021,20 @@
     if (ans === null) return;
     const minQty = Math.max(1, parseInt(ans, 10) || 1);
     const code = `(() => {
-      const c = window.__autoMarketSellConfig || (window.__autoMarketSellConfig = { rules: [] });
-      if (!Array.isArray(c.rules)) c.rules = [];
+      let storedCfg = null;
+      try {
+        const pid = window.__pmProfileId;
+        const raw = (pid && localStorage.getItem('pelican_' + pid + '__auto_market_sell_cfg')) || localStorage.getItem('pelican_auto_market_sell_cfg');
+        if (raw) storedCfg = JSON.parse(raw);
+      } catch (_) {}
+      const c = window.__autoMarketSellConfig || (window.__autoMarketSellConfig = Object.assign({ rules: [] }, storedCfg || {}));
+      if (!Array.isArray(c.rules) || (c.rules.length === 0 && storedCfg && Array.isArray(storedCfg.rules) && storedCfg.rules.length > 0)) {
+        c.rules = (storedCfg && Array.isArray(storedCfg.rules)) ? storedCfg.rules.slice() : [];
+      }
       const name = ${JSON.stringify(name)};
       if (c.rules.some(r => r && String(r.itemName || '').trim().toLowerCase() === name.toLowerCase())) return { success: true, exists: true };
       c.rules.push({ id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), itemName: name, minQty: ${minQty}, sellMode: 'all', enabled: true });
+      delete c.__userClearedAt;
       try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(c)); } catch (e) { return { success: false, error: e.message }; }
       try { const box = document.getElementById('p-autosell-hud-rules-container'); if (box && typeof window.renderAutoSellHudRulesHtml === 'function') box.innerHTML = window.renderAutoSellHudRulesHtml(); } catch (e) {}
       return { success: true, added: true, count: c.rules.length, enabled: !!c.enabled };

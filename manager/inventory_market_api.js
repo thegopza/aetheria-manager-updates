@@ -96,29 +96,55 @@ function loadAllAutoSellStore() {
 function loadProfileAutoSellStore(profileId) {
   const pid = String(profileId || '').trim();
   const all = loadAllAutoSellStore();
-  if (pid && all[pid] && typeof all[pid] === 'object') {
-    return sanitizeAutoSellConfig(all[pid]);
-  }
+  const fromAll = (pid && all[pid] && typeof all[pid] === 'object') ? all[pid] : null;
+  let fromBs = null;
   try {
     const bsFile = path.join(BROWSER_STORAGE_DIR, `${pid}.json`);
     if (fs.existsSync(bsFile)) {
       const d = JSON.parse(fs.readFileSync(bsFile, 'utf8'));
       const rawStr = d[`pelican_${pid}__auto_market_sell_cfg`] || d.pelican_auto_market_sell_cfg;
       if (rawStr) {
-        return sanitizeAutoSellConfig(JSON.parse(rawStr));
+        const parsed = JSON.parse(rawStr);
+        if (parsed && typeof parsed === 'object') fromBs = parsed;
       }
     }
   } catch (_) {}
+
+  if (fromAll && Array.isArray(fromAll.rules) && fromAll.rules.length > 0) {
+    return sanitizeAutoSellConfig(fromAll);
+  }
+  if (fromBs && Array.isArray(fromBs.rules) && fromBs.rules.length > 0 && !(fromAll && fromAll.userClearedAt)) {
+    return sanitizeAutoSellConfig(fromBs);
+  }
+  if (fromAll) return sanitizeAutoSellConfig(fromAll);
+  if (fromBs) return sanitizeAutoSellConfig(fromBs);
   return sanitizeAutoSellConfig({ enabled: false, priceStrategy: 'median', rules: [] });
 }
 
-function saveProfileAutoSellStore(profileId, rawCfg) {
+function saveProfileAutoSellStore(profileId, rawCfg, options = {}) {
   const pid = String(profileId || '').trim();
+  const allowEmptyOverwrite = Boolean(options && options.allowEmptyOverwrite);
+  const preserveEnabled = !(options && options.preserveEnabled === false);
   const clean = sanitizeAutoSellConfig(rawCfg);
   if (!pid) return clean;
+
+  if (!allowEmptyOverwrite && clean.rules.length === 0) {
+    const existing = loadProfileAutoSellStore(pid);
+    if (existing && Array.isArray(existing.rules) && existing.rules.length > 0) {
+      clean.rules = existing.rules;
+      if (preserveEnabled && existing.enabled && !clean.enabled) {
+        clean.enabled = true;
+      }
+    }
+  }
+
   try {
     const all = loadAllAutoSellStore();
-    all[pid] = Object.assign({}, clean, { updatedAt: Date.now() });
+    const entry = Object.assign({}, clean, { updatedAt: Date.now() });
+    if (allowEmptyOverwrite && clean.rules.length === 0) {
+      entry.userClearedAt = Date.now();
+    }
+    all[pid] = entry;
     fs.mkdirSync(path.dirname(AUTOSELL_STORE_PATH), { recursive: true });
     fs.writeFileSync(AUTOSELL_STORE_PATH, JSON.stringify(all, null, 2), 'utf8');
   } catch (_) {}
@@ -139,8 +165,28 @@ function saveProfileAutoSellStore(profileId, rawCfg) {
 
 function buildAutoSellReadCode() {
   return `(() => {
-    const cfg = window.__autoMarketSellConfig || { enabled: false, priceStrategy: 'median', rules: [] };
+    let storedCfg = null;
+    try {
+      const pid = window.__pmProfileId;
+      const raw = (pid && localStorage.getItem('pelican_' + pid + '__auto_market_sell_cfg')) || localStorage.getItem('pelican_auto_market_sell_cfg');
+      if (raw) storedCfg = JSON.parse(raw);
+    } catch (_) {}
+    let hasLiveCfg = Boolean(window.__autoMarketSellConfig && typeof window.__autoMarketSellConfig === 'object');
+    if (hasLiveCfg && storedCfg && Array.isArray(storedCfg.rules) && storedCfg.rules.length > 0) {
+      if ((!Array.isArray(window.__autoMarketSellConfig.rules) || window.__autoMarketSellConfig.rules.length === 0) && !window.__autoMarketSellConfig.__userClearedAt) {
+        window.__autoMarketSellConfig = Object.assign({}, storedCfg, window.__autoMarketSellConfig, {
+          enabled: storedCfg.enabled !== undefined ? Boolean(storedCfg.enabled) : Boolean(window.__autoMarketSellConfig.enabled),
+          rules: storedCfg.rules
+        });
+      }
+    } else if (!hasLiveCfg && storedCfg && typeof storedCfg === 'object') {
+      window.__autoMarketSellConfig = Object.assign({ enabled: false, priceStrategy: 'median', rules: [] }, storedCfg);
+      hasLiveCfg = true;
+    }
+    const cfg = window.__autoMarketSellConfig || storedCfg || { enabled: false, priceStrategy: 'median', rules: [] };
     const rules = Array.isArray(cfg.rules) ? cfg.rules : [];
+    const configLoaded = Boolean((hasLiveCfg && (window.__pelicanBotVersion || rules.length > 0)) || (storedCfg && Array.isArray(storedCfg.rules) && storedCfg.rules.length > 0));
+    const userClearedAt = Number(cfg.__userClearedAt) || 0;
     const bagItems = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
     const gearKept = it => typeof window.isGearKeptItem === 'function' && window.isGearKeptItem(it.raw || it);
     const stashOnly = it => typeof window.isStashOnlyItem === 'function' && window.isStashOnlyItem(it.raw || it);
@@ -197,6 +243,8 @@ function buildAutoSellReadCode() {
     const durationHours = [12, 24, 48].includes(globalHours) ? globalHours : ([12, 24, 48].includes(cfgHours) ? cfgHours : 24);
     return {
       success: true,
+      configLoaded,
+      userClearedAt,
       config: {
         enabled: Boolean(cfg.enabled),
         priceStrategy: cfg.priceStrategy || 'median',
@@ -220,15 +268,31 @@ function buildAutoSellReadCode() {
   })()`;
 }
 
-function buildAutoSellSaveCode(cleanCfg) {
+function buildAutoSellSaveCode(cleanCfg, options = {}) {
   const globalSettings = loadGlobalMarketSettings();
+  const allowEmptyOverwrite = Boolean(options && options.allowEmptyOverwrite);
   return `(() => {
     ${buildMarketGlobalRuntimeSnippet(globalSettings)};
     const next = ${JSON.stringify(cleanCfg)};
+    const allowEmpty = ${JSON.stringify(allowEmptyOverwrite)};
     if ([12, 24, 48].includes(Number(window.__pmMarketGlobalSettings && window.__pmMarketGlobalSettings.durationHours))) {
       next.durationHours = Number(window.__pmMarketGlobalSettings.durationHours);
     }
-    window.__autoMarketSellConfig = Object.assign({}, window.__autoMarketSellConfig || {}, next);
+    const cur = (window.__autoMarketSellConfig && typeof window.__autoMarketSellConfig === 'object') ? window.__autoMarketSellConfig : {};
+    if (!allowEmpty && (!Array.isArray(next.rules) || next.rules.length === 0) && Array.isArray(cur.rules) && cur.rules.length > 0) {
+      next.rules = cur.rules;
+    }
+    if (allowEmpty && (!Array.isArray(next.rules) || next.rules.length === 0)) {
+      next.__userClearedAt = Date.now();
+    } else {
+      delete next.__userClearedAt;
+    }
+    window.__autoMarketSellConfig = Object.assign({}, cur, next);
+    if (allowEmpty && (!Array.isArray(next.rules) || next.rules.length === 0)) {
+      window.__autoMarketSellConfig.__userClearedAt = next.__userClearedAt;
+    } else {
+      delete window.__autoMarketSellConfig.__userClearedAt;
+    }
     try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch (e) {}
     const en = Boolean(window.__autoMarketSellConfig.enabled);
     const t1 = document.getElementById('p-autosell-toggle');
@@ -1204,12 +1268,28 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
   return `(() => {
     const gs = ${JSON.stringify(gs)};
     window.__pmMarketGlobalSettings = gs;
-    if (!window.__autoMarketSellConfig || typeof window.__autoMarketSellConfig !== 'object') {
-      window.__autoMarketSellConfig = { enabled: false, priceStrategy: 'median', durationHours: gs.durationHours, rules: [] };
-    } else {
+    let storedCfg = null;
+    try {
+      const pid = window.__pmProfileId;
+      const raw = (pid && localStorage.getItem('pelican_' + pid + '__auto_market_sell_cfg')) || localStorage.getItem('pelican_auto_market_sell_cfg');
+      if (raw) storedCfg = JSON.parse(raw);
+    } catch (_) {}
+    if (window.__autoMarketSellConfig && typeof window.__autoMarketSellConfig === 'object') {
+      if ((!Array.isArray(window.__autoMarketSellConfig.rules) || window.__autoMarketSellConfig.rules.length === 0) && storedCfg && Array.isArray(storedCfg.rules) && storedCfg.rules.length > 0 && !window.__autoMarketSellConfig.__userClearedAt) {
+        window.__autoMarketSellConfig = Object.assign({}, storedCfg, window.__autoMarketSellConfig, {
+          enabled: storedCfg.enabled !== undefined ? Boolean(storedCfg.enabled) : Boolean(window.__autoMarketSellConfig.enabled),
+          rules: storedCfg.rules
+        });
+      }
       window.__autoMarketSellConfig.durationHours = gs.durationHours;
+      if (Array.isArray(window.__autoMarketSellConfig.rules) && window.__autoMarketSellConfig.rules.length > 0) {
+        try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch (_) {}
+      }
+    } else if (storedCfg && typeof storedCfg === 'object' && Array.isArray(storedCfg.rules) && storedCfg.rules.length > 0) {
+      storedCfg.durationHours = gs.durationHours;
+      window.__autoMarketSellConfig = storedCfg;
+      try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(storedCfg)); } catch (_) {}
     }
-    try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch (_) {}
     const durSel1 = document.getElementById('p-autosell-duration-select');
     if (durSel1) durSel1.value = String(gs.durationHours);
     const durSel2 = document.getElementById('p-autosell-duration-select-hud');
@@ -1565,15 +1645,27 @@ async function querySingleProfileOverview(p, evalProfilePort, forceRefresh = fal
 
     let asInfo = base.autoSell;
     if (d.autoSell && d.autoSell.config) {
-      saveProfileAutoSellStore(p.id, d.autoSell.config);
+      const liveRules = Array.isArray(d.autoSell.config.rules) ? d.autoSell.config.rules : [];
+      const storedRules = Array.isArray(storedAs.rules) ? storedAs.rules : [];
+      let effectiveCfg = d.autoSell.config;
+      if (liveRules.length === 0 && storedRules.length > 0 && !d.autoSell.userClearedAt) {
+        effectiveCfg = Object.assign({}, storedAs, {
+          durationHours: Number(d.autoSell.config.durationHours) || storedAs.durationHours || loadGlobalMarketSettings().durationHours || 24
+        });
+        evalProfilePort(p.debugPort, buildAutoSellSaveCode(effectiveCfg, { allowEmptyOverwrite: false }), 3500).catch(() => {});
+      } else if (liveRules.length > 0 || d.autoSell.userClearedAt) {
+        effectiveCfg = saveProfileAutoSellStore(p.id, d.autoSell.config, {
+          allowEmptyOverwrite: Boolean(d.autoSell.userClearedAt)
+        });
+      }
       const rs = d.autoSell.ruleStates || {};
-      const rules = Array.isArray(d.autoSell.config.rules) ? d.autoSell.config.rules : [];
+      const rules = Array.isArray(effectiveCfg.rules) ? effectiveCfg.rules : [];
       const readyCount = rules.filter(ru => ru && ru.enabled !== false && rs[ru.id] && rs[ru.id].ready).length;
       const bagSummary = Array.isArray(d.autoSell.bagItemsSummary) ? d.autoSell.bagItemsSummary : [];
       asInfo = {
-        enabled: Boolean(d.autoSell.config.enabled),
-        priceStrategy: d.autoSell.config.priceStrategy || 'median',
-        durationHours: Number(d.autoSell.config.durationHours) || loadGlobalMarketSettings().durationHours || 24,
+        enabled: Boolean(effectiveCfg.enabled),
+        priceStrategy: effectiveCfg.priceStrategy || 'median',
+        durationHours: Number(effectiveCfg.durationHours) || loadGlobalMarketSettings().durationHours || 24,
         rules,
         ruleStates: rs,
         readyCount,
@@ -1667,9 +1759,12 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
         const runtimeCode = buildMarketGlobalRuntimeSnippet(nextSettings);
         await runWithConcurrency(onlineProfiles, 6, async (p) => {
           try {
-            saveProfileAutoSellStore(p.id, Object.assign({}, loadProfileAutoSellStore(p.id), {
-              durationHours: nextSettings.durationHours
-            }));
+            const existing = loadProfileAutoSellStore(p.id);
+            if (existing && Array.isArray(existing.rules) && existing.rules.length > 0) {
+              saveProfileAutoSellStore(p.id, Object.assign({}, existing, {
+                durationHours: nextSettings.durationHours
+              }), { allowEmptyOverwrite: false });
+            }
             await evalProfilePort(p.debugPort, runtimeCode, 3000);
           } catch (_) {}
         });
@@ -1831,14 +1926,83 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           sendJSON({ success: false, error: 'ไม่พบโปรไฟล์ที่ระบุ' }, 404);
           return true;
         }
-        const stored = loadProfileAutoSellStore(profile.id);
+        let stored = loadProfileAutoSellStore(profile.id);
+        if (profile.debugPort && (!Array.isArray(stored.rules) || stored.rules.length === 0)) {
+          try {
+            const curR = await evalProfilePort(profile.debugPort, buildAutoSellReadCode(), 3500);
+            if (curR && curR.result && curR.result.config && Array.isArray(curR.result.config.rules) && curR.result.config.rules.length > 0) {
+              stored = curR.result.config;
+            }
+          } catch (_) {}
+        }
         stored.enabled = Boolean(payload.enabled);
-        const cleanCfg = saveProfileAutoSellStore(profile.id, stored);
+        const cleanCfg = saveProfileAutoSellStore(profile.id, stored, { allowEmptyOverwrite: false, preserveEnabled: false });
         if (profile.debugPort) {
-          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg), 4000).catch(() => {});
+          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg, { allowEmptyOverwrite: false }), 4000).catch(() => {});
         }
         const updatedClient = await querySingleProfileOverview(profile, evalProfilePort, false);
         sendJSON({ success: true, enabled: cleanCfg.enabled, client: updatedClient });
+        return true;
+      }
+
+      if (op === 'restore_autosell_from_peer') {
+        let bestSource = null;
+        let bestProfile = null;
+        for (const p of profiles) {
+          if (!p || !p.id || p.id === pid) continue;
+          const st = loadProfileAutoSellStore(p.id);
+          if (st && Array.isArray(st.rules) && st.rules.length > (bestSource ? bestSource.rules.length : 0)) {
+            bestSource = st;
+            bestProfile = p;
+          }
+        }
+        if (!bestSource || !Array.isArray(bestSource.rules) || bestSource.rules.length === 0) {
+          sendJSON({ success: false, error: 'ไม่พบรายการ List Auto-Sell จากจออื่นที่จะใช้กู้คืนได้' }, 400);
+          return true;
+        }
+        const targets = (pid && pid !== 'all')
+          ? profiles.filter(p => p && p.id === pid)
+          : profiles.filter(p => {
+              if (!p || !p.id) return false;
+              const st = loadProfileAutoSellStore(p.id);
+              return !Array.isArray(st.rules) || st.rules.length === 0;
+            });
+        if (targets.length === 0) {
+          sendJSON({ success: false, error: 'ไม่มีจอที่ต้องกู้คืน List Auto-Sell' }, 400);
+          return true;
+        }
+        let restoredCount = 0;
+        await runWithConcurrency(targets, 6, async (tp) => {
+          const nextRules = bestSource.rules.map((r, idx) => ({
+            id: `rule_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+            itemName: String(r.itemName || '').trim(),
+            minQty: Math.max(1, Number(r.minQty) || 1),
+            sellMode: r.sellMode === 'min' ? 'min' : 'all',
+            enabled: r.enabled !== false
+          }));
+          const cleanCfg = saveProfileAutoSellStore(tp.id, {
+            enabled: true,
+            priceStrategy: bestSource.priceStrategy || 'median',
+            durationHours: bestSource.durationHours || loadGlobalMarketSettings().durationHours || 24,
+            checkIntervalSec: bestSource.checkIntervalSec || 25,
+            maxActiveListings: bestSource.maxActiveListings || 10,
+            rules: nextRules
+          }, { allowEmptyOverwrite: false });
+          restoredCount++;
+          if (tp.debugPort) {
+            await evalProfilePort(tp.debugPort, buildAutoSellSaveCode(cleanCfg, { allowEmptyOverwrite: false }), 4000).catch(() => {});
+          }
+        });
+        const clients = await runWithConcurrency(profiles, 6, p =>
+          querySingleProfileOverview(p, evalProfilePort, false)
+        );
+        sendJSON({
+          success: true,
+          restoredCount,
+          rulesCount: bestSource.rules.length,
+          sourceName: (bestProfile && (bestProfile.lastCharName || bestProfile.name)) || 'จอหลัก',
+          clients
+        });
         return true;
       }
 
@@ -2023,8 +2187,16 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           ? profiles.filter(p => p && p.debugPort && p.id === targetId)
           : profiles.filter(p => p && p.debugPort);
         const code = `(() => {
-          const c = window.__autoMarketSellConfig || (window.__autoMarketSellConfig = { rules: [] });
-          if (!Array.isArray(c.rules)) c.rules = [];
+          let storedCfg = null;
+          try {
+            const pid = window.__pmProfileId;
+            const raw = (pid && localStorage.getItem('pelican_' + pid + '__auto_market_sell_cfg')) || localStorage.getItem('pelican_auto_market_sell_cfg');
+            if (raw) storedCfg = JSON.parse(raw);
+          } catch (_) {}
+          const c = window.__autoMarketSellConfig || (window.__autoMarketSellConfig = Object.assign({ rules: [] }, storedCfg || {}));
+          if (!Array.isArray(c.rules) || (c.rules.length === 0 && storedCfg && Array.isArray(storedCfg.rules) && storedCfg.rules.length > 0)) {
+            c.rules = (storedCfg && Array.isArray(storedCfg.rules)) ? storedCfg.rules.slice() : [];
+          }
           const name = ${JSON.stringify(itemName)};
           const existing = c.rules.find(r => r && String(r.itemName || '').trim().toLowerCase() === name.toLowerCase());
           if (existing) {
@@ -2034,6 +2206,7 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
             c.rules.push({ id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), itemName: name, minQty: ${minQty}, sellMode: 'all', enabled: true });
           }
           c.enabled = true;
+          delete c.__userClearedAt;
           try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(c)); } catch (e) { return { success: false, error: e.message }; }
           try { const box = document.getElementById('p-autosell-hud-rules-container'); if (box && typeof window.renderAutoSellHudRulesHtml === 'function') box.innerHTML = window.renderAutoSellHudRulesHtml(); } catch (e) {}
           return { success: true, count: c.rules.length, enabled: !!c.enabled };
@@ -2084,9 +2257,25 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
     if (req.method === 'GET') {
       if (profile.debugPort) {
         try {
+          const stored = loadProfileAutoSellStore(id);
           const r = await evalProfilePort(profile.debugPort, buildAutoSellReadCode(), 4500);
           if (r && r.result && r.result.success && r.result.config) {
-            saveProfileAutoSellStore(id, r.result.config);
+            const liveRules = Array.isArray(r.result.config.rules) ? r.result.config.rules : [];
+            const storedRules = Array.isArray(stored.rules) ? stored.rules : [];
+            if (liveRules.length === 0 && storedRules.length > 0 && !r.result.userClearedAt) {
+              const restored = await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(stored, { allowEmptyOverwrite: false }), 4500).catch(() => null);
+              const finalRes = (restored && restored.result && restored.result.success)
+                ? restored.result
+                : Object.assign({}, r.result, { config: stored });
+              sendJSON(Object.assign({}, finalRes, {
+                offline: false,
+                otherProfiles: buildOtherProfilesMeta()
+              }));
+              return true;
+            }
+            if (liveRules.length > 0 || r.result.userClearedAt) {
+              saveProfileAutoSellStore(id, r.result.config, { allowEmptyOverwrite: Boolean(r.result.userClearedAt) });
+            }
             sendJSON(Object.assign({}, r.result, {
               offline: false,
               otherProfiles: buildOtherProfilesMeta()
@@ -2119,10 +2308,10 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
       const op = payload.op || 'save';
 
       if (op === 'save') {
-        const cleanCfg = saveProfileAutoSellStore(id, payload.config || payload);
+        const cleanCfg = saveProfileAutoSellStore(id, payload.config || payload, { allowEmptyOverwrite: true, preserveEnabled: false });
         if (profile.debugPort) {
           try {
-            const r = await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg), 4500);
+            const r = await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg, { allowEmptyOverwrite: true }), 4500);
             if (r && r.result && r.result.success) {
               sendJSON(Object.assign({}, r.result, {
                 offline: false,
@@ -2152,8 +2341,8 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           return true;
         }
         if (payload.config) {
-          const cleanCfg = saveProfileAutoSellStore(id, payload.config);
-          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg), 4000).catch(() => {});
+          const cleanCfg = saveProfileAutoSellStore(id, payload.config, { allowEmptyOverwrite: false });
+          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg, { allowEmptyOverwrite: false }), 4000).catch(() => {});
         }
         const ruleId = String(payload.ruleId || '').trim();
         const sellCode = `(async () => {
@@ -2172,8 +2361,8 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           return true;
         }
         if (payload.config) {
-          const cleanCfg = saveProfileAutoSellStore(id, payload.config);
-          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg), 4000).catch(() => {});
+          const cleanCfg = saveProfileAutoSellStore(id, payload.config, { allowEmptyOverwrite: false });
+          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg, { allowEmptyOverwrite: false }), 4000).catch(() => {});
         }
         const checkCode = `(async () => {
           if (typeof window.runAutoMarketSellCycle === 'function') {
@@ -2188,10 +2377,10 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
 
       if (op === 'copy_to') {
         const sourceCfg = payload.config
-          ? saveProfileAutoSellStore(id, payload.config)
+          ? saveProfileAutoSellStore(id, payload.config, { allowEmptyOverwrite: false })
           : loadProfileAutoSellStore(id);
         if (profile.debugPort && payload.config) {
-          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(sourceCfg), 3500).catch(() => {});
+          await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(sourceCfg, { allowEmptyOverwrite: false }), 3500).catch(() => {});
         }
         const mode = payload.mode === 'merge' ? 'merge' : 'replace';
         const copyEnabled = payload.copyEnabled !== false;

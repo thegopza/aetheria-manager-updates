@@ -134,14 +134,25 @@
     let autoSellEnabledCount = 0;
     let autoSellReadyChars = 0;
     let totalReadyRules = 0;
+    let maxPeerRulesCount = 0;
+    let emptyAutoSellCharsCount = 0;
 
     let underHoursCount = 0;
     let underHoursCharsCount = 0;
 
     for (const c of state.clients) {
+      const rLen = (c.autoSell && Array.isArray(c.autoSell.rules)) ? c.autoSell.rules.length : 0;
+      if (rLen > maxPeerRulesCount) maxPeerRulesCount = rLen;
+    }
+
+    for (const c of state.clients) {
       const act = Array.isArray(c.active) ? c.active : [];
       const deliv = Array.isArray(c.deliveries) ? c.deliveries : [];
       const lim = Number(c.activeLimit) || (c.premium ? 20 : 5);
+      const rLen = (c.autoSell && Array.isArray(c.autoSell.rules)) ? c.autoSell.rules.length : 0;
+      if (rLen === 0 && maxPeerRulesCount > 0) {
+        emptyAutoSellCharsCount++;
+      }
 
       if (c.online) {
         onlineCount++;
@@ -191,6 +202,8 @@
       autoSellEnabledCount,
       autoSellReadyChars,
       totalReadyRules,
+      maxPeerRulesCount,
+      emptyAutoSellCharsCount,
       underHoursCount,
       underHoursCharsCount
     };
@@ -319,6 +332,11 @@
           <button type="button" class="mko-btn ${s.underHoursCount > 0 ? 'danger' : ''}" data-mko-act="cancel-under-hours" ${s.onlineCount === 0 ? 'disabled' : ''} title="ยกเลิกรายการขายทุกจอที่เหลือเวลาในตลาดต่ำกว่า ${underH} ชั่วโมง และรับของกลับเข้ากระเป๋าทันที">
             🚫 ยกเลิกของ &lt; ${underH} ชม. ${s.underHoursCount > 0 ? `(${s.underHoursCount})` : '(0)'}
           </button>
+          ${s.emptyAutoSellCharsCount > 0 ? `
+            <button type="button" class="mko-btn purple" data-mko-act="restore-empty-autosell" title="คัดลอกรายการ List Auto-Sell (${s.maxPeerRulesCount} รายการ) จากจอหลักไปใส่ให้จอที่ List ว่างอยู่ (${s.emptyAutoSellCharsCount} จอ) ทันที">
+              🔄 กู้คืน List จอที่ว่าง (${s.emptyAutoSellCharsCount})
+            </button>
+          ` : ''}
           <button type="button" class="mko-btn sky" data-mko-act="refresh" ${state.loading ? 'disabled' : ''} title="ดึงรายการวางขายและสถานะตลาดล่าสุดจากทุกจอ">
             🔄 ${state.loading ? 'กำลังโหลด...' : 'รีเฟรชตลาด'}
           </button>
@@ -570,6 +588,12 @@
             <button type="button" class="mko-btn purple sm" data-mko-open-autosell="${esc(c.id)}" title="เปิดดู/เพิ่ม/ลบ/คัดลอกรายการ List Auto-Sell ของตัวละครนี้">
               📋 List Auto-Sell (${rules.length})
             </button>
+
+            ${rules.length === 0 && state.clients.some(x => x && x.id !== c.id && x.autoSell && Array.isArray(x.autoSell.rules) && x.autoSell.rules.length > 0) ? `
+              <button type="button" class="mko-btn emerald sm" data-mko-restore-autosell="${esc(c.id)}" title="คัดลอกรายการ List Auto-Sell จากจออื่นที่มีข้อมูลมาใส่ให้ตัวละครนี้และเปิด Auto-Sell ทันที">
+                🔄 กู้คืน List จากจออื่น
+              </button>
+            ` : ''}
 
             <button type="button" class="mko-btn sky sm" data-mko-open-bag-sell="${esc(c.id)}" ${c.online ? '' : 'disabled'} title="เปิดกระเป๋าของตัวละครนี้เพื่อเลือกไอเทมตั้งราคาขายลงตลาดกลาง">
               🎒 ขายของ (กระเป๋า)
@@ -894,6 +918,38 @@
       return;
     }
 
+    // Restore Auto-Sell list from another profile for a character with 0 rules
+    const restoreAsBtn = e.target.closest('[data-mko-restore-autosell]');
+    if (restoreAsBtn) {
+      const profileId = restoreAsBtn.dataset.mkoRestoreAutosell;
+      restoreAsBtn.disabled = true;
+      const orig = restoreAsBtn.textContent;
+      restoreAsBtn.textContent = '⏳ กำลังกู้คืน...';
+      try {
+        const res = await fetch('/api/market/overview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ op: 'restore_autosell_from_peer', profileId })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          if (Array.isArray(data.clients)) state.clients = data.clients;
+          notify(`✅ กู้คืนรายการ List Auto-Sell (${data.rulesCount || 0} รายการ จาก ${data.sourceName || 'จอหลัก'}) เรียบร้อยแล้ว!`, 'success');
+          updateMainTabBadges();
+          renderAll();
+        } else {
+          notify(`❌ กู้คืนไม่สำเร็จ: ${(data && data.error) || ''}`, 'error');
+          restoreAsBtn.disabled = false;
+          restoreAsBtn.textContent = orig;
+        }
+      } catch (err) {
+        notify(`❌ เกิดข้อผิดพลาด: ${err.message}`, 'error');
+        restoreAsBtn.disabled = false;
+        restoreAsBtn.textContent = orig;
+      }
+      return;
+    }
+
     // Global actions
     const actBtn = e.target.closest('[data-mko-act]');
     if (!actBtn) return;
@@ -902,6 +958,34 @@
     if (act === 'refresh') {
       await fetchOverview(true);
       notify('🔄 อัปเดตข้อมูลตลาดกลางทุกจอเรียบร้อยแล้ว', 'success');
+      return;
+    }
+
+    if (act === 'restore-empty-autosell') {
+      actBtn.disabled = true;
+      const orig = actBtn.textContent;
+      actBtn.textContent = '⏳ กำลังกู้คืน...';
+      try {
+        const res = await fetch('/api/market/overview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ op: 'restore_autosell_from_peer', profileId: 'all' })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          if (Array.isArray(data.clients)) state.clients = data.clients;
+          notify(`✅ กู้คืนรายการ List Auto-Sell (${data.rulesCount || 0} รายการ) ให้ ${data.restoredCount || 0} จอที่ว่างเรียบร้อยแล้ว!`, 'success');
+          updateMainTabBadges();
+          renderAll();
+        } else {
+          notify(`❌ กู้คืนไม่สำเร็จ: ${(data && data.error) || ''}`, 'error');
+        }
+      } catch (err) {
+        notify(`❌ เกิดข้อผิดพลาด: ${err.message}`, 'error');
+      } finally {
+        actBtn.disabled = false;
+        actBtn.textContent = orig;
+      }
       return;
     }
 

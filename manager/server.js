@@ -2173,8 +2173,21 @@ function buildClientActionEvalCode(payload) {
     })()`;
   } else if (payload.type === 'update-autosell') {
     return `(() => {
-      if (!window.__autoMarketSellConfig) window.__autoMarketSellConfig = { enabled: false, rules: [] };
+      let storedCfg = null;
+      try {
+        const pid = window.__pmProfileId;
+        const raw = (pid && localStorage.getItem('pelican_' + pid + '__auto_market_sell_cfg')) || localStorage.getItem('pelican_auto_market_sell_cfg');
+        if (raw) storedCfg = JSON.parse(raw);
+      } catch (_) {}
+      if (!window.__autoMarketSellConfig || typeof window.__autoMarketSellConfig !== 'object') {
+        window.__autoMarketSellConfig = Object.assign({ enabled: false, rules: [] }, storedCfg || {});
+      } else if ((!Array.isArray(window.__autoMarketSellConfig.rules) || window.__autoMarketSellConfig.rules.length === 0) && storedCfg && Array.isArray(storedCfg.rules) && storedCfg.rules.length > 0 && !window.__autoMarketSellConfig.__userClearedAt) {
+        window.__autoMarketSellConfig.rules = storedCfg.rules;
+      }
       const patch = ${JSON.stringify(payload.config || {})};
+      if (Array.isArray(patch.rules) && patch.rules.length === 0 && Array.isArray(window.__autoMarketSellConfig.rules) && window.__autoMarketSellConfig.rules.length > 0 && !patch.__userClearedAt) {
+        delete patch.rules;
+      }
       Object.assign(window.__autoMarketSellConfig, patch);
       try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(window.__autoMarketSellConfig)); } catch(e){}
       const en = !!window.__autoMarketSellConfig.enabled;

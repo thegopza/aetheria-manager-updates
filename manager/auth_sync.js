@@ -12,10 +12,90 @@
 const crypto = require('crypto');
 
 const SYNC_MS = 10 * 1000;
-const ALNUM = 'abcdefghijklmnopqrstuvwxyz0123456789';
-const pick = (chars, n) => Array.from(crypto.randomBytes(n), b => chars[b % chars.length]).join('');
-const genUserId = () => 'pm' + pick(ALNUM, 8);   // 10 chars, a-z 0-9 (game: 3-16, a-z 0-9 _)
-const genPassword = () => pick('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789', 12);
+const rInt = (min, max) => crypto.randomInt(min, max + 1);
+const pickOne = arr => arr[crypto.randomInt(0, arr.length)];
+
+const USER_NICKS = [
+  'bank', 'boom', 'beam', 'boss', 'ball', 'benz', 'best', 'boat', 'book', 'boy', 'bas', 'bell', 'beer', 'big', 'bright',
+  'champ', 'chok', 'chom', 'cream', 'cake', 'cop', 'captain', 'dew', 'dome', 'dream', 'don', 'dear', 'din', 'duke',
+  'earth', 'ek', 'earn', 'eye', 'first', 'fluke', 'fiat', 'film', 'frame', 'folk', 'ford', 'forth', 'fah', 'fern', 'fon', 'fame', 'frank',
+  'golf', 'gun', 'game', 'guy', 'got', 'gap', 'green', 'gift', 'grace', 'gus', 'hong', 'ice', 'ink', 'indie',
+  'jay', 'jame', 'jeng', 'jeab', 'joker', 'job', 'jun', 'june', 'jib', 'jack', 'jane',
+  'kao', 'korn', 'ken', 'krit', 'kim', 'kwan', 'kong', 'kan', 'kla', 'keng', 'keam', 'knight',
+  'leo', 'luke', 'lek', 'lee', 'lotus', 'mark', 'max', 'mix', 'mike', 'mind', 'mild', 'mook', 'mew', 'mint', 'may', 'mean', 'mos', 'mick', 'mon', 'mork',
+  'non', 'nut', 'nine', 'new', 'nick', 'note', 'art', 'arm', 'aom', 'aof', 'aun', 'ake', 'auto', 'atom', 'amp',
+  'nam', 'nan', 'net', 'noey', 'ning', 'nook', 'neung', 'nai', 'ohm', 'off', 'oat', 'oak', 'oil', 'ong',
+  'peat', 'pete', 'pond', 'phu', 'poom', 'pun', 'peam', 'palm', 'petch', 'plug', 'pop', 'pang', 'ploy', 'praew', 'plai', 'pleng', 'pear', 'por', 'ple', 'ping',
+  'rew', 'ryu', 'rome', 'run', 'safe', 'save', 'sing', 'sky', 'sun', 'stamp', 'star', 'sea', 'win', 'wave', 'way', 'white', 'woody',
+  'tar', 'tee', 'ton', 'top', 'toey', 'tle', 'ter', 'time', 'title', 'team', 'ten', 'tor', 'tum', 'tan', 'tawan', 'toy', 'tack',
+  'view', 'vee', 'van', 'yok', 'zen', 'zee', 'zack'
+];
+const USER_STEMS = [
+  'shadow', 'dark', 'night', 'storm', 'frost', 'flame', 'blaze', 'wolf', 'fox', 'raven', 'dragon', 'tiger', 'lion', 'viper', 'hawk', 'bear', 'neko', 'kitsune',
+  'luna', 'nova', 'astro', 'pixel', 'cyber', 'neon', 'ghost', 'phantom', 'reaper', 'slayer', 'hunter', 'ranger', 'archer', 'sniper', 'rogue', 'mage', 'wizard', 'monk', 'paladin', 'bard',
+  'kira', 'zoro', `luffy`, 'ace', 'sabo', 'sanji', 'law', 'shanks', 'naruto', 'sasuke', 'itachi', 'kakashi', 'gojo', 'toji', 'tanjiro', 'zenitsu', 'rengoku', 'goku', 'vegeta', 'asta', 'levi', 'eren', 'killua', 'rimuru', 'kirito', 'asuna', 'sinon', 'rem', 'anya', 'frieren', 'stark', 'jinwoo', 'beru',
+  'kazu', 'haru', 'sora', 'riku', 'yuki', 'akira', 'kenji', 'hiro', 'ren', 'shin', 'rei', 'kai', 'zero', 'zephyr', 'ares', 'apollo', 'hades', 'zeus', 'loki', 'thor', 'odin', 'fenrir'
+];
+const USER_PREFIXES = [
+  'lil', 'mini', 'mr', 'iam', 'im', 'its', 'the', 'real', 'itz', 'lazy', 'sleepy', 'lucky', 'happy', 'lonely', 'silent', 'crazy', 'wild', 'sweet', 'cold', 'blue', 'red', 'black', 'white', 'gold', 'silver', 'baby', 'super', 'pro'
+];
+const USER_TAGS = [
+  'za', 'zaza', 'kung', 'krub', 'kub', 'ja', 'jaja', 'jung', 'th', 'bkk', 'cnx', 'vip', 'gg', 'ch', 'tv', 'xz', 'zx', 'zz', 'v2', 'jr', 'dk', 'pk', 'x', 'z'
+];
+
+function genHumanNum(style) {
+  const mode = style !== undefined ? style : rInt(0, 5);
+  if (mode === 0) return String(rInt(2534, 2553)); // พ.ศ. เกิด
+  if (mode === 1) return String(rInt(1991, 2010)); // ค.ศ. เกิด
+  if (mode === 2) return String(rInt(1, 28)).padStart(2, '0') + String(rInt(1, 12)).padStart(2, '0'); // วันเดือนเกิด DDMM
+  if (mode === 3) return String(rInt(10, 99)); // เลข 2 หลัก
+  if (mode === 4) return String(rInt(100, 999)); // เลข 3 หลัก
+  return pickOne(['007', '01', '07', '09', '11', '24', '35', '42', '45', '55', '555', '69', '77', '777', '88', '888', '99', '999', '123', '168', '404', '1412']) + (rInt(0, 2) === 0 ? String(rInt(0, 9)) : '');
+}
+
+function genUserId() {
+  const sep = () => (rInt(0, 10) < 3 ? '_' : '');
+  const patterns = [
+    () => pickOne(USER_NICKS) + pickOne(USER_TAGS) + genHumanNum(rInt(0, 4)),
+    () => pickOne(USER_NICKS) + sep() + pickOne(USER_STEMS) + (rInt(0, 10) < 8 ? String(rInt(1, 999)) : genHumanNum(3)),
+    () => pickOne(USER_STEMS) + sep() + pickOne(USER_NICKS) + (rInt(0, 10) < 8 ? String(rInt(1, 999)) : genHumanNum(3)),
+    () => pickOne(USER_PREFIXES) + sep() + pickOne(USER_NICKS) + genHumanNum(rInt(0, 4)),
+    () => {
+      const n = pickOne(USER_NICKS);
+      const tail = n[n.length - 1];
+      return n + tail.repeat(rInt(1, 2)) + genHumanNum(rInt(0, 2));
+    },
+    () => pickOne(USER_NICKS) + sep() + pickOne(USER_NICKS) + String(rInt(10, 999)),
+    () => pickOne(USER_STEMS) + pickOne(USER_TAGS) + genHumanNum(rInt(0, 4))
+  ];
+  for (let i = 0; i < 40; i++) {
+    let raw = pickOne(patterns)().toLowerCase().replace(/[^a-z0-9_]/g, '').replace(/_+/g, '_').replace(/^_|_$/g, '');
+    if (raw.length > 14) raw = raw.slice(0, 14).replace(/_$/g, '');
+    if (raw.length >= 6 && raw.length <= 14 && /^[a-z][a-z0-9_]{5,13}$/.test(raw) && !/^pm[a-z0-9]{8}$/.test(raw)) {
+      return raw;
+    }
+  }
+  return pickOne(USER_NICKS) + pickOne(USER_TAGS) + String(rInt(100, 9999));
+}
+
+function genPassword() {
+  const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+  const digits = len => Array.from({ length: len }, () => rInt(0, 9)).join('');
+  const patterns = [
+    () => cap(pickOne(USER_NICKS)) + genHumanNum(rInt(0, 2)) + digits(rInt(1, 2)),
+    () => cap(pickOne(USER_STEMS)) + genHumanNum(rInt(0, 2)) + (rInt(0, 1) ? digits(1) : ''),
+    () => pickOne(USER_NICKS) + pickOne(USER_TAGS) + genHumanNum(rInt(0, 2)) + digits(1),
+    () => pickOne(USER_NICKS) + genHumanNum(rInt(0, 2)) + cap(pickOne(USER_TAGS)),
+    () => pickOne(['08', '09', '06']) + digits(rInt(6, 7)) + pickOne(USER_NICKS).slice(0, rInt(2, 3)),
+    () => pickOne(USER_STEMS) + pickOne(USER_NICKS) + digits(rInt(2, 3))
+  ];
+  for (let i = 0; i < 30; i++) {
+    let pw = pickOne(patterns)().replace(/[^A-Za-z0-9]/g, '');
+    if (pw.length > 13) pw = pw.slice(0, 13);
+    if (pw.length >= 8 && pw.length <= 13) return pw;
+  }
+  return cap(pickOne(USER_NICKS)) + digits(6);
+}
 
 const READ_JS = `(() => {
   const c = window.__authConfig;
@@ -139,7 +219,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
       c = {
         username: hasAccount ? profile.account.trim() : genUserId(),
         password: pw(profile) || genPassword(),
-        generatedUser: !hasAccount
+        generatedUser: !hasAccount || !!profile.generatedAccount || !!profile.autoRegister
       };
       pendingCreds.set(profile.id, c);
     }
@@ -274,7 +354,8 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     const hasClientCreds = Boolean(cur.username && cur.password && !cur.register && !cur.registerError);
     const managerMissingCreds = !profile.account || !pw(profile);
     const isCustomClientUser = Boolean(cur.username && !cur.generatedUser && !/^pm[a-z0-9]{8}$/.test(cur.username));
-    const shouldAdoptFromClient = hasClientCreds && (
+    const isSameGeneratedAccount = Boolean(profile.generatedAccount && profile.account && cur.username === profile.account);
+    const shouldAdoptFromClient = hasClientCreds && !isSameGeneratedAccount && (
       clientEditStamp > lastManagerPushAt ||
       managerMissingCreds ||
       (!cur.generatedUser && (profile.autoRegister || profile.generatedAccount)) ||
@@ -303,7 +384,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
 
     if (profile.autoRegister) {
       // NEVER auto-register over a profile that already has a character or manual credentials in HUD!
-      if (cur.username && cur.password && !cur.register && !cur.registerError && !cur.generatedUser) {
+      if (cur.username && cur.password && !cur.register && !cur.registerError && !cur.generatedUser && !isSameGeneratedAccount) {
         credentials.setPassword(profile.id, cur.password);
         updateProfile(profile.id, {
           account: cur.username,
@@ -386,6 +467,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
         username: profile.account,
         password: pw(profile),
         register: false,
+        generatedUser: !!profile.generatedAccount,
         ...(profile.loginSyncPending ? { registerDone: true, autoCreateChar: true, autoResumeBot: true } : {})
       }), 3000);
       if (delivered?.success && delivered.result?.success === true) {
@@ -435,4 +517,4 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
   return { start, tick, syncOne, resetProxyFallback };
 }
 
-module.exports = { createAuthSync };
+module.exports = { createAuthSync, genUserId, genPassword };

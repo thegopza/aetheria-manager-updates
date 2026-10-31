@@ -6239,7 +6239,8 @@ const server = http.createServer(async (req, res) => {
                 const lastManagerPushAt = Number(p.lastAuthSyncPushAt) || 0;
                 const managerMissingCreds = !p.account || !curProfPass;
                 const isCustomClientUser = Boolean(!ca.generatedUser && !/^pm[a-z0-9]{8}$/.test(cUser));
-                const shouldAdopt = (
+                const isSameGeneratedAccount = Boolean(p.generatedAccount && p.account && cUser === p.account);
+                const shouldAdopt = !isSameGeneratedAccount && (
                   clientEditStamp > lastManagerPushAt ||
                   managerMissingCreds ||
                   (!ca.generatedUser && (p.autoRegister || p.generatedAccount)) ||

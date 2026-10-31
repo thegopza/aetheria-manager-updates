@@ -1501,12 +1501,30 @@ const LIVE_STATE_EVAL = `(() => {
 
 const clientStateCacheByPort = new Map();
 const clientStateInFlightByPort = new Map();
+const clientStateLastFailureByPort = new Map();
+
+async function mapWithConcurrency(items, limit, fn) {
+  const arr = Array.isArray(items) ? items : [];
+  if (arr.length === 0) return [];
+  const maxWorkers = Math.max(1, Math.min(Number(limit) || 8, arr.length));
+  const results = new Array(arr.length);
+  let nextIdx = 0;
+  async function worker() {
+    while (true) {
+      const idx = nextIdx++;
+      if (idx >= arr.length) break;
+      results[idx] = await fn(arr[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: maxWorkers }, () => worker()));
+  return results;
+}
 
 function queryClientState(port) {
   if (!port) return Promise.resolve(null);
   const now = Date.now();
   const cached = clientStateCacheByPort.get(port);
-  if (cached && now - cached.ts < 950) {
+  if (cached && now - cached.ts < 1750) {
     return Promise.resolve(cached.state);
   }
   if (clientStateInFlightByPort.has(port)) {
@@ -1533,22 +1551,39 @@ function queryClientState(port) {
         try {
           const parsed = JSON.parse(data);
           if (parsed && parsed.success && parsed.result) {
+            clientStateLastFailureByPort.delete(port);
             return resolve(parsed.result);
           }
         } catch (e) {}
-        queryStandardState(port).then(resolve);
+        // Only fall back to GET /api/state if /api/eval returned 404/405 (legacy loader).
+        // If /api/eval returned 500 (e.g. renderer evaluation timeout), do not double-hit the busy renderer.
+        if (res.statusCode === 404 || res.statusCode === 405) {
+          queryStandardState(port).then(resolve);
+        } else {
+          clientStateLastFailureByPort.set(port, { ts: Date.now(), reason: 'eval_error' });
+          resolve(null);
+        }
       });
     });
-    req.on("error", () => queryStandardState(port).then(resolve));
+    req.on("error", (err) => {
+      const code = String((err && err.code) || '');
+      if (code === 'ECONNREFUSED' || code === 'ECONNRESET' || code === 'EPIPE') {
+        clientStateLastFailureByPort.set(port, { ts: Date.now(), reason: code });
+        return resolve(null);
+      }
+      queryStandardState(port).then(resolve);
+    });
     req.on("timeout", () => {
       req.destroy();
-      queryStandardState(port).then(resolve);
+      clientStateLastFailureByPort.set(port, { ts: Date.now(), reason: 'timeout' });
+      resolve(null);
     });
     req.write(payload);
     req.end();
   }).then((state) => {
     clientStateInFlightByPort.delete(port);
     if (state) {
+      clientStateLastFailureByPort.delete(port);
       const m = String(state.map || '').trim();
       if (/^(?:\d+|[-—–]+)\s*ms$/i.test(m) || /\b\d+\s*ms\b/i.test(m) || /^CH\b/i.test(m) || /▾/.test(m)) {
         state.map = state.targetMap || 'ไม่ทราบแมพ';
@@ -4254,7 +4289,7 @@ async function updateBandwidthTracker(profileId, liveState, debugPort) {
   }
   const profDaily = dayBucket.byProfile[profileId];
 
-  if (liveState && !liveState.error && (!liveState.bandwidth || liveState.bandwidth.probeVersion !== 2) && debugPort) {
+  if (liveState && !liveState.error && !liveState._cachedFallback && !liveState._syntheticLoading && (!liveState.bandwidth || liveState.bandwidth.probeVersion !== 2) && debugPort) {
     const lastTry = bwProbeInstallCooldown[debugPort] || 0;
     if (now - lastTry > 5000) {
       bwProbeInstallCooldown[debugPort] = now;
@@ -4836,7 +4871,14 @@ setInterval(async () => {
   if (humanCheckMonitorInFlight) return;
   humanCheckMonitorInFlight = true;
   try {
-    const profiles = loadProfiles().filter(p => p && p.debugPort);
+    const profiles = loadProfiles().filter(p => {
+      if (!p || !p.debugPort) return false;
+      const proc = runningProcesses[p.id];
+      if (proc && isProcessAlive(proc.pid)) return true;
+      if (browserMode && typeof browserMode.isOpen === 'function' && browserMode.isOpen(p.id)) return true;
+      const cached = clientStateCacheByPort.get(p.debugPort);
+      return Boolean(cached && (Date.now() - cached.ts < 60000));
+    });
     const BATCH_SIZE = 10;
     let shouldBeepNormal = false;
     let shouldBeepUrgent = false;
@@ -6211,21 +6253,45 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && pathname === "/api/profiles") {
     lastProfilesZenyPollAt = Date.now();
     const profiles = loadProfiles();
-    const enriched = await Promise.all(
-      profiles.map(async (p) => {
+    const enriched = await mapWithConcurrency(
+      profiles,
+      8,
+      async (p) => {
         const proc = runningProcesses[p.id];
         const isBrowserOpen = Boolean(browserMode && typeof browserMode.isOpen === 'function' && browserMode.isOpen(p.id));
         let alive = Boolean((proc && isProcessAlive(proc.pid)) || isBrowserOpen);
         let liveState = null;
+        let hasFreshLiveState = false;
 
         // Auto-detect online state if debugPort is responding
         let adoptedAuthFromClient = null;
         if (p.debugPort) {
-          liveState = await queryClientState(p.debugPort);
+          const lastFail = clientStateLastFailureByPort.get(p.debugPort);
+          const skipClosedPortProbe = !alive && lastFail && lastFail.reason === 'ECONNREFUSED' && (Date.now() - lastFail.ts < 5000);
+          if (!skipClosedPortProbe) {
+            liveState = await queryClientState(p.debugPort);
+            hasFreshLiveState = Boolean(liveState && !liveState.error);
+          }
           if ((!liveState || liveState.error) && alive) {
             const recentCached = clientStateCacheByPort.get(p.debugPort);
-            if (recentCached && recentCached.state && (Date.now() - recentCached.ts < 45000)) {
-              liveState = JSON.parse(JSON.stringify(recentCached.state));
+            if (recentCached && recentCached.state && (Date.now() - recentCached.ts < 180000)) {
+              liveState = { ...JSON.parse(JSON.stringify(recentCached.state)), _cachedFallback: true };
+            } else {
+              liveState = {
+                isOnline: true,
+                isBotRunning: false,
+                autoLoop: false,
+                screenPhase: 'loading',
+                screenPhaseLabel: '⏳ กำลังโหลดหน้าเกม...',
+                botStatus: '⏳ กำลังโหลดหน้าเกม...',
+                charName: p.lastCharName || '',
+                charClass: p.lastCharClass || p.charClass || 'Hunter',
+                map: p.targetMap || 'ไม่ทราบแมพ',
+                coords: '--',
+                weight: '--',
+                zeny: null,
+                _syntheticLoading: true
+              };
             }
           }
           if (liveState && !liveState.error) {
@@ -6276,7 +6342,7 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        if (alive && liveState && !liveState.error && liveState.map) {
+        if (alive && liveState && !liveState.error && !liveState._syntheticLoading && liveState.map) {
           if (isJailMapName(liveState.map)) {
             if (!p.jailAutoStopped) {
               recordProfileJailedAndStop(p, liveState).catch(() => {});
@@ -6304,7 +6370,7 @@ const server = http.createServer(async (req, res) => {
         const zenyRate = updateZenyRateTracker(p.id, alive ? liveState : null);
         const bandwidth = await updateBandwidthTracker(p.id, alive ? liveState : null, p.debugPort);
 
-        const isInGameLive = Boolean(alive && liveState && !liveState.error && (!liveState.screenPhase || liveState.screenPhase === 'in_game'));
+        const isInGameLive = Boolean(alive && liveState && !liveState.error && !liveState._syntheticLoading && (!liveState.screenPhase || liveState.screenPhase === 'in_game'));
         const liveHasPremium = !!(isInGameLive && liveState.hasPremium);
         const livePremiumUntil = (isInGameLive && Number(liveState.premiumUntil) > 0) ? Number(liveState.premiumUntil) : null;
         const effectivePremiumUntil = livePremiumUntil || (Number(p.lastPremiumUntil) > Date.now() ? Number(p.lastPremiumUntil) : null);
@@ -6326,7 +6392,7 @@ const server = http.createServer(async (req, res) => {
           ? browserMode.ensureProfileDeviceGroupIndex(p.id)
           : 1;
 
-        if (alive && p.debugPort && assignedDeviceId && !browserMode.isOpen(p.id)) {
+        if (alive && hasFreshLiveState && p.debugPort && assignedDeviceId && !browserMode.isOpen(p.id)) {
           if (!windowStates[p.id]) windowStates[p.id] = {};
           if (windowStates[p.id].syncedDeviceId !== assignedDeviceId || windowStates[p.id].syncedMachineId !== assignedMachineId) {
             windowStates[p.id].syncedDeviceId = assignedDeviceId;
@@ -6382,7 +6448,7 @@ const server = http.createServer(async (req, res) => {
           screenProxy: screenProxy.getProfileLeaseSnapshot(p.id),
           windowState: windowStates[p.id] || { isHidden: false, zeroRender: false }
         };
-      })
+      }
     );
 
     // Remember last-seen portrait / character / premiumUntil so offline cards still show them.
@@ -6390,7 +6456,7 @@ const server = http.createServer(async (req, res) => {
     const changed = enriched.filter(p => {
       if (p._adoptedAuthFromClient) return true;
       const s = p.liveState;
-      if (!s || s.error) return false;
+      if (!s || s.error || s._syntheticLoading || s._cachedFallback) return false;
       const hasChar = Boolean(s.charName);
       const inGamePhase = !s.screenPhase || s.screenPhase === 'in_game';
       const portrait = hasChar && s.portrait && portraitPathFromSrc(s.portrait);

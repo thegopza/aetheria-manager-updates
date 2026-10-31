@@ -186,60 +186,67 @@ let topHudZIndex = 10000;
 // ==========================================
 // INITIALIZATION & POLLING
 // ==========================================
+let fetchProfilesInFlight = null;
 async function fetchProfiles() {
-  try {
-    const res = await fetch(`${API_BASE}/api/profiles`);
-    const data = await res.json();
-    if (data.success) {
-      currentProfiles = data.profiles;
-      currentBandwidthSummary = data.bandwidthSummary || null;
-      allWindowsHidden = !!data.allWindowsHidden;
-      
-      const lblHideAll = document.getElementById("lbl-toggle-all-windows");
-      if (lblHideAll) {
-        lblHideAll.innerText = allWindowsHidden ? "แสดงกราฟิกทุกจอ" : "พักกราฟิกทุกจอ (Zero-Render)";
-      }
+  if (fetchProfilesInFlight) return fetchProfilesInFlight;
+  fetchProfilesInFlight = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/profiles`);
+      const data = await res.json();
+      if (data.success) {
+        currentProfiles = data.profiles;
+        currentBandwidthSummary = data.bandwidthSummary || null;
+        allWindowsHidden = !!data.allWindowsHidden;
+        
+        const lblHideAll = document.getElementById("lbl-toggle-all-windows");
+        if (lblHideAll) {
+          lblHideAll.innerText = allWindowsHidden ? "แสดงกราฟิกทุกจอ" : "พักกราฟิกทุกจอ (Zero-Render)";
+        }
 
-      if (typeof window.refreshPartyManagerData === 'function' && (Date.now() - (window.__lastPartyPollAt || 0) > 4000)) {
-        window.__lastPartyPollAt = Date.now();
-        window.refreshPartyManagerData();
-      }
-      renderProfiles();
-      updateMetrics();
-      updateActiveWebHuds();
-      if (typeof updateBulkDeleteModalIfOpen === 'function') {
-        updateBulkDeleteModalIfOpen();
-      }
-      if (typeof updateZenyConsolidationView === 'function') {
-        updateZenyConsolidationView();
-      }
-      if (typeof window.updateJailManagerFromProfiles === 'function') {
-        window.updateJailManagerFromProfiles(currentProfiles);
-      }
-      if (typeof window.updateDeviceManagerFromProfiles === 'function') {
-        window.updateDeviceManagerFromProfiles(currentProfiles, data.deviceGroups);
-      }
+        if (typeof window.refreshPartyManagerData === 'function' && (Date.now() - (window.__lastPartyPollAt || 0) > 4000)) {
+          window.__lastPartyPollAt = Date.now();
+          window.refreshPartyManagerData();
+        }
+        renderProfiles();
+        updateMetrics();
+        updateActiveWebHuds();
+        if (typeof updateBulkDeleteModalIfOpen === 'function') {
+          updateBulkDeleteModalIfOpen();
+        }
+        if (typeof updateZenyConsolidationView === 'function') {
+          updateZenyConsolidationView();
+        }
+        if (typeof window.updateJailManagerFromProfiles === 'function') {
+          window.updateJailManagerFromProfiles(currentProfiles);
+        }
+        if (typeof window.updateDeviceManagerFromProfiles === 'function') {
+          window.updateDeviceManagerFromProfiles(currentProfiles, data.deviceGroups);
+        }
 
-      if (data.captchaStats && typeof data.captchaStats.totalSolved === 'number') {
-        updateCaptchaSolvedDisplay(data.captchaStats.totalSolved);
-      }
-      if (data.screenProxySummary && typeof updateScreenProxyToolbarBtn === 'function') {
-        updateScreenProxyToolbarBtn(data.screenProxySummary);
-      }
-      if (data.channelCheckMode && typeof syncChannelCheckModeUI === 'function') {
-        syncChannelCheckModeUI(data.channelCheckMode);
-      }
+        if (data.captchaStats && typeof data.captchaStats.totalSolved === 'number') {
+          updateCaptchaSolvedDisplay(data.captchaStats.totalSolved);
+        }
+        if (data.screenProxySummary && typeof updateScreenProxyToolbarBtn === 'function') {
+          updateScreenProxyToolbarBtn(data.screenProxySummary);
+        }
+        if (data.channelCheckMode && typeof syncChannelCheckModeUI === 'function') {
+          syncChannelCheckModeUI(data.channelCheckMode);
+        }
 
-      // Play alert chime if any card has humanCheck active or is in prison
-      const hasActiveHumanCheck = currentProfiles.some(p => p.liveState && p.liveState.humanCheck && p.liveState.humanCheck.active);
-      const hasPrisonProfile = currentProfiles.some(p => p.liveState && typeof p.liveState.map === 'string' && /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(p.liveState.map));
-      if (hasActiveHumanCheck || hasPrisonProfile) {
-        playHumanCheckAlert(hasPrisonProfile);
+        // Play alert chime if any card has humanCheck active or is in prison
+        const hasActiveHumanCheck = currentProfiles.some(p => p.liveState && p.liveState.humanCheck && p.liveState.humanCheck.active);
+        const hasPrisonProfile = currentProfiles.some(p => p.liveState && typeof p.liveState.map === 'string' && /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(p.liveState.map));
+        if (hasActiveHumanCheck || hasPrisonProfile) {
+          playHumanCheckAlert(hasPrisonProfile);
+        }
       }
+    } catch (err) {
+      console.error("Failed to fetch profiles:", err);
+    } finally {
+      fetchProfilesInFlight = null;
     }
-  } catch (err) {
-    console.error("Failed to fetch profiles:", err);
-  }
+  })();
+  return fetchProfilesInFlight;
 }
 
 function playHumanCheckAlert() {

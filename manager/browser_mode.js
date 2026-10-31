@@ -1801,14 +1801,49 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             try { code = JSON.parse(body).code || body; } catch (e) { code = body; }
           }
           if (!code) return reply(400, { error: 'Missing code' });
+          const isLiveStateProbe = code.includes('__getClientLiveState') && code.includes('grossZenyGained');
           try {
-            const evalRes = await evaluate(c, code);
-            if (/applyScriptPlan|applyPelicanSettings|importAllBotSettings|setItem\s*\(\s*['"]pelican_/.test(code)) {
-              c.lastStorageSyncAt = Date.now();
-              syncClientStorage(c).catch(() => {});
+            let evalRes;
+            if (isLiveStateProbe) {
+              if (!c.liveStateEvalPromise) {
+                c.liveStateEvalPromise = evaluate(c, code, 6500).finally(() => {
+                  c.liveStateEvalPromise = null;
+                });
+              }
+              evalRes = await c.liveStateEvalPromise;
+              c.stateFailCount = 0;
+              c.firstStateFailAt = 0;
+              if (evalRes && typeof evalRes === 'object') {
+                c.lastGoodState = evalRes;
+                c.lastGoodStateAt = Date.now();
+                if (Date.now() - (c.lastStorageSyncAt || 0) > 6000) {
+                  c.lastStorageSyncAt = Date.now();
+                  syncClientStorage(c).catch(() => {});
+                }
+              }
+            } else {
+              evalRes = await evaluate(c, code);
+              if (/applyScriptPlan|applyPelicanSettings|importAllBotSettings|setItem\s*\(\s*['"]pelican_/.test(code)) {
+                c.lastStorageSyncAt = Date.now();
+                syncClientStorage(c).catch(() => {});
+              }
             }
             return reply(200, { success: true, result: evalRes });
-          } catch (e) { if (isGoneError(e)) drop(c); return reply(500, { success: false, error: e.message }); }
+          } catch (e) {
+            if (isGoneError(e)) { drop(c); return reply(500, { success: false, error: e.message }); }
+            if (isLiveStateProbe) {
+              const now = Date.now();
+              if (!c.firstStateFailAt) c.firstStateFailAt = now;
+              c.stateFailCount = (c.stateFailCount || 0) + 1;
+              if (c.stateFailCount >= 12 && (now - c.firstStateFailAt) >= 90000) {
+                reloadCrashedClient(c, 'state-probe-timeout').catch(() => {});
+              }
+              if (c.lastGoodState && (now - (c.lastGoodStateAt || 0)) < 180000) {
+                return reply(200, { success: true, result: c.lastGoodState, cached: true });
+              }
+            }
+            return reply(500, { success: false, error: e.message });
+          }
         }
         if (url.pathname === '/api/state') {
           try {
@@ -1836,10 +1871,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             const now = Date.now();
             if (!c.firstStateFailAt) c.firstStateFailAt = now;
             c.stateFailCount = (c.stateFailCount || 0) + 1;
-            if (c.stateFailCount >= 10 && (now - c.firstStateFailAt) >= 60000) {
+            if (c.stateFailCount >= 12 && (now - c.firstStateFailAt) >= 90000) {
               reloadCrashedClient(c, 'state-probe-timeout').catch(() => {});
             }
-            if (c.lastGoodState && (now - (c.lastGoodStateAt || 0)) < 45000) {
+            if (c.lastGoodState && (now - (c.lastGoodStateAt || 0)) < 180000) {
               return reply(200, c.lastGoodState);
             }
             return reply(500, { success: false, error: e.message });

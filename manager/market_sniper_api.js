@@ -1400,86 +1400,101 @@ function createMarketSniperService({
   async function handleRoute(req, res, pathname, sendJSON) {
     if (!pathname.startsWith('/api/market-sniper')) return false;
 
-    if (req.method === 'GET' && pathname === '/api/market-sniper/status') {
-      const onlineScreens = await getOnlineScreenStates();
-      const bestBuyer = selectRichestBuyerProfile(onlineScreens, 100000, 0);
-      sendJSON(res, 200, {
-        success: true,
-        config,
-        stats: state.stats,
-        lastScan: lastScanSummary,
-        activeBids: state.activeBids.slice(0, 50),
-        history: state.history.slice(0, 100),
-        cachedItemsCount: Object.keys(state.priceCache || {}).length,
-        onlineScreens: onlineScreens.map(s => ({
-          profileId: s.profileId,
-          profileName: s.profileName,
-          charName: s.charName,
-          zeny: s.zeny,
-          premium: s.premium,
-          baseLevel: s.baseLevel,
-          activeCount: s.activeCount,
-          maxListings: s.maxListings,
-          busy: s.busy,
-          isPrimaryBuyer: Boolean(bestBuyer && bestBuyer.profileId === s.profileId)
-        }))
-      });
-      return true;
-    }
+    const replyJSON = (statusCode, payload) => {
+      if (typeof sendJSON === 'function') {
+        if (sendJSON.length >= 3) return sendJSON(res, statusCode, payload);
+        return sendJSON(payload, statusCode);
+      }
+      res.writeHead(statusCode, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify(payload));
+    };
 
-    if (req.method === 'POST' && pathname === '/api/market-sniper/config') {
-      const body = await readBody(req);
-      if (!body) {
-        sendJSON(res, 400, { success: false, error: 'Invalid JSON body' });
+    try {
+      if (req.method === 'GET' && pathname === '/api/market-sniper/status') {
+        const onlineScreens = await getOnlineScreenStates();
+        const bestBuyer = selectRichestBuyerProfile(onlineScreens, 100000, 0);
+        replyJSON(200, {
+          success: true,
+          config,
+          stats: state.stats,
+          lastScan: lastScanSummary,
+          activeBids: state.activeBids.slice(0, 50),
+          history: state.history.slice(0, 100),
+          cachedItemsCount: Object.keys(state.priceCache || {}).length,
+          onlineScreens: onlineScreens.map(s => ({
+            profileId: s.profileId,
+            profileName: s.profileName,
+            charName: s.charName,
+            zeny: s.zeny,
+            premium: s.premium,
+            baseLevel: s.baseLevel,
+            activeCount: s.activeCount,
+            maxListings: s.maxListings,
+            busy: s.busy,
+            isPrimaryBuyer: Boolean(bestBuyer && bestBuyer.profileId === s.profileId)
+          }))
+        });
         return true;
       }
-      config = saveConfig(Object.assign({}, config, body));
-      scheduleNextScan();
-      sendJSON(res, 200, { success: true, config });
+
+      if (req.method === 'POST' && pathname === '/api/market-sniper/config') {
+        const body = await readBody(req);
+        if (!body) {
+          replyJSON(400, { success: false, error: 'Invalid JSON body' });
+          return true;
+        }
+        config = saveConfig(Object.assign({}, config, body));
+        scheduleNextScan();
+        replyJSON(200, { success: true, config });
+        return true;
+      }
+
+      if (req.method === 'POST' && pathname === '/api/market-sniper/scan-now') {
+        const r = await runScanCycle(true);
+        replyJSON(200, {
+          success: true,
+          scanResult: r,
+          lastScan: lastScanSummary,
+          stats: state.stats,
+          activeBids: state.activeBids.slice(0, 50),
+          history: state.history.slice(0, 100)
+        });
+        return true;
+      }
+
+      if (req.method === 'POST' && pathname === '/api/market-sniper/claim-all-refunds') {
+        const onlineScreens = await getOnlineScreenStates();
+        let claimedScreens = 0;
+        await Promise.all(onlineScreens.map(async (scr) => {
+          try {
+            const r = await evalProfilePort(scr.debugPort, `(() => {
+              const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+              if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
+              room.send('market', { op: 'collect_all' });
+              return { ok: true };
+            })()`, 3000);
+            if (r && r.ok && r.result && r.result.ok) claimedScreens += 1;
+          } catch (_) {}
+        }));
+        replyJSON(200, { success: true, claimedScreens });
+        return true;
+      }
+
+      if (req.method === 'POST' && pathname === '/api/market-sniper/clear-history') {
+        state.activeBids = [];
+        state.history = [];
+        listingLocks.clear();
+        savePersistedState(state);
+        replyJSON(200, { success: true });
+        return true;
+      }
+
+      return false;
+    } catch (err) {
+      console.error('[MarketSniper] handleRoute error:', err && err.message ? err.message : err);
+      replyJSON(500, { success: false, error: err && err.message ? err.message : 'Internal error' });
       return true;
     }
-
-    if (req.method === 'POST' && pathname === '/api/market-sniper/scan-now') {
-      const r = await runScanCycle(true);
-      sendJSON(res, 200, {
-        success: true,
-        scanResult: r,
-        lastScan: lastScanSummary,
-        stats: state.stats,
-        activeBids: state.activeBids.slice(0, 50),
-        history: state.history.slice(0, 100)
-      });
-      return true;
-    }
-
-    if (req.method === 'POST' && pathname === '/api/market-sniper/claim-all-refunds') {
-      const onlineScreens = await getOnlineScreenStates();
-      let claimedScreens = 0;
-      await Promise.all(onlineScreens.map(async (scr) => {
-        try {
-          const r = await evalProfilePort(scr.debugPort, `(() => {
-            const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
-            if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
-            room.send('market', { op: 'collect_all' });
-            return { ok: true };
-          })()`, 3000);
-          if (r && r.ok && r.result && r.result.ok) claimedScreens += 1;
-        } catch (_) {}
-      }));
-      sendJSON(res, 200, { success: true, claimedScreens });
-      return true;
-    }
-
-    if (req.method === 'POST' && pathname === '/api/market-sniper/clear-history') {
-      state.activeBids = [];
-      state.history = [];
-      listingLocks.clear();
-      savePersistedState(state);
-      sendJSON(res, 200, { success: true });
-      return true;
-    }
-
-    return false;
   }
 
   return {

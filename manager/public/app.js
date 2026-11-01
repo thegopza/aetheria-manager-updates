@@ -1551,9 +1551,13 @@ function buildProfileCard(p) {
                   <span class="cm-icon">📜</span>
                   <span>ตั้งค่าแผนการเล่น (Plan)</span>
                 </button>
-                <button type="button" class="card-menu-item" onclick="closeCardMenu(); openCardWhitelistModal('${p.id}')">
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); openCardWhitelistModal('${p.id}', 'whitelist')">
                   <span class="cm-icon">🛡️</span>
                   <span>จัดการ Whitelist (ห้ามขาย)</span>
+                </button>
+                <button type="button" class="card-menu-item" onclick="closeCardMenu(); openCardWhitelistModal('${p.id}', 'forceSell')">
+                  <span class="cm-icon">💰</span>
+                  <span>จัดการรายการบังคับขาย NPC</span>
                 </button>
                 <button type="button" class="card-menu-item" onclick="closeCardMenu(); openSaveClientPresetModal('${p.id}')">
                   <span class="cm-icon">💾</span>
@@ -5251,9 +5255,21 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                         </label>
                     </div>
 
+                    <!-- Force Sell NPC List Card -->
+                    <div style="background: rgba(249, 115, 22, 0.07); border: 1px solid rgba(249, 115, 22, 0.35); border-radius: 6px; padding: 5px 6px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 3px; gap: 4px;">
+                            <span style="font-size: 10px; color: #fb923c; font-weight: 700;">💰 บังคับขาย NPC ทันที ไม่สนหมวดหมู่ (คั่นด้วย ,):</span>
+                            ${!isCentral ? `<button type="button" id="p-btn-open-fs-modal" style="background: rgba(168, 85, 247, 0.22); border: 1px solid rgba(168, 85, 247, 0.5); color: #e9d5ff; border-radius: 4px; font-size: 9px; padding: 1px 6px; cursor: pointer; font-weight: 600;" title="เปิดหน้าต่างจัดการรายการบังคับขาย NPC และคัดลอกไปยังจออื่น (Copy to)">📋 Copy to / จัดการ</button>` : ''}
+                        </div>
+                        <textarea id="p-sell-force-list" placeholder="เช่น Orange Potion, Blue Potion, Carrot (ใส่ชื่อแล้วขายลง NPC ทันที แม้หมวดนั้นตั้งเป็นเก็บทั้งหมด)" style="width: 100%; box-sizing: border-box; background: #0f172a; border: 1px solid rgba(249, 115, 22, 0.45); color: #fed7aa; border-radius: 4px; font-size: 9.5px; height: 36px; resize: vertical; padding: 3px;">${escapeHTML(sell.forceSellList || "")}</textarea>
+                    </div>
+
                     <!-- Whitelist Card -->
                     <div>
-                        <span style="font-size: 10px; color: #94a3b8; display: block; margin-bottom: 2px;">🛡️ Whitelist ห้ามขาย (ชื่อไอเทมคั่นด้วย ,):</span>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; gap: 4px;">
+                            <span style="font-size: 10px; color: #94a3b8;">🛡️ Whitelist ห้ามขาย (ชื่อไอเทมคั่นด้วย ,):</span>
+                            ${!isCentral ? `<button type="button" id="p-btn-open-wl-modal" style="background: rgba(56, 189, 248, 0.15); border: 1px solid rgba(56, 189, 248, 0.4); color: #bae6fd; border-radius: 4px; font-size: 9px; padding: 1px 6px; cursor: pointer; font-weight: 600;" title="เปิดหน้าต่างจัดการ Whitelist และคัดลอกไปยังจออื่น (Copy to)">📋 Copy to / จัดการ</button>` : ''}
+                        </div>
                         <textarea id="p-sell-whitelist" style="width: 100%; box-sizing: border-box; background: #0f172a; border: 1px solid rgba(234, 179, 8, 0.4); color: #fff; border-radius: 4px; font-size: 9.5px; height: 34px; resize: vertical; padding: 3px;">${escapeHTML(sell.whitelist || "")}</textarea>
                     </div>
 
@@ -6246,6 +6262,15 @@ async function openWebBotHUD(profileId) {
   bindSellField('#p-sell-keep-special', el => ({ keepSpecial: !!el.checked }));
   bindSellField('#p-sell-keep-sockets', el => ({ keepSockets: !!el.checked }));
   bindSellField('#p-sell-whitelist', el => ({ whitelist: el.value || '' }));
+  bindSellField('#p-sell-force-list', el => ({ forceSellList: el.value || '' }));
+  const openFsModalBtn = hudEl.querySelector('#p-btn-open-fs-modal');
+  if (openFsModalBtn) {
+    openFsModalBtn.onclick = () => openCardWhitelistModal(profileId, 'forceSell', true);
+  }
+  const openWlModalBtn = hudEl.querySelector('#p-btn-open-wl-modal');
+  if (openWlModalBtn) {
+    openWlModalBtn.onclick = () => openCardWhitelistModal(profileId, 'whitelist', true);
+  }
   [
     ['#p-store-enabled', 'storeEnabled'],
     ['#p-store-weapon', 'storeWeapon'],
@@ -6920,6 +6945,8 @@ function populateWebHudData(profileId, data) {
 
   const sellWl = hud.querySelector('#p-sell-whitelist');
   if (sellWl && document.activeElement !== sellWl) sellWl.value = sell.whitelist || '';
+  const sellFs = hud.querySelector('#p-sell-force-list');
+  if (sellFs && document.activeElement !== sellFs) sellFs.value = sell.forceSellList || '';
   [['#p-store-enabled', !!sell.storeEnabled], ['#p-store-weapon', sell.storeWeapon !== false], ['#p-store-armor', sell.storeArmor !== false],
    ['#p-store-acc', sell.storeAcc !== false], ['#p-store-refine', sell.storeRefine !== false], ['#p-store-skip-locked', sell.storeSkipLocked !== false]].forEach(([id, v]) => {
     const el = hud.querySelector(id);
@@ -9651,14 +9678,113 @@ fetchPresets();
 
 
 // ==========================================================================
-// CARD WHITELIST MODAL & CONTROLLER
+// CARD WHITELIST & FORCE-SELL NPC MODAL & CONTROLLER
 // ==========================================================================
 let activeWLProfileId = null;
 let activeWLItems = [];
+let activeFSItems = [];
+let activeWLTabMode = 'whitelist'; // 'whitelist' or 'forceSell'
 let activeWLViewMode = 'chips'; // 'chips' or 'text'
 
-async function openCardWhitelistModal(profileId) {
+function getActiveListArray() {
+  return activeWLTabMode === 'forceSell' ? activeFSItems : activeWLItems;
+}
+
+function setActiveListArray(arr) {
+  if (activeWLTabMode === 'forceSell') {
+    activeFSItems = arr;
+  } else {
+    activeWLItems = arr;
+  }
+}
+
+function syncTextareaToActiveList() {
+  if (activeWLViewMode === 'text') {
+    const textarea = document.getElementById('card-wl-textarea');
+    if (textarea) {
+      const parts = textarea.value.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
+      const unique = [];
+      parts.forEach(p => {
+        if (!unique.some(u => u.toLowerCase() === p.toLowerCase())) {
+          unique.push(p);
+        }
+      });
+      setActiveListArray(unique);
+    }
+  }
+}
+
+function switchCardWhitelistTab(mode) {
+  syncTextareaToActiveList();
+  activeWLTabMode = mode === 'forceSell' ? 'forceSell' : 'whitelist';
+  updateWLTabModeUI();
+  renderCardWhitelistChips();
+}
+
+function updateWLTabModeUI() {
+  const tabWlBtn = document.getElementById('btn-card-wl-tab-whitelist');
+  const tabFsBtn = document.getElementById('btn-card-wl-tab-forcesell');
+  const hintEl = document.getElementById('card-wl-mode-hint');
+  const headerIconEl = document.getElementById('card-wl-header-icon');
+  const copyLabelEl = document.getElementById('card-wl-copy-label');
+  const wlCountEl = document.getElementById('card-wl-tab-count-wl');
+  const fsCountEl = document.getElementById('card-wl-tab-count-fs');
+
+  if (wlCountEl) wlCountEl.innerText = String(activeWLItems.length);
+  if (fsCountEl) fsCountEl.innerText = String(activeFSItems.length);
+
+  if (activeWLTabMode === 'forceSell') {
+    if (tabFsBtn) {
+      tabFsBtn.style.background = 'rgba(194, 65, 12, 0.4)';
+      tabFsBtn.style.borderColor = 'rgba(249, 115, 22, 0.65)';
+      tabFsBtn.style.color = '#ffedd5';
+    }
+    if (tabWlBtn) {
+      tabWlBtn.style.background = 'transparent';
+      tabWlBtn.style.borderColor = 'transparent';
+      tabWlBtn.style.color = '#94a3b8';
+    }
+    if (headerIconEl) {
+      headerIconEl.innerText = '💰';
+      headerIconEl.style.background = 'rgba(249, 115, 22, 0.18)';
+      headerIconEl.style.borderColor = 'rgba(249, 115, 22, 0.45)';
+    }
+    if (hintEl) {
+      hintEl.style.borderLeftColor = '#f97316';
+      hintEl.innerHTML = '💰 <b>โหมดบังคับขาย NPC (ไม่สนหมวดหมู่):</b> เพียงใส่ชื่อไอเทมลงในรายการนี้ (เช่น <code>Orange Potion, Blue Potion, Carrot</code>) บอทจะขายไอเทมนั้นลงร้าน NPC ทันทีแม้หมวดนั้นตั้งเป็น "เก็บทั้งหมด"';
+    }
+    if (copyLabelEl) {
+      copyLabelEl.innerText = 'เลือกจอที่ต้องการคัดลอก "รายการบังคับขาย NPC" นี้ไปใช้:';
+    }
+  } else {
+    if (tabWlBtn) {
+      tabWlBtn.style.background = 'rgba(3, 105, 161, 0.35)';
+      tabWlBtn.style.borderColor = 'rgba(56, 189, 248, 0.5)';
+      tabWlBtn.style.color = '#e0f2fe';
+    }
+    if (tabFsBtn) {
+      tabFsBtn.style.background = 'transparent';
+      tabFsBtn.style.borderColor = 'transparent';
+      tabFsBtn.style.color = '#94a3b8';
+    }
+    if (headerIconEl) {
+      headerIconEl.innerText = '🛡️';
+      headerIconEl.style.background = 'rgba(245, 158, 11, 0.15)';
+      headerIconEl.style.borderColor = 'rgba(245, 158, 11, 0.35)';
+    }
+    if (hintEl) {
+      hintEl.style.borderLeftColor = '#38bdf8';
+      hintEl.innerHTML = '🛡️ <b>โหมด Whitelist (ห้ามขาย):</b> ไอเทมที่มีชื่อในรายการนี้จะถูกป้องกันไม่ให้ขายทิ้งลงร้าน NPC';
+    }
+    if (copyLabelEl) {
+      copyLabelEl.innerText = 'เลือกจอที่ต้องการคัดลอก "Whitelist (ห้ามขาย)" นี้ไปใช้:';
+    }
+  }
+}
+
+async function openCardWhitelistModal(profileId, initialTab = 'whitelist', autoOpenCopyPanel = false) {
   activeWLProfileId = profileId;
+  activeWLTabMode = initialTab === 'forceSell' ? 'forceSell' : 'whitelist';
   const profile = currentProfiles.find(p => p.id === profileId);
   if (!profile) return;
 
@@ -9674,13 +9800,14 @@ async function openCardWhitelistModal(profileId) {
 
   activeWLViewMode = 'chips';
   updateWLViewModeUI();
+  updateWLTabModeUI();
 
   if (subtitleEl) {
     subtitleEl.innerText = `จอ: ${profile.name} (${profile.account || 'No account'}) • Port: ${profile.debugPort || '--'}`;
   }
 
   if (statusTextEl) {
-    statusTextEl.innerText = '⏳ กำลังดึงข้อมูล Whitelist จากจอเกม...';
+    statusTextEl.innerText = '⏳ กำลังดึงข้อมูลรายการจากจอเกม...';
   }
 
   // Open modal first with loading state
@@ -9691,6 +9818,9 @@ async function openCardWhitelistModal(profileId) {
     const data = await res.json();
     if (data.success) {
       activeWLItems = Array.isArray(data.items) ? data.items : [];
+      activeFSItems = Array.isArray(data.forceSellItems)
+        ? data.forceSellItems
+        : String(data.forceSellList || '').split(',').map(s => s.trim()).filter(Boolean);
       if (statusTextEl) {
         if (data.isOnline) {
           statusTextEl.innerHTML = `🟢 <b>ออนไลน์</b> (Port ${profile.debugPort}) — ซิงค์ข้อมูล Real-time กับเกมสด`;
@@ -9706,15 +9836,22 @@ async function openCardWhitelistModal(profileId) {
       }
     } else {
       activeWLItems = (profile.whitelist || '').split(',').map(s => s.trim()).filter(Boolean);
+      activeFSItems = ((profile.sellConfig && profile.sellConfig.forceSellList) || profile.forceSellList || '').split(',').map(s => s.trim()).filter(Boolean);
       if (statusTextEl) statusTextEl.innerText = '⚠️ ใช้ข้อมูลจากโปรไฟล์เครื่อง';
     }
   } catch(e) {
     console.warn('Fetch whitelist error:', e);
     activeWLItems = (profile.whitelist || '').split(',').map(s => s.trim()).filter(Boolean);
+    activeFSItems = ((profile.sellConfig && profile.sellConfig.forceSellList) || profile.forceSellList || '').split(',').map(s => s.trim()).filter(Boolean);
     if (statusTextEl) statusTextEl.innerText = '⚠️ ใช้ข้อมูลแคชในตัว';
   }
 
+  updateWLTabModeUI();
   renderCardWhitelistChips();
+  if (autoOpenCopyPanel && copyPanel) {
+    populateWLCopyTargetList();
+    copyPanel.style.display = 'block';
+  }
 }
 
 function closeCardWhitelistModal() {
@@ -9724,25 +9861,39 @@ function closeCardWhitelistModal() {
   if (copyPanel) copyPanel.style.display = 'none';
   activeWLProfileId = null;
   activeWLItems = [];
+  activeFSItems = [];
 }
 
 function renderCardWhitelistChips() {
   const container = document.getElementById('card-wl-chips-container');
   const textarea = document.getElementById('card-wl-textarea');
   const countBadge = document.getElementById('card-wl-count-badge');
+  const wlCountEl = document.getElementById('card-wl-tab-count-wl');
+  const fsCountEl = document.getElementById('card-wl-tab-count-fs');
+  const items = getActiveListArray();
+  const isFs = activeWLTabMode === 'forceSell';
+
+  if (wlCountEl) wlCountEl.innerText = String(activeWLItems.length);
+  if (fsCountEl) fsCountEl.innerText = String(activeFSItems.length);
 
   if (countBadge) {
-    countBadge.innerText = `${activeWLItems.length} รายการ`;
+    countBadge.innerText = `${items.length} รายการ`;
   }
 
   if (textarea) {
-    textarea.value = activeWLItems.join(', ');
+    textarea.value = items.join(', ');
   }
 
   if (!container) return;
 
-  if (activeWLItems.length === 0) {
-    container.innerHTML = `
+  if (items.length === 0) {
+    container.innerHTML = isFs ? `
+      <div class="wl-empty-msg">
+        <span style="font-size: 24px; opacity: 0.6;">💰</span>
+        <span>ยังไม่มีรายการบังคับขาย NPC (ไม่สนหมวดหมู่)</span>
+        <span style="font-size: 11px; opacity: 0.7;">พิมพ์ชื่อไอเทม เช่น Orange Potion, Blue Potion, Carrot ด้านบนแล้วกด "➕ เพิ่ม" หรือกดปุ่ม "💰 ขาย NPC" จากหน้าต่างกระเป๋า</span>
+      </div>
+    ` : `
       <div class="wl-empty-msg">
         <span style="font-size: 24px; opacity: 0.6;">📦</span>
         <span>ไม่มีไอเทมใน Whitelist (บอทจะขายทุกชิ้นตามเกณฑ์ความหายาก)</span>
@@ -9752,11 +9903,11 @@ function renderCardWhitelistChips() {
     return;
   }
 
-  container.innerHTML = activeWLItems.map((item, idx) => `
-    <div class="wl-chip" title="${escapeHTML(item)}">
-      <span class="wl-chip-icon">🛡️</span>
+  container.innerHTML = items.map((item, idx) => `
+    <div class="wl-chip" title="${escapeHTML(item)}" style="${isFs ? 'border-color: rgba(249, 115, 22, 0.45); background: rgba(194, 65, 12, 0.2);' : ''}">
+      <span class="wl-chip-icon">${isFs ? '💰' : '🛡️'}</span>
       <span class="wl-chip-text">${escapeHTML(item)}</span>
-      <span class="wl-chip-del" onclick="removeCardWhitelistItem(${idx})" title="ลบออกจาก Whitelist">&times;</span>
+      <span class="wl-chip-del" onclick="removeCardWhitelistItem(${idx})" title="ลบออกจากรายการ">&times;</span>
     </div>
   `).join('');
 }
@@ -9765,12 +9916,19 @@ function addCardWhitelistItems(inputStr) {
   if (!inputStr || !inputStr.trim()) return;
   const parts = inputStr.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
   let addedCount = 0;
+  const items = getActiveListArray();
+  const otherItems = activeWLTabMode === 'forceSell' ? activeWLItems : activeFSItems;
 
   parts.forEach(name => {
-    const exists = activeWLItems.some(existing => existing.toLowerCase() === name.toLowerCase());
+    const lower = name.toLowerCase();
+    const exists = items.some(existing => existing.toLowerCase() === lower);
     if (!exists) {
-      activeWLItems.push(name);
+      items.push(name);
       addedCount++;
+    }
+    const otherIdx = otherItems.findIndex(existing => existing.toLowerCase() === lower);
+    if (otherIdx !== -1) {
+      otherItems.splice(otherIdx, 1);
     }
   });
 
@@ -9779,8 +9937,9 @@ function addCardWhitelistItems(inputStr) {
 }
 
 function removeCardWhitelistItem(idx) {
-  if (idx >= 0 && idx < activeWLItems.length) {
-    activeWLItems.splice(idx, 1);
+  const items = getActiveListArray();
+  if (idx >= 0 && idx < items.length) {
+    items.splice(idx, 1);
     renderCardWhitelistChips();
   }
 }
@@ -9790,6 +9949,7 @@ function updateWLViewModeUI() {
   const textContainer = document.getElementById('card-wl-text-container');
   const viewLabel = document.getElementById('card-wl-view-label');
   const textarea = document.getElementById('card-wl-textarea');
+  const items = getActiveListArray();
 
   if (activeWLViewMode === 'chips') {
     if (chipsContainer) chipsContainer.style.display = 'flex';
@@ -9799,7 +9959,7 @@ function updateWLViewModeUI() {
     if (chipsContainer) chipsContainer.style.display = 'none';
     if (textContainer) textContainer.style.display = 'block';
     if (viewLabel) viewLabel.innerText = '🏷️ Tags Mode';
-    if (textarea) textarea.value = activeWLItems.join(', ');
+    if (textarea) textarea.value = items.join(', ');
   }
 }
 
@@ -9807,18 +9967,9 @@ function toggleCardWhitelistViewMode() {
   const textarea = document.getElementById('card-wl-textarea');
   if (activeWLViewMode === 'chips') {
     activeWLViewMode = 'text';
-    if (textarea) textarea.value = activeWLItems.join(', ');
+    if (textarea) textarea.value = getActiveListArray().join(', ');
   } else {
-    if (textarea) {
-      const parts = textarea.value.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
-      const unique = [];
-      parts.forEach(p => {
-        if (!unique.some(u => u.toLowerCase() === p.toLowerCase())) {
-          unique.push(p);
-        }
-      });
-      activeWLItems = unique;
-    }
+    syncTextareaToActiveList();
     activeWLViewMode = 'chips';
   }
   updateWLViewModeUI();
@@ -9834,12 +9985,15 @@ function handleCardWhitelistImport() {
 }
 
 function handleCardWhitelistExport() {
-  if (activeWLItems.length === 0) {
-    alert('Whitelist ว่างเปล่า ไม่มีรายการให้ส่งออก');
+  syncTextareaToActiveList();
+  const items = getActiveListArray();
+  const isFs = activeWLTabMode === 'forceSell';
+  if (items.length === 0) {
+    alert((isFs ? 'รายการบังคับขาย NPC' : 'Whitelist') + ' ว่างเปล่า ไม่มีรายการให้ส่งออก');
     return;
   }
   const profile = currentProfiles.find(p => p.id === activeWLProfileId);
-  const text = activeWLItems.join(', ');
+  const text = items.join(', ');
 
   // 1. Copy to clipboard
   if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -9852,13 +10006,13 @@ function handleCardWhitelistExport() {
   const a = document.createElement('a');
   a.href = url;
   const safeName = (profile?.name || 'profile').replace(/[^a-zA-Z0-9_\u0E00-\u0E7F]/g, '_');
-  a.download = `whitelist_${safeName}.txt`;
+  a.download = `${isFs ? 'forcesell_npc' : 'whitelist'}_${safeName}.txt`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 
-  alert(`📤 ส่งออกเรียบร้อย!\n- คัดลอก ${activeWLItems.length} รายการลงคลิปบอร์ดแล้ว\n- ดาวน์โหลดไฟล์ ${a.download} เรียบร้อยแล้ว`);
+  alert(`📤 ส่งออกเรียบร้อย!\n- คัดลอก ${items.length} รายการลงคลิปบอร์ดแล้ว\n- ดาวน์โหลดไฟล์ ${a.download} เรียบร้อยแล้ว`);
 }
 
 function toggleCardWhitelistCopyPanel() {
@@ -9908,12 +10062,7 @@ async function executeCardWhitelistCopyToTargets() {
     return;
   }
 
-  if (activeWLViewMode === 'text') {
-    const textarea = document.getElementById('card-wl-textarea');
-    if (textarea) {
-      activeWLItems = textarea.value.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
-    }
-  }
+  syncTextareaToActiveList();
 
   const execBtn = document.getElementById('btn-card-wl-copy-execute');
   const originalText = execBtn ? execBtn.innerHTML : '';
@@ -9922,18 +10071,25 @@ async function executeCardWhitelistCopyToTargets() {
     execBtn.innerHTML = '⏳ กำลังคัดลอก...';
   }
 
+  const isFs = activeWLTabMode === 'forceSell';
+  const reqBody = isFs
+    ? { mode: 'forceSell', forceSellList: activeFSItems.join(', '), targets: targetIds }
+    : { mode: 'whitelist', whitelist: activeWLItems.join(', '), targets: targetIds };
+
   try {
     const res = await fetch(`${API_BASE}/api/profiles/${activeWLProfileId}/whitelist`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        whitelist: activeWLItems.join(', '),
-        targets: targetIds
-      })
+      body: JSON.stringify(reqBody)
     });
     const result = await res.json();
     if (result.success) {
-      alert(`🚀 ${result.message || 'คัดลอก Whitelist สำเร็จแล้ว!'}`);
+      syncOpenWebHudSellLists(activeWLProfileId, activeWLItems.join(', '), activeFSItems.join(', '));
+      targetIds.forEach(tid => {
+        if (isFs) syncOpenWebHudSellLists(tid, undefined, activeFSItems.join(', '));
+        else syncOpenWebHudSellLists(tid, activeWLItems.join(', '), undefined);
+      });
+      alert(`🚀 ${result.message || 'คัดลอกรายการสำเร็จแล้ว!'}`);
       const panel = document.getElementById('card-wl-copy-panel');
       if (panel) panel.style.display = 'none';
       fetchProfiles();
@@ -9950,22 +10106,24 @@ async function executeCardWhitelistCopyToTargets() {
   }
 }
 
+function syncOpenWebHudSellLists(profileId, wlStr, fsStr) {
+  const hudObj = activeWebHuds && activeWebHuds[profileId];
+  const hudEl = hudObj && hudObj.el;
+  if (!hudEl) return;
+  if (wlStr !== undefined) {
+    const wlInp = hudEl.querySelector('#p-sell-whitelist');
+    if (wlInp) wlInp.value = wlStr;
+  }
+  if (fsStr !== undefined) {
+    const fsInp = hudEl.querySelector('#p-sell-force-list');
+    if (fsInp) fsInp.value = fsStr;
+  }
+}
+
 async function saveCardWhitelist() {
   if (!activeWLProfileId) return;
 
-  if (activeWLViewMode === 'text') {
-    const textarea = document.getElementById('card-wl-textarea');
-    if (textarea) {
-      const parts = textarea.value.split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
-      const unique = [];
-      parts.forEach(p => {
-        if (!unique.some(u => u.toLowerCase() === p.toLowerCase())) {
-          unique.push(p);
-        }
-      });
-      activeWLItems = unique;
-    }
-  }
+  syncTextareaToActiveList();
 
   const saveBtn = document.getElementById('btn-card-wl-save');
   const originalText = saveBtn ? saveBtn.innerHTML : '';
@@ -9974,17 +10132,23 @@ async function saveCardWhitelist() {
     saveBtn.innerHTML = '⏳ กำลังบันทึก...';
   }
 
+  const wlStr = activeWLItems.join(', ');
+  const fsStr = activeFSItems.join(', ');
+
   try {
     const res = await fetch(`${API_BASE}/api/profiles/${activeWLProfileId}/whitelist`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        whitelist: activeWLItems.join(', ')
+        mode: 'both',
+        whitelist: wlStr,
+        forceSellList: fsStr
       })
     });
     const result = await res.json();
     if (result.success) {
-      alert('💾 บันทึก Whitelist สำเร็จและอัปเดตเข้าจอเกมเรียบร้อยแล้ว!');
+      syncOpenWebHudSellLists(activeWLProfileId, wlStr, fsStr);
+      alert('💾 บันทึก Whitelist & รายการบังคับขาย NPC สำเร็จ และอัปเดตเข้าจอเกมเรียบร้อยแล้ว!');
       closeCardWhitelistModal();
       fetchProfiles();
     } else {
@@ -10006,6 +10170,12 @@ function setupCardWhitelistEventListeners() {
 
   const btnCancel = document.getElementById('card-wl-modal-cancel');
   if (btnCancel) btnCancel.onclick = closeCardWhitelistModal;
+
+  const tabWlBtn = document.getElementById('btn-card-wl-tab-whitelist');
+  if (tabWlBtn) tabWlBtn.onclick = () => switchCardWhitelistTab('whitelist');
+
+  const tabFsBtn = document.getElementById('btn-card-wl-tab-forcesell');
+  if (tabFsBtn) tabFsBtn.onclick = () => switchCardWhitelistTab('forceSell');
 
   const inputEl = document.getElementById('card-wl-input');
   const btnAdd = document.getElementById('btn-card-wl-add');
@@ -10045,6 +10215,8 @@ function setupCardWhitelistEventListeners() {
           const parsed = JSON.parse(content);
           if (Array.isArray(parsed)) {
             importedItems = parsed.map(String);
+          } else if (activeWLTabMode === 'forceSell' && parsed.forceSellList) {
+            importedItems = String(parsed.forceSellList).split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
           } else if (parsed.whitelist) {
             importedItems = String(parsed.whitelist).split(/[,\n]+/).map(s => s.trim()).filter(Boolean);
           } else if (parsed.items && Array.isArray(parsed.items)) {
@@ -10061,18 +10233,19 @@ function setupCardWhitelistEventListeners() {
 
         const isReplace = confirm(`พบรายการไอเทมทั้งหมด ${importedItems.length} รายการ\n\nต้องการ "แทนที่ทั้งหมด (Replace)" หรือไม่?\n[OK] = แทนที่ทั้งหมด\n[Cancel] = เพิ่มต่อท้าย (Append)`);
         if (isReplace) {
-          activeWLItems = [];
+          setActiveListArray([]);
         }
+        const curList = getActiveListArray();
 
         importedItems.forEach(name => {
           name = name.trim();
-          if (name && !activeWLItems.some(existing => existing.toLowerCase() === name.toLowerCase())) {
-            activeWLItems.push(name);
+          if (name && !curList.some(existing => existing.toLowerCase() === name.toLowerCase())) {
+            curList.push(name);
           }
         });
 
         renderCardWhitelistChips();
-        alert(`📥 นำเข้าเรียบร้อย! ตอนนี้มีทั้งหมด ${activeWLItems.length} รายการ`);
+        alert(`📥 นำเข้าเรียบร้อย! ตอนนี้มีทั้งหมด ${curList.length} รายการ`);
       };
       reader.readAsText(file);
     };
@@ -10106,9 +10279,11 @@ function setupCardWhitelistEventListeners() {
   const btnClearAll = document.getElementById('btn-card-wl-clear-all');
   if (btnClearAll) {
     btnClearAll.onclick = () => {
-      if (activeWLItems.length === 0) return;
-      if (confirm('คุณแน่ใจหรือไม่ว่าต้องการล้างรายการ Whitelist ทั้งหมดสำหรับจอนี้?')) {
-        activeWLItems = [];
+      const curList = getActiveListArray();
+      if (curList.length === 0) return;
+      const label = activeWLTabMode === 'forceSell' ? 'รายการบังคับขาย NPC' : 'Whitelist';
+      if (confirm(`คุณแน่ใจหรือไม่ว่าต้องการล้าง ${label} ทั้งหมดสำหรับจอนี้?`)) {
+        setActiveListArray([]);
         renderCardWhitelistChips();
       }
     };

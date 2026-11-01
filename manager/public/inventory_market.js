@@ -982,6 +982,7 @@
         ${canLock ? `<button type="button" class="im-btn ghost" data-act="lock">${item.locked ? '🔓 ปลดล็อค' : '🔒 ล็อค'}</button>` : ''}
         ${item.destroyable ? `<button type="button" class="im-btn danger" data-act="destroy" ${item.locked ? 'disabled title="ไอเทมถูกล็อคอยู่"' : ''}>ทิ้ง</button>` : ''}
         <button type="button" class="im-btn ghost" data-act="wl" title="เพิ่มเข้า Whitelist (รายการห้ามขายให้ NPC)">🛡️ เพิ่ม WL</button>
+        <button type="button" class="im-btn ghost" data-act="forcesell" style="border-color: rgba(249, 115, 22, 0.45); color: #fdba74; background: rgba(194, 65, 12, 0.18);" title="เพิ่มเข้ารายการบังคับขาย NPC ทันที (ไม่สนหมวดหมู่ เช่น ขวดยา / ของใช้)">💰 ขาย NPC</button>
         <button type="button" class="im-btn ghost" data-act="autosell" title="เพิ่มเข้ารายการ Auto Sell — บอทจะลงขายตลาดกลางให้เอง (ราคาถูกกว่าคนอื่น 1 z)">🏷️ เพิ่ม Auto Sell</button>
         <button type="button" class="im-btn market" data-act="market">🏪 ขายลงตลาด</button>
       </div>`;
@@ -1004,14 +1005,50 @@
     const base = `/api/profiles/${encodeURIComponent(bag.profileId)}/whitelist`;
     const cur = await api(base);
     const list = String(cur && cur.whitelist || '').split(',').map(s => s.trim()).filter(Boolean);
+    const fsList = String(cur && cur.forceSellList || '').split(',').map(s => s.trim()).filter(Boolean);
     if (list.some(n => n.toLowerCase() === name.toLowerCase())) {
       toast(`ℹ️ "${name}" อยู่ใน Whitelist แล้ว`);
       return;
     }
     list.push(name);
-    const res = await fetch(`${API_BASE}${base}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ whitelist: list.join(', ') }) });
+    const nextFs = fsList.filter(n => n.toLowerCase() !== name.toLowerCase());
+    const wlStr = list.join(', ');
+    const fsStr = nextFs.join(', ');
+    const res = await fetch(`${API_BASE}${base}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'both', whitelist: wlStr, forceSellList: fsStr })
+    });
     const r = await res.json().catch(() => null);
+    if (r && r.success !== false && typeof syncOpenWebHudSellLists === 'function') {
+      syncOpenWebHudSellLists(bag.profileId, wlStr, fsStr);
+    }
     toast(r && r.success !== false ? `🛡️ เพิ่ม "${name}" เข้า Whitelist แล้ว` : '❌ บันทึก Whitelist ไม่สำเร็จ', r && r.success !== false ? 'ok' : 'err');
+  }
+
+  async function addToForceSellList(name) {
+    const base = `/api/profiles/${encodeURIComponent(bag.profileId)}/whitelist`;
+    const cur = await api(base);
+    const fsList = String(cur && cur.forceSellList || '').split(',').map(s => s.trim()).filter(Boolean);
+    const wlList = String(cur && cur.whitelist || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (fsList.some(n => n.toLowerCase() === name.toLowerCase())) {
+      toast(`ℹ️ "${name}" อยู่ในรายการบังคับขาย NPC แล้ว`);
+      return;
+    }
+    fsList.push(name);
+    const nextWl = wlList.filter(n => n.toLowerCase() !== name.toLowerCase());
+    const fsStr = fsList.join(', ');
+    const wlStr = nextWl.join(', ');
+    const res = await fetch(`${API_BASE}${base}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'both', whitelist: wlStr, forceSellList: fsStr })
+    });
+    const r = await res.json().catch(() => null);
+    if (r && r.success !== false && typeof syncOpenWebHudSellLists === 'function') {
+      syncOpenWebHudSellLists(bag.profileId, wlStr, fsStr);
+    }
+    toast(r && r.success !== false ? `💰 เพิ่ม "${name}" เข้ารายการบังคับขาย NPC แล้ว (ไม่สนหมวดหมู่)` : '❌ บันทึกรายการบังคับขาย NPC ไม่สำเร็จ', r && r.success !== false ? 'ok' : 'err');
   }
 
   async function addToAutoSell(item) {
@@ -1088,6 +1125,7 @@
       return;
     }
     if (act === 'wl') return addToWhitelist(item.name);
+    if (act === 'forcesell') return addToForceSellList(item.name);
     if (act === 'autosell') return addToAutoSell(item);
     if (act === 'market') return openMarketFor(item, { preferTab: true });
   }

@@ -2162,6 +2162,8 @@ function buildClientActionEvalCode(payload) {
       });
       const wlEl = document.getElementById('p-sell-whitelist');
       if (wlEl && patch.whitelist !== undefined) wlEl.value = String(window.__sellConfig.whitelist);
+      const fsEl = document.getElementById('p-sell-force-list');
+      if (fsEl && patch.forceSellList !== undefined) fsEl.value = String(window.__sellConfig.forceSellList || '');
       if (sfPatch) {
         const sf = window.__sellConfig.statsFilter || {};
         const setSfCb = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined) el.checked = !!v; };
@@ -6873,9 +6875,16 @@ const server = http.createServer(async (req, res) => {
 
     const defaultWL = "Phracon, Rough Elunium, Enchant Rune, Composite Bow, Crossbow, Gakkung, Hunter Bow";
     const profileWL = profile.whitelist || (profile.sellConfig && profile.sellConfig.whitelist) || defaultWL;
+    const profileFS = (profile.sellConfig && typeof profile.sellConfig.forceSellList === "string") ? profile.sellConfig.forceSellList : (profile.forceSellList || "");
 
     if (profile.debugPort) {
-      const evalCode = `(window.__sellConfig && window.__sellConfig.whitelist !== undefined) ? window.__sellConfig.whitelist : null`;
+      const evalCode = `(() => {
+        const sc = window.__sellConfig || {};
+        return {
+          whitelist: sc.whitelist !== undefined ? sc.whitelist : null,
+          forceSellList: sc.forceSellList !== undefined ? sc.forceSellList : null
+        };
+      })()`;
       const evalUrl = `http://127.0.0.1:${profile.debugPort}/api/eval?code=` + encodeURIComponent(evalCode);
       let responded = false;
       const reqTimer = setTimeout(() => {
@@ -6887,6 +6896,8 @@ const server = http.createServer(async (req, res) => {
           profileName: profile.name,
           whitelist: profileWL,
           items: profileWL.split(",").map(s => s.trim()).filter(Boolean),
+          forceSellList: profileFS,
+          forceSellItems: profileFS.split(",").map(s => s.trim()).filter(Boolean),
           isOnline: false
         });
       }, 700);
@@ -6901,8 +6912,17 @@ const server = http.createServer(async (req, res) => {
           clearTimeout(reqTimer);
           try {
             const parsed = JSON.parse(d);
-            const liveWL = (parsed.result !== null && parsed.result !== undefined) ? String(parsed.result) : profileWL;
+            const resObj = (parsed.result && typeof parsed.result === "object") ? parsed.result : null;
+            const liveWL = resObj && resObj.whitelist !== null && resObj.whitelist !== undefined
+              ? String(resObj.whitelist)
+              : ((typeof parsed.result === "string") ? parsed.result : profileWL);
+            const liveFS = resObj && resObj.forceSellList !== null && resObj.forceSellList !== undefined
+              ? String(resObj.forceSellList)
+              : profileFS;
             profile.whitelist = liveWL;
+            if (!profile.sellConfig) profile.sellConfig = {};
+            profile.sellConfig.whitelist = liveWL;
+            profile.sellConfig.forceSellList = liveFS;
             saveProfiles(profiles);
             sendJSON({
               success: true,
@@ -6910,6 +6930,8 @@ const server = http.createServer(async (req, res) => {
               profileName: profile.name,
               whitelist: liveWL,
               items: liveWL.split(",").map(s => s.trim()).filter(Boolean),
+              forceSellList: liveFS,
+              forceSellItems: liveFS.split(",").map(s => s.trim()).filter(Boolean),
               isOnline: true
             });
           } catch(e) {
@@ -6919,6 +6941,8 @@ const server = http.createServer(async (req, res) => {
               profileName: profile.name,
               whitelist: profileWL,
               items: profileWL.split(",").map(s => s.trim()).filter(Boolean),
+              forceSellList: profileFS,
+              forceSellItems: profileFS.split(",").map(s => s.trim()).filter(Boolean),
               isOnline: false
             });
           }
@@ -6933,6 +6957,8 @@ const server = http.createServer(async (req, res) => {
           profileName: profile.name,
           whitelist: profileWL,
           items: profileWL.split(",").map(s => s.trim()).filter(Boolean),
+          forceSellList: profileFS,
+          forceSellItems: profileFS.split(",").map(s => s.trim()).filter(Boolean),
           isOnline: false
         });
       });
@@ -6945,11 +6971,13 @@ const server = http.createServer(async (req, res) => {
       profileName: profile.name,
       whitelist: profileWL,
       items: profileWL.split(",").map(s => s.trim()).filter(Boolean),
+      forceSellList: profileFS,
+      forceSellItems: profileFS.split(",").map(s => s.trim()).filter(Boolean),
       isOnline: false
     });
   }
 
-  // PUT /api/profiles/:id/whitelist (Update whitelist & sync live to clients)
+  // PUT /api/profiles/:id/whitelist (Update whitelist / forceSellList & sync live to clients)
   if (req.method === "PUT" && pathname.match(/^\/api\/profiles\/[^/]+\/whitelist$/)) {
     const id = pathname.split("/")[3];
     let body = "";
@@ -6961,50 +6989,77 @@ const server = http.createServer(async (req, res) => {
         const profile = profiles.find(p => p.id === id);
         if (!profile) return sendJSON({ success: false, error: "Profile not found" }, 404);
 
-        const newWhitelist = typeof payload.whitelist === "string" ? payload.whitelist : "";
-        profile.whitelist = newWhitelist;
-        if (!profile.sellConfig) profile.sellConfig = {};
-        profile.sellConfig.whitelist = newWhitelist;
+        const updateWL = payload.whitelist !== undefined && (payload.mode !== "forceSell");
+        const updateFS = payload.forceSellList !== undefined && (payload.mode !== "whitelist");
 
-        const syncToLiveClient = (p) => {
+        const newWhitelist = updateWL ? String(payload.whitelist || "") : (profile.whitelist || (profile.sellConfig && profile.sellConfig.whitelist) || "");
+        const newForceSellList = updateFS ? String(payload.forceSellList || "") : ((profile.sellConfig && profile.sellConfig.forceSellList) || profile.forceSellList || "");
+
+        if (!profile.sellConfig) profile.sellConfig = {};
+        if (updateWL) {
+          profile.whitelist = newWhitelist;
+          profile.sellConfig.whitelist = newWhitelist;
+        }
+        if (updateFS) {
+          profile.forceSellList = newForceSellList;
+          profile.sellConfig.forceSellList = newForceSellList;
+        }
+
+        const syncToLiveClient = (p, syncWL, syncFS) => {
           if (!p.debugPort) return;
           const code = `(() => {
             if (!window.__sellConfig) window.__sellConfig = {};
-            window.__sellConfig.whitelist = ${JSON.stringify(newWhitelist)};
+            if (${Boolean(syncWL)}) {
+              window.__sellConfig.whitelist = ${JSON.stringify(newWhitelist)};
+              const wlEl = document.getElementById("p-sell-whitelist");
+              if (wlEl) wlEl.value = ${JSON.stringify(newWhitelist)};
+            }
+            if (${Boolean(syncFS)}) {
+              window.__sellConfig.forceSellList = ${JSON.stringify(newForceSellList)};
+              const fsEl = document.getElementById("p-sell-force-list");
+              if (fsEl) fsEl.value = ${JSON.stringify(newForceSellList)};
+            }
             try { localStorage.setItem("pelican_sell_cfg", JSON.stringify(window.__sellConfig)); } catch(e){}
-            const wlEl = document.getElementById("p-sell-whitelist");
-            if (wlEl) wlEl.value = ${JSON.stringify(newWhitelist)};
             return { success: true };
           })()`;
           evalProfilePort(p.debugPort, code, 5000);
         };
 
         // Sync live to current profile's game client
-        syncToLiveClient(profile);
+        syncToLiveClient(profile, updateWL, updateFS);
 
         let copiedTargetsCount = 0;
         if (Array.isArray(payload.targets) && payload.targets.length > 0) {
           payload.targets.forEach(targetId => {
             const targetProfile = profiles.find(p => p.id === targetId);
             if (targetProfile) {
-              targetProfile.whitelist = newWhitelist;
               if (!targetProfile.sellConfig) targetProfile.sellConfig = {};
-              targetProfile.sellConfig.whitelist = newWhitelist;
-              syncToLiveClient(targetProfile);
+              if (updateWL) {
+                targetProfile.whitelist = newWhitelist;
+                targetProfile.sellConfig.whitelist = newWhitelist;
+              }
+              if (updateFS) {
+                targetProfile.forceSellList = newForceSellList;
+                targetProfile.sellConfig.forceSellList = newForceSellList;
+              }
+              syncToLiveClient(targetProfile, updateWL, updateFS);
               if (targetProfile.id !== profile.id) copiedTargetsCount++;
             }
           });
         }
 
         saveProfiles(profiles);
+        const listLabel = (updateFS && !updateWL) ? "รายการบังคับขาย NPC" : (updateWL && !updateFS ? "Whitelist" : "Whitelist + รายการขาย NPC");
         sendJSON({
           success: true,
           whitelist: newWhitelist,
           items: newWhitelist.split(",").map(s => s.trim()).filter(Boolean),
+          forceSellList: newForceSellList,
+          forceSellItems: newForceSellList.split(",").map(s => s.trim()).filter(Boolean),
           copiedTargetsCount,
           message: copiedTargetsCount > 0
-            ? `คัดลอก Whitelist ไปยัง ${copiedTargetsCount} จอเรียบร้อยแล้ว!`
-            : "บันทึกและซิงค์ Whitelist สำหรับจอนี้เรียบร้อยแล้ว!"
+            ? `คัดลอก ${listLabel} ไปยัง ${copiedTargetsCount} จอเรียบร้อยแล้ว!`
+            : `บันทึกและซิงค์ ${listLabel} สำหรับจอนี้เรียบร้อยแล้ว!`
         });
       } catch (err) {
         sendJSON({ success: false, error: err.message }, 400);
@@ -7943,6 +7998,17 @@ public class PmFocus {
         }
 
         // POST: configs (import-config, whitelists, rules) are far too long for a URL once Thai text is encoded
+        if (payload.type === 'update-sell' && payload.config && typeof payload.config === 'object') {
+          const fresh = loadProfiles();
+          const target = fresh.find(f => f.id === profile.id);
+          if (target) {
+            if (!target.sellConfig || typeof target.sellConfig !== 'object') target.sellConfig = {};
+            Object.assign(target.sellConfig, payload.config);
+            if (payload.config.whitelist !== undefined) target.whitelist = String(payload.config.whitelist || '');
+            if (payload.config.forceSellList !== undefined) target.forceSellList = String(payload.config.forceSellList || '');
+            saveProfiles(fresh);
+          }
+        }
         const r = await enqueueProfileClientAction(profile.id, () => evalProfilePort(profile.debugPort, codeToRun, 15000));
         if (r && r.success === false && !('result' in r)) return sendJSON({ success: false, error: r.error || 'สั่งงานจอเกมไม่สำเร็จ' }, 502);
         sendJSON({ success: true, result: r });

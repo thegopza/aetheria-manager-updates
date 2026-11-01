@@ -63,7 +63,7 @@
         <div class="cc-head"><b>📋 คัดลอกการตั้งค่าบอทไปจออื่น</b><button type="button" class="cc-x" data-cc="close">✕</button></div>
         <div class="cc-src">จาก: <b>${esc(sourceName)}</b></div>
         <div class="cc-info">
-          คัดลอกทุกอย่าง: แมพฟาร์ม, ลูป 24 ชม., ธนู/ลูกธนู/B.Wing, ยาบัพ, ขายของ NPC + Whitelist + ตัวกรองออฟ, Auto Sell ตลาด, Sniper, Auto-Shop, Auto-Login (เปิด/ปิด, เริ่มบอทต่อ)<br>
+          คัดลอกทุกอย่าง: แมพฟาร์ม, ลูป 24 ชม., ธนู/ลูกธนู/B.Wing, ยาบัพ, ขายของ NPC + รายการบังคับขาย NPC + Whitelist + ตัวกรองออฟ, Auto Sell ตลาด, Sniper, Auto-Shop, Auto-Login (เปิด/ปิด, เริ่มบอทต่อ)<br>
           <span class="no">ไม่คัดลอก: ID, รหัสผ่าน และชื่อตัวละคร (จอปลายทางใช้ของเดิม)</span>
         </div>
         <div class="cc-tools">

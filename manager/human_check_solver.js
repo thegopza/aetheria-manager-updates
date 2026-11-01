@@ -89,7 +89,8 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
         try {
           const result = JSON.parse(body);
           if (res.statusCode < 200 || res.statusCode >= 300) {
-            const error = new Error(typeof result.message === 'string' ? result.message : 'CAPTCHA service rejected request');
+            const msg = (typeof result.message === 'string' && result.message) ? result.message : ((typeof result.error === 'string' && result.error) ? result.error : 'CAPTCHA service rejected request');
+            const error = new Error(msg);
             error.status = res.statusCode;
             error.code = typeof result.code === 'string' && /^[A-Z0-9_]{1,64}$/.test(result.code) ? result.code : 'SERVICE_REJECTED';
             return reject(error);
@@ -124,7 +125,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       serviceAvailable = true;
       return result;
     } catch (e) {
-      if (e && e.status === 401 && e.code === 'ACCOUNT_HWID_MISMATCH') {
+      if (e && e.status === 401 && (e.code === 'ACCOUNT_HWID_MISMATCH' || e.code === 'UNAUTHORIZED')) {
         const prevAccountId = account?.accountId || null;
         account = null;
         try { fs.unlinkSync(accountFile); } catch (_) {}

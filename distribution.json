@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "89b3dfaf9e43749e193ab462d238b273c1bc5f6c",
+  "sourceCommit": "4f398fbfc613ef52e655626195a46b5c9ce8efeb",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -60,7 +60,7 @@
     },
     {
       "path": "manager/human_check_solver.js",
-      "sha256": "fff70d1aac160aceefd5e357c7f91f6a4f5d819bd99ff7dcc1370015906878f0"
+      "sha256": "05770e8eca1d81a2e8b759bd2ba8ffb2a5bd0a2183bfbab7e751798e3f4221c1"
     },
     {
       "path": "manager/image_board_solver.js",
@@ -85,6 +85,10 @@
     {
       "path": "manager/manager_self_update.js",
       "sha256": "dd3f02e51a7a444ad78f6db8d1aa3ec7d65653b260d2efef79cfde414a5e9524"
+    },
+    {
+      "path": "manager/market_sniper_api.js",
+      "sha256": "98338eb464406ddb3de547d9b7cd8971d87721a74d1f1d34343773dcdf16a937"
     },
     {
       "path": "manager/offline_coordinator.js",
@@ -180,7 +184,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "489a9f20fc4e146988484bb999c6b76a3f939e69d5228b006dbab859cd9e21b2"
+      "sha256": "be8e55440afcb781e1678a3c2d5f9bfb173b95053df5108b6a0e248ae69ed088"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -205,6 +209,10 @@
     {
       "path": "manager/public/market_overview.js",
       "sha256": "fe45a7fe68eb07969ab906ebe741a9b8fae31f1043f91b93f91af1685afb54dd"
+    },
+    {
+      "path": "manager/public/market_sniper.js",
+      "sha256": "fd1503de5f9c489ca87b09fffd3485d35fc05fafb3f758afc902a43e126d3918"
     },
     {
       "path": "manager/public/party_manager.css",
@@ -244,7 +252,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "0cfeb08d29cfc857690d2deca03379eeff6af47df6524bb3e1bc0f1141842f32"
+      "sha256": "658b35d827cfa68bf6a9b6d7b38f061ca26abb8ef77c6e0ac45f0f9181022c60"
     },
     {
       "path": "manager/screen_proxy_manager.js",
@@ -272,7 +280,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "039c649b3eb79aca9b9b5e28c96e93d3b9136fa5d8696fc061607d7e8dc4e12f"
+      "sha256": "f9fb9cac7b65f17c07210b97bf14f7dc93b04fa446da05fd6a41185b75fd81ad"
     },
     {
       "path": "manager/test_isolation.js",

@@ -89,6 +89,7 @@ const { createPartyService } = require("./party_api");
 const { createPremiumService } = require("./premium_api");
 const { createGuildService } = require("./guild_api");
 const { createCardMarketService } = require("./card_market_api");
+const { createMarketSniperService } = require("./market_sniper_api");
 const { createBotAutoUpdater } = require("./bot_auto_update");
 const { createManagerSelfUpdater } = require("./manager_self_update");
 const { handleConfigCopyRoute } = require("./config_copy_api");
@@ -4672,6 +4673,14 @@ const cardMarketService = createCardMarketService({
 });
 cardMarketService.start();
 
+// Centralized Market Misprice Sniper & Auto-Flip Engine (manager/market_sniper_api.js)
+const marketSniperService = createMarketSniperService({
+  loadProfiles,
+  evalProfilePort,
+  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
+});
+marketSniperService.start();
+
 function getDefaultDeviceNickname() {
   return process.env.USERNAME || (typeof os.userInfo === 'function' ? os.userInfo()?.username : '') || os.hostname() || 'PmheeUser';
 }
@@ -5635,6 +5644,8 @@ const server = http.createServer(async (req, res) => {
   if (await guildService.handleRoute(req, res, pathname, sendJSON)) return;
   // Card Market Price & Farm Map Switcher — see card_market_api.js
   if (await cardMarketService.handleRoute(req, res, pathname, sendJSON)) return;
+  // Centralized Market Misprice Sniper & Auto-Flip — see market_sniper_api.js
+  if (await marketSniperService.handleRoute(req, res, pathname, sendJSON)) return;
 
   // Discord Bot & Webhook Settings & Controls
   if (pathname === "/api/discord/settings") {

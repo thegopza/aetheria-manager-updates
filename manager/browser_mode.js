@@ -834,10 +834,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (ws && ws.readyState === 1) return;
     if (wsReady) return wsReady;
     wsReady = (async () => {
-      const info = JSON.parse(await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, 3000));
+      const info = JSON.parse(await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, 6000));
       await new Promise((resolve, reject) => {
         const socket = new WebSocket(info.webSocketDebuggerUrl);ws=socket;
-        const openingTimeout=setTimeout(()=>{reject(new Error('CDP connect timeout'));try{socket.close();}catch(_){}},3000);
+        const openingTimeout=setTimeout(()=>{reject(new Error('CDP connect timeout'));try{socket.close();}catch(_){}},8000);
         socket.onopen = () => {clearTimeout(openingTimeout);resolve();};
         socket.onerror = () => {clearTimeout(openingTimeout);reject(new Error('CDP connect failed'));};
         socket.onclose = () => {
@@ -873,7 +873,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
 
   async function browserAlive() {
-    try { await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, 1500); return true; } catch (e) { return false; }
+    if (ws && ws.readyState === 1) return true;
+    try { await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, 6000); return true; } catch (e) { return false; }
   }
 
   function killStuckBrowserProcesses() {
@@ -1722,18 +1723,20 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   async function attach(profileId, targetId, skipIdentityProbe = false, browserContextId = null) {
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
-    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, undefined, 5000);
     try {
-    await send('Page.enable', {}, sessionId).catch(() => {});
-    await send('Runtime.enable', {}, sessionId).catch(() => {});
-    await configureSessionAssetCache(sessionId);
     const initScript = profileInitScript(profileId);
-    const addedInit = await send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId).catch(() => null);
+    const [, , , addedInit] = await Promise.all([
+      send('Page.enable', {}, sessionId, 3500).catch(() => {}),
+      send('Runtime.enable', {}, sessionId, 3500).catch(() => {}),
+      configureSessionAssetCache(sessionId),
+      send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId, 3500).catch(() => null)
+    ]);
     if (!skipIdentityProbe) {
       try {
-        const identity = await evaluate({ sessionId }, `(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`, 5000);
+        const identity = await evaluate({ sessionId }, `(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`, 4000);
         if (identity && identity !== profileId) throw Error('PROFILE_ID_CONFLICT');
-        await evaluate({ sessionId }, initScript, 5000).catch(() => {});
+        await evaluate({ sessionId }, initScript, 4000).catch(() => {});
       } catch (probeErr) {
         if (probeErr && probeErr.message === 'PROFILE_ID_CONFLICT') throw probeErr;
       }
@@ -1744,7 +1747,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     clients.set(profileId, c);
     knownTargets.set(profileId,targetId);saveKnownTargets();diagnostic(c,'document-pending');
     return c;
-    } catch(e) {await send('Target.detachFromTarget',{sessionId}).catch(()=>{});throw e;}
+    } catch(e) {await send('Target.detachFromTarget',{sessionId}, undefined, 3000).catch(()=>{});throw e;}
   }
 
   async function migrateProfileStorageFromDefaultContext(profileId) {
@@ -1816,54 +1819,59 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const unattachedPages = targetInfos.filter(x => x.type === 'page' && isGameUrl(x.url) && !Array.from(clients.values()).some(c => c.targetId === x.targetId));
     for (const t of unattachedPages) {
       try {
-        const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
-        let pid = null, charName = null, sessionUserId = null, bodyText = '', probeFailed = false;
-        try {
-          const r = await send('Runtime.evaluate', {
-            expression: `(() => {
-              let sUser = null;
-              try {
-                const tok = typeof sessionStorage !== 'undefined' && sessionStorage.getItem ? sessionStorage.getItem('aetheria.session') : null;
-                if (tok && tok.split('.').length >= 2) {
-                  const p = JSON.parse(atob(tok.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
-                  if (p && typeof p.userId === 'string') sUser = p.userId.trim();
-                }
-              } catch (_) {}
-              return {
-                pid: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
-                charName: (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData() && window.getLiveCharacterData().name) || window.__charName || null,
-                sessionUserId: sUser,
-                bodyText: (typeof document !== 'undefined' && document.body && typeof document.body.innerText === 'string') ? document.body.innerText.slice(0, 1500) : ''
-              };
-            })()`,
-            returnByValue: true
-          }, sessionId, 6000);
-          if(r.exceptionDetails)throw Error('PROFILE_PROBE_FAILED');
-          crashedTargetFailCount.delete(t.targetId);
-          const val = r && r.result && r.result.value;
-          if (val && typeof val === 'object') {
-            pid = val.pid || null;
-            charName = val.charName || null;
-            sessionUserId = val.sessionUserId || null;
-            bodyText = String(val.bodyText || '');
-          } else if (typeof val === 'string') {
-            pid = val;
+        const knownMatch = allProfiles.find(p => !clients.has(p.id) && knownTargets.get(p.id) === t.targetId);
+        let identified = knownMatch ? knownMatch.id : null;
+        let probeFailed = false;
+        let pid = null, charName = null, sessionUserId = null, bodyText = '';
+        if (!identified) {
+          const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
+          try {
+            const r = await send('Runtime.evaluate', {
+              expression: `(() => {
+                let sUser = null;
+                try {
+                  const tok = typeof sessionStorage !== 'undefined' && sessionStorage.getItem ? sessionStorage.getItem('aetheria.session') : null;
+                  if (tok && tok.split('.').length >= 2) {
+                    const p = JSON.parse(atob(tok.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+                    if (p && typeof p.userId === 'string') sUser = p.userId.trim();
+                  }
+                } catch (_) {}
+                return {
+                  pid: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
+                  charName: (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData() && window.getLiveCharacterData().name) || window.__charName || null,
+                  sessionUserId: sUser,
+                  bodyText: (typeof document !== 'undefined' && document.body && typeof document.body.innerText === 'string') ? document.body.innerText.slice(0, 1500) : ''
+                };
+              })()`,
+              returnByValue: true
+            }, sessionId, 6000);
+            if(r.exceptionDetails)throw Error('PROFILE_PROBE_FAILED');
+            crashedTargetFailCount.delete(t.targetId);
+            const val = r && r.result && r.result.value;
+            if (val && typeof val === 'object') {
+              pid = val.pid || null;
+              charName = val.charName || null;
+              sessionUserId = val.sessionUserId || null;
+              bodyText = String(val.bodyText || '');
+            } else if (typeof val === 'string') {
+              pid = val;
+            }
+          } catch (_) {
+            probeFailed = true;
+            const fails = (crashedTargetFailCount.get(t.targetId) || 0) + 1;
+            crashedTargetFailCount.set(t.targetId, fails);
+            const lastAt = crashedTargetReloadAt.get(t.targetId) || 0;
+            if (fails >= 4 && Date.now() - lastAt > 90000) {
+              crashedTargetReloadAt.set(t.targetId, Date.now());
+              crashedTargetFailCount.set(t.targetId, 0);
+              await send('Page.enable', {}, sessionId, 5000).catch(() => {});
+              await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000).catch(() => {}));
+            }
+          } finally {
+            await send('Target.detachFromTarget', { sessionId }).catch(() => {});
           }
-        } catch (_) {
-          probeFailed = true;
-          const fails = (crashedTargetFailCount.get(t.targetId) || 0) + 1;
-          crashedTargetFailCount.set(t.targetId, fails);
-          const lastAt = crashedTargetReloadAt.get(t.targetId) || 0;
-          if (fails >= 4 && Date.now() - lastAt > 90000) {
-            crashedTargetReloadAt.set(t.targetId, Date.now());
-            crashedTargetFailCount.set(t.targetId, 0);
-            await send('Page.enable', {}, sessionId, 5000).catch(() => {});
-            await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000).catch(() => {}));
-          }
-        } finally {
-          await send('Target.detachFromTarget', { sessionId }).catch(() => {});
+          identified = pid || allProfiles.find(p => knownTargets.get(p.id) === t.targetId)?.id || null;
         }
-        let identified = pid || allProfiles.find(p => knownTargets.get(p.id) === t.targetId)?.id || null;
         if (!identified) {
           const unclaimed = allProfiles.filter(p => !clients.has(p.id) && (!knownTargets.get(p.id) || !surviving.has(knownTargets.get(p.id))));
           if (sessionUserId) {
@@ -1884,7 +1892,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             identified = unclaimed[0].id;
           }
         }
-        if (identified && stoppedProfiles.has(identified) && (sessionUserId || charName || pid)) {
+        if (identified && stoppedProfiles.has(identified) && (knownMatch || sessionUserId || charName || pid)) {
           stoppedProfiles.delete(identified);
         }
         const profile = identified && !stoppedProfiles.has(identified) && allProfiles.find(p => p.id === identified);
@@ -1897,7 +1905,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               await screenProxy.ensureProfileTunnel(profile.id, profile.debugPort).catch(() => {});
             }
           }
-          const c = await attach(profile.id, t.targetId, probeFailed, isCustomCtx ? t.browserContextId : null);
+          const c = await attach(profile.id, t.targetId, Boolean(knownMatch || probeFailed), isCustomCtx ? t.browserContextId : null);
+          if (knownMatch) {
+            evaluate(c, profileInitScript(profile.id), 5000).catch(() => {});
+          }
           startProxy(c, profile.debugPort);
           injectBot(c).catch(() => {});
         }

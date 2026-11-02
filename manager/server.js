@@ -7689,8 +7689,23 @@ public class PmFocus {
     // "ลูป 24 ชม." (autoLoop) is only a setting — START BOT is __isBotRunning
     const isRunning = Boolean(live && live.isBotRunning);
     const targetRunning = action === "start" ? true : (action === "stop" ? false : !isRunning);
+    const plansData = loadPlans();
+    const assignedPlanId = plansData && plansData.assignments ? plansData.assignments[id] : null;
+    const assignedPlan = assignedPlanId ? (plansData.profiles || []).find(x => x.id === assignedPlanId) : null;
+    const planShouldEnable = Boolean(assignedPlan && !(plansData.userDisabled && plansData.userDisabled[id]));
 
     const code = targetRunning ? `(() => {
+      try {
+        const assignedPlan = ${JSON.stringify(assignedPlan || null)};
+        const shouldEnablePlan = ${JSON.stringify(planShouldEnable)};
+        const userDis = localStorage.getItem('pelican_plan_user_disabled') === 'true';
+        if (assignedPlan && typeof window.__applyScriptPlan === 'function') {
+          const curId = window.__currentScriptPlan ? window.__currentScriptPlan.id : null;
+          if (curId !== assignedPlan.id || (shouldEnablePlan && !userDis && !window.__planScriptEnabled)) {
+            window.__applyScriptPlan(assignedPlan, (shouldEnablePlan && !userDis) ? true : undefined);
+          }
+        }
+      } catch (_) {}
       if (window.__isBotRunning) {
         if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
         return { success: true, running: true, unchanged: true };
@@ -7718,21 +7733,14 @@ public class PmFocus {
       return { success: true, running: false };
     })()`;
 
-    const evalUrl = `http://127.0.0.1:${profile.debugPort}/api/eval?code=` + encodeURIComponent(code);
-    http.get(evalUrl, (cRes) => {
-      let d = "";
-      cRes.setEncoding('utf8');
-      cRes.on("data", c => d += c);
-      cRes.on("end", () => {
-        let ok = false;
-        try { const r = JSON.parse(d); ok = !!(r && r.success && r.result && r.result.success); } catch (e) {}
-        if (ok) sendJSON({ success: true, isBotRunning: targetRunning });
-        else sendJSON({ success: false, error: "เกมไม่ตอบรับคำสั่ง (บอทอาจยังโหลดไม่เสร็จ)" }, 502);
-      });
-    }).on('error', (err) => {
-      sendJSON({ success: false, error: err.message }, 502);
-    });
-    return;
+    try {
+      const r = await evalProfilePort(profile.debugPort, code, 6000);
+      const ok = !!(r && r.success && r.result && r.result.success);
+      if (ok) return sendJSON({ success: true, isBotRunning: targetRunning });
+      return sendJSON({ success: false, error: "เกมไม่ตอบรับคำสั่ง (บอทอาจยังโหลดไม่เสร็จ)" }, 502);
+    } catch (err) {
+      return sendJSON({ success: false, error: err.message }, 502);
+    }
   }
 
   // GET /api/profiles/:id/client-data (Live Bot Configs & State for Floating Web HUD)
@@ -8449,6 +8457,7 @@ public class PmFocus {
         if (!plan) return sendJSON({ success: false, error: "Plan profile not found" }, 404);
         if (!plansData.assignments) plansData.assignments = {};
         if (!plansData.pendingEnable) plansData.pendingEnable = {};
+        if (!plansData.userDisabled) plansData.userDisabled = {};
         const profiles = loadProfiles();
         const label = cid => { const p = profiles.find(x => x.id === cid); return p ? (p.name || cid) : cid; };
 
@@ -8456,6 +8465,7 @@ public class PmFocus {
         const live = [], later = [];
         for (const cid of addIds) {
           plansData.assignments[cid] = id;
+          delete plansData.userDisabled[cid];
           const synced = await planSync.push(profiles.find(p => p.id === cid), plan, true);
           if (synced) { delete plansData.pendingEnable[cid]; live.push(label(cid)); }
           else { plansData.pendingEnable[cid] = true; later.push(label(cid)); }
@@ -8465,6 +8475,7 @@ public class PmFocus {
           if (plansData.assignments[cid] !== id || addIds.includes(cid)) continue;
           delete plansData.assignments[cid];
           delete plansData.pendingEnable[cid];
+          delete plansData.userDisabled[cid];
           removed.push(cid);
         }
         savePlans(plansData);

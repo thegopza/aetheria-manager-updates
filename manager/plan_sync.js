@@ -12,6 +12,7 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
   const applyCode = (plan, enable) =>
     `(() => {
       if (typeof window.__applyScriptPlan !== 'function') return { success: false, error: 'bot not ready' };
+      ${enable === true ? `try { localStorage.setItem('pelican_plan_user_disabled', 'false'); } catch (_) {}` : ''}
       window.__applyScriptPlan(${JSON.stringify(plan)}${typeof enable === 'boolean' ? `, ${enable}` : ''});
       return { success: true, enabled: !!window.__planScriptEnabled };
     })()`;
@@ -47,7 +48,7 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
     for (const p of profiles) {
       const assignedId = assignments[p.id] || null;
       const plan = assignedId ? (data.profiles || []).find(x => x.id === assignedId) : null;
-      const r = await evalProfilePort(p.debugPort, `(() => { const c = window.__currentScriptPlan; return typeof window.__applyScriptPlan === 'function' ? { id: c ? c.id : null, u: c ? c.updatedAt || null : null, en: !!window.__planScriptEnabled } : null; })()`, 4000);
+      const r = await evalProfilePort(p.debugPort, `(() => { const c = window.__currentScriptPlan; return typeof window.__applyScriptPlan === 'function' ? { id: c ? c.id : null, u: c ? c.updatedAt || null : null, en: !!window.__planScriptEnabled, userDisabled: localStorage.getItem('pelican_plan_user_disabled') === 'true' } : null; })()`, 4000);
       const cur = r && r.success ? r.result : null;
       if (!cur) continue;   // offline or bot not loaded yet
       if (!plan) {
@@ -57,9 +58,11 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
         continue;
       }
       const enablePending = Boolean(data.pendingEnable && data.pendingEnable[p.id]);
-      if (cur.id !== plan.id || (cur.u || null) !== (plan.updatedAt || null) || enablePending) {
-        // Assigned while this client was offline -> switch Plan Script on now that it got the plan
-        const ok = await push(p, plan, enablePending ? true : undefined);
+      const userDisabled = Boolean((data.userDisabled && data.userDisabled[p.id]) || cur.userDisabled);
+      const shouldEnable = enablePending || !userDisabled;
+      if (cur.id !== plan.id || (cur.u || null) !== (plan.updatedAt || null) || enablePending || (!cur.en && shouldEnable)) {
+        // Assigned while this client was offline, or plan script got disabled accidentally -> switch Plan Script on
+        const ok = await push(p, plan, shouldEnable ? true : undefined);
         if (ok && enablePending) {
           const fresh = loadPlans();
           if (fresh.pendingEnable) { delete fresh.pendingEnable[p.id]; savePlans(fresh); }
@@ -90,7 +93,10 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
   })()`;
   const enableJs = en => `(() => {
     window.__planScriptEnabled = ${en};
-    try { localStorage.setItem('pelican_plan_script_enabled', '${en}'); } catch (e) {}
+    try {
+      localStorage.setItem('pelican_plan_script_enabled', '${en}');
+      localStorage.setItem('pelican_plan_user_disabled', '${!en}');
+    } catch (e) {}
     const cb = document.getElementById('p-plan-script-enabled');
     if (cb) cb.checked = ${en};
     return { success: true, enabled: !!window.__planScriptEnabled };
@@ -112,6 +118,13 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
       await new Promise(r => req.on('end', r));
       let en = false;
       try { en = JSON.parse(body || '{}').enabled === true; } catch (e) {}
+      try {
+        const fresh = loadPlans();
+        if (!fresh.userDisabled) fresh.userDisabled = {};
+        if (en) delete fresh.userDisabled[profile.id];
+        else fresh.userDisabled[profile.id] = true;
+        savePlans(fresh);
+      } catch (_) {}
       const r = await evalProfilePort(profile.debugPort, enableJs(en), 3000);
       sendJSON(r && r.success && r.result ? r.result : { success: false, error: 'สั่งงานจอนี้ไม่สำเร็จ' });
       return true;
@@ -119,7 +132,7 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
     return false;
   }
 
-  return { push, pushToAssigned, assignedProfiles, clearClients, start, handleRoute };
+  return { push, pushToAssigned, assignedProfiles, clearClients, reconcile, start, handleRoute };
 }
 
 module.exports = { createPlanSync };

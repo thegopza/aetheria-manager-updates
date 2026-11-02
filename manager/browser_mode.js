@@ -25,6 +25,7 @@ function deriveMachineId(seed) {
 }
 const HEALTH_JS = `(() => {
   const bs = window.__pmScriptBootstrap?.status?.() || null;
+  const bootstrapPhase = bs?.phase || null;
   return {
     href: location.href,
     documentId: String(performance.timeOrigin),
@@ -36,8 +37,9 @@ const HEALTH_JS = `(() => {
     version: window.__pelicanBotVersion || null,
     hud: !!document.getElementById('pelican-hud'),
     liveHook: typeof window.__getClientLiveState === 'function',
-    bootstrapPhase: bs?.phase || null,
-    initialized: !!window.__pmPayloadInitialized || (bs && bs.phase !== 'waiting') || !!window.__pmBrowserInjectionAttempted || ('__isBotRunning' in window) || typeof window.startMasterBot === 'function' || typeof window.startAutoLoop === 'function'
+    bootstrapPhase,
+    bootstrapFailed: bootstrapPhase === 'failed',
+    initialized: !!window.__pmPayloadInitialized || (bs && bootstrapPhase !== 'waiting' && bootstrapPhase !== 'failed') || ('__isBotRunning' in window) || typeof window.startMasterBot === 'function' || typeof window.startAutoLoop === 'function'
   };
 })()`;
 
@@ -981,7 +983,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if (profileId && k.startsWith('pelican_')) {
         if (k.startsWith(pfx)) {
           saved[k] = v;
-        } else if (!k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
+        } else if (!k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog') {
           const mappedKey = pfx + k.slice(8);
           if (isTransientStorageKey(mappedKey)) continue;
           if (rawSaved[mappedKey] === undefined && saved[mappedKey] === undefined) saved[mappedKey] = v;
@@ -1415,11 +1417,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const devId = ensureProfileDeviceId(c.profileId);
     if(h.version&&h.hud&&h.liveHook){
       if (Date.now() - (c.lastCrashReloadAt || 0) > 120000) c.crashReloadCount=0;
-      c.stateFailCount=0;c.firstStateFailAt=0;
+      c.stateFailCount=0;c.firstStateFailAt=0;c.attempts=0;
       diagnostic(c,'ready',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});
       return true;
     }
-    if(h.version||h.hud||h.liveHook||(h.initialized&&h.bootstrapPhase!=='waiting')){c.stateFailCount=0;c.firstStateFailAt=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
+    if(h.version||h.hud||h.liveHook){c.stateFailCount=0;c.firstStateFailAt=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
     return false;
   }
 
@@ -1502,8 +1504,15 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         }
         return;
       }
-      if(c.attempts>=3){diagnostic(c,'load-failed',{code:'RETRY_LIMIT'});return;}
-      c.attempts++;diagnostic(c,'loading');
+      if(c.attempts>=3){
+        if (Date.now() - (c.lastAttemptAt || 0) > 12000) {
+          c.attempts = 0;
+        } else {
+          diagnostic(c,'load-failed',{code:'RETRY_LIMIT'});
+          return;
+        }
+      }
+      c.attempts++;c.lastAttemptAt=Date.now();diagnostic(c,'loading');
       const selectedSource=profileScriptSource?.(c.profileId);
       const code = await botSource(c.profileId);
       if(profileScriptSource?.(c.profileId)!==selectedSource)return;
@@ -1513,10 +1522,17 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       await evaluate(c,MSGPACK,8000);
       if(!current(c,token))return;
       // Atomic document/runtime guard closes the race with a delayed legacy loader response.
-      const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; if(!window.__pmDeviceId) window.__pmDeviceId=${JSON.stringify(expectedDeviceId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') return {skipped:true,reason:'INITIALIZATION_FAILED'}; window.__pmBrowserInjectionAttempted=true; const evalResult = await (0,eval)(${JSON.stringify(code)}); return {attempted:true, evalResult}; })()`;
+      const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; if(!window.__pmDeviceId) window.__pmDeviceId=${JSON.stringify(expectedDeviceId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') { try { delete window.__pmScriptBootstrap; delete window.__pmBrowserInjectionAttempted; } catch (_) { window.__pmScriptBootstrap = null; window.__pmBrowserInjectionAttempted = false; } } window.__pmBrowserInjectionAttempted=true; const evalResult = await (0,eval)(${JSON.stringify(code)}); return {attempted:true, evalResult}; })()`;
       await evaluate(c,expression);
       if(!current(c,token))return;
-      const result=await health(c);if(!classify(c,result))diagnostic(c,'partial-runtime',{code:'POSTCONDITION_MISSING'});
+      const result=await health(c);
+      if(!classify(c,result)) {
+        diagnostic(c,'partial-runtime',{code:'POSTCONDITION_MISSING'});
+        if (c.attempts < 3 && !c.retryTimer) {
+          c.retryTimer=setTimeout(()=>{c.retryTimer=null;injectBot(c);},retryDelays[Math.max(0,c.attempts-1)]||2500);
+          c.retryTimer.unref?.();
+        }
+      }
     } catch (e) {
       if(isGoneError(e)){diagnostic(c,'transport-disconnected',{gameAlive:null});drop(c);scheduleReconnect();return;}
       if(!token){

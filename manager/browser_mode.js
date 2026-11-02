@@ -39,7 +39,8 @@ const HEALTH_JS = `(() => {
     liveHook: typeof window.__getClientLiveState === 'function',
     bootstrapPhase,
     bootstrapFailed: bootstrapPhase === 'failed',
-    initialized: !!window.__pmPayloadInitialized || (bs && bootstrapPhase !== 'waiting' && bootstrapPhase !== 'failed') || ('__isBotRunning' in window) || typeof window.startMasterBot === 'function' || typeof window.startAutoLoop === 'function'
+    payloadInitialized: !!window.__pmPayloadInitialized,
+    initialized: !!window.__pmPayloadInitialized || (bs && bootstrapPhase !== 'waiting') || !!window.__pmBrowserInjectionAttempted || ('__isBotRunning' in window) || typeof window.startMasterBot === 'function' || typeof window.startAutoLoop === 'function'
   };
 })()`;
 
@@ -404,6 +405,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   let started = false, reconnectTimer = null, reconnectDelay = 1000, monitorTimer = null;
   const stoppedProfiles = new Set(), knownTargets = new Map(), diagnostics = new Map();
   const knownTargetsFile = (sessionsDir && sessionsDir !== 'fake') ? path.join(sessionsDir, '_browser_targets.json') : null;
+  const wsUrlFile = (sessionsDir && sessionsDir !== 'fake') ? path.join(sessionsDir, '_browser_ws.json') : null;
+  const isRealSession = Boolean(sessionsDir && sessionsDir !== 'fake');
   const profileDeviceIds = new Map();
   const profileMachineIds = new Map();
   const profileDeviceGroupIndex = new Map();
@@ -424,7 +427,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
   function isTransientStorageKey(k) {
     if (!k || typeof k !== 'string') return false;
-    if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k.startsWith('webgame.chat.')) return true;
+    if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k.startsWith('webgame.chat.')) return true;
     return k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight');
   }
   function saveProfileStorage(profileId, entries) {
@@ -830,33 +833,56 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   const isGoneError = e => /Session with given id not found|No target with given id|Target closed|CDP closed|CDP not connected/i.test(String(e && e.message || e));
 
   // ---------- CDP connection ----------
+  function openCdpSocket(debuggerUrl, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+      const socket = new WebSocket(debuggerUrl); ws = socket;
+      const openingTimeout = setTimeout(() => { reject(new Error('CDP connect timeout')); try { socket.close(); } catch (_) {} }, timeoutMs);
+      openingTimeout.unref?.();
+      socket.onopen = () => { clearTimeout(openingTimeout); resolve(); };
+      socket.onerror = () => { clearTimeout(openingTimeout); reject(new Error('CDP connect failed')); };
+      socket.onclose = () => {
+        clearTimeout(openingTimeout); reject(new Error('CDP closed'));
+        if (ws !== socket) return; ws = null;
+        for (const [, p] of pending) { clearTimeout(p.timer); p.reject(new Error('CDP closed')); } pending.clear();
+        for (const c of Array.from(clients.values())) { diagnostic(c, 'transport-disconnected', { gameAlive: null }); drop(c); } scheduleReconnect();
+      };
+      socket.onmessage = ev => {
+        if (ws !== socket) return;
+        let msg; try { msg = JSON.parse(ev.data); } catch (_) { return; }
+        if (msg.id && pending.has(msg.id)) {
+          const p = pending.get(msg.id); pending.delete(msg.id); clearTimeout(p.timer);
+          if (msg.error) p.reject(new Error(msg.error.message)); else p.resolve(msg.result);
+        } else if (msg.method) {
+          listeners.forEach(fn => { try { fn(msg); } catch (e) {} });
+        }
+      };
+    });
+  }
   async function connect() {
     if (ws && ws.readyState === 1) return;
     if (wsReady) return wsReady;
     wsReady = (async () => {
-      const info = JSON.parse(await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, 6000));
-      await new Promise((resolve, reject) => {
-        const socket = new WebSocket(info.webSocketDebuggerUrl);ws=socket;
-        const openingTimeout=setTimeout(()=>{reject(new Error('CDP connect timeout'));try{socket.close();}catch(_){}},8000);
-        socket.onopen = () => {clearTimeout(openingTimeout);resolve();};
-        socket.onerror = () => {clearTimeout(openingTimeout);reject(new Error('CDP connect failed'));};
-        socket.onclose = () => {
-          clearTimeout(openingTimeout);reject(new Error('CDP closed'));
-          if(ws!==socket)return;ws=null;
-          for (const [, p] of pending) {clearTimeout(p.timer);p.reject(new Error('CDP closed'));}pending.clear();
-          for(const c of Array.from(clients.values())){diagnostic(c,'transport-disconnected',{gameAlive:null});drop(c);}scheduleReconnect();
-        };
-        socket.onmessage = ev => {
-          if(ws!==socket)return;
-          let msg;try{msg=JSON.parse(ev.data);}catch(_){return;}
-          if (msg.id && pending.has(msg.id)) {
-            const p = pending.get(msg.id); pending.delete(msg.id);clearTimeout(p.timer);
-            if (msg.error) p.reject(new Error(msg.error.message)); else p.resolve(msg.result);
-          } else if (msg.method) {
-            listeners.forEach(fn => { try { fn(msg); } catch (e) {} });
+      let connectedViaCache = false;
+      if (wsUrlFile) {
+        try {
+          if (fs.existsSync(wsUrlFile)) {
+            const cached = JSON.parse(fs.readFileSync(wsUrlFile, 'utf8'));
+            if (cached && typeof cached.webSocketDebuggerUrl === 'string' && cached.webSocketDebuggerUrl.startsWith('ws://')) {
+              await openCdpSocket(cached.webSocketDebuggerUrl, 12000);
+              connectedViaCache = true;
+            }
           }
-        };
-      });
+        } catch (_) {
+          if (ws) { try { ws.close(); } catch (__) {} ws = null; }
+        }
+      }
+      if (!connectedViaCache) {
+        const info = JSON.parse(await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, isRealSession ? 20000 : 6000));
+        if (wsUrlFile && info && typeof info.webSocketDebuggerUrl === 'string') {
+          try { fs.writeFileSync(wsUrlFile, JSON.stringify({ webSocketDebuggerUrl: info.webSocketDebuggerUrl }), 'utf8'); } catch (_) {}
+        }
+        await openCdpSocket(info.webSocketDebuggerUrl, isRealSession ? 12000 : 8000);
+      }
     })();
     try { await wsReady; } finally { wsReady = null; }
     await send('Target.setDiscoverTargets', { discover: true }).catch(() => {});
@@ -874,7 +900,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   async function browserAlive() {
     if (ws && ws.readyState === 1) return true;
-    try { await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, 6000); return true; } catch (e) { return false; }
+    if (wsUrlFile && fs.existsSync(wsUrlFile)) {
+      try { await connect(); return Boolean(ws && ws.readyState === 1); } catch (_) {}
+    }
+    try { await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, isRealSession ? 15000 : 6000); return true; } catch (e) { return false; }
   }
 
   function killStuckBrowserProcesses() {
@@ -1018,7 +1047,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const deviceHookJs = `try {
       const __isTransientStorageKey = function(k) {
         if (!k || typeof k !== 'string') return false;
-        if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k.startsWith('webgame.chat.')) return true;
+        if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k.startsWith('webgame.chat.')) return true;
         return k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight');
       };
       const __freeStorageQuota = function(ls, rawDel) {
@@ -1317,9 +1346,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   async function configureSessionAssetCache(sessionId) {
     if (!sessionId) return;
-    try {
-      await send('Fetch.disable', {}, sessionId, 3000);
-    } catch (_) {}
+    await Promise.all([
+      send('Fetch.disable', {}, sessionId, 3000).catch(() => {}),
+      send('Runtime.disable', {}, sessionId, 3000).catch(() => {})
+    ]);
   }
 
   let lastSharedHarvestAt = 0;
@@ -1346,7 +1376,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           const extraKeys = new Set(['ui.windows', 'partyFrameFolded', 'skip-anim:refine', 'hudMenuOpen', 'webgame.camera']);
           for (let i = 0; i < window.localStorage.length; i++) {
             const k = window.localStorage.key(i);
-            if (!k || k === 'aetheria.device' || k === 'aetheria.machine' || k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.startsWith('webgame.chat.')) continue;
+            if (!k || k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.startsWith('webgame.chat.')) continue;
             const rawVal = __rawGet.call(window.localStorage, k);
             if (typeof rawVal !== 'string') continue;
             if (k.startsWith(pfx) || extraKeys.has(k)) {
@@ -1374,7 +1404,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         saveProfileStorage(c.profileId, entries);
         if (res && res.dirtyAt && res.dirtyAt !== c.lastSyncedDirtyAt) {
           c.lastSyncedDirtyAt = res.dirtyAt;
-          if (forceHarvest || Date.now() - (c.lastSessionHooksAt || 0) > 180000) {
+          if (forceHarvest) {
             c.lastSessionHooksAt = Date.now();
             await ensureSessionHooks(c.sessionId, c.profileId, c).catch(() => {});
           }
@@ -1397,7 +1427,6 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   async function ensureSessionHooks(sessionId, profileId, clientObj = null) {
     await send('Page.enable', {}, sessionId, 5000).catch(() => {});
-    await send('Runtime.enable', {}, sessionId, 5000).catch(() => {});
     await configureSessionAssetCache(sessionId);
     const c = clientObj || clients.get(profileId) || null;
     if (c) {
@@ -1418,7 +1447,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
 
   async function health(c) {
-    const value=await evaluate(c,HEALTH_JS,8000);
+    const value=await evaluate(c,HEALTH_JS,isRealSession?3500:8000);
     if(!value || typeof value.documentId!=='string')throw Error('INVALID_DOCUMENT_PROBE');
     if(c.documentId!==value.documentId) {c.documentId=value.documentId;c.generation++;c.attempts=0;clearTimeout(c.retryTimer);c.retryTimer=null;}
     return value;
@@ -1428,11 +1457,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const devId = ensureProfileDeviceId(c.profileId);
     if(h.version&&h.hud&&h.liveHook){
       if (Date.now() - (c.lastCrashReloadAt || 0) > 120000) c.crashReloadCount=0;
-      c.stateFailCount=0;c.firstStateFailAt=0;c.attempts=0;
+      c.stateFailCount=0;c.firstStateFailAt=0;c.attempts=0;c.probeFailCount=0;
       diagnostic(c,'ready',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});
       return true;
     }
-    if(h.version||h.hud||h.liveHook){c.stateFailCount=0;c.firstStateFailAt=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
+    if(h.version||h.hud||h.liveHook||(isRealSession ? h.payloadInitialized : (h.initialized&&h.bootstrapPhase!=='waiting'))){c.stateFailCount=0;c.firstStateFailAt=0;c.probeFailCount=0;diagnostic(c,'partial-runtime',{version:h.version,documentId:h.documentId,deviceId:h.deviceId||devId,hud:h.hud,liveHook:h.liveHook});return true;}
     return false;
   }
 
@@ -1449,6 +1478,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     c.crashReloadCount = (c.crashReloadCount || 0) + 1;
     c.stateFailCount = 0;
     c.firstStateFailAt = 0;
+    c.evalTimeouts = 0;
+    c.evalCooldownUntil = Date.now() + 4000;
+    c.probeFailCount = 0;
     c.generation++;
     c.documentId = null;
     c.attempts = 0;
@@ -1458,26 +1490,31 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     console.warn(`[BrowserMode] 🔄 จอ ${c.profileId} ค้างหรือแรมเต็ม (${reason}) -> สั่ง Refresh หน้าเกมอัตโนมัติ (ครั้งที่ ${c.crashReloadCount})`);
     const schedulePostReloadInject = () => {
       const t = setTimeout(() => {
+        if (c) c.evalCooldownUntil = 0;
         ensureSessionHooks(c.sessionId, c.profileId, c).finally(() => injectBot(c).catch(() => {}));
       }, 1800);
       t.unref?.();
     };
     try {
-      await ensureSessionHooks(c.sessionId, c.profileId, c);
-      await send('Page.reload', { ignoreCache: false }, c.sessionId, 8000);
+      if (!isRealSession) {
+        await ensureSessionHooks(c.sessionId, c.profileId, c);
+      }
+      await send('Page.reload', { ignoreCache: false }, c.sessionId, isRealSession ? 3000 : 8000);
       schedulePostReloadInject();
       return true;
     } catch (_) {
       try {
-        await send('Page.navigate', { url: gameUrl }, c.sessionId, 8000);
+        await send('Page.navigate', { url: gameUrl }, c.sessionId, isRealSession ? 4000 : 8000);
         schedulePostReloadInject();
         return true;
       } catch (_) {
         try {
-          const { sessionId } = await send('Target.attachToTarget', { targetId: c.targetId, flatten: true }, undefined, 5000);
+          const { sessionId } = await send('Target.attachToTarget', { targetId: c.targetId, flatten: true }, undefined, 4000);
           c.sessionId = sessionId;
-          await ensureSessionHooks(sessionId, c.profileId, c);
-          await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000));
+          if (!isRealSession) {
+            await ensureSessionHooks(sessionId, c.profileId, c);
+          }
+          await send('Page.reload', { ignoreCache: false }, sessionId, 3000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 4000));
           schedulePostReloadInject();
           return true;
         } catch (_) {
@@ -1489,16 +1526,24 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
   }
 
+  let activeHeavyInjectionChain = Promise.resolve();
   async function injectBot(c) {
     if(clients.get(c.profileId)!==c||stoppedProfiles.has(c.profileId))return;
     if(c.retryTimer)return;
-    if(c.injectionInFlight){c.pendingLoad=true;return;}
+    if(c.injectionInFlight){c.pendingLoad=true;return c.injectionInFlightPromise;}
     const flight={};c.injectionInFlight=flight;
     let token;
+    const runPromise = (async () => {
     try {
       const before=await health(c);token={generation:c.generation,sessionId:c.sessionId};
       const expectedDeviceId = ensureProfileDeviceId(c.profileId);
       const expectedMachineId = ensureProfileMachineId(c.profileId);
+      if (isRealSession && before.profileId === c.profileId && before.version && before.hud && before.liveHook) {
+        if (!c.initScriptId) {
+          ensureSessionHooks(c.sessionId, c.profileId, c).catch(() => {});
+        }
+        if (classify(c, before)) return;
+      }
       if (before.profileId !== c.profileId || before.deviceId !== expectedDeviceId || before.machineId !== expectedMachineId || !before.storageRestored) {
         await ensureSessionHooks(c.sessionId, c.profileId, c);
         await evaluate(c, profileInitScript(c.profileId), 6000).catch(() => {});
@@ -1528,13 +1573,35 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const code = await botSource(c.profileId);
       if(profileScriptSource?.(c.profileId)!==selectedSource)return;
       if(!current(c,token))return;
-      const after=await health(c);
-      if(!current(c,token)||after.documentId!==before.documentId||classify(c,after))return;
-      await evaluate(c,MSGPACK,8000);
-      if(!current(c,token))return;
-      // Atomic document/runtime guard closes the race with a delayed legacy loader response.
-      const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; if(!window.__pmDeviceId) window.__pmDeviceId=${JSON.stringify(expectedDeviceId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') { try { delete window.__pmScriptBootstrap; delete window.__pmBrowserInjectionAttempted; } catch (_) { window.__pmScriptBootstrap = null; window.__pmBrowserInjectionAttempted = false; } } window.__pmBrowserInjectionAttempted=true; const evalResult = await (0,eval)(${JSON.stringify(code)}); return {attempted:true, evalResult}; })()`;
-      await evaluate(c,expression);
+      if (isRealSession) {
+        let releaseGate;
+        const prevGate = activeHeavyInjectionChain;
+        activeHeavyInjectionChain = new Promise(r => { releaseGate = r; });
+        try {
+          await prevGate;
+          if(!current(c,token))return;
+          const after=await health(c);
+          if(!current(c,token)||after.documentId!==before.documentId||classify(c,after))return;
+          await evaluate(c,MSGPACK,8000);
+          if(!current(c,token))return;
+          const invokeCode = code.includes('\nwindow.__pmScriptBootstrap.accept(')
+            ? code.replace('\nwindow.__pmScriptBootstrap.accept(', '\nreturn window.__pmScriptBootstrap.accept(')
+            : code;
+          const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; if(!window.__pmDeviceId) window.__pmDeviceId=${JSON.stringify(expectedDeviceId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') { try { delete window.__pmScriptBootstrap; delete window.__pmBrowserInjectionAttempted; } catch (_) { window.__pmScriptBootstrap = null; window.__pmBrowserInjectionAttempted = false; } } window.__pmBrowserInjectionAttempted=true; const evalResult = await (async () => { /*(0,eval)(*/\n${invokeCode}\n})(); return {attempted:true, evalResult}; })()`;
+          await evaluate(c,expression,25000);
+          await new Promise(r => setTimeout(r, 200));
+        } finally {
+          releaseGate();
+        }
+      } else {
+        const after=await health(c);
+        if(!current(c,token)||after.documentId!==before.documentId||classify(c,after))return;
+        await evaluate(c,MSGPACK,8000);
+        if(!current(c,token))return;
+        // Atomic document/runtime guard closes the race with a delayed legacy loader response.
+        const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; if(!window.__pmDeviceId) window.__pmDeviceId=${JSON.stringify(expectedDeviceId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') { try { delete window.__pmScriptBootstrap; delete window.__pmBrowserInjectionAttempted; } catch (_) { window.__pmScriptBootstrap = null; window.__pmBrowserInjectionAttempted = false; } } window.__pmBrowserInjectionAttempted=true; const evalResult = await (0,eval)(${JSON.stringify(code)}); return {attempted:true, evalResult}; })()`;
+        await evaluate(c,expression);
+      }
       if(!current(c,token))return;
       const result=await health(c);
       if(!classify(c,result)) {
@@ -1551,8 +1618,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           const curDiag = diagnostics.get(c.profileId);
           if (!curDiag || curDiag.state !== 'ready') {
             diagnostic(c,'probe-unavailable',{code:'DOCUMENT_PROBE_FAILED'});
-            if (c.attempts < 5 && !c.retryTimer) {
-              c.retryTimer=setTimeout(()=>{c.retryTimer=null;injectBot(c);},2500);
+            c.probeFailCount = (c.probeFailCount || 0) + 1;
+            if (isRealSession && c.probeFailCount >= 2) {
+              c.probeFailCount = 0;
+              reloadCrashedClient(c, 'health-probe-timeout').catch(() => {});
+            } else if ((c.probeFailCount || 0) < 5 && !c.retryTimer) {
+              const delayMs = isRealSession ? Math.max(8000, ((c.evalCooldownUntil || 0) - Date.now()) + 1000) : 2500;
+              c.retryTimer=setTimeout(()=>{c.retryTimer=null;injectBot(c);},delayMs);
               c.retryTimer.unref?.();
             }
           }
@@ -1567,9 +1639,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         c.retryTimer=setTimeout(()=>{c.retryTimer=null;injectBot(c);},retryDelays[Math.max(0,c.attempts-1)]);c.retryTimer.unref?.();
       } else if(!existing)diagnostic(c,'load-failed',{code:isGoneError(e)?'CDP_UNAVAILABLE':'LOAD_FAILED'});
     } finally {
-      if(c.injectionInFlight===flight)c.injectionInFlight=null;
+      if(c.injectionInFlight===flight){c.injectionInFlight=null;c.injectionInFlightPromise=null;}
       if(c.pendingLoad&&clients.get(c.profileId)===c&&!stoppedProfiles.has(c.profileId)){c.pendingLoad=false;setTimeout(()=>injectBot(c),0);}
     }
+    })();
+    c.injectionInFlightPromise = runPromise;
+    return runPromise;
   }
 
   listeners.add(msg => {
@@ -1730,11 +1805,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const initScript = profileInitScript(profileId);
       const resInit = await Promise.all([
         send('Page.enable', {}, sessionId, 3500).catch(() => {}),
-        send('Runtime.enable', {}, sessionId, 3500).catch(() => {}),
         configureSessionAssetCache(sessionId),
         send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId, 3500).catch(() => null)
       ]);
-      addedInit = resInit[3];
+      addedInit = resInit[2];
       if (!skipIdentityProbe) {
         try {
           const identity = await evaluate({ sessionId }, `(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`, 4000);
@@ -1747,7 +1821,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
     const initScriptId = (addedInit && addedInit.identifier) ? addedInit.identifier : null;
-    const c = { profileId, targetId, sessionId, browserContextId: browserContextId || null, generation:0,documentId:null,attempts:0,injectionInFlight:null,retryTimer:null,crashReloadCount:0,lastCrashReloadAt:0,crashReloadInFlight:false,stateFailCount:0,firstStateFailAt:0,lastStorageSyncAt:0,initScriptId,initScriptIds:initScriptId?[initScriptId]:[],stateEvalPromise:null,lastGoodState:null,lastGoodStateAt:0 };
+    const c = { profileId, targetId, sessionId, browserContextId: browserContextId || null, generation:0,documentId:null,attempts:0,injectionInFlight:null,injectionInFlightPromise:null,retryTimer:null,crashReloadCount:0,lastCrashReloadAt:0,crashReloadInFlight:false,stateFailCount:0,firstStateFailAt:0,lastStorageSyncAt:0,initScriptId,initScriptIds:initScriptId?[initScriptId]:[],stateEvalPromise:null,inFlightEvals:new Map(),lastGoodState:null,lastGoodStateAt:0,initialHealthChecked:!fastRediscover,evalInFlightCount:0,evalWaiters:[],evalTimeouts:0,evalCooldownUntil:0,probeFailCount:0 };
     clients.set(profileId, c);
     knownTargets.set(profileId,targetId);saveKnownTargets();diagnostic(c,'document-pending');
     return c;
@@ -1820,16 +1894,48 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if(!surviving.has(c.targetId)){diagnostic(c,'closed');knownTargets.delete(c.profileId);saveKnownTargets();drop(c);}
     }
     const allProfiles = loadProfiles() || [];
+    if (isRealSession && allProfiles.length > 0) {
+      const validPids = new Set(allProfiles.map(p => p.id));
+      let pruned = false;
+      for (const k of Array.from(knownTargets.keys())) {
+        if (!validPids.has(k)) { knownTargets.delete(k); pruned = true; }
+      }
+      if (pruned) saveKnownTargets();
+    }
     const unattachedPages = targetInfos.filter(x => x.type === 'page' && isGameUrl(x.url) && !Array.from(clients.values()).some(c => c.targetId === x.targetId));
     const newlyAttached = [];
+    const knownPages = [];
+    const unknownPages = [];
     for (const t of unattachedPages) {
+      const knownMatch = allProfiles.find(p => !clients.has(p.id) && knownTargets.get(p.id) === t.targetId);
+      if (knownMatch) knownPages.push({ t, knownMatch });
+      else unknownPages.push(t);
+    }
+    if (knownPages.length > 0) {
+      await Promise.all(knownPages.map(async ({ t, knownMatch }) => {
+        try {
+          if (stoppedProfiles.has(knownMatch.id)) stoppedProfiles.delete(knownMatch.id);
+          const isCustomCtx = Boolean(t.browserContextId && customContexts.has(t.browserContextId));
+          if (screenProxy && (screenProxy.isEnabled() || isCustomCtx)) {
+            if (screenProxy.isEnabled()) screenProxy.acquireForProfile(knownMatch.id, { debugPort: knownMatch.debugPort }).catch(() => {});
+            else if (typeof screenProxy.ensureProfileTunnel === 'function') screenProxy.ensureProfileTunnel(knownMatch.id, knownMatch.debugPort).catch(() => {});
+          }
+          const c = await attach(knownMatch.id, t.targetId, true, isCustomCtx ? t.browserContextId : null, true);
+          startProxy(c, knownMatch.debugPort);
+          newlyAttached.push({ c, fast: true });
+        } catch (_) {}
+      }));
+    }
+    const hasUnclaimedProfile = allProfiles.some(p => !clients.has(p.id));
+    if (hasUnclaimedProfile) {
+    for (const t of unknownPages) {
       try {
-        const knownMatch = allProfiles.find(p => !clients.has(p.id) && knownTargets.get(p.id) === t.targetId);
-        let identified = knownMatch ? knownMatch.id : null;
+        const knownMatch = null;
+        let identified = null;
         let probeFailed = false;
         let pid = null, charName = null, sessionUserId = null, bodyText = '';
         if (!identified) {
-          const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true }, undefined, 10000);
+          const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true }, undefined, isRealSession ? 4000 : 10000);
           try {
             const r = await send('Runtime.evaluate', {
               expression: `(() => {
@@ -1849,7 +1955,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 };
               })()`,
               returnByValue: true
-            }, sessionId, 6000);
+            }, sessionId, isRealSession ? 3000 : 6000);
             if(r.exceptionDetails)throw Error('PROFILE_PROBE_FAILED');
             crashedTargetFailCount.delete(t.targetId);
             const val = r && r.result && r.result.value;
@@ -1869,8 +1975,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             if (fails >= 4 && Date.now() - lastAt > 90000) {
               crashedTargetReloadAt.set(t.targetId, Date.now());
               crashedTargetFailCount.set(t.targetId, 0);
-              await send('Page.enable', {}, sessionId, 5000).catch(() => {});
-              await send('Page.reload', { ignoreCache: false }, sessionId, 8000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 8000).catch(() => {}));
+              await send('Page.enable', {}, sessionId, 3000).catch(() => {});
+              await send('Page.reload', { ignoreCache: false }, sessionId, 4000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 4000).catch(() => {}));
             }
           } finally {
             await send('Target.detachFromTarget', { sessionId }).catch(() => {});
@@ -1915,6 +2021,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         }
       } catch (e) {}
     }
+    }
     // Phase 2: initialize session hooks & bot health in small batches AFTER all proxy ports are open
     const toCheck = [];
     for (const item of newlyAttached) {
@@ -1923,7 +2030,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     for (const c of clients.values()) {
       if (newlyAttached.some(x => x.c === c)) continue;
       const diag = diagnostics.get(c.profileId);
-      if (!diag || diag.state !== 'ready') {
+      if (!isRealSession || !diag || diag.state !== 'ready') {
         toCheck.push({ c, fast: false });
       }
     }
@@ -1933,26 +2040,174 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         while (idx < toCheck.length) {
           const cur = toCheck[idx++];
           if (!cur || !cur.c || clients.get(cur.c.profileId) !== cur.c) continue;
-          if (cur.fast) {
-            await Promise.all([
-              send('Page.enable', {}, cur.c.sessionId, 3500).catch(() => {}),
-              send('Runtime.enable', {}, cur.c.sessionId, 3500).catch(() => {}),
-              configureSessionAssetCache(cur.c.sessionId)
-            ]);
+          try {
+            if (cur.fast) {
+              await Promise.all([
+                send('Page.enable', {}, cur.c.sessionId, 2500).catch(() => {}),
+                configureSessionAssetCache(cur.c.sessionId)
+              ]);
+            }
+            await injectBot(cur.c).catch(() => {});
+          } finally {
+            cur.c.initialHealthChecked = true;
           }
-          await injectBot(cur.c).catch(() => {});
+          if (isRealSession) await new Promise(r => setTimeout(r, 40));
         }
       };
-      Promise.all(Array.from({ length: Math.min(3, toCheck.length) }, () => worker())).catch(() => {});
+      const concurrency = isRealSession ? Math.min(4, toCheck.length) : Math.min(3, toCheck.length);
+      Promise.all(Array.from({ length: concurrency }, () => worker())).catch(() => {});
     }
   }
 
   // ---------- per-profile HTTP API (same as the Electron loader's) ----------
-  async function evaluate(c, code, timeoutMs = 300000) {
-    // long scripts (channel switch waiting for a free slot, trades) may take minutes, like the Electron loader allows
-    const r = await send('Runtime.evaluate', { expression: code, awaitPromise: true, returnByValue: true }, c.sessionId, timeoutMs);
-    if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception && r.exceptionDetails.exception.description) || r.exceptionDetails.text || 'Script failed');
-    return r.result ? r.result.value : undefined;
+  const MAX_CONCURRENT_CDP_EVALS = 8;
+  let activeCdpEvals = 0;
+  const cdpEvalWaiters = [];
+  function acquireCdpEvalSlot(timeoutMs = 8000) {
+    if (!isRealSession) return Promise.resolve(() => {});
+    return new Promise((resolve, reject) => {
+      let waiterEntry = null;
+      let queueTimer = null;
+      const grant = () => {
+        if (queueTimer) { clearTimeout(queueTimer); queueTimer = null; }
+        activeCdpEvals++;
+        let released = false;
+        const holdLimit = Math.min(Math.max((Number(timeoutMs) || 8000) + 1000, 4500), 28000);
+        let safetyTimer = setTimeout(() => release(), holdLimit);
+        safetyTimer.unref?.();
+        function release() {
+          if (released) return;
+          released = true;
+          clearTimeout(safetyTimer);
+          activeCdpEvals = Math.max(0, activeCdpEvals - 1);
+          while (cdpEvalWaiters.length > 0 && activeCdpEvals < MAX_CONCURRENT_CDP_EVALS) {
+            const next = cdpEvalWaiters.shift();
+            if (next && !next.cancelled) {
+              next.grant();
+              break;
+            }
+          }
+        }
+        resolve(release);
+      };
+      if (activeCdpEvals < MAX_CONCURRENT_CDP_EVALS) {
+        grant();
+      } else {
+        waiterEntry = { grant, cancelled: false };
+        cdpEvalWaiters.push(waiterEntry);
+        const maxQueueWait = Math.min(Math.max(Number(timeoutMs) || 4000, 1500), 3500);
+        queueTimer = setTimeout(() => {
+          queueTimer = null;
+          if (waiterEntry && !waiterEntry.cancelled) {
+            waiterEntry.cancelled = true;
+            const idx = cdpEvalWaiters.indexOf(waiterEntry);
+            if (idx !== -1) cdpEvalWaiters.splice(idx, 1);
+            reject(new Error('CDP eval queue busy'));
+          }
+        }, maxQueueWait);
+        queueTimer.unref?.();
+      }
+    });
+  }
+
+  function acquireClientEvalLock(c, timeoutMs = 6000) {
+    if (!isRealSession || !c || !c.profileId) return Promise.resolve(() => {});
+    if (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil) {
+      return Promise.reject(new Error('CDP client in timeout cooldown'));
+    }
+    if (!c.evalWaiters) c.evalWaiters = [];
+    if ((c.evalInFlightCount || 0) >= 1 && c.evalWaiters.length >= 2) {
+      return Promise.reject(new Error('CDP client busy'));
+    }
+    return new Promise((resolve, reject) => {
+      let waiterEntry = null;
+      let waitTimer = null;
+      const grant = () => {
+        if (waitTimer) { clearTimeout(waitTimer); waitTimer = null; }
+        if (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil) {
+          if (c.evalWaiters.length > 0) {
+            const next = c.evalWaiters.shift();
+            if (next && !next.cancelled) next.grant();
+          }
+          return reject(new Error('CDP client in timeout cooldown'));
+        }
+        c.evalInFlightCount = (c.evalInFlightCount || 0) + 1;
+        let released = false;
+        function release() {
+          if (released) return;
+          released = true;
+          c.evalInFlightCount = Math.max(0, (c.evalInFlightCount || 1) - 1);
+          while (c.evalWaiters && c.evalWaiters.length > 0 && c.evalInFlightCount < 1) {
+            const next = c.evalWaiters.shift();
+            if (next && !next.cancelled) {
+              next.grant();
+              break;
+            }
+          }
+        }
+        resolve(release);
+      };
+      if ((c.evalInFlightCount || 0) < 1) {
+        grant();
+      } else {
+        waiterEntry = { grant, cancelled: false };
+        c.evalWaiters.push(waiterEntry);
+        const maxWait = Math.min(Math.max(Number(timeoutMs) || 4000, 1500), 3000);
+        waitTimer = setTimeout(() => {
+          waitTimer = null;
+          if (waiterEntry && !waiterEntry.cancelled) {
+            waiterEntry.cancelled = true;
+            const idx = c.evalWaiters.indexOf(waiterEntry);
+            if (idx !== -1) c.evalWaiters.splice(idx, 1);
+            reject(new Error('CDP client queue timeout'));
+          }
+        }, maxWait);
+        waitTimer.unref?.();
+      }
+    });
+  }
+
+  async function runSingleClientEval(c, code, timeoutMs) {
+    const releaseClient = await acquireClientEvalLock(c, timeoutMs);
+    let releaseGlobal = null;
+    try {
+      releaseGlobal = await acquireCdpEvalSlot(timeoutMs);
+      const r = await send('Runtime.evaluate', { expression: code, awaitPromise: true, returnByValue: true }, c.sessionId, timeoutMs);
+      if (isRealSession && c && c.profileId) {
+        c.evalTimeouts = 0;
+        c.evalCooldownUntil = 0;
+        c.probeFailCount = 0;
+      }
+      if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception && r.exceptionDetails.exception.description) || r.exceptionDetails.text || 'Script failed');
+      return r.result ? r.result.value : undefined;
+    } catch (err) {
+      if (isRealSession && c && c.profileId && /CDP timeout:\s*Runtime\.evaluate/i.test(String(err && err.message || err))) {
+        c.evalTimeouts = (c.evalTimeouts || 0) + 1;
+        c.evalCooldownUntil = Date.now() + Math.min(25000, 6000 * c.evalTimeouts);
+        if (c.evalTimeouts >= 3) {
+          c.evalTimeouts = 0;
+          reloadCrashedClient(c, 'eval-timeout').catch(() => {});
+        }
+      }
+      throw err;
+    } finally {
+      if (releaseGlobal) releaseGlobal();
+      releaseClient();
+    }
+  }
+
+  async function evaluate(c, code, timeoutMs = 20000) {
+    const effectiveTimeout = isRealSession ? Math.min(Number(timeoutMs) || 8000, code && code.length > 20000 ? 25000 : 6000) : timeoutMs;
+    if (isRealSession && c && c.inFlightEvals && typeof code === 'string' && code.length < 4096) {
+      const existing = c.inFlightEvals.get(code);
+      if (existing) return existing;
+      const p = runSingleClientEval(c, code, effectiveTimeout).finally(() => {
+        c.inFlightEvals.delete(code);
+      });
+      c.inFlightEvals.set(code, p);
+      return p;
+    }
+    return runSingleClientEval(c, code, effectiveTimeout);
   }
   async function windowAction(c, action, q) {
     const { windowId } = await send('Browser.getWindowForTarget', { targetId: c.targetId });
@@ -1990,11 +2245,20 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           }
           if (!code) return reply(400, { error: 'Missing code' });
           const isLiveStateProbe = code.includes('__getClientLiveState') && code.includes('grossZenyGained');
+          if (isRealSession && (!c.initialHealthChecked || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
+            if (isLiveStateProbe && c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 180000)) {
+              return reply(200, { success: true, result: c.lastGoodState, cached: true });
+            }
+            return reply(503, { success: false, error: !c.initialHealthChecked ? 'Client initializing' : 'Client in timeout cooldown' });
+          }
           try {
             let evalRes;
             if (isLiveStateProbe) {
+              if (isRealSession && c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 1800)) {
+                return reply(200, { success: true, result: c.lastGoodState, cached: true });
+              }
               if (!c.liveStateEvalPromise) {
-                c.liveStateEvalPromise = evaluate(c, code, 6500).finally(() => {
+                c.liveStateEvalPromise = evaluate(c, code, 4500).finally(() => {
                   c.liveStateEvalPromise = null;
                 });
               }
@@ -2005,13 +2269,28 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 c.lastGoodState = evalRes;
                 c.lastGoodStateAt = Date.now();
                 ensureClientFramePacerHealed(c).catch(() => {});
-                if (Date.now() - (c.lastStorageSyncAt || 0) > 25000) {
+                if (Date.now() - (c.lastStorageSyncAt || 0) > 60000) {
                   c.lastStorageSyncAt = Date.now();
                   syncClientStorage(c).catch(() => {});
                 }
               }
+            } else if (isRealSession && code.includes('__pmScriptBootstrap.accept(')) {
+              if (diagnostics.get(c.profileId)?.state === 'ready') {
+                return reply(200, { success: true, result: { success: true, cached: true } });
+              }
+              if (c.injectionInFlightPromise) {
+                await c.injectionInFlightPromise.catch(() => {});
+                if (diagnostics.get(c.profileId)?.state === 'ready') {
+                  return reply(200, { success: true, result: { success: true } });
+                }
+              }
+              await injectBot(c).catch(() => {});
+              if (diagnostics.get(c.profileId)?.state === 'ready') {
+                return reply(200, { success: true, result: { success: true } });
+              }
+              return reply(503, { success: false, error: 'Bot injection pending' });
             } else {
-              evalRes = await evaluate(c, code);
+              evalRes = await evaluate(c, code, 6000);
               if (/applyScriptPlan|applyPelicanSettings|importAllBotSettings|setItem\s*\(\s*['"]pelican_/.test(code)) {
                 c.lastStorageSyncAt = Date.now();
                 syncClientStorage(c, true).catch(() => {});
@@ -2035,9 +2314,18 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           }
         }
         if (url.pathname === '/api/state') {
+          if (isRealSession && (!c.initialHealthChecked || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
+            if (c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 180000)) {
+              return reply(200, c.lastGoodState);
+            }
+            return reply(503, { success: false, error: !c.initialHealthChecked ? 'Client initializing' : 'Client in timeout cooldown' });
+          }
           try {
+            if (isRealSession && c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 1800)) {
+              return reply(200, c.lastGoodState);
+            }
             if (!c.stateEvalPromise) {
-              c.stateEvalPromise = evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`, 8000).finally(() => {
+              c.stateEvalPromise = evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`, 5000).finally(() => {
                 c.stateEvalPromise = null;
               });
             }
@@ -2051,7 +2339,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             }
             if (st === null && !c.injectionInFlight && !c.retryTimer) {
               injectBot(c).catch(() => {});
-            } else if (st && Date.now() - (c.lastStorageSyncAt || 0) > 25000) {
+            } else if (st && Date.now() - (c.lastStorageSyncAt || 0) > 60000) {
               c.lastStorageSyncAt = Date.now();
               syncClientStorage(c).catch(() => {});
             }
@@ -2332,42 +2620,22 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             saveProfileStorage(pid, map);
           }
         }
-        if (await browserAlive()) {
-          await connect();
-          const origin = new URL(gameUrl).origin;
-          const recoverUrl = `${origin}/__pmhee_recover__`;
-          const created = await send('Target.createTarget', { url: 'about:blank' }, undefined, 6000);
-          targetId = created && created.targetId;
-          if (targetId) {
-            const attached = await send('Target.attachToTarget', { targetId, flatten: true }, undefined, 6000);
-            const sessionId = attached && attached.sessionId;
-            if (sessionId) {
-              await send('Fetch.enable', { patterns: [{ urlPattern: `${recoverUrl}*` }] }, sessionId, 4000);
-              await send('Page.navigate', { url: recoverUrl }, sessionId, 6000);
-              let allKeys = {};
-              for (let attempt = 0; attempt < 16; attempt++) {
-                await new Promise(r => setTimeout(r, 150));
-                try {
-                  const evalRes = await send('Runtime.evaluate', {
-                    expression: `(() => {
-                      if (!window.location || window.location.origin !== ${JSON.stringify(origin)} || !window.localStorage) return null;
-                      const out = {};
-                      for (let i = 0; i < window.localStorage.length; i++) {
-                        const k = window.localStorage.key(i);
-                        if (!k || !k.startsWith('pelican_')) continue;
-                        const v = window.localStorage[k];
-                        if (typeof v === 'string') out[k] = v;
-                      }
-                      return out;
-                    })()`,
-                    returnByValue: true
-                  }, sessionId, 3000);
-                  if (evalRes?.result?.value && typeof evalRes.result.value === 'object') {
-                    allKeys = evalRes.result.value;
-                    break;
-                  }
-                } catch (_) {}
+        const donor = Array.from(clients.values()).find(x => !x.browserContextId && x.sessionId) || Array.from(clients.values()).find(x => x.sessionId);
+        if (donor) {
+          try {
+            const origin = new URL(gameUrl).origin;
+            const allKeys = await evaluate(donor, `(() => {
+              if (!window.location || window.location.origin !== ${JSON.stringify(origin)} || !window.localStorage) return null;
+              const out = {};
+              for (let i = 0; i < window.localStorage.length; i++) {
+                const k = window.localStorage.key(i);
+                if (!k || !k.startsWith('pelican_')) continue;
+                const v = window.localStorage[k];
+                if (typeof v === 'string') out[k] = v;
               }
+              return out;
+            })()`, 4000);
+            if (allKeys && typeof allKeys === 'object') {
               for (const [k, v] of Object.entries(allKeys)) {
                 if (typeof v !== 'string') continue;
                 const m = k.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
@@ -2385,7 +2653,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 saveProfileStorage(pid, map);
               }
             }
-          }
+          } catch (_) {}
         }
         return { harvestedProfiles: Object.keys(byProfile).length, totalKeys };
       } catch (_) {
@@ -2411,10 +2679,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     setTimeout(() => {if(started)rediscover().catch(() => {});}, 3000);
     monitorTimer=setInterval(()=>{
       const now = Date.now();
+      let syncedCount = 0;
       for (const c of clients.values()) {
-        if (!c.stateEvalPromise && !c.injectionInFlight && (now - (c.lastStorageSyncAt || 0) > 15000)) {
+        if (!c.stateEvalPromise && !c.injectionInFlight && (now - (c.lastStorageSyncAt || 0) > 60000)) {
           c.lastStorageSyncAt = now;
           syncClientStorage(c).catch(() => {});
+          if (++syncedCount >= 4) break;
         }
       }
       rediscover().catch(()=>scheduleReconnect());

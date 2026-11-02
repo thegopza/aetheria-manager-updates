@@ -1544,6 +1544,10 @@ function queryClientState(port) {
   if (cached && now - cached.ts < 1750) {
     return Promise.resolve(cached.state);
   }
+  const lastFail = clientStateLastFailureByPort.get(port);
+  if (lastFail && now - lastFail.ts < (lastFail.reason === 'ECONNREFUSED' ? 2500 : 3500)) {
+    return Promise.resolve(null);
+  }
   if (clientStateInFlightByPort.has(port)) {
     return clientStateInFlightByPort.get(port);
   }
@@ -5500,9 +5504,12 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
 }
 
 if (!TEST_INSTANCE) {
-  setTimeout(() => {
-    recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
-  }, 5000);
+  setTimeout(async () => {
+    const cur = loadProfiles() || [];
+    if (hasProfilesMissingCredentialsOrAccount(cur)) {
+      await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
+    }
+  }, 15000);
   setInterval(async () => {
     const cur = loadProfiles() || [];
     if (hasProfilesMissingCredentialsOrAccount(cur)) {

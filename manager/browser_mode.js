@@ -976,29 +976,6 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     browserProc = spawn(exe, args, { detached: true, stdio: 'ignore' });
     browserProc.unref();
     let cleanedMidWait = forceClean;
-    const lockStartupAccessibilityOff = async (pages) => {
-      if (!isRealSession || !Array.isArray(pages) || pages.length === 0) return;
-      try {
-        const { sessionId } = await send('Target.attachToTarget', { targetId: pages[0], flatten: true }, undefined, 3000);
-        await send('Page.navigate', { url: 'chrome://accessibility' }, sessionId, 3000).catch(() => {});
-        await new Promise(r => setTimeout(r, 350));
-        await send('Runtime.evaluate', {
-          expression: `try {
-            if (typeof chrome !== 'undefined' && typeof chrome.send === 'function') {
-              chrome.send('setGlobalFlag', ['locked', false]);
-              chrome.send('setGlobalFlag', ['text', false]);
-              chrome.send('setGlobalFlag', ['extendedProperties', false]);
-              chrome.send('setGlobalFlag', ['screenReader', false]);
-              chrome.send('setGlobalFlag', ['html', false]);
-              chrome.send('setGlobalFlag', ['web', false]);
-              chrome.send('setGlobalFlag', ['native', false]);
-              chrome.send('setGlobalFlag', ['locked', true]);
-            }
-          } catch (_) {}`
-        }, sessionId, 2000).catch(() => {});
-        await send('Target.detachFromTarget', { sessionId }, undefined, 2000).catch(() => {});
-      } catch (_) {}
-    };
     for (let i = 0; i < 40; i++) {
       await new Promise(r => setTimeout(r, 300));
       if (await browserAlive()) {
@@ -1006,7 +983,6 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           await connect();
           const tRes = await send('Target.getTargets', {}, undefined, 4000);
           startupPages = (tRes?.targetInfos || []).filter(t => t.type === 'page').map(t => t.targetId);
-          await lockStartupAccessibilityOff(startupPages);
           return;
         } catch (e) {
           if (ws) { try { ws.close(); } catch (_) {} ws = null; }

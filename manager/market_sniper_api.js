@@ -681,265 +681,316 @@ function createMarketSniperService({
     `;
   }
 
+  const runtimeInstalledByPort = new Map();
+  let cachedOnlineScreens = null;
+  let cachedOnlineScreensAt = 0;
+  let inflightOnlineScreensPromise = null;
+
   // Probe all online profiles to get their live Zeny, Premium status, Market Quota, and connection readiness
-  async function getOnlineScreenStates() {
-    const profiles = (typeof loadProfiles === 'function' ? loadProfiles() : []) || [];
-    const running = profiles.filter(p => p && p.debugPort);
-    if (!running.length) return [];
-
-    const sniperAutoFlip = Boolean(config.enabled && config.mode === 'auto_flip');
-    const reserveSlots = sniperAutoFlip ? 2 : 0;
-
-    // Build map of items bought/flipped by Sniper so any auto-cancelled flip item in bag knows its reference flip price
-    const sniperFlippedMap = {};
-    if (Array.isArray(state.history)) {
-      for (const h of state.history) {
-        if (!h || !h.itemName) continue;
-        const nm = String(h.itemName).trim().toLowerCase();
-        const refP = Number(h.relistUnitPrice || h.cleanRefUnitPrice) || 0;
-        if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
-      }
+  async function getOnlineScreenStates(forceFresh = false) {
+    if (!forceFresh && cachedOnlineScreens && (Date.now() - cachedOnlineScreensAt < 3500)) {
+      return cachedOnlineScreens;
     }
-    if (Array.isArray(state.activeBids)) {
-      for (const b of state.activeBids) {
-        if (!b || !b.itemName) continue;
-        const nm = String(b.itemName).trim().toLowerCase();
-        const refP = Number(b.flipUnitPrice || b.cleanRefUnitPrice) || 0;
-        if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
-      }
+    if (!forceFresh && inflightOnlineScreensPromise) {
+      return inflightOnlineScreensPromise;
     }
-    if (Array.isArray(state.pendingFlips)) {
-      for (const pf of state.pendingFlips) {
-        if (!pf || !pf.itemName) continue;
-        const nm = String(pf.itemName).trim().toLowerCase();
-        const refP = Number(pf.flipUnitPrice || pf.cleanRefUnitPrice) || 0;
-        if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
-      }
-    }
-
-    const globalMarketSnippet = buildMarketGlobalRuntimeSnippet(loadGlobalMarketSettings());
-    const probeCode = `(() => {
-      const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
-      if (!room || !room.connection || !room.connection.isOpen) return { connected: false };
-      window.__pmSniperFlippedItems = Object.assign(window.__pmSniperFlippedItems || {}, ${JSON.stringify(sniperFlippedMap)});
-      try { ${globalMarketSnippet}; } catch (_) {}
-      ${buildSniperClaimAndFlipRuntimeJs()}
-      if (room !== window.__pmSniperMineHookedRoomV3) {
-        window.__pmSniperMineHookedRoomV3 = room;
-        room.onMessage('market_mine', (msg) => {
-          if (msg && Array.isArray(msg.active)) {
-            window.__lastMarketMine = msg;
-            window.__myMarketActiveCount = msg.active.length;
-            window.__myMarketActiveCountUpdatedAt = Date.now();
-            if (typeof window.__pmSyncKnownMarketItems === 'function') {
-              try { window.__pmSyncKnownMarketItems(msg); } catch (_) {}
-            }
-            const nowTs = Date.now();
-            const nonAuction = msg.active.filter(a => a && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs));
-            const prices = nonAuction.map(a => Number(a.price) || 0).filter(p => p > 0);
-            window.__myMarketCheapestActivePrice = prices.length ? Math.min(...prices) : 0;
-            if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
-            window.__myMarketEvictableCheapCount = nonAuction.filter(a => {
-              const p = Number(a.price) || 0;
-              if (p > 0 && p <= 50000) {
-                const nm = String((a.item && a.item.name) || '').trim().toLowerCase();
-                if (nm) window.__pmSniperKnownCheapItems.add(nm);
-                return true;
-              }
-              return false;
-            }).length;
-            const nameCounts = {};
-            const idCounts = {};
-            for (const a of nonAuction) {
-              const nm = String((a.item && a.item.name) || '').trim().toLowerCase();
-              const iid = Number(a.item && (a.item.itemId ?? a.item.id)) || 0;
-              if (nm) nameCounts[nm] = (nameCounts[nm] || 0) + 1;
-              if (iid) idCounts[iid] = (idCounts[iid] || 0) + 1;
-            }
-            window.__myMarketActiveNameCounts = nameCounts;
-            window.__myMarketActiveIdCounts = idCounts;
-            window.__myMarketStackedCards = nonAuction
-              .filter(a => a && Number(a.qty) > 1 && /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(String((a.item && a.item.name) || '')))
-              .map(a => ({
-                listingId: Number(a.listingId),
-                itemId: Number(a.item && (a.item.itemId ?? a.item.id)) || 0,
-                refine: Number(a.item && a.item.refine) || 0,
-                name: String((a.item && a.item.name) || ''),
-                qty: Number(a.qty) || 1,
-                price: Number(a.price) || 0,
-                unitPrice: Math.max(1, Math.round((Number(a.price) || 0) / Math.max(1, Number(a.qty) || 1)))
-              }));
-          }
-        });
-      }
-      const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
-      const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
-      const premium = Boolean(
-        (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
-        (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
-      );
-      const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : (typeof live.zeny === 'number' ? live.zeny : 0));
-
-      // 1) Reserve 2 market slots on Sniper screens (>= 300k zeny) so normal Auto-Sell stops at 18/20
-      window.__pmSniperReservedSlots = (zeny >= 300000) ? ${reserveSlots} : 0;
-      window.__pmSniperBlockCheapAutoSell = Boolean(${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000);
-
-      // 2) Packet-level guard on room.send('market', { op: 'list', ... }):
-      //    - Never allow Cards/Stones to be listed with qty > 1 (auto-rewrite to qty: 1 at unit price)
-      //    - On Sniper screens, block Auto-Sell from listing items with total price <= 50,000 z or > 2 concurrent copies of the same Card
-      if (room !== window.__pmSniperSendGuardRoom && typeof room.send === 'function') {
-        window.__pmSniperSendGuardRoom = room;
-        const origRoomSend = room.send.bind(room);
-        room.send = function (type, data) {
-          if (type === 'market' && data && data.op === 'list') {
-            const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-            const slotItem = bag.find(b => b && Number(b.slot) === Number(data.slot));
-            const itemName = String((slotItem && slotItem.name) || '').trim();
-            const norm = itemName.toLowerCase();
-            const isCardOrStone = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(itemName);
-            if (isCardOrStone && Number(data.qty) > 1) {
-              const unitP = Math.max(1, Math.round((Number(data.price) || 0) / Math.max(1, Number(data.qty) || 1)));
-              data.qty = 1;
-              data.price = unitP;
-            }
-            if (window.__isAutoSellingNow && window.__pmSniperBlockCheapAutoSell) {
-              if ((Number(data.price) || 0) > 0 && (Number(data.price) || 0) <= 50000) {
-                if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
-                if (norm) window.__pmSniperKnownCheapItems.add(norm);
-                return;
-              }
-              if (norm && window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(norm)) {
-                return;
-              }
-              if (isCardOrStone && norm) {
-                const curSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[norm]) || 0;
-                if (curSame >= 2) {
-                  return;
-                }
-                if (!window.__myMarketActiveNameCounts) window.__myMarketActiveNameCounts = {};
-                window.__myMarketActiveNameCounts[norm] = curSame + 1;
-              }
-            }
-          }
-          return origRoomSend(type, data);
-        };
-      }
-
-      // 3) Sync Auto-Sell rules & backoffs on Sniper screens:
-      //    - Add any unlocked Card in bag to Auto-Sell rules (minQty: 1, sellMode: 'min') so sniped cards in bag get listed 1 by 1 automatically
-      //    - Force all Card/Stone rules to sellMode = 'min', minQty = 1
-      //    - Set rule.id backoff for cheap items (<= 50k z) and Cards that already have >= 2 active listings
-      if (${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000 && window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
-        if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
-        let changedCardRule = false;
-        const existingRuleNames = new Set(window.__autoMarketSellConfig.rules.map(r => String((r && (r.itemName || r.name)) || '').trim().toLowerCase()).filter(Boolean));
-        const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-        for (const b of bag) {
-          if (!b || b.locked) continue;
-          const bName = String(b.name || '').trim();
-          const bNorm = bName.toLowerCase();
-          const isCardOrStoneItem = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(bName) || b.type === 'Card' || b.type === 'AwakeningStone' || b.type === 'WeaponStone';
-          if (bName && isCardOrStoneItem && !existingRuleNames.has(bNorm)) {
-            window.__autoMarketSellConfig.rules.unshift({
-              id: 'rule_sniper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-              itemName: bName,
-              minQty: 1,
-              sellMode: 'min',
-              enabled: true
-            });
-            existingRuleNames.add(bNorm);
-            changedCardRule = true;
-          }
-        }
-        for (const r of window.__autoMarketSellConfig.rules) {
-          if (!r) continue;
-          const rName = String(r.itemName || r.name || '').trim();
-          const rNorm = rName.toLowerCase();
-          const rKey = r.id || rNorm;
-          const isCardOrStone = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(rName);
-          if (isCardOrStone && (r.sellMode !== 'min' || Number(r.minQty) !== 1)) {
-            r.sellMode = 'min';
-            r.minQty = 1;
-            changedCardRule = true;
-          }
-          if ((window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(rNorm)) ||
-              (window.__pmSniperKnownCheapItems && window.__pmSniperKnownCheapItems.has(rNorm))) {
-            window.__autoSellRuleBackoffUntil[rKey] = Date.now() + 30 * 60 * 1000;
-            window.__autoSellRuleBackoffUntil[rNorm] = Date.now() + 30 * 60 * 1000;
-          } else if (isCardOrStone) {
-            const activeSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[rNorm]) || 0;
-            if (activeSame >= 2) {
-              window.__autoSellRuleBackoffUntil[rKey] = Date.now() + 3 * 60 * 1000;
-              window.__autoSellRuleBackoffUntil[rNorm] = Date.now() + 3 * 60 * 1000;
-            }
-          }
-        }
-        if (changedCardRule && typeof window.saveMarketSellConfig === 'function') {
-          try { window.saveMarketSellConfig(); } catch (_) {}
-        }
-      }
-
-      if (zeny >= 300000 && (!window.__myMarketActiveCountUpdatedAt || window.__myMarketEvictableCheapCount === undefined || (Date.now() - window.__myMarketActiveCountUpdatedAt > 60000))) {
-        window.__myMarketActiveCountUpdatedAt = Date.now();
-        try { room.send('market', { op: 'mine' }); } catch (_) {}
-      }
-      const baseLevel = Number(ch.baseLevel ?? ch.level ?? live.level) || 0;
-      const charName = ch.name || live.charName || window.__characterName || '';
-      const activeCount = Number(window.__myMarketActiveCount) || 0;
-      const cheapestActivePrice = Number(window.__myMarketCheapestActivePrice) || 0;
-      const evictableCheapCount = Number(window.__myMarketEvictableCheapCount) || 0;
-      const activeNameCounts = window.__myMarketActiveNameCounts || {};
-      const activeIdCounts = window.__myMarketActiveIdCounts || {};
-      const stackedCards = Array.isArray(window.__myMarketStackedCards) ? window.__myMarketStackedCards : [];
-      const maxListings = premium ? 20 : 3;
-      const weight = Number(ch.weight ?? live.weight) || 0;
-      const weightLimit = Number(ch.weightLimit ?? live.weightLimit) || 0;
-      const busy = !!(window.__isConsolidating || window.__isShopping || window.__isAutoSellingNow || window.__isManualSelling || window.__isStoring);
-      const sniperEvents = Array.isArray(window.__pmSniperEvents) ? window.__pmSniperEvents.splice(0, 50) : [];
-      return {
-        connected: true,
-        zeny,
-        premium,
-        baseLevel,
-        charName,
-        activeCount,
-        cheapestActivePrice,
-        evictableCheapCount,
-        activeNameCounts,
-        activeIdCounts,
-        stackedCards,
-        maxListings,
-        weight,
-        weightLimit,
-        busy,
-        sniperEvents
-      };
-    })()`;
-
-    const results = await Promise.all(running.map(async (p) => {
+    inflightOnlineScreensPromise = (async () => {
       try {
-        const r = await evalProfilePort(p.debugPort, probeCode, 4500);
-        if (r && (r.success || r.ok) && r.result && r.result.connected) {
-          return {
-            profileId: String(p.id),
-            profileName: p.name || p.id,
-            debugPort: p.debugPort,
-            ...r.result
-          };
+        const profiles = (typeof loadProfiles === 'function' ? loadProfiles() : []) || [];
+        const running = profiles.filter(p => p && p.debugPort);
+        if (!running.length) {
+          cachedOnlineScreens = [];
+          cachedOnlineScreensAt = Date.now();
+          return [];
         }
-      } catch (_) {}
-      return null;
-    }));
 
-    const online = results.filter(Boolean);
-    for (const scr of online) {
-      if (Array.isArray(scr.sniperEvents) && scr.sniperEvents.length > 0) {
-        for (const ev of scr.sniperEvents) {
-          handleClientSniperEvent(scr, ev);
+        const sniperAutoFlip = Boolean(config.enabled && config.mode === 'auto_flip');
+        const reserveSlots = sniperAutoFlip ? 2 : 0;
+
+        // Build map of items bought/flipped by Sniper so any auto-cancelled flip item in bag knows its reference flip price
+        const sniperFlippedMap = {};
+        if (Array.isArray(state.history)) {
+          for (const h of state.history) {
+            if (!h || !h.itemName) continue;
+            const nm = String(h.itemName).trim().toLowerCase();
+            const refP = Number(h.relistUnitPrice || h.cleanRefUnitPrice) || 0;
+            if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
+          }
         }
+        if (Array.isArray(state.activeBids)) {
+          for (const b of state.activeBids) {
+            if (!b || !b.itemName) continue;
+            const nm = String(b.itemName).trim().toLowerCase();
+            const refP = Number(b.flipUnitPrice || b.cleanRefUnitPrice) || 0;
+            if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
+          }
+        }
+        if (Array.isArray(state.pendingFlips)) {
+          for (const pf of state.pendingFlips) {
+            if (!pf || !pf.itemName) continue;
+            const nm = String(pf.itemName).trim().toLowerCase();
+            const refP = Number(pf.flipUnitPrice || pf.cleanRefUnitPrice) || 0;
+            if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
+          }
+        }
+
+        const globalSettings = loadGlobalMarketSettings();
+        let cachedFullSetupCode = null;
+        const getFullSetupCode = () => {
+          if (!cachedFullSetupCode) {
+            const globalMarketSnippet = buildMarketGlobalRuntimeSnippet(globalSettings);
+            cachedFullSetupCode = `(() => {
+              const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+              if (!room || !room.connection || !room.connection.isOpen) return false;
+              try { ${globalMarketSnippet}; } catch (_) {}
+              ${buildSniperClaimAndFlipRuntimeJs()}
+              if (room !== window.__pmSniperMineHookedRoomV3) {
+                window.__pmSniperMineHookedRoomV3 = room;
+                room.onMessage('market_mine', (msg) => {
+                  if (msg && Array.isArray(msg.active)) {
+                    window.__lastMarketMine = msg;
+                    window.__myMarketActiveCount = msg.active.length;
+                    window.__myMarketActiveCountUpdatedAt = Date.now();
+                    if (typeof window.__pmSyncKnownMarketItems === 'function') {
+                      try { window.__pmSyncKnownMarketItems(msg); } catch (_) {}
+                    }
+                    const nowTs = Date.now();
+                    const nonAuction = msg.active.filter(a => a && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs));
+                    const prices = nonAuction.map(a => Number(a.price) || 0).filter(p => p > 0);
+                    window.__myMarketCheapestActivePrice = prices.length ? Math.min(...prices) : 0;
+                    if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
+                    window.__myMarketEvictableCheapCount = nonAuction.filter(a => {
+                      const p = Number(a.price) || 0;
+                      if (p > 0 && p <= 50000) {
+                        const nm = String((a.item && a.item.name) || '').trim().toLowerCase();
+                        if (nm) window.__pmSniperKnownCheapItems.add(nm);
+                        return true;
+                      }
+                      return false;
+                    }).length;
+                    const nameCounts = {};
+                    const idCounts = {};
+                    for (const a of nonAuction) {
+                      const nm = String((a.item && a.item.name) || '').trim().toLowerCase();
+                      const iid = Number(a.item && (a.item.itemId ?? a.item.id)) || 0;
+                      if (nm) nameCounts[nm] = (nameCounts[nm] || 0) + 1;
+                      if (iid) idCounts[iid] = (idCounts[iid] || 0) + 1;
+                    }
+                    window.__myMarketActiveNameCounts = nameCounts;
+                    window.__myMarketActiveIdCounts = idCounts;
+                    window.__myMarketStackedCards = nonAuction
+                      .filter(a => a && Number(a.qty) > 1 && /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(String((a.item && a.item.name) || '')))
+                      .map(a => ({
+                        listingId: Number(a.listingId),
+                        itemId: Number(a.item && (a.item.itemId ?? a.item.id)) || 0,
+                        refine: Number(a.item && a.item.refine) || 0,
+                        name: String((a.item && a.item.name) || ''),
+                        qty: Number(a.qty) || 1,
+                        price: Number(a.price) || 0,
+                        unitPrice: Math.max(1, Math.round((Number(a.price) || 0) / Math.max(1, Number(a.qty) || 1)))
+                      }));
+                  }
+                });
+              }
+              if (room !== window.__pmSniperSendGuardRoom && typeof room.send === 'function') {
+                window.__pmSniperSendGuardRoom = room;
+                const origRoomSend = room.send.bind(room);
+                room.send = function (type, data) {
+                  if (type === 'market' && data && data.op === 'list') {
+                    const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+                    const slotItem = bag.find(b => b && Number(b.slot) === Number(data.slot));
+                    const itemName = String((slotItem && slotItem.name) || '').trim();
+                    const norm = itemName.toLowerCase();
+                    const isCardOrStone = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(itemName);
+                    if (isCardOrStone && Number(data.qty) > 1) {
+                      const unitP = Math.max(1, Math.round((Number(data.price) || 0) / Math.max(1, Number(data.qty) || 1)));
+                      data.qty = 1;
+                      data.price = unitP;
+                    }
+                    if (window.__isAutoSellingNow && window.__pmSniperBlockCheapAutoSell) {
+                      if ((Number(data.price) || 0) > 0 && (Number(data.price) || 0) <= 50000) {
+                        if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
+                        if (norm) window.__pmSniperKnownCheapItems.add(norm);
+                        return;
+                      }
+                      if (norm && window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(norm)) {
+                        return;
+                      }
+                      if (isCardOrStone && norm) {
+                        const curSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[norm]) || 0;
+                        if (curSame >= 2) {
+                          return;
+                        }
+                        if (!window.__myMarketActiveNameCounts) window.__myMarketActiveNameCounts = {};
+                        window.__myMarketActiveNameCounts[norm] = curSame + 1;
+                      }
+                    }
+                  }
+                  return origRoomSend(type, data);
+                };
+              }
+              return true;
+            })()`;
+          }
+          return cachedFullSetupCode;
+        };
+
+        const fastProbeCode = `(() => {
+          const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+          if (!room || !room.connection || !room.connection.isOpen) return { connected: false };
+          window.__pmSniperFlippedItems = Object.assign(window.__pmSniperFlippedItems || {}, ${JSON.stringify(sniperFlippedMap)});
+          const runtimeInstalled = Boolean(
+            window.__pmMarketGlobalTimerVer === 5 &&
+            typeof window.__pmSniperClaimAndFlip === 'function' &&
+            window.__pmSniperMineHookedRoomV3 === room &&
+            window.__pmSniperSendGuardRoom === room
+          );
+          const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
+          const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
+          const premium = Boolean(
+            (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
+            (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
+          );
+          const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : (typeof live.zeny === 'number' ? live.zeny : 0));
+
+          window.__pmSniperReservedSlots = (zeny >= 300000) ? ${reserveSlots} : 0;
+          window.__pmSniperBlockCheapAutoSell = Boolean(${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000);
+
+          if (${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000 && (!window.__pmLastSniperRuleSyncAt || (Date.now() - window.__pmLastSniperRuleSyncAt > 30000)) && window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
+            window.__pmLastSniperRuleSyncAt = Date.now();
+            if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
+            let changedCardRule = false;
+            const existingRuleNames = new Set(window.__autoMarketSellConfig.rules.map(r => String((r && (r.itemName || r.name)) || '').trim().toLowerCase()).filter(Boolean));
+            const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+            for (const b of bag) {
+              if (!b || b.locked) continue;
+              const bName = String(b.name || '').trim();
+              const bNorm = bName.toLowerCase();
+              const isCardOrStoneItem = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(bName) || b.type === 'Card' || b.type === 'AwakeningStone' || b.type === 'WeaponStone';
+              if (bName && isCardOrStoneItem && !existingRuleNames.has(bNorm)) {
+                window.__autoMarketSellConfig.rules.unshift({
+                  id: 'rule_sniper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                  itemName: bName,
+                  minQty: 1,
+                  sellMode: 'min',
+                  enabled: true
+                });
+                existingRuleNames.add(bNorm);
+                changedCardRule = true;
+              }
+            }
+            for (const r of window.__autoMarketSellConfig.rules) {
+              if (!r) continue;
+              const rName = String(r.itemName || r.name || '').trim();
+              const rNorm = rName.toLowerCase();
+              const rKey = r.id || rNorm;
+              const isCardOrStone = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(rName);
+              if (isCardOrStone && (r.sellMode !== 'min' || Number(r.minQty) !== 1)) {
+                r.sellMode = 'min';
+                r.minQty = 1;
+                changedCardRule = true;
+              }
+              if ((window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(rNorm)) ||
+                  (window.__pmSniperKnownCheapItems && window.__pmSniperKnownCheapItems.has(rNorm))) {
+                window.__autoSellRuleBackoffUntil[rKey] = Date.now() + 30 * 60 * 1000;
+                window.__autoSellRuleBackoffUntil[rNorm] = Date.now() + 30 * 60 * 1000;
+              } else if (isCardOrStone) {
+                const activeSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[rNorm]) || 0;
+                if (activeSame >= 2) {
+                  window.__autoSellRuleBackoffUntil[rKey] = Date.now() + 3 * 60 * 1000;
+                  window.__autoSellRuleBackoffUntil[rNorm] = Date.now() + 3 * 60 * 1000;
+                }
+              }
+            }
+            if (changedCardRule && typeof window.saveMarketSellConfig === 'function') {
+              try { window.saveMarketSellConfig(); } catch (_) {}
+            }
+          }
+
+          if (zeny >= 300000 && (!window.__myMarketActiveCountUpdatedAt || window.__myMarketEvictableCheapCount === undefined || (Date.now() - window.__myMarketActiveCountUpdatedAt > 60000))) {
+            window.__myMarketActiveCountUpdatedAt = Date.now();
+            try { room.send('market', { op: 'mine' }); } catch (_) {}
+          }
+          const baseLevel = Number(ch.baseLevel ?? ch.level ?? live.level) || 0;
+          const charName = ch.name || live.charName || window.__characterName || '';
+          const activeCount = Number(window.__myMarketActiveCount) || 0;
+          const cheapestActivePrice = Number(window.__myMarketCheapestActivePrice) || 0;
+          const evictableCheapCount = Number(window.__myMarketEvictableCheapCount) || 0;
+          const activeNameCounts = window.__myMarketActiveNameCounts || {};
+          const activeIdCounts = window.__myMarketActiveIdCounts || {};
+          const stackedCards = Array.isArray(window.__myMarketStackedCards) ? window.__myMarketStackedCards : [];
+          const maxListings = premium ? 20 : 3;
+          const weight = Number(ch.weight ?? live.weight) || 0;
+          const weightLimit = Number(ch.weightLimit ?? live.weightLimit) || 0;
+          const busy = !!(window.__isConsolidating || window.__isShopping || window.__isAutoSellingNow || window.__isManualSelling || window.__isStoring);
+          const sniperEvents = Array.isArray(window.__pmSniperEvents) ? window.__pmSniperEvents.splice(0, 50) : [];
+          return {
+            connected: true,
+            runtimeInstalled,
+            zeny,
+            premium,
+            baseLevel,
+            charName,
+            activeCount,
+            cheapestActivePrice,
+            evictableCheapCount,
+            activeNameCounts,
+            activeIdCounts,
+            stackedCards,
+            maxListings,
+            weight,
+            weightLimit,
+            busy,
+            sniperEvents
+          };
+        })()`;
+
+        const results = new Array(running.length).fill(null);
+        let nextIdx = 0;
+        const concurrency = Math.min(6, running.length);
+        await Promise.all(Array.from({ length: concurrency }, async () => {
+          while (nextIdx < running.length) {
+            const curIdx = nextIdx++;
+            const p = running[curIdx];
+            try {
+              const r = await evalProfilePort(p.debugPort, fastProbeCode, 2500);
+              if (r && (r.success || r.ok) && r.result && r.result.connected) {
+                const rtMeta = runtimeInstalledByPort.get(p.debugPort);
+                const needSetup = !r.result.runtimeInstalled || !rtMeta || rtMeta.settingsUpdatedAt !== globalSettings.updatedAt || (Date.now() - rtMeta.installedAt > 180000);
+                if (needSetup) {
+                  await evalProfilePort(p.debugPort, getFullSetupCode(), 3500).catch(() => {});
+                  runtimeInstalledByPort.set(p.debugPort, {
+                    installedAt: Date.now(),
+                    settingsUpdatedAt: globalSettings.updatedAt
+                  });
+                }
+                results[curIdx] = {
+                  profileId: String(p.id),
+                  profileName: p.name || p.id,
+                  debugPort: p.debugPort,
+                  ...r.result
+                };
+              }
+            } catch (_) {}
+          }
+        }));
+
+        const online = results.filter(Boolean);
+        for (const scr of online) {
+          if (Array.isArray(scr.sniperEvents) && scr.sniperEvents.length > 0) {
+            for (const ev of scr.sniperEvents) {
+              handleClientSniperEvent(scr, ev);
+            }
+          }
+        }
+        cachedOnlineScreens = online;
+        cachedOnlineScreensAt = Date.now();
+        return online;
+      } finally {
+        inflightOnlineScreensPromise = null;
       }
-    }
-    return online;
+    })();
+    return inflightOnlineScreensPromise;
   }
 
   function recordHistoryEvent(entry) {

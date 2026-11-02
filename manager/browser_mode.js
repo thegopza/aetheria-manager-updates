@@ -531,7 +531,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     return mach;
   }
 
+  let orderedProfileIdsCache = null;
+  let orderedProfileIdsCacheAt = 0;
   function getOrderedProfileIds(extraProfileId) {
+    const now = Date.now();
+    if (!extraProfileId && orderedProfileIdsCache && (now - orderedProfileIdsCacheAt < 5000)) {
+      return orderedProfileIdsCache;
+    }
     const seen = new Set();
     const ordered = [];
     const addId = (pid) => {
@@ -558,7 +564,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       }
     } catch (_) {}
     for (const pid of profileDeviceIds.keys()) addId(pid);
-    if (extraProfileId) addId(extraProfileId);
+    if (!extraProfileId) {
+      orderedProfileIdsCache = ordered;
+      orderedProfileIdsCacheAt = now;
+      return ordered;
+    }
+    addId(extraProfileId);
     return ordered;
   }
 
@@ -1304,13 +1315,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   };
 
   async function configureSessionAssetCache(sessionId) {
-    if (!sessionId || !effectiveAssetCache) return;
+    if (!sessionId) return;
     try {
-      if (effectiveAssetCache.isEnabled()) {
-        await send('Fetch.enable', { patterns: effectiveAssetCache.CDP_ASSET_FETCH_PATTERNS }, sessionId, 4000);
-      } else {
-        await send('Fetch.disable', {}, sessionId, 3000);
-      }
+      await send('Fetch.disable', {}, sessionId, 3000);
     } catch (_) {}
   }
 
@@ -1366,7 +1373,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         saveProfileStorage(c.profileId, entries);
         if (res && res.dirtyAt && res.dirtyAt !== c.lastSyncedDirtyAt) {
           c.lastSyncedDirtyAt = res.dirtyAt;
-          await ensureSessionHooks(c.sessionId, c.profileId, c).catch(() => {});
+          if (forceHarvest || Date.now() - (c.lastSessionHooksAt || 0) > 180000) {
+            c.lastSessionHooksAt = Date.now();
+            await ensureSessionHooks(c.sessionId, c.profileId, c).catch(() => {});
+          }
         }
       }
       if (res && res.other && typeof res.other === 'object') {
@@ -1623,53 +1633,82 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   async function ensureClientFramePacerHealed(c) {
     if (!c || !c.sessionId || c.framePacerHealInFlight) return;
+    if (!c.cdpFetchDisabled) {
+      c.cdpFetchDisabled = true;
+      send('Fetch.disable', {}, c.sessionId, 3000).catch(() => {});
+    }
     if (c.framePacerHealedDocId && c.framePacerHealedDocId === c.documentId) return;
     c.framePacerHealInFlight = true;
     try {
       const res = await evaluate(c, `(async () => {
-        if (window.__pmFramePacerLeakFixed) return { healed: true, docId: String(performance.timeOrigin) };
-        const g = window.__pmPhaserGame;
-        if (!g || !g.loop || !g.loop.raf) return { healed: false };
-        const rafObj = g.loop.raf;
+        if (window.__pmFramePacerLeakFixedV3) return { healed: true, docId: String(performance.timeOrigin) };
         window.__pmFramePacerLeakFixed = true;
-        rafObj.isRunning = false;
-        if (rafObj.timeOutID) {
-          try { window.cancelAnimationFrame(rafObj.timeOutID); } catch (e) {}
-          try { clearTimeout(rafObj.timeOutID); } catch (e) {}
+        window.__pmFramePacerLeakFixedV2 = true;
+        window.__pmFramePacerLeakFixedV3 = true;
+        try {
+          const st1 = document.getElementById('pm-bg-anim-pause');
+          if (st1 && !window.__pmZeroRender) st1.textContent = '';
+          const st2 = document.getElementById('pelican-bg-anim-pause');
+          if (st2 && !window.__pmZeroRender) st2.textContent = '';
+        } catch (e) {}
+        if (window.__tooltipRescueInterval && !window.__tooltipRescueIntervalThrottled) {
+          window.__tooltipRescueIntervalThrottled = true;
+          clearInterval(window.__tooltipRescueInterval);
+          window.__tooltipRescueInterval = setInterval(() => {
+            if (window.__pmZeroRender) return;
+            try {
+              const ttEl = document.querySelector('.item-tooltip');
+              if (ttEl && !document.querySelector(':hover')) {
+                const rootEl = document.getElementById('root') || document.body.firstElementChild;
+                if (rootEl) {
+                  const fk = Object.keys(rootEl).find(k => k.startsWith('__reactContainer') || k.startsWith('__reactFiber'));
+                  if (fk) {
+                    let q = [rootEl[fk]], visited = 0;
+                    while (q.length > 0 && visited < 1200) {
+                      let node = q.shift();
+                      visited++;
+                      if (!node) continue;
+                      if (node.type && (node.type.name === 'TooltipLayer' || node.type.name === 'Fx') && node.memoizedState) {
+                        let s = node.memoizedState;
+                        while (s) {
+                          if (s.memoizedState && typeof s.memoizedState === 'object' && 'item' in s.memoizedState && s.queue && s.queue.dispatch) {
+                            s.queue.dispatch(null);
+                            break;
+                          }
+                          s = s.next;
+                        }
+                      }
+                      if (node.child) q.push(node.child);
+                      if (node.sibling) q.push(node.sibling);
+                    }
+                  }
+                }
+              }
+            } catch (_) {}
+          }, 2500);
         }
-        await new Promise(r => setTimeout(r, 160));
-        rafObj.isRunning = true;
-        rafObj.__pmStepGen = (rafObj.__pmStepGen || 0) + 1;
-        const myGen = rafObj.__pmStepGen;
-        let lastStepTs = 0;
-        const stepFixed = function(now) {
-          if (!rafObj.isRunning || rafObj.__pmStepGen !== myGen) return;
-          rafObj.__pmWaitingBgTimer = false;
-          const ts = (typeof now === 'number' && now > 0) ? now : performance.now();
-          const isBg = Boolean(window.__pmZeroRender || !document.hasFocus() || document.hidden);
-          if (isBg && (ts - lastStepTs) < 55) return;
-          lastStepTs = ts;
-          rafObj.callback(ts);
-          if (!rafObj.isRunning || rafObj.__pmStepGen !== myGen) return;
-          if (rafObj.timeOutID) {
-            try { window.cancelAnimationFrame(rafObj.timeOutID); } catch (e) {}
-            try { clearTimeout(rafObj.timeOutID); } catch (e) {}
-          }
-          if (!window.__pmZeroRender && document.hasFocus() && !document.hidden) {
-            rafObj.timeOutID = window.requestAnimationFrame(stepFixed);
-          } else {
-            const delayMs = window.__pmZeroRender ? 85 : 120;
-            rafObj.__pmWaitingBgTimer = true;
-            rafObj.timeOutID = setTimeout(() => {
-              if (!rafObj.isRunning || rafObj.__pmStepGen !== myGen) return;
-              rafObj.__pmWaitingBgTimer = false;
-              stepFixed(performance.now());
-            }, delayMs);
-          }
-        };
-        rafObj.step = stepFixed;
-        window.__pmSyncActiveState = () => {};
-        stepFixed(performance.now());
+        if (!window.__pmPointerWakeInstalled) {
+          window.__pmPointerWakeInstalled = true;
+          const onPtr = () => {
+            window.__pmHovered = true;
+            window.__pmLastPointerTs = Date.now();
+            try {
+              const st1 = document.getElementById('pm-bg-anim-pause');
+              if (st1 && !window.__pmZeroRender) st1.textContent = '';
+              const st2 = document.getElementById('pelican-bg-anim-pause');
+              if (st2 && !window.__pmZeroRender) st2.textContent = '';
+            } catch (e) {}
+            if (typeof window.__pmSyncActiveState === 'function') {
+              try { window.__pmSyncActiveState(); } catch (e) {}
+            }
+          };
+          try {
+            document.addEventListener('pointerenter', onPtr, { passive: true, capture: true });
+            document.addEventListener('pointermove', onPtr, { passive: true, capture: true });
+            document.addEventListener('pointerdown', onPtr, { passive: true, capture: true });
+            document.addEventListener('mousedown', onPtr, { passive: true, capture: true });
+          } catch (e) {}
+        }
         return { healed: true, docId: String(performance.timeOrigin) };
       })()`, 4000);
       if (res && res.healed) {
@@ -1864,7 +1903,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         }
       } catch (e) {}
     }
-    for (const c of clients.values()) injectBot(c).catch(() => {});
+    for (const c of clients.values()) {
+      const diag = diagnostics.get(c.profileId);
+      if (!diag || diag.state !== 'ready') {
+        injectBot(c).catch(() => {});
+      }
+    }
   }
 
   // ---------- per-profile HTTP API (same as the Electron loader's) ----------

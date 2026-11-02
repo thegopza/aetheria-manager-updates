@@ -957,6 +957,7 @@ const LIVE_STATE_EVAL = `(() => {
   try {
     const hasHud = Boolean(document.querySelector('.hud, .hud-status, .hud-name'));
     const charPanel = document.querySelector('.panel.char-select, .char-select');
+    const loginQueue = document.querySelector('.login-queue, .panel.reconnecting');
     const loginForm = document.querySelector('form.login-form, .login-card, .login-panel');
     const charCards = Array.from(document.querySelectorAll('.char-card:not(.empty):not(.pending-delete)')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
     const emptyCards = Array.from(document.querySelectorAll('.char-card.empty')).filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
@@ -973,9 +974,24 @@ const LIVE_STATE_EVAL = `(() => {
     let detail = '';
     let autoReloadAfterMs = 0;
 
-    if (hasHud && !charPanel && !loginForm) {
+    if (hasHud && !charPanel && !loginForm && !loginQueue) {
       screenPhase = 'in_game';
       window.__pmScreenPhaseTracker = null;
+    } else if (loginQueue) {
+      const isQueue = loginQueue.classList.contains('login-queue') || /กำลังรอคิวเข้าเกม/.test(loginQueue.innerText || '');
+      if (isQueue) {
+        const qPlace = String(loginQueue.querySelector('.login-queue-place')?.innerText || '').replace(/\\s+/g, ' ').trim();
+        const qEtaMatch = String(loginQueue.querySelector('.login-tagline')?.innerText || '').match(/ประมาณ\\s*\\d+\\s*วินาที/);
+        screenPhase = 'login_queue';
+        baseLabel = '⏳ รอคิวเข้าเกม' + (qPlace ? ' (' + qPlace + ')' : '') + (qEtaMatch ? ' · ' + qEtaMatch[0] : '');
+        detail = '⏳ กำลังรอคิวเข้าเกม: ' + [qPlace, qEtaMatch ? qEtaMatch[0] : 'ระบบจะพาเข้าเกมเองเมื่อถึงคิว'].filter(Boolean).join(' · ');
+        autoReloadAfterMs = 0;
+      } else {
+        screenPhase = 'reconnecting';
+        baseLabel = '🔄 กำลังเชื่อมต่อเซิร์ฟเวอร์ใหม่...';
+        detail = '🔄 กำลังเชื่อมต่อใหม่: เกมจะพากลับเข้าไปเองเมื่อพร้อม';
+        autoReloadAfterMs = 90000;
+      }
     } else if (charPanel) {
       if (errText) {
         if (/ตัวละครนี้ออนไลน์อยู่แล้ว|ตัวนี้ออนไลน์อยู่|already online/i.test(errText)) {

@@ -1327,6 +1327,69 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       window.__pmSniperWlHooked = true;
     }
 
+    if (!window.__pmKnownMyMarketItems || typeof window.__pmKnownMyMarketItems !== 'object') {
+      window.__pmKnownMyMarketItems = {};
+      try {
+        const pid = window.__pmProfileId;
+        const rawK = (pid && localStorage.getItem('pelican_' + pid + '__known_my_market_items')) || localStorage.getItem('pelican_known_my_market_items');
+        if (rawK) {
+          const parsedK = JSON.parse(rawK);
+          if (parsedK && typeof parsedK === 'object') window.__pmKnownMyMarketItems = parsedK;
+        }
+      } catch (_) {}
+    }
+
+    window.__pmSyncKnownMarketItems = function (mine) {
+      if (!mine || typeof mine !== 'object') return;
+      if (!window.__pmKnownMyMarketItems || typeof window.__pmKnownMyMarketItems !== 'object') {
+        window.__pmKnownMyMarketItems = {};
+      }
+      if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
+      let changed = false;
+      const nowTs = Date.now();
+      const allLists = []
+        .concat(Array.isArray(mine.active) ? mine.active : [])
+        .concat(Array.isArray(mine.closed) ? mine.closed.filter(c => c && (c.status === 'cancelled' || c.reason === 'cancelled')) : []);
+      for (const entry of allLists) {
+        if (!entry) continue;
+        const totalPrice = Number(entry.price) || 0;
+        if (totalPrice <= 50000) continue;
+        const itemObj = entry.item || entry;
+        const itemName = String((itemObj && itemObj.name) || entry.name || '').trim();
+        if (!itemName) continue;
+        const normName = itemName.toLowerCase();
+        if (window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(normName)) continue;
+        const qty = Math.max(1, Number(entry.qty ?? (itemObj && itemObj.qty)) || 1);
+        const unitPrice = Math.max(1, Math.round(totalPrice / qty));
+        const itemId = Number((itemObj && (itemObj.itemId ?? itemObj.id)) ?? entry.itemId) || 0;
+        const refine = Number((itemObj && itemObj.refine) ?? entry.refine) || 0;
+        window.__pmSniperProtectedItems.add(normName);
+        const prev = window.__pmKnownMyMarketItems[normName];
+        if (!prev || prev.unitPrice !== unitPrice || prev.itemId !== itemId) {
+          window.__pmKnownMyMarketItems[normName] = {
+            itemId,
+            itemName,
+            normName,
+            refine,
+            unitPrice,
+            updatedAt: nowTs
+          };
+          changed = true;
+        }
+      }
+      if (changed) {
+        try {
+          const pid = window.__pmProfileId;
+          const kJson = JSON.stringify(window.__pmKnownMyMarketItems);
+          localStorage.setItem('pelican_known_my_market_items', kJson);
+          if (pid) localStorage.setItem('pelican_' + pid + '__known_my_market_items', kJson);
+        } catch (_) {}
+      }
+    };
+    if (window.__lastMarketMine) {
+      try { window.__pmSyncKnownMarketItems(window.__lastMarketMine); } catch (_) {}
+    }
+
     if (!Array.isArray(window.__pmAutoRelistAfterCancel)) {
       window.__pmAutoRelistAfterCancel = [];
       try {
@@ -1428,6 +1491,9 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
 
       // Step A: Recover recently cancelled listings (> 50,000 z) from market_mine.closed if not yet seen
+      if (window.__lastMarketMine && typeof window.__pmSyncKnownMarketItems === 'function') {
+        try { window.__pmSyncKnownMarketItems(window.__lastMarketMine); } catch (_) {}
+      }
       const closedList = (window.__lastMarketMine && Array.isArray(window.__lastMarketMine.closed))
         ? window.__lastMarketMine.closed
         : [];
@@ -1445,13 +1511,16 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         window.__pmQueueCancelledForRelist(newlyDiscoveredClosed);
       }
 
-      // Step B: Recover unlocked Sniper flip items & high-value Craft materials sitting in bag that aren't in Auto-Sell rules
+      // Step B: Recover unlocked Sniper flip items, previously listed market items & high-value Craft materials sitting in bag
       const cfg = window.__pmMarketGlobalSettings;
       const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
       if (cfg && cfg.autoCancelEnabled) {
         const bagNow = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
         const flippedMap = (window.__pmSniperFlippedItems && typeof window.__pmSniperFlippedItems === 'object')
           ? window.__pmSniperFlippedItems
+          : {};
+        const knownMap = (window.__pmKnownMyMarketItems && typeof window.__pmKnownMyMarketItems === 'object')
+          ? window.__pmKnownMyMarketItems
           : {};
         for (const b of bagNow) {
           if (!b || b.locked || b.equipped) continue;
@@ -1479,9 +1548,12 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
           );
           if (hasActiveRule) continue;
 
-          const sniperRefUnit = Number(flippedMap[bNorm]) || 0;
-          const isCraftStack = (b.type === 'Craft' || (b.raw && b.raw.type === 'Craft')) && bQty >= 20 && curZeny >= 300000;
-          if (sniperRefUnit > 0 || isCraftStack) {
+          const sniperEntry = flippedMap[bNorm];
+          const sniperRefUnit = typeof sniperEntry === 'object' && sniperEntry ? (Number(sniperEntry.unitPrice || sniperEntry.price) || 0) : (Number(sniperEntry) || 0);
+          const knownEntry = knownMap[bNorm];
+          const knownRefUnit = knownEntry && typeof knownEntry === 'object' ? (Number(knownEntry.unitPrice) || 0) : 0;
+          const isCraftStack = (b.type === 'Craft' || (b.raw && b.raw.type === 'Craft')) && bQty >= 20 && curZeny >= 100000;
+          if (sniperRefUnit > 0 || knownRefUnit > 0 || isCraftStack) {
             window.__pmSniperProtectedItems.add(bNorm);
             window.__pmAutoRelistAfterCancel.push({
               listingId: 0,
@@ -1490,7 +1562,7 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
               normName: bNorm,
               refine: bRef,
               qty: bQty,
-              prevUnitPrice: sniperRefUnit,
+              prevUnitPrice: sniperRefUnit || knownRefUnit,
               queuedAt: Date.now()
             });
           }
@@ -1569,18 +1641,16 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
           let unitPrice = 0;
           if (typeof window.fetchItemSmartSellPrice === 'function') {
             try {
-              unitPrice = Number(await window.fetchItemSmartSellPrice(sampleItem)) || 0;
+              const smartRes = await window.fetchItemSmartSellPrice(sampleItem);
+              unitPrice = Number((smartRes && typeof smartRes === 'object') ? smartRes.unitPrice : smartRes) || 0;
             } catch (_) {}
           }
-          const sniperRef = (window.__pmSniperFlippedItems && Number(window.__pmSniperFlippedItems[entry.normName])) || 0;
-          const fallbackUnit = Math.max(Number(entry.prevUnitPrice) || 0, sniperRef);
+          const rawSniperRef = window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[entry.normName];
+          const sniperRef = typeof rawSniperRef === 'object' && rawSniperRef ? (Number(rawSniperRef.unitPrice || rawSniperRef.price) || 0) : (Number(rawSniperRef) || 0);
+          const knownRef = (window.__pmKnownMyMarketItems && window.__pmKnownMyMarketItems[entry.normName] && Number(window.__pmKnownMyMarketItems[entry.normName].unitPrice)) || 0;
+          const fallbackUnit = Math.max(Number(entry.prevUnitPrice) || 0, sniperRef, knownRef);
           if (!(unitPrice > 0) && fallbackUnit > 0) {
             unitPrice = fallbackUnit;
-          }
-          if (sniperRef > 0 && unitPrice > 0 && unitPrice < Math.round(sniperRef * 0.55)) {
-            unitPrice = sniperRef;
-          } else if (entry.prevUnitPrice > 0 && unitPrice > 0 && unitPrice < Math.round(entry.prevUnitPrice * 0.45)) {
-            unitPrice = Math.round(entry.prevUnitPrice * 0.85);
           }
 
           if (!(unitPrice > 0)) {
@@ -1763,9 +1833,17 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       return { relistedCount };
     };
 
-    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 4) {
+    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 5) {
       if (window.__pmMarketGlobalTimer) { try { clearInterval(window.__pmMarketGlobalTimer); } catch (_) {} }
-      window.__pmMarketGlobalTimerVer = 4;
+      window.__pmMarketGlobalTimerVer = 5;
+      setTimeout(() => {
+        try {
+          const rmInit = ${ROOM_JS};
+          if (rmInit && typeof window.__pmProcessAutoRelistQueue === 'function') {
+            window.__pmProcessAutoRelistQueue(rmInit).catch(() => {});
+          }
+        } catch (_) {}
+      }, 2000);
       window.__pmMarketGlobalTimer = setInterval(async () => {
         try {
           const rm = ${ROOM_JS};
@@ -1785,6 +1863,9 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
             if (fresh && Array.isArray(fresh.active)) {
               mine = fresh;
               window.__lastMarketMine = fresh;
+              if (typeof window.__pmSyncKnownMarketItems === 'function') {
+                try { window.__pmSyncKnownMarketItems(fresh); } catch (_) {}
+              }
             }
           }
           const activeItems = (mine && Array.isArray(mine.active)) ? mine.active : [];
@@ -1817,6 +1898,9 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
               if (afterMine && Array.isArray(afterMine.active)) {
                 window.__lastMarketMine = afterMine;
                 window.__myMarketActiveCount = afterMine.active.length;
+                if (typeof window.__pmSyncKnownMarketItems === 'function') {
+                  try { window.__pmSyncKnownMarketItems(afterMine); } catch (_) {}
+                }
               }
             } finally {
               window.__pmAutoCancellingMarketNow = false;
@@ -3034,4 +3118,9 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
   return true;
 }
 
-module.exports = { handleInventoryMarketRoute, WITCH_HAZEL_ITEMS };
+module.exports = {
+  handleInventoryMarketRoute,
+  WITCH_HAZEL_ITEMS,
+  loadGlobalMarketSettings,
+  buildMarketGlobalRuntimeSnippet
+};

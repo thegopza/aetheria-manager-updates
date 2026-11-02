@@ -24,9 +24,12 @@
 
 const fs = require('fs');
 const path = require('path');
+const { loadGlobalMarketSettings, buildMarketGlobalRuntimeSnippet } = require('./inventory_market_api');
 
 const CONFIG_FILE = path.join(__dirname, 'data', 'market_sniper_config.json');
 const STATE_FILE = path.join(__dirname, 'data', 'market_sniper_state.json');
+const searchHistoryByProfile = new Map();
+const MAX_SEARCHES_PER_HOUR_PER_PROFILE = 140;
 
 const DEFAULT_CONFIG = {
   enabled: false,
@@ -555,7 +558,8 @@ function createMarketSniperService({
             let unitPrice = Math.max(1, Number(targetInfo.flipUnitPrice) || Math.round((Number(targetInfo.relistPriceTotal) || 0) / Math.max(1, Number(targetInfo.qty) || 1)));
             if (typeof window.fetchItemSmartSellPrice === 'function' && initialCandidates[0]) {
               try {
-                const liveSmart = Number(await window.fetchItemSmartSellPrice(initialCandidates[0])) || 0;
+                const rawSmart = await window.fetchItemSmartSellPrice(initialCandidates[0]);
+                const liveSmart = Number((rawSmart && typeof rawSmart === 'object') ? rawSmart.unitPrice : rawSmart) || 0;
                 if (liveSmart > 0 && (liveSmart * totalWantedQty) > paidTotal && liveSmart >= Math.round(unitPrice * 0.55)) {
                   unitPrice = liveSmart;
                 }
@@ -713,17 +717,23 @@ function createMarketSniperService({
       }
     }
 
+    const globalMarketSnippet = buildMarketGlobalRuntimeSnippet(loadGlobalMarketSettings());
     const probeCode = `(() => {
       const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
       if (!room || !room.connection || !room.connection.isOpen) return { connected: false };
       window.__pmSniperFlippedItems = Object.assign(window.__pmSniperFlippedItems || {}, ${JSON.stringify(sniperFlippedMap)});
+      try { ${globalMarketSnippet}; } catch (_) {}
       ${buildSniperClaimAndFlipRuntimeJs()}
       if (room !== window.__pmSniperMineHookedRoomV3) {
         window.__pmSniperMineHookedRoomV3 = room;
         room.onMessage('market_mine', (msg) => {
           if (msg && Array.isArray(msg.active)) {
+            window.__lastMarketMine = msg;
             window.__myMarketActiveCount = msg.active.length;
             window.__myMarketActiveCountUpdatedAt = Date.now();
+            if (typeof window.__pmSyncKnownMarketItems === 'function') {
+              try { window.__pmSyncKnownMarketItems(msg); } catch (_) {}
+            }
             const nowTs = Date.now();
             const nonAuction = msg.active.filter(a => a && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs));
             const prices = nonAuction.map(a => Number(a.price) || 0).filter(p => p > 0);
@@ -1213,25 +1223,13 @@ function createMarketSniperService({
         });
         room.send('market', { op: 'history', itemId: ${itemId}, refine: ${refine}, range });
       });
-      const fetchCheapestActive = () => new Promise(resolve => {
-        let unsub;
-        const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2800);
-        unsub = room.onMessage('market_results', msg => {
-          clearTimeout(t);
-          if (unsub) unsub();
-          resolve(msg && Array.isArray(msg.listings) ? msg.listings : null);
-        });
-        room.send('market', { op: 'search', filters: { q: ${JSON.stringify(itemName)}, sort: 'price_asc', page: 0 } });
-      });
       const h24 = await fetchHist('24h');
       await new Promise(r => setTimeout(r, 140));
       const h7d = await fetchHist('7d');
-      await new Promise(r => setTimeout(r, 140));
-      const itemActives = ${itemName ? 'await fetchCheapestActive()' : 'null'};
-      return { ok: true, h24, h7d, itemActives };
+      return { ok: true, h24, h7d, itemActives: null };
     })()`;
 
-    const res = await evalProfilePort(screen.debugPort, code, 9500);
+    const res = await evalProfilePort(screen.debugPort, code, 7500);
     if (!res || !(res.success || res.ok) || !res.result || !res.result.ok) return null;
 
     const mergedMap = new Map();
@@ -1696,8 +1694,29 @@ function createMarketSniperService({
         return { skipped: true, reason: 'no_categories_enabled' };
       }
 
-      const scanner = nonBusyScreens[scannerCursor % nonBusyScreens.length];
-      scannerCursor = (scannerCursor + 1) % Math.max(1, nonBusyScreens.length);
+      const nowSearchTs = Date.now();
+      const lv10Screens = nonBusyScreens.filter(s => (Number(s.baseLevel) || 0) >= 10);
+      const poolScreens = lv10Screens.length > 0 ? lv10Screens : nonBusyScreens;
+      const underCapScreens = [];
+      for (let i = 0; i < poolScreens.length; i++) {
+        const s = poolScreens[(scannerCursor + i) % poolScreens.length];
+        const pid = String(s.profileId || s.debugPort || '');
+        const hist = (searchHistoryByProfile.get(pid) || []).filter(ts => nowSearchTs - ts < 3600000);
+        searchHistoryByProfile.set(pid, hist);
+        if (hist.length < MAX_SEARCHES_PER_HOUR_PER_PROFILE) {
+          underCapScreens.push({ screen: s, count: hist.length, pid });
+        }
+      }
+      if (!underCapScreens.length) {
+        return { skipped: true, reason: 'hourly_search_cap_reached' };
+      }
+      underCapScreens.sort((a, b) => a.count - b.count);
+      const scanner = underCapScreens[0].screen;
+      const scannerPid = underCapScreens[0].pid;
+      scannerCursor = (scannerCursor + 1) % Math.max(1, poolScreens.length);
+      const curHist = searchHistoryByProfile.get(scannerPid) || [];
+      curHist.push(nowSearchTs);
+      searchHistoryByProfile.set(scannerPid, curHist);
 
       const targetSearch = filterQueue[filterCursor % filterQueue.length];
       filterCursor = (filterCursor + 1) % Math.max(1, filterQueue.length);

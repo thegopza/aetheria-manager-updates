@@ -508,8 +508,8 @@ function createMarketSniperService({
     const probeCode = `(() => {
       const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
       if (!room || !room.connection || !room.connection.isOpen) return { connected: false };
-      if (room !== window.__pmSniperMineHookedRoomV2) {
-        window.__pmSniperMineHookedRoomV2 = room;
+      if (room !== window.__pmSniperMineHookedRoomV3) {
+        window.__pmSniperMineHookedRoomV3 = room;
         room.onMessage('market_mine', (msg) => {
           if (msg && Array.isArray(msg.active)) {
             window.__myMarketActiveCount = msg.active.length;
@@ -518,9 +518,15 @@ function createMarketSniperService({
             const nonAuction = msg.active.filter(a => a && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs));
             const prices = nonAuction.map(a => Number(a.price) || 0).filter(p => p > 0);
             window.__myMarketCheapestActivePrice = prices.length ? Math.min(...prices) : 0;
+            if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
             window.__myMarketEvictableCheapCount = nonAuction.filter(a => {
               const p = Number(a.price) || 0;
-              return p > 0 && p <= 50000;
+              if (p > 0 && p <= 50000) {
+                const nm = String((a.item && a.item.name) || '').trim().toLowerCase();
+                if (nm) window.__pmSniperKnownCheapItems.add(nm);
+                return true;
+              }
+              return false;
             }).length;
             const nameCounts = {};
             const idCounts = {};
@@ -556,87 +562,100 @@ function createMarketSniperService({
 
       // 1) Reserve 2 market slots on Sniper screens (>= 300k zeny) so normal Auto-Sell stops at 18/20
       window.__pmSniperReservedSlots = (zeny >= 300000) ? ${reserveSlots} : 0;
-      if (typeof window.getEffectiveMarketMaxListings === 'function' && !window.__pmSniperQuotaHooked) {
-        const origGetMax = window.getEffectiveMarketMaxListings;
-        window.getEffectiveMarketMaxListings = function () {
-          const rawMax = origGetMax.apply(this, arguments);
-          const resv = Number(window.__pmSniperReservedSlots) || 0;
-          if (window.__isAutoSellingNow && resv > 0 && rawMax >= 10) {
-            return Math.max(1, rawMax - resv);
+      window.__pmSniperBlockCheapAutoSell = Boolean(${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000);
+
+      // 2) Packet-level guard on room.send('market', { op: 'list', ... }):
+      //    - Never allow Cards/Stones to be listed with qty > 1 (auto-rewrite to qty: 1 at unit price)
+      //    - On Sniper screens, block Auto-Sell from listing items with total price <= 50,000 z or > 2 concurrent copies of the same Card
+      if (room !== window.__pmSniperSendGuardRoom && typeof room.send === 'function') {
+        window.__pmSniperSendGuardRoom = room;
+        const origRoomSend = room.send.bind(room);
+        room.send = function (type, data) {
+          if (type === 'market' && data && data.op === 'list') {
+            const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+            const slotItem = bag.find(b => b && Number(b.slot) === Number(data.slot));
+            const itemName = String((slotItem && slotItem.name) || '').trim();
+            const norm = itemName.toLowerCase();
+            const isCardOrStone = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(itemName);
+            if (isCardOrStone && Number(data.qty) > 1) {
+              const unitP = Math.max(1, Math.round((Number(data.price) || 0) / Math.max(1, Number(data.qty) || 1)));
+              data.qty = 1;
+              data.price = unitP;
+            }
+            if (window.__isAutoSellingNow && window.__pmSniperBlockCheapAutoSell) {
+              if ((Number(data.price) || 0) > 0 && (Number(data.price) || 0) <= 50000) {
+                if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
+                if (norm) window.__pmSniperKnownCheapItems.add(norm);
+                return;
+              }
+              if (norm && window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(norm)) {
+                return;
+              }
+              if (isCardOrStone && norm) {
+                const curSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[norm]) || 0;
+                if (curSame >= 2) {
+                  return;
+                }
+                if (!window.__myMarketActiveNameCounts) window.__myMarketActiveNameCounts = {};
+                window.__myMarketActiveNameCounts[norm] = curSame + 1;
+              }
+            }
           }
-          return rawMax;
+          return origRoomSend(type, data);
         };
-        window.__pmSniperQuotaHooked = true;
       }
 
-      // 2) Ensure all Card/Stone Auto-Sell rules use sellMode = 'min', minQty = 1 (never list Cards/Stones as stacks!)
-      if (${sniperAutoFlip ? 'true' : 'false'} && window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
+      // 3) Sync Auto-Sell rules & backoffs on Sniper screens:
+      //    - Add any unlocked Card in bag to Auto-Sell rules (minQty: 1, sellMode: 'min') so sniped cards in bag get listed 1 by 1 automatically
+      //    - Force all Card/Stone rules to sellMode = 'min', minQty = 1
+      //    - Set rule.id backoff for cheap items (<= 50k z) and Cards that already have >= 2 active listings
+      if (${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000 && window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
+        if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
         let changedCardRule = false;
+        const existingRuleNames = new Set(window.__autoMarketSellConfig.rules.map(r => String((r && (r.itemName || r.name)) || '').trim().toLowerCase()).filter(Boolean));
+        const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+        for (const b of bag) {
+          if (!b || b.locked) continue;
+          const bName = String(b.name || '').trim();
+          const bNorm = bName.toLowerCase();
+          if (bName && /\\bCard$/i.test(bName) && !existingRuleNames.has(bNorm)) {
+            window.__autoMarketSellConfig.rules.unshift({
+              id: 'rule_sniper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+              itemName: bName,
+              minQty: 1,
+              sellMode: 'min',
+              enabled: true
+            });
+            existingRuleNames.add(bNorm);
+            changedCardRule = true;
+          }
+        }
         for (const r of window.__autoMarketSellConfig.rules) {
-          const rName = String((r && (r.itemName || r.name)) || '');
-          if (r && /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(rName)) {
-            if (r.sellMode !== 'min' || Number(r.minQty) !== 1) {
-              r.sellMode = 'min';
-              r.minQty = 1;
-              changedCardRule = true;
+          if (!r) continue;
+          const rName = String(r.itemName || r.name || '').trim();
+          const rNorm = rName.toLowerCase();
+          const rKey = r.id || rNorm;
+          const isCardOrStone = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(rName);
+          if (isCardOrStone && (r.sellMode !== 'min' || Number(r.minQty) !== 1)) {
+            r.sellMode = 'min';
+            r.minQty = 1;
+            changedCardRule = true;
+          }
+          if ((window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(rNorm)) ||
+              (window.__pmSniperKnownCheapItems && window.__pmSniperKnownCheapItems.has(rNorm))) {
+            window.__autoSellRuleBackoffUntil[rKey] = Date.now() + 30 * 60 * 1000;
+            window.__autoSellRuleBackoffUntil[rNorm] = Date.now() + 30 * 60 * 1000;
+          } else if (isCardOrStone) {
+            const activeSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[rNorm]) || 0;
+            if (activeSame >= 2) {
+              window.__autoSellRuleBackoffUntil[rKey] = Date.now() + 3 * 60 * 1000;
+              window.__autoSellRuleBackoffUntil[rNorm] = Date.now() + 3 * 60 * 1000;
             }
           }
         }
         if (changedCardRule && typeof window.saveMarketSellConfig === 'function') {
           try { window.saveMarketSellConfig(); } catch (_) {}
         }
-      }
-
-      // 3) On Sniper screens (>= 300k zeny), block Auto-Sell from filling slots with cheap items (<= 50,000 z) or > 2 concurrent copies of the same Card
-      window.__pmSniperBlockCheapAutoSell = Boolean(${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000);
-      if (typeof window.fetchItemSmartSellPrice === 'function' && !window.__pmSniperSmartSellHooked) {
-        const origSmartSell = window.fetchItemSmartSellPrice;
-        window.fetchItemSmartSellPrice = async function (item) {
-          const norm = String((item && (item.name || item.itemName)) || '').trim().toLowerCase();
-          if (window.__isAutoSellingNow && window.__pmSniperBlockCheapAutoSell && norm) {
-            if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
-            const rules = (window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) ? window.__autoMarketSellConfig.rules : [];
-            const matchingRule = rules.find(r => r && String(r.itemName || '').trim().toLowerCase() === norm);
-            const ruleKey = (matchingRule && matchingRule.id) || norm;
-
-            // Block items evicted by Sniper
-            if (window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(norm)) {
-              window.__autoSellRuleBackoffUntil[ruleKey] = Date.now() + 30 * 60 * 1000;
-              window.__autoSellRuleBackoffUntil[norm] = Date.now() + 30 * 60 * 1000;
-              return null;
-            }
-            // Limit same Card/Stone to at most 2 active listings at a time so 1 card type doesn't clog all slots
-            if (/\\b(card|stone)\\b|การ์ด|ศิลา/i.test(norm)) {
-              const activeSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[norm]) || 0;
-              if (activeSame >= 2) {
-                window.__autoSellRuleBackoffUntil[ruleKey] = Date.now() + 3 * 60 * 1000;
-                window.__autoSellRuleBackoffUntil[norm] = Date.now() + 3 * 60 * 1000;
-                return null;
-              }
-            }
-          }
-          const res = await origSmartSell.apply(this, arguments);
-          if (window.__isAutoSellingNow && window.__pmSniperBlockCheapAutoSell && res && res.unitPrice > 0 && norm) {
-            const isSingle = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(norm);
-            const estQty = isSingle ? 1 : Math.max(1, Number(item && item.qty) || 1);
-            const estTotal = res.unitPrice * estQty;
-            if (estTotal <= 50000) {
-              if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
-              const rules = (window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) ? window.__autoMarketSellConfig.rules : [];
-              const matchingRule = rules.find(r => r && String(r.itemName || '').trim().toLowerCase() === norm);
-              const ruleKey = (matchingRule && matchingRule.id) || norm;
-              window.__autoSellRuleBackoffUntil[ruleKey] = Date.now() + 30 * 60 * 1000;
-              window.__autoSellRuleBackoffUntil[norm] = Date.now() + 30 * 60 * 1000;
-              return null;
-            }
-            if (isSingle) {
-              if (!window.__myMarketActiveNameCounts) window.__myMarketActiveNameCounts = {};
-              window.__myMarketActiveNameCounts[norm] = (window.__myMarketActiveNameCounts[norm] || 0) + 1;
-            }
-          }
-          return res;
-        };
-        window.__pmSniperSmartSellHooked = true;
       }
 
       if (zeny >= 300000 && (!window.__myMarketActiveCountUpdatedAt || window.__myMarketEvictableCheapCount === undefined || (Date.now() - window.__myMarketActiveCountUpdatedAt > 60000))) {

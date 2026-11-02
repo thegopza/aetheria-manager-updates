@@ -588,12 +588,16 @@
     const pill = document.getElementById('ms-header-state-pill');
     if (pill) {
       const mode = sniperStatus?.config?.mode || 'auto_flip';
+      const pausedFull = Boolean(sniperStatus?.pausedAllScreensFull || sniperStatus?.lastScan?.pausedAllScreensFull);
       if (!enabled) {
         pill.className = 'ms-badge stopped';
         pill.innerText = 'ปิดอยู่';
       } else if (mode === 'dry_run') {
         pill.className = 'ms-badge dry';
         pill.innerText = '🧪 กำลังสแกน (โหมดจำลอง)';
+      } else if (pausedFull) {
+        pill.className = 'ms-badge won';
+        pill.innerText = '⏸️ ช่องขายเต็มทุกจอ (รอของขายออก)';
       } else {
         pill.className = 'ms-badge relisted';
         pill.innerText = '🟢 กำลังทำงานอัตโนมัติ';
@@ -606,13 +610,22 @@
     updateSecretDotAndHeader();
 
     const screens = Array.isArray(sniperStatus.onlineScreens) ? sniperStatus.onlineScreens : [];
-    const primary = screens.find(s => s.isPrimaryBuyer) || screens[0] || null;
+    const primary = screens.find(s => s.isPrimaryBuyer) || null;
+    const pausedFull = Boolean(sniperStatus?.pausedAllScreensFull || sniperStatus?.lastScan?.pausedAllScreensFull);
     const buyerNameEl = document.getElementById('ms-kpi-buyer-name');
     const buyerSubEl = document.getElementById('ms-kpi-buyer-sub');
     if (buyerNameEl && buyerSubEl) {
-      if (primary) {
+      if (pausedFull && screens.length > 0) {
+        buyerNameEl.innerText = '⏸️ ช่องขายเต็มทุกจอ — รอขายออก';
+        buyerSubEl.innerText = `ของทำกำไรเต็มโควตาทุกจอที่มีงบแล้ว · ระบบจะช้อนต่ออัตโนมัติเมื่อมีช่องว่าง`;
+      } else if (primary) {
+        const evictHint = (Number(primary.evictableCheapCount) || 0) > 0 ? ` (ถอดของ ≤50k ได้ ${primary.evictableCheapCount} ช่อง)` : '';
         buyerNameEl.innerText = `${primary.charName || primary.profileName} (${fmtZeny(primary.zeny)})`;
-        buyerSubEl.innerText = `${primary.premium ? '👑 Premium (ภาษี 4%)' : 'ภาษีปกติ 8%'} · โควตาขาย ${primary.activeCount}/${primary.maxListings} · ออนไลน์รวม ${screens.length} จอ`;
+        buyerSubEl.innerText = `${primary.premium ? '👑 Premium (ภาษี 4%)' : 'ภาษีปกติ 8%'} · โควตาขาย ${primary.activeCount}/${primary.maxListings}${evictHint} · ออนไลน์ ${screens.length} จอ`;
+      } else if (screens[0]) {
+        const top = screens[0];
+        buyerNameEl.innerText = `${top.charName || top.profileName} (${fmtZeny(top.zeny)})`;
+        buyerSubEl.innerText = `${top.premium ? '👑 Premium (ภาษี 4%)' : 'ภาษีปกติ 8%'} · โควตาขาย ${top.activeCount}/${top.maxListings} · ออนไลน์รวม ${screens.length} จอ`;
       } else {
         buyerNameEl.innerText = 'ไม่มีจอออนไลน์ที่พร้อมซื้อ';
         buyerSubEl.innerText = 'เปิดจอเกมอย่างน้อย 1 จอเพื่อให้ระบบเริ่มสแกน';
@@ -793,11 +806,16 @@
                 <td style="font-weight:700;color:#f8fafc;">${escapeHtml(s.charName || s.profileName)} <span style="color:#64748b;font-weight:400;">(${escapeHtml(s.profileName)})</span></td>
                 <td style="color:#fde047;font-weight:800;">${fmtZeny(s.zeny)}</td>
                 <td>${s.premium ? '<span class="ms-badge relisted">👑 มี Premium (ภาษี 4%)</span>' : '<span class="ms-badge">ทั่วไป (ภาษี 8%)</span>'}</td>
-                <td style="color:#cbd5e1;">${s.activeCount} / ${s.maxListings} รายการ</td>
+                <td style="color:#cbd5e1;">
+                  ${s.activeCount} / ${s.maxListings} รายการ
+                  ${(Number(s.evictableCheapCount) || 0) > 0
+                    ? `<div style="font-size:10px;color:#fbbf24;">ถอดของถูก ≤50k ได้ ${s.evictableCheapCount} ช่อง</div>`
+                    : (s.activeCount >= s.maxListings ? `<div style="font-size:10px;color:#f87171;">ของทำกำไรเต็มโควตา (ข้ามไปจอถัดไป)</div>` : '')}
+                </td>
                 <td>
                   ${s.isPrimaryBuyer
-                    ? '<span class="ms-badge won">🎯 คนช้อน/ประมูลหลัก (เงินเยอะสุด)</span>'
-                    : (s.busy ? '<span class="ms-badge stopped">กำลังทำธุรกรรมอื่น</span>' : '<span class="ms-badge leading">🔍 ช่วยสแกนตลาด & สำรอง</span>')}
+                    ? '<span class="ms-badge won">🎯 คนช้อน/ประมูลหลักตอนนี้</span>'
+                    : (s.busy ? '<span class="ms-badge stopped">กำลังทำธุรกรรมอื่น</span>' : (s.activeCount >= s.maxListings && !(Number(s.evictableCheapCount) > 0) ? '<span class="ms-badge stopped">⏳ ช่องเต็ม (รอของขายออก)</span>' : '<span class="ms-badge leading">🔍 ช่วยสแกน & รับไม้ต่อเมื่อจอหลักเต็ม</span>'))}
                 </td>
               </tr>
             `).join('')}

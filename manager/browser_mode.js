@@ -965,6 +965,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       `--remote-debugging-port=${CDP_PORT}`, '--remote-allow-origins=*',
       `--user-data-dir=${userDataDir}`,
       '--disable-background-mode',
+      '--disable-renderer-accessibility',
       // the bot's timers must keep running in background / covered windows
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
       '--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling',
@@ -975,6 +976,29 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     browserProc = spawn(exe, args, { detached: true, stdio: 'ignore' });
     browserProc.unref();
     let cleanedMidWait = forceClean;
+    const lockStartupAccessibilityOff = async (pages) => {
+      if (!isRealSession || !Array.isArray(pages) || pages.length === 0) return;
+      try {
+        const { sessionId } = await send('Target.attachToTarget', { targetId: pages[0], flatten: true }, undefined, 3000);
+        await send('Page.navigate', { url: 'chrome://accessibility' }, sessionId, 3000).catch(() => {});
+        await new Promise(r => setTimeout(r, 350));
+        await send('Runtime.evaluate', {
+          expression: `try {
+            if (typeof chrome !== 'undefined' && typeof chrome.send === 'function') {
+              chrome.send('setGlobalFlag', ['locked', false]);
+              chrome.send('setGlobalFlag', ['text', false]);
+              chrome.send('setGlobalFlag', ['extendedProperties', false]);
+              chrome.send('setGlobalFlag', ['screenReader', false]);
+              chrome.send('setGlobalFlag', ['html', false]);
+              chrome.send('setGlobalFlag', ['web', false]);
+              chrome.send('setGlobalFlag', ['native', false]);
+              chrome.send('setGlobalFlag', ['locked', true]);
+            }
+          } catch (_) {}`
+        }, sessionId, 2000).catch(() => {});
+        await send('Target.detachFromTarget', { sessionId }, undefined, 2000).catch(() => {});
+      } catch (_) {}
+    };
     for (let i = 0; i < 40; i++) {
       await new Promise(r => setTimeout(r, 300));
       if (await browserAlive()) {
@@ -982,6 +1006,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           await connect();
           const tRes = await send('Target.getTargets', {}, undefined, 4000);
           startupPages = (tRes?.targetInfos || []).filter(t => t.type === 'page').map(t => t.targetId);
+          await lockStartupAccessibilityOff(startupPages);
           return;
         } catch (e) {
           if (ws) { try { ws.close(); } catch (_) {} ws = null; }
@@ -1449,8 +1474,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
   }
 
-  async function health(c) {
-    const value=await evaluate(c,HEALTH_JS,isRealSession?10000:8000,true);
+  async function health(c, customTimeoutMs = 0) {
+    const tMs = customTimeoutMs > 0 ? customTimeoutMs : (isRealSession ? 6000 : 8000);
+    const value=await evaluate(c,HEALTH_JS,tMs,true);
     if(!value || typeof value.documentId!=='string')throw Error('INVALID_DOCUMENT_PROBE');
     if(c.documentId!==value.documentId) {c.documentId=value.documentId;c.generation++;c.attempts=0;clearTimeout(c.retryTimer);c.retryTimer=null;}
     return value;
@@ -1594,16 +1620,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               ? code.replace('\nwindow.__pmScriptBootstrap.accept(', '\nreturn window.__pmScriptBootstrap.accept(')
               : code;
             const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; if(!window.__pmDeviceId) window.__pmDeviceId=${JSON.stringify(expectedDeviceId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') { try { delete window.__pmScriptBootstrap; delete window.__pmBrowserInjectionAttempted; } catch (_) { window.__pmScriptBootstrap = null; window.__pmBrowserInjectionAttempted = false; } } window.__pmBrowserInjectionAttempted=true; const evalResult = await (async () => { /*(0,eval)(*/\n${invokeCode}\n})(); return {attempted:true, evalResult}; })()`;
-            c.pendingBootstrapScript = expression;
-            if (c.port) {
-              const fetchExpr = `(async () => { try { const r = await fetch('http://127.0.0.1:${c.port}/__pm_bootstrap.js?t=' + Date.now()); if (!r.ok) return { __pmFetchErr: 'HTTP_' + r.status }; const src = await r.text(); return await (0, eval)(src); } catch (e) { return { __pmFetchErr: String(e && e.message || e) }; } })()`;
-              const fRes = await evaluate(c, fetchExpr, 15000, true).catch(e => ({ __pmFetchErr: String(e && e.message || e) }));
-              if (fRes && fRes.__pmFetchErr) {
-                await evaluate(c, expression, 25000, true);
-              }
-            } else {
-              await evaluate(c, expression, 25000, true);
-            }
+            await evaluate(c, expression, 25000, true);
             await new Promise(r => setTimeout(r, 200));
           } finally {
             heavyInjectionInFlightCount = Math.max(0, heavyInjectionInFlightCount - 1);
@@ -2077,6 +2094,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         phase2Running = true;
         (async () => {
           const needsInject = [];
+          const slowTabs = [];
           const readyTabs = [];
           try {
             // Step 2A: Fast health sweep across all tabs BEFORE any 1.5 MB bot injection runs
@@ -2086,7 +2104,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 const cur = toCheck[idx++];
                 if (!cur || !cur.c || clients.get(cur.c.profileId) !== cur.c || stoppedProfiles.has(cur.c.profileId)) continue;
                 try {
-                  const h = await health(cur.c);
+                  const h = await health(cur.c, 3000);
                   if (h && h.profileId === cur.c.profileId && h.version && h.hud && h.liveHook && classify(cur.c, h)) {
                     cur.c.initialHealthChecked = true;
                     readyTabs.push(cur.c);
@@ -2094,22 +2112,22 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                     needsInject.push(cur.c);
                   }
                 } catch (_) {
-                  needsInject.push(cur.c);
+                  slowTabs.push(cur.c);
                 }
               }
             };
-            const sweepConcurrency = Math.min(4, toCheck.length);
+            const sweepConcurrency = Math.min(8, toCheck.length);
             await Promise.all(Array.from({ length: sweepConcurrency }, () => healthWorker()));
 
-            // Step 2B: Sequential heavy bot injection (1 tab at a time) only for tabs not yet ready
-            for (const c of needsInject) {
+            // Step 2B: Sequential heavy bot injection (1 tab at a time), responsive tabs first then slow tabs
+            for (const c of needsInject.concat(slowTabs)) {
               if (!c || clients.get(c.profileId) !== c || stoppedProfiles.has(c.profileId)) continue;
               try {
                 await injectBot(c).catch(() => {});
               } finally {
                 c.initialHealthChecked = true;
               }
-              await new Promise(r => setTimeout(r, 400));
+              await new Promise(r => setTimeout(r, 250));
             }
 
             // Step 2C: Gently ensure Page.enable + initScriptId on ready tabs one at a time in background
@@ -2321,7 +2339,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           if (!code) return reply(400, { error: 'Missing code' });
           const isLiveStateProbe = code.includes('__getClientLiveState') && code.includes('grossZenyGained');
           const isBootstrapAccept = isRealSession && code.includes('__pmScriptBootstrap.accept(');
-          if (isRealSession && !isBootstrapAccept && (!c.initialHealthChecked || heavyInjectionInFlightCount > 0 || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
+          const isReadyClient = diagnostics.get(c.profileId)?.state === 'ready';
+          if (isRealSession && !isBootstrapAccept && ((!c.initialHealthChecked && !isReadyClient) || (!isReadyClient && heavyInjectionInFlightCount > 0) || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
             if (isLiveStateProbe && c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 180000)) {
               return reply(200, { success: true, result: c.lastGoodState, cached: true });
             }
@@ -2392,7 +2411,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           }
         }
         if (url.pathname === '/api/state') {
-          if (isRealSession && (!c.initialHealthChecked || heavyInjectionInFlightCount > 0 || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
+          const isReadyStateClient = diagnostics.get(c.profileId)?.state === 'ready';
+          if (isRealSession && ((!c.initialHealthChecked && !isReadyStateClient) || (!isReadyStateClient && heavyInjectionInFlightCount > 0) || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
             if (c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 180000)) {
               return reply(200, c.lastGoodState);
             }

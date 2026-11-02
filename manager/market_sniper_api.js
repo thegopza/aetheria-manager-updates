@@ -184,36 +184,65 @@ function inferItemCategory(item) {
   return 'other';
 }
 
-// Compute Clean Reference Price from 24h & 7d market history + active listings.
-// Strips both mistyped low sales (< 45% of 75th percentile, e.g. 1.4M vs 14M)
-// and wash-trade spikes (> Q3 + 1.5*IQR).
+// Compute Clean Reference Price from the last 10 hours (fallback 24h) + active listings.
+// 7d history is used ONLY for liquidity count (sales7d), never for price averaging so old prices don't distort flips.
+// Strips both mistyped low sales (< 45% of 70th percentile, e.g. 1.4M vs 14M)
+// and wash-trade spikes (> Q3 + 1.5*IQR), and never sets flipUnitPrice above cleanRefUnitPrice.
 function computeCleanReferencePrice(history24h, history7d, activeListingsForSameItem, undercutZeny = 1) {
-  const unitSamples = [];
-  const recentOrdered24h = [];
-  const recentOrdered7d = [];
-  const fallbackPointSamples = [];
+  const now = Date.now();
+  const tenHoursAgo = now - 10 * 3600 * 1000;
+  const fourHoursAgo = now - 4 * 3600 * 1000;
+  const recent10hSamples = [];
+  const recent4hSamples = [];
+  const recent24hSamples = [];
+  const hourly10hSamples = [];
+  const hourly4hSamples = [];
+  const hourly24hSamples = [];
   const seenRecentKeys = new Set();
   let sales24h = 0;
   let sales7d = 0;
+
+  const medianOf = (arr) => {
+    if (!arr || !arr.length) return 0;
+    const s = arr.slice().sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return (s.length % 2 !== 0) ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+  };
 
   const collectFromHistory = (hist, is24h) => {
     if (!hist || typeof hist !== 'object') return;
     const recent = Array.isArray(hist.recent) ? hist.recent : [];
     const points = Array.isArray(hist.points) ? hist.points : [];
+    const totalBuckets = Number(hist.buckets) || points.length || 24;
+    const cutoff10hBucket = Math.max(0, totalBuckets - 10);
+    const cutoff4hBucket = Math.max(0, totalBuckets - 4);
 
     let countFromPoints = 0;
     for (const pt of points) {
       if (!pt) continue;
       const s = Number(pt.sales ?? pt.count ?? 0) || 0;
       const avg = Number(pt.avg) || 0;
+      const low = Number(pt.low) || avg;
+      const high = Number(pt.high) || avg;
+      const bucketIdx = Number(pt.bucket);
       if (s > 0 && avg > 0) {
         countFromPoints += s;
-        if (!is24h) {
-          // pt.avg in game market_history is already the per-piece average price
-          const estUnit = Math.round(avg);
+        if (is24h) {
+          // If an hourly bucket had a severe mistyped crash (< 40% of high in that same hour),
+          // its avg is pulled down by the mistake; use high or skip that distorted avg.
+          const isCleanBucket = !(low > 0 && high > 0 && low < high * 0.40);
+          const estUnit = Math.round(isCleanBucket ? avg : high);
           if (estUnit > 0) {
-            const weight = Math.min(s, 6);
-            for (let i = 0; i < weight; i++) fallbackPointSamples.push(estUnit);
+            const weight = Math.min(s, 4);
+            for (let i = 0; i < weight; i++) {
+              hourly24hSamples.push(estUnit);
+              if (Number.isFinite(bucketIdx) && bucketIdx >= cutoff10hBucket) {
+                hourly10hSamples.push(estUnit);
+              }
+              if (Number.isFinite(bucketIdx) && bucketIdx >= cutoff4hBucket && isCleanBucket) {
+                hourly4hSamples.push(estUnit);
+              }
+            }
           }
         }
       }
@@ -225,14 +254,21 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
       const qty = Math.max(1, Number(r.qty) || 1);
       const price = Number(r.price) || 0;
       const u = Math.round(price / qty);
+      const at = Number(r.at) || 0;
       if (u > 0) {
         countFromRecent += 1;
-        if (is24h) recentOrdered24h.push(u);
-        else recentOrdered7d.push(u);
-        const rKey = `${r.at || 0}:${price}:${qty}`;
+        const rKey = `${at}:${price}:${qty}`;
         if (!seenRecentKeys.has(rKey)) {
           seenRecentKeys.add(rKey);
-          unitSamples.push(u);
+          if (is24h || (at > 0 && at >= now - 24 * 3600 * 1000)) {
+            recent24hSamples.push(u);
+          }
+          if (!at || at >= tenHoursAgo) {
+            recent10hSamples.push(u);
+          }
+          if (at > 0 && at >= fourHoursAgo) {
+            recent4hSamples.push(u);
+          }
         }
       }
     }
@@ -245,8 +281,11 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   collectFromHistory(history24h, true);
   collectFromHistory(history7d, false);
 
-  if (unitSamples.length < 3 && fallbackPointSamples.length > 0) {
-    unitSamples.push(...fallbackPointSamples);
+  // Build primary sample pool from the last 10 hours (recent 10h trades + hourly 10h buckets).
+  // Only fall back to 24h if the item had fewer than 3 samples in the last 10 hours.
+  let unitSamples = [...recent10hSamples, ...hourly10hSamples];
+  if (unitSamples.length < 3) {
+    unitSamples = [...recent24hSamples, ...hourly24hSamples];
   }
 
   const totalSales = Math.max(sales7d, sales24h);
@@ -254,16 +293,9 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     return { valid: false, reason: 'no_history', totalSales: 0, sales24h: 0, sales7d: 0 };
   }
 
-  const medianOf = (arr) => {
-    if (!arr || !arr.length) return 0;
-    const s = arr.slice().sort((a, b) => a - b);
-    const m = Math.floor(s.length / 2);
-    return (s.length % 2 !== 0) ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
-  };
-
   const sortedAll = unitSamples.slice().sort((a, b) => a - b);
 
-  // Stage 1: Reject isolated mistyped low sales (e.g. seller forgot a 0 and sold 1 item at 10% of real value)
+  // Stage 1: Reject isolated mistyped low sales (e.g. seller forgot a 0 or dumped at 10% of real value)
   const p70Idx = Math.min(sortedAll.length - 1, Math.floor(sortedAll.length * 0.70));
   const anchorHigh = sortedAll[p70Idx];
   const lowMistakeFloor = Math.round(anchorHigh * 0.45);
@@ -275,7 +307,7 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   const medRaw = stage1[Math.floor(stage1.length * 0.50)];
   const q3 = stage1[Math.floor(stage1.length * 0.75)];
   const iqr = Math.max(1, q3 - q1);
-  const maxFence = Math.max(q3 + 1.5 * iqr, Math.round(medRaw * 2.2));
+  const maxFence = Math.max(q3 + 1.5 * iqr, Math.round(medRaw * 2.0));
   const minFence = Math.max(lowMistakeFloor, q1 - 1.5 * iqr);
 
   const cleanSamples = stage1.filter(p => p >= minFence && p <= maxFence);
@@ -283,24 +315,20 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
 
   let cleanRefUnitPrice = medianOf(finalSamples);
 
-  // Stage 2.5: Downtrend / Falling-Market Anchor
-  // If an item's market price dropped today, recent trades (newest 3 and newest 5) will reflect the new lower market price,
-  // whereas a single 1-off mistyped sale will NOT move the median of the newest 3 or 5 trades.
-  const newestStream = recentOrdered24h.length >= 3 ? recentOrdered24h : recentOrdered7d;
-  if (newestStream.length >= 3) {
-    const recent3Med = medianOf(newestStream.slice(0, 3));
-    const recent5Med = medianOf(newestStream.slice(0, Math.min(6, newestStream.length)));
-    const recentAnchor = Math.max(recent3Med, recent5Med);
-    if (recentAnchor > 0 && recentAnchor < cleanRefUnitPrice) {
-      cleanRefUnitPrice = recentAnchor;
+  // Stage 2.5: Short-Term (Last 1-4 Hours) Downtrend Anchor
+  // Filter out mistyped low dumps (< lowMistakeFloor) from the last 4h stream first,
+  // then if the last 1-4 hours traded lower than the 10h median, anchor down to the 4h median!
+  const cleanRecent4h = recent4hSamples.filter(p => p >= lowMistakeFloor && p <= maxFence);
+  const cleanHourly4h = hourly4hSamples.filter(p => p >= lowMistakeFloor && p <= maxFence);
+  const shortTermPool = [...cleanRecent4h, ...cleanHourly4h];
+  if (shortTermPool.length >= 2) {
+    const shortTermMed = medianOf(shortTermPool);
+    if (shortTermMed > 0 && shortTermMed < cleanRefUnitPrice) {
+      cleanRefUnitPrice = shortTermMed;
     }
   }
 
   // Stage 3: Competing Active Listings Ceiling & Flip Price
-  // Collect all active listings for the same item+refine (sorted ascending by unit price).
-  // If there are >= 2 listings on the market right now, the 2nd cheapest listing is the competing supply ceiling
-  // (even if the 1st cheapest listing is the snipe candidate itself).
-  const now = Date.now();
   const allActiveUnitPrices = [];
   const normalActivePrices = [];
   if (Array.isArray(activeListingsForSameItem)) {
@@ -330,7 +358,9 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
       if (l.auctionEndsAt && Number(l.auctionEndsAt) > now) continue;
       const q = Math.max(1, Number(l.qty) || 1);
       const u = Math.round((Number(l.price) || 0) / q);
-      if (u >= Math.round(cleanRefUnitPrice * 0.70) && u <= Math.round(cleanRefUnitPrice * 1.60)) {
+      // Only consider normal Buy-Now listings that are AT OR BELOW cleanRefUnitPrice (down to 75% of cleanRefUnitPrice).
+      // Never chase overpriced unsold listings above cleanRefUnitPrice (e.g. 700k when real sold price is 572k).
+      if (u >= Math.round(cleanRefUnitPrice * 0.75) && u <= cleanRefUnitPrice) {
         normalActivePrices.push(u);
       }
     }
@@ -340,10 +370,15 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   let flipUnitPrice = cleanRefUnitPrice;
   if (normalActivePrices.length > 0) {
     const cheapestNormal = normalActivePrices[0];
-    flipUnitPrice = Math.max(
-      Math.round(cleanRefUnitPrice * 0.78),
-      cheapestNormal - Math.max(0, Number(undercutZeny) || 0)
+    flipUnitPrice = Math.min(
+      cleanRefUnitPrice,
+      Math.max(
+        Math.round(cleanRefUnitPrice * 0.78),
+        cheapestNormal - Math.max(0, Number(undercutZeny) || 0)
+      )
     );
+  } else if (Number(undercutZeny) > 0) {
+    flipUnitPrice = Math.max(1, cleanRefUnitPrice - Math.max(0, Number(undercutZeny) || 0));
   }
 
   return {
@@ -776,8 +811,8 @@ function createMarketSniperService({
     const itemName = String(item.name || '').trim();
     const cacheKey = `${itemId}:${refine}`;
     const cached = state.priceCache[cacheKey];
-    if (cached && cached.cacheVer === 3 && (Date.now() - (Number(cached.updatedAt) || 0)) < PRICE_CACHE_TTL_MS) {
-      // Re-adjust flipUnitPrice against latest normal active listings if available
+    if (cached && cached.cacheVer === 4 && (Date.now() - (Number(cached.updatedAt) || 0)) < PRICE_CACHE_TTL_MS) {
+      // Re-adjust flipUnitPrice against latest normal active listings if available (never above cleanRefUnitPrice)
       const sameItemListings = (Array.isArray(activeListings) ? activeListings : []).filter(
         l => l && l.item && Number(l.item.itemId ?? l.item.id) === itemId && (Number(l.item.refine) || 0) === refine
       );
@@ -786,12 +821,15 @@ function createMarketSniperService({
         const normalActives = sameItemListings
           .filter(l => !l.mine && !(l.auctionEndsAt && Number(l.auctionEndsAt) > now))
           .map(l => Math.round((Number(l.price) || 0) / Math.max(1, Number(l.qty) || 1)))
-          .filter(u => u >= Math.round(cached.cleanRefUnitPrice * 0.70) && u <= Math.round(cached.cleanRefUnitPrice * 1.60))
+          .filter(u => u >= Math.round(cached.cleanRefUnitPrice * 0.75) && u <= cached.cleanRefUnitPrice)
           .sort((a, b) => a - b);
         if (normalActives.length > 0) {
-          cached.flipUnitPrice = Math.max(
-            Math.round(cached.cleanRefUnitPrice * 0.78),
-            normalActives[0] - Math.max(0, Number(config.relistUndercutZeny) || 0)
+          cached.flipUnitPrice = Math.min(
+            cached.cleanRefUnitPrice,
+            Math.max(
+              Math.round(cached.cleanRefUnitPrice * 0.78),
+              normalActives[0] - Math.max(0, Number(config.relistUndercutZeny) || 0)
+            )
           );
         }
       }
@@ -854,7 +892,7 @@ function createMarketSniperService({
     );
 
     const entry = {
-      cacheVer: 3,
+      cacheVer: 4,
       itemId,
       refine,
       name: item.name || `Item #${itemId}`,

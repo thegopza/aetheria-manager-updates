@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "dd7f12013a77f7cce7d911ac336986c136a04651",
+  "sourceCommit": "3d4f38b51f2653e3077f21aee3f727298a708faa",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -88,7 +88,7 @@
     },
     {
       "path": "manager/market_sniper_api.js",
-      "sha256": "daee6adcbcc6ce59feaec457b02b15217dfc324a23afe507bcab7d735fee0673"
+      "sha256": "7091ebd05df753dd208245ca0dfa85efe63082058866d893736164af5f5f3ec1"
     },
     {
       "path": "manager/offline_coordinator.js",

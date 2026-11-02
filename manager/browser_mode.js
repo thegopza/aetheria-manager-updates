@@ -966,6 +966,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       `--user-data-dir=${userDataDir}`,
       '--disable-background-mode',
       '--disable-renderer-accessibility',
+      '--disable-platform-accessibility-integration',
       // the bot's timers must keep running in background / covered windows
       '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
       '--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling',
@@ -1836,6 +1837,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     } catch(e) {await send('Target.detachFromTarget',{sessionId}, undefined, 3000).catch(()=>{});throw e;}
   }
 
+  let lastLevelDbExtractAt = 0;
   async function migrateProfileStorageFromDefaultContext(profileId) {
     if (!storageDir || !profileId) return;
     const existing = loadProfileStorage(profileId);
@@ -1848,15 +1850,18 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       } catch (_) {}
     }
     if (hasFullAuth) return;
-    try {
-      const levelDbDir = path.join(userDataDir, 'Default', 'Local Storage', 'leveldb');
-      const diskHarvest = extractPelicanStorageFromLevelDb(levelDbDir);
-      if (diskHarvest && diskHarvest.byProfile) {
-        for (const [pid, map] of Object.entries(diskHarvest.byProfile)) {
-          saveProfileStorage(pid, map);
+    if (!isRealSession || Date.now() - lastLevelDbExtractAt > 60000) {
+      lastLevelDbExtractAt = Date.now();
+      try {
+        const levelDbDir = path.join(userDataDir, 'Default', 'Local Storage', 'leveldb');
+        const diskHarvest = extractPelicanStorageFromLevelDb(levelDbDir);
+        if (diskHarvest && diskHarvest.byProfile) {
+          for (const [pid, map] of Object.entries(diskHarvest.byProfile)) {
+            saveProfileStorage(pid, map);
+          }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
     const donor = Array.from(clients.values()).find(x => !x.browserContextId && x.sessionId);
     if (!donor) return;
     try {
@@ -2542,7 +2547,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       ? { url: 'about:blank', newWindow: true, browserContextId }
       : { url: 'about:blank', newWindow: true };
     const { targetId } = await send('Target.createTarget', createParams);
-    const c = await attach(profile.id, targetId, false, browserContextId);
+    const c = await attach(profile.id, targetId, true, browserContextId);
+    c.initialHealthChecked = true;
     startProxy(c, profile.debugPort);
     await send('Page.navigate', { url: gameUrl }, c.sessionId);
     for (const targetId of startupPages.splice(0)) await send('Target.closeTarget', { targetId }).catch(() => {});

@@ -1108,7 +1108,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         };
         __sp.setItem = function(k, v) {
           if (this === window.localStorage && window.__pmProfileId) {
-            window.__pmStorageDirtyAt = Date.now();
+            if (!__isTransientStorageKey(k)) {
+              window.__pmStorageDirtyAt = Date.now();
+            }
             if (k === 'aetheria.device' || k === 'pelican_' + window.__pmProfileId + '__aetheria_device') {
               const incoming = String(v || '').trim();
               const dev = (incoming && incoming.length >= 16 && incoming !== 'unknown-device') ? incoming : (window.__pmDeviceId || __mintUuid());
@@ -1311,20 +1313,26 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
 
   let lastSharedHarvestAt = 0;
-  async function syncClientStorage(c) {
+  async function syncClientStorage(c, forceHarvest = false) {
     if (!c || !c.sessionId || !storageDir) return;
     try {
       const prefix = `pelican_${c.profileId}__`;
-      const harvestAll = !c.browserContextId && (Date.now() - lastSharedHarvestAt > 60000);
+      const harvestAll = !c.browserContextId && (Date.now() - lastSharedHarvestAt > 120000);
       if (harvestAll) lastSharedHarvestAt = Date.now();
       const res = await evaluate(c, `(() => {
         if (!window.__pmStorageRestored) return { restored: false, out: {}, other: {} };
+        const curDirty = window.__pmStorageDirtyAt || 1;
+        const doHarvest = ${Boolean(harvestAll)};
+        const force = ${Boolean(forceHarvest)};
+        if (!force && !doHarvest && window.__pmLastHarvestedDirtyAt === curDirty) {
+          return { restored: true, unchanged: true, dirtyAt: curDirty };
+        }
+        window.__pmLastHarvestedDirtyAt = curDirty;
         const out = {};
         const other = {};
         const __rawGet = (window.__pmRawStorage && window.__pmRawStorage.get) || Storage.prototype.getItem;
         if (window.localStorage) {
           const pfx = ${JSON.stringify(prefix)};
-          const doHarvest = ${Boolean(harvestAll)};
           const extraKeys = new Set(['ui.windows', 'partyFrameFolded', 'skip-anim:refine', 'hudMenuOpen', 'webgame.camera']);
           for (let i = 0; i < window.localStorage.length; i++) {
             const k = window.localStorage.key(i);
@@ -1348,9 +1356,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           const ssVal = __rawGet.call(window.sessionStorage, 'aetheria.session');
           if (ssVal) out['__ss:aetheria.session'] = ssVal;
         }
-        return { restored: true, dirtyAt: window.__pmStorageDirtyAt || 0, out, other };
+        return { restored: true, dirtyAt: curDirty, out, other };
       })()`, 5000);
-      if (res && res.restored === false) return;
+      if (!res || res.restored === false || res.unchanged) return;
       const entries = res && res.out ? res.out : res;
       if (entries && typeof entries === 'object' && Object.keys(entries).length > 0) {
         saveProfileStorage(c.profileId, entries);
@@ -1597,19 +1605,83 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
   });
 
+  async function ensureClientFramePacerHealed(c) {
+    if (!c || !c.sessionId || c.framePacerHealInFlight) return;
+    if (c.framePacerHealedDocId && c.framePacerHealedDocId === c.documentId) return;
+    c.framePacerHealInFlight = true;
+    try {
+      const res = await evaluate(c, `(async () => {
+        if (window.__pmFramePacerLeakFixed) return { healed: true, docId: String(performance.timeOrigin) };
+        const g = window.__pmPhaserGame;
+        if (!g || !g.loop || !g.loop.raf) return { healed: false };
+        const rafObj = g.loop.raf;
+        window.__pmFramePacerLeakFixed = true;
+        rafObj.isRunning = false;
+        if (rafObj.timeOutID) {
+          try { window.cancelAnimationFrame(rafObj.timeOutID); } catch (e) {}
+          try { clearTimeout(rafObj.timeOutID); } catch (e) {}
+        }
+        await new Promise(r => setTimeout(r, 160));
+        rafObj.isRunning = true;
+        rafObj.__pmStepGen = (rafObj.__pmStepGen || 0) + 1;
+        const myGen = rafObj.__pmStepGen;
+        let lastStepTs = 0;
+        const stepFixed = function(now) {
+          if (!rafObj.isRunning || rafObj.__pmStepGen !== myGen) return;
+          rafObj.__pmWaitingBgTimer = false;
+          const ts = (typeof now === 'number' && now > 0) ? now : performance.now();
+          const isBg = Boolean(window.__pmZeroRender || !document.hasFocus() || document.hidden);
+          if (isBg && (ts - lastStepTs) < 55) return;
+          lastStepTs = ts;
+          rafObj.callback(ts);
+          if (!rafObj.isRunning || rafObj.__pmStepGen !== myGen) return;
+          if (rafObj.timeOutID) {
+            try { window.cancelAnimationFrame(rafObj.timeOutID); } catch (e) {}
+            try { clearTimeout(rafObj.timeOutID); } catch (e) {}
+          }
+          if (!window.__pmZeroRender && document.hasFocus() && !document.hidden) {
+            rafObj.timeOutID = window.requestAnimationFrame(stepFixed);
+          } else {
+            const delayMs = window.__pmZeroRender ? 85 : 120;
+            rafObj.__pmWaitingBgTimer = true;
+            rafObj.timeOutID = setTimeout(() => {
+              if (!rafObj.isRunning || rafObj.__pmStepGen !== myGen) return;
+              rafObj.__pmWaitingBgTimer = false;
+              stepFixed(performance.now());
+            }, delayMs);
+          }
+        };
+        rafObj.step = stepFixed;
+        window.__pmSyncActiveState = () => {};
+        stepFixed(performance.now());
+        return { healed: true, docId: String(performance.timeOrigin) };
+      })()`, 4000);
+      if (res && res.healed) {
+        c.framePacerHealedDocId = res.docId || c.documentId || 'healed';
+      }
+    } catch (_) {
+    } finally {
+      c.framePacerHealInFlight = false;
+    }
+  }
+
   async function attach(profileId, targetId, skipIdentityProbe = false, browserContextId = null) {
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
     try {
-    await send('Page.enable', {}, sessionId);
-    await send('Runtime.enable', {}, sessionId);
+    await send('Page.enable', {}, sessionId).catch(() => {});
+    await send('Runtime.enable', {}, sessionId).catch(() => {});
     await configureSessionAssetCache(sessionId);
     const initScript = profileInitScript(profileId);
     const addedInit = await send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId).catch(() => null);
     if (!skipIdentityProbe) {
-      const identity=await evaluate({sessionId},`(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`,6000);
-      if(identity!==profileId)throw Error('PROFILE_ID_CONFLICT');
-      await evaluate({sessionId}, initScript, 6000).catch(() => {});
+      try {
+        const identity = await evaluate({ sessionId }, `(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`, 5000);
+        if (identity && identity !== profileId) throw Error('PROFILE_ID_CONFLICT');
+        await evaluate({ sessionId }, initScript, 5000).catch(() => {});
+      } catch (probeErr) {
+        if (probeErr && probeErr.message === 'PROFILE_ID_CONFLICT') throw probeErr;
+      }
     }
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
     const initScriptId = (addedInit && addedInit.identifier) ? addedInit.identifier : null;
@@ -1690,22 +1762,34 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     for (const t of unattachedPages) {
       try {
         const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
-        let pid = null, charName = null, bodyText = '', probeFailed = false;
+        let pid = null, charName = null, sessionUserId = null, bodyText = '', probeFailed = false;
         try {
           const r = await send('Runtime.evaluate', {
-            expression: `(() => ({
-              pid: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
-              charName: (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData() && window.getLiveCharacterData().name) || window.__charName || null,
-              bodyText: (typeof document !== 'undefined' && document.body && typeof document.body.innerText === 'string') ? document.body.innerText.slice(0, 1500) : ''
-            }))()`,
+            expression: `(() => {
+              let sUser = null;
+              try {
+                const tok = typeof sessionStorage !== 'undefined' && sessionStorage.getItem ? sessionStorage.getItem('aetheria.session') : null;
+                if (tok && tok.split('.').length >= 2) {
+                  const p = JSON.parse(atob(tok.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+                  if (p && typeof p.userId === 'string') sUser = p.userId.trim();
+                }
+              } catch (_) {}
+              return {
+                pid: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
+                charName: (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData() && window.getLiveCharacterData().name) || window.__charName || null,
+                sessionUserId: sUser,
+                bodyText: (typeof document !== 'undefined' && document.body && typeof document.body.innerText === 'string') ? document.body.innerText.slice(0, 1500) : ''
+              };
+            })()`,
             returnByValue: true
-          }, sessionId, 8000);
+          }, sessionId, 6000);
           if(r.exceptionDetails)throw Error('PROFILE_PROBE_FAILED');
           crashedTargetFailCount.delete(t.targetId);
           const val = r && r.result && r.result.value;
           if (val && typeof val === 'object') {
             pid = val.pid || null;
             charName = val.charName || null;
+            sessionUserId = val.sessionUserId || null;
             bodyText = String(val.bodyText || '');
           } else if (typeof val === 'string') {
             pid = val;
@@ -1726,19 +1810,27 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         }
         let identified = pid || allProfiles.find(p => knownTargets.get(p.id) === t.targetId)?.id || null;
         if (!identified) {
-          const unclaimed = allProfiles.filter(p => !stoppedProfiles.has(p.id) && !clients.has(p.id) && (!knownTargets.get(p.id) || !surviving.has(knownTargets.get(p.id))));
-          if (charName || bodyText) {
+          const unclaimed = allProfiles.filter(p => !clients.has(p.id) && (!knownTargets.get(p.id) || !surviving.has(knownTargets.get(p.id))));
+          if (sessionUserId) {
+            const uLower = sessionUserId.toLowerCase();
+            const byUser = unclaimed.filter(p => String(p.account || '').trim().toLowerCase() === uLower);
+            if (byUser.length === 1) identified = byUser[0].id;
+          }
+          if (!identified && (charName || bodyText)) {
             const tokens = new Set(bodyText.split(/[\r\n\s·•]+/).filter(Boolean));
             const byChar = unclaimed.filter(p => {
               const cn = String(p.lastCharName || '').trim();
               if (!cn) return false;
-              return charName === cn || tokens.has(cn) || bodyText.includes('เข้าเกมด้วย ' + cn);
+              return charName === cn || tokens.has(cn) || bodyText.includes(cn) || bodyText.includes('เข้าเกมด้วย ' + cn);
             });
             if (byChar.length === 1) identified = byChar[0].id;
           }
           if (!identified && unattachedPages.length === 1 && unclaimed.length === 1 && clients.size > 0) {
             identified = unclaimed[0].id;
           }
+        }
+        if (identified && stoppedProfiles.has(identified) && (sessionUserId || charName || pid)) {
+          stoppedProfiles.delete(identified);
         }
         const profile = identified && !stoppedProfiles.has(identified) && allProfiles.find(p => p.id === identified);
         const isCustomCtx = Boolean(t.browserContextId && customContexts.has(t.browserContextId));
@@ -1752,11 +1844,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           }
           const c = await attach(profile.id, t.targetId, probeFailed, isCustomCtx ? t.browserContextId : null);
           startProxy(c, profile.debugPort);
-          await injectBot(c);
+          injectBot(c).catch(() => {});
         }
       } catch (e) {}
     }
-    for (const c of clients.values()) await injectBot(c);
+    for (const c of clients.values()) injectBot(c).catch(() => {});
   }
 
   // ---------- per-profile HTTP API (same as the Electron loader's) ----------
@@ -1816,7 +1908,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               if (evalRes && typeof evalRes === 'object') {
                 c.lastGoodState = evalRes;
                 c.lastGoodStateAt = Date.now();
-                if (Date.now() - (c.lastStorageSyncAt || 0) > 6000) {
+                ensureClientFramePacerHealed(c).catch(() => {});
+                if (Date.now() - (c.lastStorageSyncAt || 0) > 25000) {
                   c.lastStorageSyncAt = Date.now();
                   syncClientStorage(c).catch(() => {});
                 }
@@ -1825,7 +1918,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               evalRes = await evaluate(c, code);
               if (/applyScriptPlan|applyPelicanSettings|importAllBotSettings|setItem\s*\(\s*['"]pelican_/.test(code)) {
                 c.lastStorageSyncAt = Date.now();
-                syncClientStorage(c).catch(() => {});
+                syncClientStorage(c, true).catch(() => {});
               }
             }
             return reply(200, { success: true, result: evalRes });
@@ -1858,10 +1951,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             if (st) {
               c.lastGoodState = st;
               c.lastGoodStateAt = Date.now();
+              ensureClientFramePacerHealed(c).catch(() => {});
             }
             if (st === null && !c.injectionInFlight && !c.retryTimer) {
               injectBot(c).catch(() => {});
-            } else if (st && Date.now() - (c.lastStorageSyncAt || 0) > 6000) {
+            } else if (st && Date.now() - (c.lastStorageSyncAt || 0) > 25000) {
               c.lastStorageSyncAt = Date.now();
               syncClientStorage(c).catch(() => {});
             }

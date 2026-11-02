@@ -7692,7 +7692,7 @@ public class PmFocus {
     const plansData = loadPlans();
     const assignedPlanId = plansData && plansData.assignments ? plansData.assignments[id] : null;
     const assignedPlan = assignedPlanId ? (plansData.profiles || []).find(x => x.id === assignedPlanId) : null;
-    const planShouldEnable = Boolean(assignedPlan && !(plansData.userDisabled && plansData.userDisabled[id]));
+    const planShouldEnable = Boolean(assignedPlan && plansData.pendingEnable && plansData.pendingEnable[id]);
 
     const code = targetRunning ? `(() => {
       try {

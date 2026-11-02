@@ -496,6 +496,187 @@ function createMarketSniperService({
     return queue;
   }
 
+  function buildSniperClaimAndFlipRuntimeJs() {
+    return `
+      if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
+      if (typeof window.isSellWhitelisted === 'function' && !window.__pmSniperWlHooked) {
+        const origWl = window.isSellWhitelisted;
+        window.isSellWhitelisted = function (nm, customWl) {
+          if (nm && window.__pmSniperProtectedItems && window.__pmSniperProtectedItems.has(String(nm).trim().toLowerCase())) {
+            return true;
+          }
+          return origWl.call(this, nm, customWl);
+        };
+        window.__pmSniperWlHooked = true;
+      }
+      if (typeof window.__pmSniperClaimAndFlip !== 'function') {
+        window.__pmSniperClaimAndFlip = async function (targetInfo, paidTotal, waitBeforeCollectMs = 750) {
+          const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+          if (!room || !room.connection || !room.connection.isOpen) {
+            return { relisted: false, foundInBag: false, listedUnitsCount: 0, evictedItemName: null, evictedItemPrice: 0 };
+          }
+          if (waitBeforeCollectMs >= 0) {
+            if (waitBeforeCollectMs > 0) {
+              await new Promise(r => setTimeout(r, waitBeforeCollectMs));
+            }
+            try { room.send('market', { op: 'collect_all' }); } catch (_) {}
+            await new Promise(r => setTimeout(r, 850));
+            if (typeof window.refreshInventoryAndWeight === 'function') {
+              try { window.refreshInventoryAndWeight(); } catch (_) {}
+            }
+            await new Promise(r => setTimeout(r, 300));
+          }
+
+          let relisted = false;
+          let foundInBag = false;
+          let evictedInfo = null;
+          let listedUnitsCount = 0;
+          const normName = String(targetInfo.itemName || '').trim().toLowerCase();
+          const isSingle = Boolean(targetInfo.singleUnit || /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(normName));
+          if (normName && window.__pmSniperProtectedItems) window.__pmSniperProtectedItems.add(normName);
+
+          const findMatchingInBag = () => {
+            const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+            return bag.filter(b => {
+              if (!b || b.locked) return false;
+              const bId = Number((b.raw && b.raw.itemId) ?? b.id);
+              const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
+              if (bId === Number(targetInfo.itemId) && bRef === Number(targetInfo.refine)) return true;
+              return String(b.name || '').trim().toLowerCase() === normName && bRef === Number(targetInfo.refine);
+            });
+          };
+
+          const initialCandidates = findMatchingInBag();
+          foundInBag = initialCandidates.length > 0;
+
+          if (foundInBag && targetInfo.autoFlip && targetInfo.relistPriceTotal > paidTotal) {
+            const totalBagQty = initialCandidates.reduce((s, c) => s + (Number(c.qty) || 1), 0);
+            const totalWantedQty = Math.min(Number(targetInfo.qty) || 1, totalBagQty);
+            let unitPrice = Math.max(1, Number(targetInfo.flipUnitPrice) || Math.round((Number(targetInfo.relistPriceTotal) || 0) / Math.max(1, Number(targetInfo.qty) || 1)));
+            if (typeof window.fetchItemSmartSellPrice === 'function' && initialCandidates[0]) {
+              try {
+                const liveSmart = Number(await window.fetchItemSmartSellPrice(initialCandidates[0])) || 0;
+                if (liveSmart > 0 && (liveSmart * totalWantedQty) > paidTotal && liveSmart >= Math.round(unitPrice * 0.55)) {
+                  unitPrice = liveSmart;
+                }
+              } catch (_) {}
+            }
+            const listingsToPost = isSingle ? Math.min(2, Math.max(1, totalWantedQty)) : 1;
+            const perListingQty = isSingle ? 1 : totalWantedQty;
+            const perListingPrice = isSingle ? unitPrice : (unitPrice * totalWantedQty);
+            const totalDepositFee = Math.max(1, Math.floor(perListingPrice * 2 / 100)) * listingsToPost;
+            const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
+
+            if (totalWantedQty > 0 && (unitPrice * totalWantedQty) > paidTotal && (curZeny === 0 || curZeny >= totalDepositFee)) {
+              const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
+              const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
+              const hasPrem = Boolean(
+                (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
+                (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
+              );
+              const maxSlots = hasPrem ? 20 : 3;
+
+              const mineMsg = await new Promise(resolve => {
+                let unsub;
+                const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2200);
+                unsub = room.onMessage('market_mine', m => { clearTimeout(t); if (unsub) unsub(); resolve(m); });
+                try { room.send('market', { op: 'mine' }); } catch (_) { clearTimeout(t); if (unsub) unsub(); resolve(null); }
+              });
+
+              const activeList = (mineMsg && Array.isArray(mineMsg.active)) ? mineMsg.active : [];
+              const freeSlotsNow = Math.max(0, maxSlots - activeList.length);
+              const needEvictCount = Math.max(0, listingsToPost - freeSlotsNow);
+
+              if (needEvictCount > 0) {
+                const nowTs = Date.now();
+                const evictable = activeList
+                  .filter(a => a && a.listingId && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs) && Number(a.price) > 0 && Number(a.price) <= 50000)
+                  .sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
+
+                const toEvict = evictable.slice(0, needEvictCount);
+                if (toEvict.length > 0) {
+                  if (!window.__pmSniperEvictedItemNames) window.__pmSniperEvictedItemNames = new Set();
+                  if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
+                  const evictedNames = [];
+                  let firstEvictPrice = 0;
+                  for (const targetEvict of toEvict) {
+                    const evName = (targetEvict.item && targetEvict.item.name) || 'Item';
+                    const evNorm = String(evName).trim().toLowerCase();
+                    const evPrice = Number(targetEvict.price) || 0;
+                    if (!firstEvictPrice) firstEvictPrice = evPrice;
+                    evictedNames.push(evName);
+                    window.__pmSniperEvictedItemNames.add(evNorm);
+                    window.__autoSellRuleBackoffUntil[evNorm] = Date.now() + 30 * 60 * 1000;
+                    try { room.send('market', { op: 'cancel', listingId: Number(targetEvict.listingId) }); } catch (_) {}
+                    await new Promise(r => setTimeout(r, 320));
+                  }
+                  try { room.send('market', { op: 'collect_all' }); } catch (_) {}
+                  await new Promise(r => setTimeout(r, 500));
+                  evictedInfo = { name: evictedNames.join(', '), price: firstEvictPrice, count: toEvict.length };
+                }
+              }
+
+              for (let u = 0; u < listingsToPost; u++) {
+                const freshCandidates = findMatchingInBag();
+                if (!freshCandidates.length) break;
+                const freshTarget = freshCandidates[0];
+                const beforeQty = Number(freshTarget.qty) || 1;
+                const qtyThisPost = Math.min(perListingQty, beforeQty);
+                if (qtyThisPost <= 0) break;
+                const priceThisPost = isSingle ? unitPrice : (unitPrice * qtyThisPost);
+
+                window.__pmExplicitHoursOnce = true;
+                try {
+                  room.send('market', {
+                    op: 'list',
+                    slot: Number(freshTarget.slot),
+                    qty: qtyThisPost,
+                    price: priceThisPost,
+                    hours: Number(targetInfo.relistDurationHours) || 24
+                  });
+                } finally {
+                  window.__pmExplicitHoursOnce = false;
+                }
+
+                let postedOne = false;
+                for (let i = 0; i < 8; i++) {
+                  await new Promise(r => setTimeout(r, 250));
+                  const nowBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+                  const nowSlot = nowBag.find(x => Number(x.slot) === Number(freshTarget.slot));
+                  const left = nowSlot ? (Number(nowSlot.qty) || 0) : 0;
+                  if (left <= beforeQty - qtyThisPost) {
+                    postedOne = true;
+                    listedUnitsCount += qtyThisPost;
+                    relisted = true;
+                    break;
+                  }
+                }
+                if (!postedOne) break;
+                if (u + 1 < listingsToPost) {
+                  await new Promise(r => setTimeout(r, 320));
+                }
+              }
+
+              if (relisted) {
+                try { room.send('market', { op: 'mine' }); } catch (_) {}
+              }
+            }
+          }
+          if (relisted && window.__pmSniperProtectedItems && listedUnitsCount >= (Number(targetInfo.qty) || 1)) {
+            window.__pmSniperProtectedItems.delete(normName);
+          }
+          return {
+            relisted,
+            foundInBag,
+            listedUnitsCount,
+            evictedItemName: evictedInfo ? evictedInfo.name : null,
+            evictedItemPrice: evictedInfo ? evictedInfo.price : 0
+          };
+        };
+      }
+    `;
+  }
+
   // Probe all online profiles to get their live Zeny, Premium status, Market Quota, and connection readiness
   async function getOnlineScreenStates() {
     const profiles = (typeof loadProfiles === 'function' ? loadProfiles() : []) || [];
@@ -505,9 +686,38 @@ function createMarketSniperService({
     const sniperAutoFlip = Boolean(config.enabled && config.mode === 'auto_flip');
     const reserveSlots = sniperAutoFlip ? 2 : 0;
 
+    // Build map of items bought/flipped by Sniper so any auto-cancelled flip item in bag knows its reference flip price
+    const sniperFlippedMap = {};
+    if (Array.isArray(state.history)) {
+      for (const h of state.history) {
+        if (!h || !h.itemName) continue;
+        const nm = String(h.itemName).trim().toLowerCase();
+        const refP = Number(h.relistUnitPrice || h.cleanRefUnitPrice) || 0;
+        if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
+      }
+    }
+    if (Array.isArray(state.activeBids)) {
+      for (const b of state.activeBids) {
+        if (!b || !b.itemName) continue;
+        const nm = String(b.itemName).trim().toLowerCase();
+        const refP = Number(b.flipUnitPrice || b.cleanRefUnitPrice) || 0;
+        if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
+      }
+    }
+    if (Array.isArray(state.pendingFlips)) {
+      for (const pf of state.pendingFlips) {
+        if (!pf || !pf.itemName) continue;
+        const nm = String(pf.itemName).trim().toLowerCase();
+        const refP = Number(pf.flipUnitPrice || pf.cleanRefUnitPrice) || 0;
+        if (nm && refP > 0 && !sniperFlippedMap[nm]) sniperFlippedMap[nm] = refP;
+      }
+    }
+
     const probeCode = `(() => {
       const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
       if (!room || !room.connection || !room.connection.isOpen) return { connected: false };
+      window.__pmSniperFlippedItems = Object.assign(window.__pmSniperFlippedItems || {}, ${JSON.stringify(sniperFlippedMap)});
+      ${buildSniperClaimAndFlipRuntimeJs()}
       if (room !== window.__pmSniperMineHookedRoomV3) {
         window.__pmSniperMineHookedRoomV3 = room;
         room.onMessage('market_mine', (msg) => {
@@ -618,7 +828,8 @@ function createMarketSniperService({
           if (!b || b.locked) continue;
           const bName = String(b.name || '').trim();
           const bNorm = bName.toLowerCase();
-          if (bName && /\\bCard$/i.test(bName) && !existingRuleNames.has(bNorm)) {
+          const isCardOrStoneItem = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(bName) || b.type === 'Card' || b.type === 'AwakeningStone' || b.type === 'WeaponStone';
+          if (bName && isCardOrStoneItem && !existingRuleNames.has(bNorm)) {
             window.__autoMarketSellConfig.rules.unshift({
               id: 'rule_sniper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
               itemName: bName,
@@ -1892,6 +2103,7 @@ function createMarketSniperService({
             const settleCode = `(async () => {
               const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
               if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
+              ${buildSniperClaimAndFlipRuntimeJs()}
               const lid = ${Number(bid.listingId)};
               if (window.__pmSniperAuctions && window.__pmSniperAuctions[lid]) {
                 delete window.__pmSniperAuctions[lid];
@@ -1987,6 +2199,35 @@ function createMarketSniperService({
         }
       }
 
+      // Reconcile any orphaned 'queued_flip' entries in state.activeBids that are missing from state.pendingFlips
+      if (config.mode === 'auto_flip' && Array.isArray(state.activeBids)) {
+        if (!Array.isArray(state.pendingFlips)) state.pendingFlips = [];
+        const pendingIds = new Set(state.pendingFlips.map(pf => Number(pf && pf.listingId)).filter(Boolean));
+        for (const b of state.activeBids) {
+          if (!b || b.status !== 'queued_flip') continue;
+          const lid = Number(b.listingId) || 0;
+          if (lid > 0 && !pendingIds.has(lid) && (now - (Number(b.updatedAt || b.createdAt) || 0)) < 6 * 3600 * 1000) {
+            const flipTotal = (Number(b.flipUnitPrice) || 0) * Math.max(1, Number(b.qty) || 1);
+            enqueuePendingFlip({
+              listingId: lid,
+              itemId: b.itemId,
+              itemName: b.itemName,
+              refine: b.refine || 0,
+              qty: b.qty || 1,
+              icon: b.icon || null,
+              buyPriceTotal: b.currentBid || 0,
+              cleanRefUnitPrice: b.cleanRefUnitPrice || 0,
+              flipUnitPrice: b.flipUnitPrice || 0,
+              relistPriceTotal: flipTotal,
+              expectedNetProfit: b.expectedNetProfit || 0,
+              buyerProfileId: b.buyerProfileId,
+              buyerCharName: b.buyerCharName
+            });
+            pendingIds.add(lid);
+          }
+        }
+      }
+
       // 2) Process Pending Flip Queue (items waiting for a free market slot)
       if (config.mode === 'auto_flip' && Array.isArray(state.pendingFlips) && state.pendingFlips.length > 0) {
         const remainingQueue = [];
@@ -2001,6 +2242,7 @@ function createMarketSniperService({
           const retryCode = `(async () => {
             const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
             if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
+            ${buildSniperClaimAndFlipRuntimeJs()}
             if (typeof window.__pmSniperClaimAndFlip !== 'function') return { ok: false };
             const flipOut = await window.__pmSniperClaimAndFlip({
               itemId: ${Number(item.itemId)},

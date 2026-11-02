@@ -1315,9 +1315,457 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
     const curRoom = ${ROOM_JS};
     if (curRoom) window.__pmHookMarketRoomSend(curRoom);
 
-    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 2) {
+    if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
+    if (typeof window.isSellWhitelisted === 'function' && !window.__pmSniperWlHooked) {
+      const origWl = window.isSellWhitelisted;
+      window.isSellWhitelisted = function (nm, customWl) {
+        if (nm && window.__pmSniperProtectedItems && window.__pmSniperProtectedItems.has(String(nm).trim().toLowerCase())) {
+          return true;
+        }
+        return origWl.call(this, nm, customWl);
+      };
+      window.__pmSniperWlHooked = true;
+    }
+
+    if (!Array.isArray(window.__pmAutoRelistAfterCancel)) {
+      window.__pmAutoRelistAfterCancel = [];
+      try {
+        const pid = window.__pmProfileId;
+        const rawQ = (pid && localStorage.getItem('pelican_' + pid + '__auto_relist_queue')) || localStorage.getItem('pelican_auto_relist_queue');
+        if (rawQ) {
+          const parsedQ = JSON.parse(rawQ);
+          if (Array.isArray(parsedQ)) window.__pmAutoRelistAfterCancel = parsedQ;
+        }
+      } catch (_) {}
+    }
+
+    if (!(window.__pmSeenCancelledClosedIds instanceof Set)) {
+      window.__pmSeenCancelledClosedIds = new Set();
+      try {
+        const pid = window.__pmProfileId;
+        const rawS = (pid && localStorage.getItem('pelican_' + pid + '__seen_cancelled_ids')) || localStorage.getItem('pelican_seen_cancelled_ids');
+        if (rawS) {
+          const parsedS = JSON.parse(rawS);
+          if (Array.isArray(parsedS)) {
+            for (const id of parsedS) {
+              if (Number(id) > 0) window.__pmSeenCancelledClosedIds.add(Number(id));
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    window.__pmSaveAutoRelistState = function () {
+      try {
+        const pid = window.__pmProfileId;
+        const qJson = JSON.stringify((window.__pmAutoRelistAfterCancel || []).slice(-60));
+        localStorage.setItem('pelican_auto_relist_queue', qJson);
+        if (pid) localStorage.setItem('pelican_' + pid + '__auto_relist_queue', qJson);
+        const sJson = JSON.stringify(Array.from(window.__pmSeenCancelledClosedIds || []).slice(-250));
+        localStorage.setItem('pelican_seen_cancelled_ids', sJson);
+        if (pid) localStorage.setItem('pelican_' + pid + '__seen_cancelled_ids', sJson);
+      } catch (_) {}
+    };
+
+    window.__pmQueueCancelledForRelist = function (targets) {
+      if (!Array.isArray(targets) || targets.length === 0) return;
+      if (!Array.isArray(window.__pmAutoRelistAfterCancel)) window.__pmAutoRelistAfterCancel = [];
+      if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
+      const nowTs = Date.now();
+      for (const t of targets) {
+        if (!t) continue;
+        const lid = Number(t.listingId ?? t.id) || 0;
+        if (lid > 0 && window.__pmSeenCancelledClosedIds instanceof Set) {
+          window.__pmSeenCancelledClosedIds.add(lid);
+        }
+        const itemObj = t.item || t;
+        const itemName = String((itemObj && itemObj.name) || t.name || '').trim();
+        if (!itemName) continue;
+        const normName = itemName.toLowerCase();
+        const itemId = Number((itemObj && (itemObj.itemId ?? itemObj.id)) ?? t.itemId) || 0;
+        const refine = Number((itemObj && itemObj.refine) ?? t.refine) || 0;
+        const qty = Math.max(1, Number(t.qty ?? (itemObj && itemObj.qty)) || 1);
+        const totalPrice = Math.max(0, Number(t.price) || 0);
+        const prevUnitPrice = totalPrice > 0 ? Math.max(1, Math.round(totalPrice / qty)) : 0;
+
+        if (window.__pmSniperBlockCheapAutoSell && totalPrice > 0 && totalPrice <= 50000) continue;
+        if (window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(normName)) continue;
+
+        window.__pmSniperProtectedItems.add(normName);
+        const existing = window.__pmAutoRelistAfterCancel.find(
+          x => x && x.normName === normName && Number(x.refine || 0) === refine
+        );
+        if (existing) {
+          existing.qty = Math.max(Number(existing.qty) || 1, qty);
+          if (prevUnitPrice > 0) existing.prevUnitPrice = prevUnitPrice;
+          if (itemId > 0 && !existing.itemId) existing.itemId = itemId;
+          existing.queuedAt = nowTs;
+        } else {
+          window.__pmAutoRelistAfterCancel.push({
+            listingId: lid,
+            itemId,
+            itemName,
+            normName,
+            refine,
+            qty,
+            prevUnitPrice,
+            queuedAt: nowTs
+          });
+        }
+      }
+      if (typeof window.__pmSaveAutoRelistState === 'function') window.__pmSaveAutoRelistState();
+    };
+
+    window.__pmProcessAutoRelistQueue = async function (rm) {
+      if (window.__pmRelistingCancelledNow || window.__isAutoSellingNow || window.__pmAutoCancellingMarketNow) {
+        return { relistedCount: 0 };
+      }
+      const room = rm || (${ROOM_JS});
+      if (!room || !room.connection || !room.connection.isOpen) return { relistedCount: 0 };
+      if (!Array.isArray(window.__pmAutoRelistAfterCancel)) window.__pmAutoRelistAfterCancel = [];
+      if (!(window.__pmSeenCancelledClosedIds instanceof Set)) window.__pmSeenCancelledClosedIds = new Set();
+      if (!window.__pmAutoRelistCooldownUntil) window.__pmAutoRelistCooldownUntil = {};
+      if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
+
+      // Step A: Recover recently cancelled listings (> 50,000 z) from market_mine.closed if not yet seen
+      const closedList = (window.__lastMarketMine && Array.isArray(window.__lastMarketMine.closed))
+        ? window.__lastMarketMine.closed
+        : [];
+      const newlyDiscoveredClosed = [];
+      for (const c of closedList) {
+        if (!c || (c.status !== 'cancelled' && c.reason !== 'cancelled')) continue;
+        const lid = Number(c.listingId ?? c.id) || 0;
+        if (lid > 0 && window.__pmSeenCancelledClosedIds.has(lid)) continue;
+        if (lid > 0) window.__pmSeenCancelledClosedIds.add(lid);
+        if ((Number(c.price) || 0) > 50000) {
+          newlyDiscoveredClosed.push(c);
+        }
+      }
+      if (newlyDiscoveredClosed.length > 0 && typeof window.__pmQueueCancelledForRelist === 'function') {
+        window.__pmQueueCancelledForRelist(newlyDiscoveredClosed);
+      }
+
+      // Step B: Recover unlocked Sniper flip items & high-value Craft materials sitting in bag that aren't in Auto-Sell rules
+      const cfg = window.__pmMarketGlobalSettings;
+      const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
+      if (cfg && cfg.autoCancelEnabled) {
+        const bagNow = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+        const flippedMap = (window.__pmSniperFlippedItems && typeof window.__pmSniperFlippedItems === 'object')
+          ? window.__pmSniperFlippedItems
+          : {};
+        for (const b of bagNow) {
+          if (!b || b.locked || b.equipped) continue;
+          const bName = String(b.name || '').trim();
+          if (!bName) continue;
+          const bNorm = bName.toLowerCase();
+          const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
+          const bQty = Math.max(1, Number(b.qty) || 1);
+          if (window.__pmAutoRelistCooldownUntil[bNorm] > Date.now()) continue;
+          if (window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(bNorm)) continue;
+          if (window.__pmSniperKnownCheapItems && window.__pmSniperKnownCheapItems.has(bNorm)) continue;
+          if (typeof window.isStashOnlyItem === 'function' && window.isStashOnlyItem(bName)) continue;
+          if (typeof window.shouldKeepGearByStatRule === 'function' && window.shouldKeepGearByStatRule(b)) continue;
+
+          const alreadyQueued = window.__pmAutoRelistAfterCancel.some(
+            x => x && x.normName === bNorm && Number(x.refine || 0) === bRef
+          );
+          if (alreadyQueued) continue;
+
+          const hasActiveRule = Boolean(
+            window.__autoMarketSellConfig &&
+            window.__autoMarketSellConfig.enabled &&
+            Array.isArray(window.__autoMarketSellConfig.rules) &&
+            window.__autoMarketSellConfig.rules.some(r => r && r.enabled !== false && String(r.itemName || r.name || '').trim().toLowerCase() === bNorm && bQty >= Math.max(1, Number(r.minQty) || 1))
+          );
+          if (hasActiveRule) continue;
+
+          const sniperRefUnit = Number(flippedMap[bNorm]) || 0;
+          const isCraftStack = (b.type === 'Craft' || (b.raw && b.raw.type === 'Craft')) && bQty >= 20 && curZeny >= 300000;
+          if (sniperRefUnit > 0 || isCraftStack) {
+            window.__pmSniperProtectedItems.add(bNorm);
+            window.__pmAutoRelistAfterCancel.push({
+              listingId: 0,
+              itemId: Number((b.raw && b.raw.itemId) ?? b.id) || 0,
+              itemName: bName,
+              normName: bNorm,
+              refine: bRef,
+              qty: bQty,
+              prevUnitPrice: sniperRefUnit,
+              queuedAt: Date.now()
+            });
+          }
+        }
+      }
+
+      if (!window.__pmAutoRelistAfterCancel.length) return { relistedCount: 0 };
+
+      window.__pmRelistingCancelledNow = true;
+      let relistedCount = 0;
+      try {
+        const awaitReply = ${AWAIT_REPLY_JS};
+        let mine = window.__lastMarketMine;
+        if (!mine || !Array.isArray(mine.active) || (Date.now() - (window.__lastMarketMineCheckTs || 0) > 8000)) {
+          const fresh = await awaitReply(room, 'market_mine', () => {
+            try { room.send('market', { op: 'mine' }); } catch (_) {}
+          }, 2800);
+          if (fresh && Array.isArray(fresh.active)) {
+            mine = fresh;
+            window.__lastMarketMine = fresh;
+            window.__lastMarketMineCheckTs = Date.now();
+          }
+        }
+        const activeList = (mine && Array.isArray(mine.active)) ? mine.active.slice() : [];
+        const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
+        const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
+        const hasPrem = Boolean(
+          (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
+          (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
+        );
+        const activeLimit = hasPrem ? 20 : 5;
+        const listHours = [12, 24, 48].includes(Number(cfg && cfg.durationHours)) ? Number(cfg.durationHours) : 12;
+
+        const remainingQueue = [];
+        for (const entry of window.__pmAutoRelistAfterCancel) {
+          if (!entry || !entry.normName) continue;
+          const nowTs = Date.now();
+          if (nowTs - (Number(entry.queuedAt) || nowTs) > 6 * 3600 * 1000) continue;
+          if ((window.__pmAutoRelistCooldownUntil[entry.normName] || 0) > nowTs) {
+            remainingQueue.push(entry);
+            continue;
+          }
+
+          const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+          const candidates = bag.filter(b => {
+            if (!b || b.locked || b.equipped) return false;
+            if (typeof window.isStashOnlyItem === 'function' && window.isStashOnlyItem(b.name)) return false;
+            if (typeof window.shouldKeepGearByStatRule === 'function' && window.shouldKeepGearByStatRule(b)) return false;
+            const bId = Number((b.raw && b.raw.itemId) ?? b.id) || 0;
+            const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
+            const bNorm = String(b.name || '').trim().toLowerCase();
+            if (entry.itemId > 0 && bId === entry.itemId && bRef === Number(entry.refine || 0)) return true;
+            return bNorm === entry.normName && bRef === Number(entry.refine || 0);
+          });
+
+          if (!candidates.length) {
+            if (nowTs - (Number(entry.queuedAt) || 0) < 90000) {
+              remainingQueue.push(entry);
+            } else if (window.__pmSniperProtectedItems) {
+              window.__pmSniperProtectedItems.delete(entry.normName);
+            }
+            continue;
+          }
+
+          const sampleItem = candidates[0];
+          const reserveGuild = (typeof window.getGuildDonationReserveQty === 'function') ? (Number(window.getGuildDonationReserveQty(sampleItem.name)) || 0) : 0;
+          const reserveOre = (typeof window.getGearOreReserveQty === 'function') ? (Number(window.getGearOreReserveQty(sampleItem.name)) || 0) : 0;
+          const reserveQty = Math.max(reserveGuild, reserveOre);
+          const totalBagQty = candidates.reduce((s, x) => s + (Number(x.qty) || 1), 0);
+          const sellableTotal = Math.max(0, totalBagQty - reserveQty);
+          if (sellableTotal <= 0) {
+            if (window.__pmSniperProtectedItems) window.__pmSniperProtectedItems.delete(entry.normName);
+            continue;
+          }
+
+          let unitPrice = 0;
+          if (typeof window.fetchItemSmartSellPrice === 'function') {
+            try {
+              unitPrice = Number(await window.fetchItemSmartSellPrice(sampleItem)) || 0;
+            } catch (_) {}
+          }
+          const sniperRef = (window.__pmSniperFlippedItems && Number(window.__pmSniperFlippedItems[entry.normName])) || 0;
+          const fallbackUnit = Math.max(Number(entry.prevUnitPrice) || 0, sniperRef);
+          if (!(unitPrice > 0) && fallbackUnit > 0) {
+            unitPrice = fallbackUnit;
+          }
+          if (sniperRef > 0 && unitPrice > 0 && unitPrice < Math.round(sniperRef * 0.55)) {
+            unitPrice = sniperRef;
+          } else if (entry.prevUnitPrice > 0 && unitPrice > 0 && unitPrice < Math.round(entry.prevUnitPrice * 0.45)) {
+            unitPrice = Math.round(entry.prevUnitPrice * 0.85);
+          }
+
+          if (!(unitPrice > 0)) {
+            window.__pmAutoRelistCooldownUntil[entry.normName] = Date.now() + 120000;
+            remainingQueue.push(entry);
+            continue;
+          }
+
+          const isSingle = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(String(sampleItem.name || entry.itemName || '')) ||
+            sampleItem.type === 'Equipment' || (sampleItem.raw && sampleItem.raw.type === 'Equipment');
+
+          if (isSingle && /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(String(sampleItem.name || '')) &&
+              window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
+            const hasRule = window.__autoMarketSellConfig.rules.some(
+              r => r && String(r.itemName || r.name || '').trim().toLowerCase() === entry.normName
+            );
+            if (!hasRule) {
+              window.__autoMarketSellConfig.rules.unshift({
+                id: 'rule_relist_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+                itemName: String(sampleItem.name || entry.itemName),
+                minQty: 1,
+                sellMode: 'min',
+                enabled: true
+              });
+              if (typeof window.saveMarketSellConfig === 'function') {
+                try { window.saveMarketSellConfig(); } catch (_) {}
+              }
+            }
+          }
+
+          const activeSameCount = activeList.filter(
+            a => a && String((a.item && a.item.name) || '').trim().toLowerCase() === entry.normName
+          ).length;
+
+          const postsWanted = isSingle
+            ? Math.min(Math.max(0, 2 - activeSameCount), sellableTotal)
+            : 1;
+
+          if (isSingle && postsWanted <= 0) {
+            // Already has 2 active single-unit listings on market; Auto-Sell rule will list remaining as they sell
+            continue;
+          }
+
+          const firstSlotQty = Math.min(Number(sampleItem.qty) || 1, sellableTotal);
+          const estTotalValue = unitPrice * (isSingle ? 1 : firstSlotQty);
+          if (estTotalValue <= 50000 && (window.__pmSniperBlockCheapAutoSell || !entry.listingId)) {
+            if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
+            window.__pmSniperKnownCheapItems.add(entry.normName);
+            window.__pmAutoRelistCooldownUntil[entry.normName] = Date.now() + 1800000;
+            continue;
+          }
+
+          // Ensure market slot is available (evict 1 cheap <= 50k item if needed on Sniper screen)
+          if (activeList.length >= activeLimit) {
+            if (window.__pmSniperBlockCheapAutoSell && estTotalValue > 50000) {
+              const nowM = Date.now();
+              const cheapIdx = activeList.findIndex(
+                a => a && a.listingId && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowM) && Number(a.price) > 0 && Number(a.price) <= 50000
+              );
+              if (cheapIdx >= 0) {
+                const ev = activeList[cheapIdx];
+                const evNorm = String((ev.item && ev.item.name) || '').trim().toLowerCase();
+                if (!window.__pmSniperEvictedItemNames) window.__pmSniperEvictedItemNames = new Set();
+                if (evNorm) window.__pmSniperEvictedItemNames.add(evNorm);
+                try { room.send('market', { op: 'cancel', listingId: Number(ev.listingId) }); } catch (_) {}
+                await new Promise(r => setTimeout(r, 320));
+                try { room.send('market', { op: 'collect_all' }); } catch (_) {}
+                await new Promise(r => setTimeout(r, 450));
+                activeList.splice(cheapIdx, 1);
+              } else {
+                remainingQueue.push(entry);
+                continue;
+              }
+            } else {
+              remainingQueue.push(entry);
+              continue;
+            }
+          }
+
+          let postedAnyForEntry = false;
+          for (let pIdx = 0; pIdx < postsWanted; pIdx++) {
+            if (activeList.length >= activeLimit) break;
+            const freshBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+            const freshSlot = freshBag.find(b => {
+              if (!b || b.locked || b.equipped) return false;
+              const bId = Number((b.raw && b.raw.itemId) ?? b.id) || 0;
+              const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
+              const bNorm = String(b.name || '').trim().toLowerCase();
+              if (entry.itemId > 0 && bId === entry.itemId && bRef === Number(entry.refine || 0)) return true;
+              return bNorm === entry.normName && bRef === Number(entry.refine || 0);
+            });
+            if (!freshSlot) break;
+            const beforeQty = Number(freshSlot.qty) || 1;
+            const qtyThisPost = isSingle ? 1 : Math.min(beforeQty, sellableTotal);
+            if (qtyThisPost <= 0) break;
+            const priceThisPost = unitPrice * qtyThisPost;
+
+            window.__pmExplicitHoursOnce = true;
+            try {
+              room.send('market', {
+                op: 'list',
+                slot: Number(freshSlot.slot),
+                qty: qtyThisPost,
+                price: priceThisPost,
+                hours: listHours
+              });
+            } finally {
+              window.__pmExplicitHoursOnce = false;
+            }
+
+            let postedOne = false;
+            for (let w = 0; w < 8; w++) {
+              await new Promise(r => setTimeout(r, 250));
+              const checkBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+              const checkSlot = checkBag.find(x => Number(x.slot) === Number(freshSlot.slot));
+              const leftQty = checkSlot ? (Number(checkSlot.qty) || 0) : 0;
+              if (leftQty <= beforeQty - qtyThisPost) {
+                postedOne = true;
+                postedAnyForEntry = true;
+                relistedCount += 1;
+                activeList.push({
+                  listingId: -Date.now(),
+                  qty: qtyThisPost,
+                  price: priceThisPost,
+                  item: { name: freshSlot.name || entry.itemName }
+                });
+                console.log(
+                  '%c[PmheeAether Market] ♻️ ตั้งขายกลับอัตโนมัติสำเร็จ: ' +
+                  (freshSlot.name || entry.itemName) +
+                  ' x' + qtyThisPost +
+                  ' @ ' + unitPrice.toLocaleString() + ' z/ชิ้น (รวม ' + priceThisPost.toLocaleString() + ' z · ' + listHours + ' ชม.)',
+                  'color: #10b981; font-weight: bold;'
+                );
+                break;
+              }
+            }
+            if (!postedOne) break;
+            if (pIdx + 1 < postsWanted) {
+              await new Promise(r => setTimeout(r, 320));
+            }
+          }
+
+          if (!postedAnyForEntry) {
+            window.__pmAutoRelistCooldownUntil[entry.normName] = Date.now() + 60000;
+            remainingQueue.push(entry);
+          } else {
+            // Check if there are still remaining non-single stacks in bag to list
+            if (!isSingle) {
+              const afterBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+              const leftTotal = afterBag
+                .filter(b => b && !b.locked && !b.equipped && String(b.name || '').trim().toLowerCase() === entry.normName && Number(b.refine || (b.raw && b.raw.refine) || 0) === Number(entry.refine || 0))
+                .reduce((s, x) => s + (Number(x.qty) || 1), 0);
+              if (leftTotal - reserveQty > 0) {
+                remainingQueue.push(entry);
+              } else if (window.__pmSniperProtectedItems) {
+                window.__pmSniperProtectedItems.delete(entry.normName);
+              }
+            }
+          }
+        }
+
+        window.__pmAutoRelistAfterCancel = remainingQueue;
+        if (typeof window.__pmSaveAutoRelistState === 'function') window.__pmSaveAutoRelistState();
+
+        if (relistedCount > 0) {
+          await new Promise(r => setTimeout(r, 350));
+          const afterMine = await awaitReply(room, 'market_mine', () => {
+            try { room.send('market', { op: 'mine' }); } catch (_) {}
+          }, 2800);
+          if (afterMine && Array.isArray(afterMine.active)) {
+            window.__lastMarketMine = afterMine;
+            window.__myMarketActiveCount = afterMine.active.length;
+            window.__lastMarketMineCheckTs = Date.now();
+          }
+        }
+      } catch (_) {
+      } finally {
+        window.__pmRelistingCancelledNow = false;
+      }
+      return { relistedCount };
+    };
+
+    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 4) {
       if (window.__pmMarketGlobalTimer) { try { clearInterval(window.__pmMarketGlobalTimer); } catch (_) {} }
-      window.__pmMarketGlobalTimerVer = 2;
+      window.__pmMarketGlobalTimerVer = 4;
       window.__pmMarketGlobalTimer = setInterval(async () => {
         try {
           const rm = ${ROOM_JS};
@@ -1339,36 +1787,46 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
               window.__lastMarketMine = fresh;
             }
           }
-          if (!mine || !Array.isArray(mine.active) || mine.active.length === 0) return;
+          const activeItems = (mine && Array.isArray(mine.active)) ? mine.active : [];
           const thresholdMs = underH * 3600000;
-          const targets = mine.active.filter(e => {
+          const targets = activeItems.filter(e => {
             const lid = Number(e && (e.listingId ?? e.id));
             const exp = Number(e && e.expiresAt);
             return lid > 0 && exp > 0 && (exp - Date.now()) < thresholdMs;
           });
-          if (targets.length === 0) return;
-          window.__pmAutoCancellingMarketNow = true;
-          try {
-            for (const t of targets) {
-              const lid = Number(t.listingId ?? t.id);
-              try { rm.send('market', { op: 'cancel', listingId: lid }); } catch (_) {}
-              await new Promise(r => setTimeout(r, 260));
+          if (targets.length > 0) {
+            window.__pmAutoCancellingMarketNow = true;
+            try {
+              if (typeof window.__pmQueueCancelledForRelist === 'function') {
+                window.__pmQueueCancelledForRelist(targets);
+              }
+              for (const t of targets) {
+                const lid = Number(t.listingId ?? t.id);
+                try { rm.send('market', { op: 'cancel', listingId: lid }); } catch (_) {}
+                await new Promise(r => setTimeout(r, 260));
+              }
+              if (cfg.autoCollectAfterCancel !== false) {
+                await new Promise(r => setTimeout(r, 420));
+                try { rm.send('market', { op: 'collect_all' }); } catch (_) {}
+              }
+              await new Promise(r => setTimeout(r, 380));
+              const awaitReply = ${AWAIT_REPLY_JS};
+              const afterMine = await awaitReply(rm, 'market_mine', () => {
+                try { rm.send('market', { op: 'mine' }); } catch (_) {}
+              }, 3000);
+              if (afterMine && Array.isArray(afterMine.active)) {
+                window.__lastMarketMine = afterMine;
+                window.__myMarketActiveCount = afterMine.active.length;
+              }
+            } finally {
+              window.__pmAutoCancellingMarketNow = false;
             }
-            if (cfg.autoCollectAfterCancel !== false) {
-              await new Promise(r => setTimeout(r, 420));
-              try { rm.send('market', { op: 'collect_all' }); } catch (_) {}
-            }
-            await new Promise(r => setTimeout(r, 380));
-            const awaitReply = ${AWAIT_REPLY_JS};
-            const afterMine = await awaitReply(rm, 'market_mine', () => {
-              try { rm.send('market', { op: 'mine' }); } catch (_) {}
-            }, 3000);
-            if (afterMine && Array.isArray(afterMine.active)) {
-              window.__lastMarketMine = afterMine;
-              window.__myMarketActiveCount = afterMine.active.length;
-            }
-          } finally {
-            window.__pmAutoCancellingMarketNow = false;
+          }
+          if (typeof window.__pmProcessAutoRelistQueue === 'function') {
+            await window.__pmProcessAutoRelistQueue(rm);
+          }
+          if (targets.length > 0 && typeof window.runAutoMarketSellCycle === 'function' && !window.__isAutoSellingNow) {
+            try { window.runAutoMarketSellCycle(false); } catch (_) {}
           }
         } catch (_) {}
       }, 30000);
@@ -1403,6 +1861,9 @@ function buildCancelUnderHoursProfileCode(underHours, autoCollect = true) {
     if (targets.length > 0) {
       window.__pmAutoCancellingMarketNow = true;
       try {
+        if (typeof window.__pmQueueCancelledForRelist === 'function') {
+          window.__pmQueueCancelledForRelist(targets);
+        }
         for (const t of targets) {
           const lid = Number(t.listingId ?? t.id);
           cancelledItems.push({
@@ -1426,6 +1887,16 @@ function buildCancelUnderHoursProfileCode(underHours, autoCollect = true) {
         if (refreshed) mine = refreshed;
       } finally {
         window.__pmAutoCancellingMarketNow = false;
+      }
+      if (${Boolean(autoCollect)}) {
+        setTimeout(() => {
+          if (typeof window.__pmProcessAutoRelistQueue === 'function') {
+            window.__pmProcessAutoRelistQueue(room).catch(() => {});
+          }
+          if (typeof window.runAutoMarketSellCycle === 'function' && !window.__isAutoSellingNow) {
+            try { window.runAutoMarketSellCycle(false); } catch (_) {}
+          }
+        }, 350);
       }
     }
 
@@ -1499,6 +1970,9 @@ function buildOverviewProfileCode(fetchMine = true) {
       if (underTargets.length > 0) {
         window.__pmAutoCancellingMarketNow = true;
         try {
+          if (typeof window.__pmQueueCancelledForRelist === 'function') {
+            window.__pmQueueCancelledForRelist(underTargets);
+          }
           const cancelledIds = new Set();
           for (const t of underTargets) {
             const lid = Number(t.listingId ?? t.id);
@@ -1527,6 +2001,13 @@ function buildOverviewProfileCode(fetchMine = true) {
           window.__pmAutoCancellingMarketNow = false;
         }
       }
+    }
+    if (gs && gs.autoCancelEnabled && room && room.connection?.isOpen) {
+      setTimeout(() => {
+        if (typeof window.__pmProcessAutoRelistQueue === 'function') {
+          window.__pmProcessAutoRelistQueue(room).catch(() => {});
+        }
+      }, 300);
     }
     const enrich = list => (Array.isArray(list) ? list : []).map(entry => {
       if (entry && entry.item) {

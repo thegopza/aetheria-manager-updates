@@ -58,11 +58,9 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
         continue;
       }
       const enablePending = Boolean(data.pendingEnable && data.pendingEnable[p.id]);
-      const userDisabled = Boolean((data.userDisabled && data.userDisabled[p.id]) || cur.userDisabled);
-      const shouldEnable = enablePending || !userDisabled;
-      if (cur.id !== plan.id || (cur.u || null) !== (plan.updatedAt || null) || enablePending || (!cur.en && shouldEnable)) {
-        // Assigned while this client was offline, or plan script got disabled accidentally -> switch Plan Script on
-        const ok = await push(p, plan, shouldEnable ? true : undefined);
+      if (cur.id !== plan.id || (cur.u || null) !== (plan.updatedAt || null) || enablePending) {
+        // Assigned while this client was offline -> switch Plan Script on too
+        const ok = await push(p, plan, enablePending ? true : undefined);
         if (ok && enablePending) {
           const fresh = loadPlans();
           if (fresh.pendingEnable) { delete fresh.pendingEnable[p.id]; savePlans(fresh); }

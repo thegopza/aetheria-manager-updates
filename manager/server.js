@@ -5964,7 +5964,7 @@ const server = http.createServer(async (req, res) => {
           }
           const paidAtMs = Number(result.order.paidAt || 0);
           const isRecentPaid = !paidAtMs || (Date.now() - paidAtMs < 15 * 60 * 1000);
-          if (orderId && isRecentPaid && !global.__pmNotifiedPromptPayOrders.has(orderId) && discordService && typeof discordService.notifyMeritTopup === "function") {
+          if (orderId && isRecentPaid && !result.order.discordNotified && !global.__pmNotifiedPromptPayOrders.has(orderId) && discordService && typeof discordService.notifyMeritTopup === "function") {
             global.__pmNotifiedPromptPayOrders.add(orderId);
             try {
               const allIds = Array.from(global.__pmNotifiedPromptPayOrders).slice(-200);

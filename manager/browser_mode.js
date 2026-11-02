@@ -1721,24 +1721,28 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
   }
 
-  async function attach(profileId, targetId, skipIdentityProbe = false, browserContextId = null) {
+  async function attach(profileId, targetId, skipIdentityProbe = false, browserContextId = null, fastRediscover = false) {
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
-    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, undefined, 5000);
+    const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, undefined, 15000);
     try {
-    const initScript = profileInitScript(profileId);
-    const [, , , addedInit] = await Promise.all([
-      send('Page.enable', {}, sessionId, 3500).catch(() => {}),
-      send('Runtime.enable', {}, sessionId, 3500).catch(() => {}),
-      configureSessionAssetCache(sessionId),
-      send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId, 3500).catch(() => null)
-    ]);
-    if (!skipIdentityProbe) {
-      try {
-        const identity = await evaluate({ sessionId }, `(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`, 4000);
-        if (identity && identity !== profileId) throw Error('PROFILE_ID_CONFLICT');
-        await evaluate({ sessionId }, initScript, 4000).catch(() => {});
-      } catch (probeErr) {
-        if (probeErr && probeErr.message === 'PROFILE_ID_CONFLICT') throw probeErr;
+    let addedInit = null;
+    if (!fastRediscover) {
+      const initScript = profileInitScript(profileId);
+      const resInit = await Promise.all([
+        send('Page.enable', {}, sessionId, 3500).catch(() => {}),
+        send('Runtime.enable', {}, sessionId, 3500).catch(() => {}),
+        configureSessionAssetCache(sessionId),
+        send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId, 3500).catch(() => null)
+      ]);
+      addedInit = resInit[3];
+      if (!skipIdentityProbe) {
+        try {
+          const identity = await evaluate({ sessionId }, `(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`, 4000);
+          if (identity && identity !== profileId) throw Error('PROFILE_ID_CONFLICT');
+          await evaluate({ sessionId }, initScript, 4000).catch(() => {});
+        } catch (probeErr) {
+          if (probeErr && probeErr.message === 'PROFILE_ID_CONFLICT') throw probeErr;
+        }
       }
     }
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
@@ -1817,6 +1821,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
     const allProfiles = loadProfiles() || [];
     const unattachedPages = targetInfos.filter(x => x.type === 'page' && isGameUrl(x.url) && !Array.from(clients.values()).some(c => c.targetId === x.targetId));
+    const newlyAttached = [];
     for (const t of unattachedPages) {
       try {
         const knownMatch = allProfiles.find(p => !clients.has(p.id) && knownTargets.get(p.id) === t.targetId);
@@ -1824,7 +1829,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         let probeFailed = false;
         let pid = null, charName = null, sessionUserId = null, bodyText = '';
         if (!identified) {
-          const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true });
+          const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true }, undefined, 10000);
           try {
             const r = await send('Runtime.evaluate', {
               expression: `(() => {
@@ -1899,26 +1904,46 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         const isCustomCtx = Boolean(t.browserContextId && customContexts.has(t.browserContextId));
         if (profile) {
           if (screenProxy && (screenProxy.isEnabled() || isCustomCtx)) {
-            if (screenProxy.isEnabled()) {
-              await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort }).catch(() => {});
-            } else if (typeof screenProxy.ensureProfileTunnel === 'function') {
-              await screenProxy.ensureProfileTunnel(profile.id, profile.debugPort).catch(() => {});
-            }
+            const pTask = screenProxy.isEnabled()
+              ? screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort }).catch(() => {})
+              : (typeof screenProxy.ensureProfileTunnel === 'function' ? screenProxy.ensureProfileTunnel(profile.id, profile.debugPort).catch(() => {}) : Promise.resolve());
+            if (!knownMatch) await pTask;
           }
-          const c = await attach(profile.id, t.targetId, Boolean(knownMatch || probeFailed), isCustomCtx ? t.browserContextId : null);
-          if (knownMatch) {
-            evaluate(c, profileInitScript(profile.id), 5000).catch(() => {});
-          }
+          const c = await attach(profile.id, t.targetId, Boolean(knownMatch || probeFailed), isCustomCtx ? t.browserContextId : null, Boolean(knownMatch));
           startProxy(c, profile.debugPort);
-          injectBot(c).catch(() => {});
+          newlyAttached.push({ c, fast: Boolean(knownMatch) });
         }
       } catch (e) {}
     }
+    // Phase 2: initialize session hooks & bot health in small batches AFTER all proxy ports are open
+    const toCheck = [];
+    for (const item of newlyAttached) {
+      toCheck.push(item);
+    }
     for (const c of clients.values()) {
+      if (newlyAttached.some(x => x.c === c)) continue;
       const diag = diagnostics.get(c.profileId);
       if (!diag || diag.state !== 'ready') {
-        injectBot(c).catch(() => {});
+        toCheck.push({ c, fast: false });
       }
+    }
+    if (toCheck.length > 0) {
+      let idx = 0;
+      const worker = async () => {
+        while (idx < toCheck.length) {
+          const cur = toCheck[idx++];
+          if (!cur || !cur.c || clients.get(cur.c.profileId) !== cur.c) continue;
+          if (cur.fast) {
+            await Promise.all([
+              send('Page.enable', {}, cur.c.sessionId, 3500).catch(() => {}),
+              send('Runtime.enable', {}, cur.c.sessionId, 3500).catch(() => {}),
+              configureSessionAssetCache(cur.c.sessionId)
+            ]);
+          }
+          await injectBot(cur.c).catch(() => {});
+        }
+      };
+      Promise.all(Array.from({ length: Math.min(3, toCheck.length) }, () => worker())).catch(() => {});
     }
   }
 

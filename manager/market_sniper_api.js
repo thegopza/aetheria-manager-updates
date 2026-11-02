@@ -120,6 +120,7 @@ function loadPersistedState() {
         return {
           priceCache: (d.priceCache && typeof d.priceCache === 'object') ? d.priceCache : {},
           activeBids: Array.isArray(d.activeBids) ? d.activeBids : [],
+          pendingFlips: Array.isArray(d.pendingFlips) ? d.pendingFlips : [],
           history: Array.isArray(d.history) ? d.history.slice(0, 200) : [],
           stats: Object.assign({
             totalScans: 0,
@@ -137,6 +138,7 @@ function loadPersistedState() {
   return {
     priceCache: {},
     activeBids: [],
+    pendingFlips: [],
     history: [],
     stats: {
       totalScans: 0,
@@ -156,6 +158,7 @@ function savePersistedState(state) {
     fs.writeFileSync(STATE_FILE, JSON.stringify({
       priceCache: state.priceCache || {},
       activeBids: (state.activeBids || []).slice(0, 100),
+      pendingFlips: (state.pendingFlips || []).slice(0, 50),
       history: (state.history || []).slice(0, 200),
       stats: state.stats || {}
     }, null, 2), 'utf8');
@@ -186,6 +189,10 @@ function inferItemCategory(item) {
 // and wash-trade spikes (> Q3 + 1.5*IQR).
 function computeCleanReferencePrice(history24h, history7d, activeListingsForSameItem, undercutZeny = 1) {
   const unitSamples = [];
+  const recentOrdered24h = [];
+  const recentOrdered7d = [];
+  const fallbackPointSamples = [];
+  const seenRecentKeys = new Set();
   let sales24h = 0;
   let sales7d = 0;
 
@@ -197,13 +204,17 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     let countFromPoints = 0;
     for (const pt of points) {
       if (!pt) continue;
-      const s = Number(pt.sales) || 0;
+      const s = Number(pt.sales ?? pt.count ?? 0) || 0;
       const avg = Number(pt.avg) || 0;
       if (s > 0 && avg > 0) {
         countFromPoints += s;
         if (!is24h) {
-          const weight = Math.min(s, 8);
-          for (let i = 0; i < weight; i++) unitSamples.push(Math.round(avg));
+          // pt.avg in game market_history is already the per-piece average price
+          const estUnit = Math.round(avg);
+          if (estUnit > 0) {
+            const weight = Math.min(s, 6);
+            for (let i = 0; i < weight; i++) fallbackPointSamples.push(estUnit);
+          }
         }
       }
     }
@@ -212,10 +223,17 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     for (const r of recent) {
       if (!r) continue;
       const qty = Math.max(1, Number(r.qty) || 1);
-      const u = Math.round((Number(r.price) || 0) / qty);
+      const price = Number(r.price) || 0;
+      const u = Math.round(price / qty);
       if (u > 0) {
         countFromRecent += 1;
-        unitSamples.push(u);
+        if (is24h) recentOrdered24h.push(u);
+        else recentOrdered7d.push(u);
+        const rKey = `${r.at || 0}:${price}:${qty}`;
+        if (!seenRecentKeys.has(rKey)) {
+          seenRecentKeys.add(rKey);
+          unitSamples.push(u);
+        }
       }
     }
 
@@ -227,15 +245,25 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   collectFromHistory(history24h, true);
   collectFromHistory(history7d, false);
 
+  if (unitSamples.length < 3 && fallbackPointSamples.length > 0) {
+    unitSamples.push(...fallbackPointSamples);
+  }
+
   const totalSales = Math.max(sales7d, sales24h);
   if (unitSamples.length === 0 || totalSales === 0) {
     return { valid: false, reason: 'no_history', totalSales: 0, sales24h: 0, sales7d: 0 };
   }
 
+  const medianOf = (arr) => {
+    if (!arr || !arr.length) return 0;
+    const s = arr.slice().sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return (s.length % 2 !== 0) ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+  };
+
   const sortedAll = unitSamples.slice().sort((a, b) => a - b);
 
-  // Stage 1: Reject mistyped low sales (e.g. seller forgot a 0 and sold at 10% of real value)
-  // Use the 70th percentile as the anchor of normal trading price.
+  // Stage 1: Reject isolated mistyped low sales (e.g. seller forgot a 0 and sold 1 item at 10% of real value)
   const p70Idx = Math.min(sortedAll.length - 1, Math.floor(sortedAll.length * 0.70));
   const anchorHigh = sortedAll[p70Idx];
   const lowMistakeFloor = Math.round(anchorHigh * 0.45);
@@ -253,15 +281,49 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   const cleanSamples = stage1.filter(p => p >= minFence && p <= maxFence);
   const finalSamples = cleanSamples.length > 0 ? cleanSamples : stage1;
 
-  const mid = Math.floor(finalSamples.length / 2);
-  const cleanRefUnitPrice = (finalSamples.length % 2 !== 0)
-    ? finalSamples[mid]
-    : Math.round((finalSamples[mid - 1] + finalSamples[mid]) / 2);
+  let cleanRefUnitPrice = medianOf(finalSamples);
 
-  // Stage 3: Determine Flip Price (relist unit price)
-  // Ignore any active listing in the 5-minute auction window AND ignore any active listing < 70% of cleanRefUnitPrice
+  // Stage 2.5: Downtrend / Falling-Market Anchor
+  // If an item's market price dropped today, recent trades (newest 3 and newest 5) will reflect the new lower market price,
+  // whereas a single 1-off mistyped sale will NOT move the median of the newest 3 or 5 trades.
+  const newestStream = recentOrdered24h.length >= 3 ? recentOrdered24h : recentOrdered7d;
+  if (newestStream.length >= 3) {
+    const recent3Med = medianOf(newestStream.slice(0, 3));
+    const recent5Med = medianOf(newestStream.slice(0, Math.min(6, newestStream.length)));
+    const recentAnchor = Math.max(recent3Med, recent5Med);
+    if (recentAnchor > 0 && recentAnchor < cleanRefUnitPrice) {
+      cleanRefUnitPrice = recentAnchor;
+    }
+  }
+
+  // Stage 3: Competing Active Listings Ceiling & Flip Price
+  // Collect all active listings for the same item+refine (sorted ascending by unit price).
+  // If there are >= 2 listings on the market right now, the 2nd cheapest listing is the competing supply ceiling
+  // (even if the 1st cheapest listing is the snipe candidate itself).
   const now = Date.now();
+  const allActiveUnitPrices = [];
   const normalActivePrices = [];
+  if (Array.isArray(activeListingsForSameItem)) {
+    for (const l of activeListingsForSameItem) {
+      if (!l || l.mine) continue;
+      const q = Math.max(1, Number(l.qty) || 1);
+      const u = Math.round((Number(l.minBid || l.price) || 0) / q);
+      if (u > 0) {
+        allActiveUnitPrices.push(u);
+      }
+    }
+  }
+  allActiveUnitPrices.sort((a, b) => a - b);
+
+  // Cap cleanRefUnitPrice by the 2nd cheapest active listing on the market so we never overvalue an item
+  // that already has multiple sellers offering it at a lower price.
+  if (allActiveUnitPrices.length >= 2) {
+    const secondCheapestActive = allActiveUnitPrices[1];
+    if (secondCheapestActive > 0 && secondCheapestActive < cleanRefUnitPrice) {
+      cleanRefUnitPrice = secondCheapestActive;
+    }
+  }
+
   if (Array.isArray(activeListingsForSameItem)) {
     for (const l of activeListingsForSameItem) {
       if (!l || l.mine) continue;
@@ -280,7 +342,7 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     const cheapestNormal = normalActivePrices[0];
     flipUnitPrice = Math.max(
       Math.round(cleanRefUnitPrice * 0.78),
-      cheapestNormal - Math.max(0, Number(undercutZeny) || 1)
+      cheapestNormal - Math.max(0, Number(undercutZeny) || 0)
     );
   }
 
@@ -394,16 +456,60 @@ function createMarketSniperService({
     const running = profiles.filter(p => p && p.debugPort);
     if (!running.length) return [];
 
+    const reserveSlots = (config.enabled && config.mode === 'auto_flip') ? 2 : 0;
+
     const probeCode = `(() => {
       const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
       if (!room || !room.connection || !room.connection.isOpen) return { connected: false };
+      if (room !== window.__pmSniperMineHookedRoom) {
+        window.__pmSniperMineHookedRoom = room;
+        room.onMessage('market_mine', (msg) => {
+          if (msg && Array.isArray(msg.active)) {
+            window.__myMarketActiveCount = msg.active.length;
+            window.__myMarketActiveCountUpdatedAt = Date.now();
+            const nowTs = Date.now();
+            const prices = msg.active
+              .filter(a => a && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs))
+              .map(a => Number(a.price) || 0)
+              .filter(p => p > 0);
+            window.__myMarketCheapestActivePrice = prices.length ? Math.min(...prices) : 0;
+          }
+        });
+      }
       const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
-      const premium = Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token');
-      const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : 0);
-      const baseLevel = Number(ch.baseLevel ?? ch.level) || 0;
-      const charName = ch.name || window.__characterName || '';
+      const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
+      const premium = Boolean(
+        (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
+        (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
+      );
+      const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : (typeof live.zeny === 'number' ? live.zeny : 0));
+
+      // 1) Reserve 2 market slots on rich screens (>= 1M zeny) so normal Auto-Sell stops at 18/20
+      window.__pmSniperReservedSlots = (zeny >= 1000000) ? ${reserveSlots} : 0;
+      if (typeof window.getEffectiveMarketMaxListings === 'function' && !window.__pmSniperQuotaHooked) {
+        const origGetMax = window.getEffectiveMarketMaxListings;
+        window.getEffectiveMarketMaxListings = function () {
+          const rawMax = origGetMax.apply(this, arguments);
+          const resv = Number(window.__pmSniperReservedSlots) || 0;
+          if (window.__isAutoSellingNow && resv > 0 && rawMax >= 10) {
+            return Math.max(1, rawMax - resv);
+          }
+          return rawMax;
+        };
+        window.__pmSniperQuotaHooked = true;
+      }
+
+      if (zeny >= 1000000 && (!window.__myMarketActiveCountUpdatedAt || (Date.now() - window.__myMarketActiveCountUpdatedAt > 90000))) {
+        window.__myMarketActiveCountUpdatedAt = Date.now();
+        try { room.send('market', { op: 'mine' }); } catch (_) {}
+      }
+      const baseLevel = Number(ch.baseLevel ?? ch.level ?? live.level) || 0;
+      const charName = ch.name || live.charName || window.__characterName || '';
       const activeCount = Number(window.__myMarketActiveCount) || 0;
+      const cheapestActivePrice = Number(window.__myMarketCheapestActivePrice) || 0;
       const maxListings = premium ? 20 : 3;
+      const weight = Number(ch.weight ?? live.weight) || 0;
+      const weightLimit = Number(ch.weightLimit ?? live.weightLimit) || 0;
       const busy = !!(window.__isConsolidating || window.__isShopping || window.__isAutoSellingNow || window.__isManualSelling || window.__isStoring);
       const sniperEvents = Array.isArray(window.__pmSniperEvents) ? window.__pmSniperEvents.splice(0, 50) : [];
       return {
@@ -413,7 +519,10 @@ function createMarketSniperService({
         baseLevel,
         charName,
         activeCount,
+        cheapestActivePrice,
         maxListings,
+        weight,
+        weightLimit,
         busy,
         sniperEvents
       };
@@ -421,8 +530,8 @@ function createMarketSniperService({
 
     const results = await Promise.all(running.map(async (p) => {
       try {
-        const r = await evalProfilePort(p.debugPort, probeCode, 2500);
-        if (r && r.ok && r.result && r.result.connected) {
+        const r = await evalProfilePort(p.debugPort, probeCode, 4500);
+        if (r && (r.success || r.ok) && r.result && r.result.connected) {
           return {
             profileId: String(p.id),
             profileName: p.name || p.id,
@@ -465,6 +574,19 @@ function createMarketSniperService({
       state.activeBids.unshift(Object.assign({ createdAt: Date.now(), updatedAt: Date.now() }, bidData));
     }
     if (state.activeBids.length > 80) state.activeBids.length = 80;
+    savePersistedState(state);
+  }
+
+  function enqueuePendingFlip(entry) {
+    if (!Array.isArray(state.pendingFlips)) state.pendingFlips = [];
+    const lid = Number(entry.listingId);
+    const idx = state.pendingFlips.findIndex(x => Number(x.listingId) === lid);
+    if (idx >= 0) {
+      state.pendingFlips[idx] = Object.assign({}, state.pendingFlips[idx], entry, { updatedAt: Date.now() });
+    } else {
+      state.pendingFlips.push(Object.assign({ queuedAt: Date.now(), updatedAt: Date.now() }, entry));
+    }
+    if (state.pendingFlips.length > 50) state.pendingFlips.length = 50;
     savePersistedState(state);
   }
 
@@ -547,7 +669,24 @@ function createMarketSniperService({
       if (ev.relisted) {
         state.stats.totalRelisted = (state.stats.totalRelisted || 0) + 1;
         state.stats.totalEstimatedNetProfit = (state.stats.totalEstimatedNetProfit || 0) + (Number(ev.expectedNetProfit) || 0);
+      } else if (config.mode === 'auto_flip') {
+        enqueuePendingFlip({
+          listingId: lid,
+          itemId: ev.itemId,
+          itemName: ev.itemName,
+          refine: ev.refine || 0,
+          qty: ev.qty || 1,
+          icon: ev.icon || null,
+          buyPriceTotal: ev.buyPriceTotal || 0,
+          cleanRefUnitPrice: ev.cleanRefUnitPrice || 0,
+          flipUnitPrice: ev.flipUnitPrice || 0,
+          relistPriceTotal: ev.relistPriceTotal || 0,
+          expectedNetProfit: ev.expectedNetProfit || 0,
+          buyerProfileId: scr.profileId,
+          buyerCharName: scr.charName || scr.profileName
+        });
       }
+      const evictedText = ev.evictedItemName ? ` (ถอด ${ev.evictedItemName} @ ${Number(ev.evictedItemPrice || 0).toLocaleString()} z ออกชั่วคราว)` : '';
       upsertActiveBid({
         listingId: lid,
         itemId: ev.itemId,
@@ -561,11 +700,11 @@ function createMarketSniperService({
         expectedNetProfit: ev.expectedNetProfit || 0,
         buyerProfileId: scr.profileId,
         buyerCharName: scr.charName || scr.profileName,
-        status: ev.relisted ? 'relisted' : 'won',
+        status: ev.relisted ? 'relisted' : (config.mode === 'auto_flip' ? 'queued_flip' : 'won'),
         relistedPrice: ev.relistPriceTotal || 0,
         lastEventNote: ev.relisted
-          ? `ชนะประมูล & ตั้งขายกลับที่ ${Number(ev.relistPriceTotal || 0).toLocaleString()} z สำเร็จ!`
-          : `ชนะประมูล & รับของเข้ากระเป๋าแล้ว`
+          ? `ชนะประมูล & ตั้งขายกลับที่ ${Number(ev.relistPriceTotal || 0).toLocaleString()} z สำเร็จ!${evictedText}`
+          : (config.mode === 'auto_flip' ? `ชนะประมูล & รับของแล้ว — ⏳ เข้าคิวรอช่องตลาดว่างเพื่อตั้งขายอัตโนมัติ` : `ชนะประมูล & รับของเข้ากระเป๋าแล้ว`)
       });
       recordHistoryEvent({
         listingId: lid,
@@ -584,26 +723,35 @@ function createMarketSniperService({
         buyerProfileId: scr.profileId,
         buyerCharName: scr.charName || scr.profileName,
         note: ev.relisted
-          ? `ชนะประมูลที่ ${Number(ev.buyPriceTotal || 0).toLocaleString()} z -> ตั้งขายกลับ ${Number(ev.relistPriceTotal || 0).toLocaleString()} z (คาดการณ์กำไรสุทธิ +${Number(ev.expectedNetProfit || 0).toLocaleString()} z)`
-          : `ชนะประมูลที่ ${Number(ev.buyPriceTotal || 0).toLocaleString()} z และรับของเข้าตัวเรียบร้อย`
+          ? `ชนะประมูลที่ ${Number(ev.buyPriceTotal || 0).toLocaleString()} z -> ตั้งขายกลับ ${Number(ev.relistPriceTotal || 0).toLocaleString()} z (คาดการณ์กำไรสุทธิ +${Number(ev.expectedNetProfit || 0).toLocaleString()} z)${evictedText}`
+          : (config.mode === 'auto_flip' ? `ชนะประมูลที่ ${Number(ev.buyPriceTotal || 0).toLocaleString()} z -> รอช่องตลาดว่างเพื่อตั้งขายกลับอัตโนมัติ` : `ชนะประมูลที่ ${Number(ev.buyPriceTotal || 0).toLocaleString()} z และรับของเข้าตัวเรียบร้อย`)
       });
     }
   }
 
   // Pick the richest eligible online screen to execute a buy or bid
-  function selectRichestBuyerProfile(onlineScreens, requiredAmount, existingListingId = 0) {
+  function selectRichestBuyerProfile(onlineScreens, requiredAmount, existingListingId = 0, requiredQty = 1, requireFreeSlot = false) {
     const allowedSet = new Set(Array.isArray(config.allowedBuyerProfileIds) ? config.allowedBuyerProfileIds : []);
     const lock = existingListingId ? listingLocks.get(Number(existingListingId)) : null;
 
-    const candidates = onlineScreens.filter(s => {
+    const filterCandidates = (mustHaveSlot) => onlineScreens.filter(s => {
       if (!s || !s.connected || s.busy) return false;
       if (s.baseLevel > 0 && s.baseLevel < 10) return false;
       if (allowedSet.size > 0 && !allowedSet.has(String(s.profileId))) return false;
-      if (config.mode === 'auto_flip' && s.activeCount >= s.maxListings) return false;
+      const canEvictCheap = Number(s.cheapestActivePrice) > 0 && Number(s.cheapestActivePrice) <= 50000;
+      if (mustHaveSlot && s.activeCount >= s.maxListings && !canEvictCheap) return false;
+      if (s.weightLimit > 0) {
+        const freeW = s.weightLimit * 0.85 - (Number(s.weight) || 0);
+        if (freeW < Math.min(350, Math.max(20, requiredQty))) return false;
+      }
       const spendable = (Number(s.zeny) || 0) - (Number(config.minReserveZeny) || 0);
       return spendable >= requiredAmount;
     });
 
+    let candidates = filterCandidates(requireFreeSlot);
+    if (!candidates.length && requireFreeSlot) {
+      candidates = filterCandidates(false);
+    }
     if (!candidates.length) return null;
 
     // If a screen already holds the lock for this listingId and can afford it, keep using the same screen
@@ -621,13 +769,14 @@ function createMarketSniperService({
     return candidates[0];
   }
 
-  // Fetch 24h & 7d market history for an item via an online screen
+  // Fetch 24h & 7d market history + cheapest active listings for an item via an online screen
   async function fetchItemReferencePrice(screen, item, activeListings) {
     const itemId = Number(item.itemId ?? item.id);
     const refine = Number(item.refine) || 0;
+    const itemName = String(item.name || '').trim();
     const cacheKey = `${itemId}:${refine}`;
     const cached = state.priceCache[cacheKey];
-    if (cached && (Date.now() - (Number(cached.updatedAt) || 0)) < PRICE_CACHE_TTL_MS) {
+    if (cached && cached.cacheVer === 3 && (Date.now() - (Number(cached.updatedAt) || 0)) < PRICE_CACHE_TTL_MS) {
       // Re-adjust flipUnitPrice against latest normal active listings if available
       const sameItemListings = (Array.isArray(activeListings) ? activeListings : []).filter(
         l => l && l.item && Number(l.item.itemId ?? l.item.id) === itemId && (Number(l.item.refine) || 0) === refine
@@ -642,7 +791,7 @@ function createMarketSniperService({
         if (normalActives.length > 0) {
           cached.flipUnitPrice = Math.max(
             Math.round(cached.cleanRefUnitPrice * 0.78),
-            normalActives[0] - Math.max(0, Number(config.relistUndercutZeny) || 1)
+            normalActives[0] - Math.max(0, Number(config.relistUndercutZeny) || 0)
           );
         }
       }
@@ -664,18 +813,38 @@ function createMarketSniperService({
         });
         room.send('market', { op: 'history', itemId: ${itemId}, refine: ${refine}, range });
       });
+      const fetchCheapestActive = () => new Promise(resolve => {
+        let unsub;
+        const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2800);
+        unsub = room.onMessage('market_results', msg => {
+          clearTimeout(t);
+          if (unsub) unsub();
+          resolve(msg && Array.isArray(msg.listings) ? msg.listings : null);
+        });
+        room.send('market', { op: 'search', filters: { q: ${JSON.stringify(itemName)}, sort: 'price_asc', page: 0 } });
+      });
       const h24 = await fetchHist('24h');
-      await new Promise(r => setTimeout(r, 180));
+      await new Promise(r => setTimeout(r, 140));
       const h7d = await fetchHist('7d');
-      return { ok: true, h24, h7d };
+      await new Promise(r => setTimeout(r, 140));
+      const itemActives = ${itemName ? 'await fetchCheapestActive()' : 'null'};
+      return { ok: true, h24, h7d, itemActives };
     })()`;
 
-    const res = await evalProfilePort(screen.debugPort, code, 8000);
-    if (!res || !res.ok || !res.result || !res.result.ok) return null;
+    const res = await evalProfilePort(screen.debugPort, code, 9500);
+    if (!res || !(res.success || res.ok) || !res.result || !res.result.ok) return null;
 
-    const sameItemListings = (Array.isArray(activeListings) ? activeListings : []).filter(
-      l => l && l.item && Number(l.item.itemId ?? l.item.id) === itemId && (Number(l.item.refine) || 0) === refine
-    );
+    const mergedMap = new Map();
+    for (const src of [activeListings, res.result.itemActives]) {
+      if (!Array.isArray(src)) continue;
+      for (const l of src) {
+        if (!l || !l.item) continue;
+        if (Number(l.item.itemId ?? l.item.id) === itemId && (Number(l.item.refine) || 0) === refine) {
+          mergedMap.set(Number(l.listingId) || Math.random(), l);
+        }
+      }
+    }
+    const sameItemListings = Array.from(mergedMap.values());
 
     const calc = computeCleanReferencePrice(
       res.result.h24,
@@ -685,6 +854,7 @@ function createMarketSniperService({
     );
 
     const entry = {
+      cacheVer: 3,
       itemId,
       refine,
       name: item.name || `Item #${itemId}`,
@@ -756,23 +926,30 @@ function createMarketSniperService({
       }
 
       if (!window.__pmSniperAuctions) window.__pmSniperAuctions = {};
+      if (!window.__pmSniperHandledDeliveries) window.__pmSniperHandledDeliveries = new Set();
       if (!Array.isArray(window.__pmSniperEvents)) window.__pmSniperEvents = [];
 
-      // Helper to claim deliveries and auto-list won/bought item
-      window.__pmSniperClaimAndFlip = async function (targetInfo, paidTotal) {
-        try {
-          room.send('market', { op: 'collect_all' });
-        } catch (_) {}
-        await new Promise(r => setTimeout(r, 650));
-        if (typeof window.refreshInventoryAndWeight === 'function') {
-          try { window.refreshInventoryAndWeight(); } catch (_) {}
+      // Helper to claim deliveries and auto-list won/bought item (with Smart Slot Eviction when 20/20 is full)
+      window.__pmSniperClaimAndFlip = async function (targetInfo, paidTotal, waitBeforeCollectMs = 750) {
+        if (waitBeforeCollectMs >= 0) {
+          if (waitBeforeCollectMs > 0) {
+            await new Promise(r => setTimeout(r, waitBeforeCollectMs));
+          }
+          try {
+            room.send('market', { op: 'collect_all' });
+          } catch (_) {}
+          await new Promise(r => setTimeout(r, 850));
+          if (typeof window.refreshInventoryAndWeight === 'function') {
+            try { window.refreshInventoryAndWeight(); } catch (_) {}
+          }
+          await new Promise(r => setTimeout(r, 300));
         }
-        await new Promise(r => setTimeout(r, 350));
 
         let relisted = false;
+        let evictedInfo = null;
+        const normName = String(targetInfo.itemName || '').trim().toLowerCase();
         if (targetInfo.autoFlip && targetInfo.relistPriceTotal > paidTotal) {
           const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-          const normName = String(targetInfo.itemName || '').trim().toLowerCase();
           const candidates = bag.filter(b => {
             if (!b || b.locked) return false;
             const bId = Number((b.raw && b.raw.itemId) ?? b.id);
@@ -787,13 +964,63 @@ function createMarketSniperService({
             const listPriceTotal = Number(targetInfo.flipUnitPrice) * sellQty;
             const depositFee = Math.max(1, Math.floor(listPriceTotal * 2 / 100));
             const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
+
             if (sellQty > 0 && listPriceTotal > paidTotal && (curZeny === 0 || curZeny >= depositFee)) {
-              const beforeQty = Number(slotItem.qty) || 1;
+              // Check current active market listings and evict cheapest low-value item if quota is full
+              const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
+              const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
+              const hasPrem = Boolean(
+                (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
+                (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
+              );
+              const maxSlots = hasPrem ? 20 : 3;
+
+              const mineMsg = await new Promise(resolve => {
+                let unsub;
+                const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2200);
+                unsub = room.onMessage('market_mine', m => { clearTimeout(t); if (unsub) unsub(); resolve(m); });
+                try { room.send('market', { op: 'mine' }); } catch (_) { clearTimeout(t); if (unsub) unsub(); resolve(null); }
+              });
+
+              const activeList = (mineMsg && Array.isArray(mineMsg.active)) ? mineMsg.active : [];
+              if (activeList.length >= maxSlots) {
+                const maxEvictPrice = Math.min(50000, Math.floor(listPriceTotal * 0.20));
+                const nowTs = Date.now();
+                const evictable = activeList
+                  .filter(a => a && a.listingId && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs) && Number(a.price) > 0 && Number(a.price) <= maxEvictPrice)
+                  .sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
+
+                if (evictable.length > 0) {
+                  const targetEvict = evictable[0];
+                  const evName = (targetEvict.item && targetEvict.item.name) || 'Item';
+                  const evPrice = Number(targetEvict.price) || 0;
+                  try {
+                    room.send('market', { op: 'cancel', listingId: Number(targetEvict.listingId) });
+                    console.log('%c[PmheeAether Sniper] 🔄 ช่องขายเต็ม ' + activeList.length + '/' + maxSlots + ' -> ถอดรายการราคาถูก ' + evName + ' (' + evPrice.toLocaleString() + ' z) ออกชั่วคราวเพื่อเปิดช่องขายของกำไรสูง!', 'color: #f59e0b; font-weight: bold;');
+                    await new Promise(r => setTimeout(r, 500));
+                    room.send('market', { op: 'collect_all' });
+                    await new Promise(r => setTimeout(r, 450));
+                    evictedInfo = { name: evName, price: evPrice };
+                  } catch (_) {}
+                }
+              }
+
+              // Re-find slotItem in bag in case collect_all shifted inventory
+              const freshBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+              const freshTarget = freshBag.find(b => {
+                if (!b || b.locked) return false;
+                const bId = Number((b.raw && b.raw.itemId) ?? b.id);
+                const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
+                if (bId === Number(targetInfo.itemId) && bRef === Number(targetInfo.refine)) return true;
+                return String(b.name || '').trim().toLowerCase() === normName && bRef === Number(targetInfo.refine);
+              }) || slotItem;
+
+              const beforeQty = Number(freshTarget.qty) || 1;
               window.__pmExplicitHoursOnce = true;
               try {
                 room.send('market', {
                   op: 'list',
-                  slot: Number(slotItem.slot),
+                  slot: Number(freshTarget.slot),
                   qty: sellQty,
                   price: listPriceTotal,
                   hours: Number(targetInfo.relistDurationHours) || 24
@@ -804,10 +1031,13 @@ function createMarketSniperService({
               for (let i = 0; i < 8; i++) {
                 await new Promise(r => setTimeout(r, 250));
                 const nowBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-                const nowSlot = nowBag.find(x => Number(x.slot) === Number(slotItem.slot));
+                const nowSlot = nowBag.find(x => Number(x.slot) === Number(freshTarget.slot));
                 const left = nowSlot ? (Number(nowSlot.qty) || 0) : 0;
                 if (left <= beforeQty - sellQty) {
                   relisted = true;
+                  window.__myMarketActiveCount = evictedInfo
+                    ? (Number(window.__myMarketActiveCount) || maxSlots)
+                    : (Number(window.__myMarketActiveCount) || 0) + 1;
                   break;
                 }
               }
@@ -817,41 +1047,110 @@ function createMarketSniperService({
             }
           }
         }
-        return relisted;
+        if (relisted && window.__pmSniperProtectedItems) {
+          window.__pmSniperProtectedItems.delete(normName);
+        }
+        return {
+          relisted,
+          evictedItemName: evictedInfo ? evictedInfo.name : null,
+          evictedItemPrice: evictedInfo ? evictedInfo.price : 0
+        };
       };
 
-      // Install real-time Colyseus listeners once per room
+      // Install real-time Colyseus listeners once per room (using market_badge + market_mine)
       if (room !== window.__pmSniperHookedRoom) {
         window.__pmSniperHookedRoom = room;
 
-        room.onMessage('market_outbid', async (msg) => {
-          if (!msg || !msg.listingId) return;
-          const lid = Number(msg.listingId);
-          const tracked = window.__pmSniperAuctions && window.__pmSniperAuctions[lid];
-          // Always collect outbid refund immediately so Zeny returns to bag right away!
+        room.onMessage('market_badge', (msg) => {
+          if (msg && Number(msg.pending) > 0) {
+            try { room.send('market', { op: 'mine' }); } catch (_) {}
+          }
+        });
+
+        room.onMessage('market_mine', async (msg) => {
+          if (!msg) return;
+          if (Array.isArray(msg.active)) {
+            window.__myMarketActiveCount = msg.active.length;
+            window.__myMarketActiveCountUpdatedAt = Date.now();
+          }
+          const deliveries = Array.isArray(msg.deliveries) ? msg.deliveries.filter(d => d && !d.held) : [];
+          if (!deliveries.length) return;
+
+          // Collect all non-held deliveries (outbid refunds, won auctions, bought items) immediately
           try {
             room.send('market', { op: 'collect_all' });
-            console.log('%c[PmheeAether Sniper] 💰 โดนปาดประมูล listing #' + lid + ' -> สั่งกดรับเงินประมูลคืนเข้ากระเป๋าทันที!', 'color: #f59e0b; font-weight: bold;');
           } catch (_) {}
 
-          if (!tracked) return;
-          const outbidAmount = Number(msg.amount) || 0;
-          const nextBid = Math.max(outbidAmount + 1, Math.ceil(outbidAmount * 1.01));
-          const nowTs = Date.now();
-          if (tracked.auctionEndsAt && nowTs >= tracked.auctionEndsAt) return;
+          for (const d of deliveries) {
+            const did = d.deliveryId || (d.reason + ':' + (d.name || '') + ':' + (d.zeny || 0));
+            if (window.__pmSniperHandledDeliveries.has(did)) continue;
+            window.__pmSniperHandledDeliveries.add(did);
 
-          if (nextBid <= tracked.maxBidCapTotal) {
-            await new Promise(r => setTimeout(r, 550));
-            const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
-            if (curZeny === 0 || (curZeny - tracked.minReserveZeny) >= nextBid) {
-              try {
-                room.send('market', { op: 'bid', listingId: lid, amount: nextBid });
-                tracked.lastBidAmount = nextBid;
-                const netRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * 4 / 100);
-                const newProfit = netRev - nextBid;
-                console.log('%c[PmheeAether Sniper] 🔨 ประมูลสู้ต่อทันที! ' + tracked.itemName + ' ที่ ' + nextBid.toLocaleString() + ' z (เพดาน ' + tracked.maxBidCapTotal.toLocaleString() + ' z)', 'color: #38bdf8; font-weight: bold;');
+            const activeAuctions = Object.values(window.__pmSniperAuctions || {});
+            if (!activeAuctions.length) continue;
+
+            if (d.reason === 'outbid') {
+              const dNameLower = String(d.name || '').trim().toLowerCase();
+              const tracked = activeAuctions.find(a => a && dNameLower.includes(String(a.itemName || '').trim().toLowerCase()));
+              if (!tracked) continue;
+              const lid = Number(tracked.listingId);
+              const refundZeny = Number(d.zeny) || tracked.lastBidAmount || 0;
+              console.log('%c[PmheeAether Sniper] 💰 โดนปาดประมูล ' + tracked.itemName + ' -> รับเงินประมูลคืน ' + refundZeny.toLocaleString() + ' z เข้ากระเป๋าทันที!', 'color: #f59e0b; font-weight: bold;');
+
+              if (tracked.auctionEndsAt && Date.now() >= tracked.auctionEndsAt) {
+                delete window.__pmSniperAuctions[lid];
+                continue;
+              }
+
+              // Query live listing to check new minBid / topBid
+              const searchRes = await new Promise(resolve => {
+                let unsub;
+                const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2500);
+                unsub = room.onMessage('market_results', m => { clearTimeout(t); if (unsub) unsub(); resolve(m); });
+                room.send('market', { op: 'search', filters: { q: tracked.itemName, sort: 'price_asc', page: 0 } });
+              });
+              const liveListing = searchRes && Array.isArray(searchRes.listings)
+                ? searchRes.listings.find(x => x && Number(x.listingId) === lid)
+                : null;
+              if (!liveListing) {
+                delete window.__pmSniperAuctions[lid];
+                continue;
+              }
+              const outbidAmount = Number(liveListing.topBid || liveListing.price) || refundZeny;
+              const nextBid = Number(liveListing.minBid) || Math.max(outbidAmount + 1, Math.ceil(outbidAmount * 1.01));
+
+              if (nextBid <= tracked.maxBidCapTotal) {
+                await new Promise(r => setTimeout(r, 450));
+                const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
+                if (curZeny === 0 || (curZeny - tracked.minReserveZeny) >= nextBid) {
+                  try {
+                    room.send('market', { op: 'bid', listingId: lid, amount: nextBid });
+                    tracked.lastBidAmount = nextBid;
+                    const netRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * 4 / 100);
+                    const newProfit = netRev - nextBid;
+                    console.log('%c[PmheeAether Sniper] 🔨 ประมูลสู้ต่อทันที! ' + tracked.itemName + ' ที่ ' + nextBid.toLocaleString() + ' z (เพดาน ' + tracked.maxBidCapTotal.toLocaleString() + ' z)', 'color: #38bdf8; font-weight: bold;');
+                    window.__pmSniperEvents.push({
+                      type: 'outbid_rebid',
+                      listingId: lid,
+                      itemId: tracked.itemId,
+                      itemName: tracked.itemName,
+                      refine: tracked.refine,
+                      qty: tracked.qty,
+                      icon: tracked.icon,
+                      outbidAmount,
+                      refund: refundZeny,
+                      newBid: nextBid,
+                      cleanRefUnitPrice: tracked.cleanRefUnitPrice,
+                      flipUnitPrice: tracked.flipUnitPrice,
+                      expectedNetProfit: newProfit
+                    });
+                  } catch (_) {}
+                }
+              } else {
+                console.log('%c[PmheeAether Sniper] ⏹️ หยุดสู้ราคา ' + tracked.itemName + ' (ราคา ' + outbidAmount.toLocaleString() + ' z เกินเพดานกำไร ' + tracked.maxBidCapTotal.toLocaleString() + ' z) — รับเงินคืนเรียบร้อย', 'color: #f87171; font-weight: bold;');
+                delete window.__pmSniperAuctions[lid];
                 window.__pmSniperEvents.push({
-                  type: 'outbid_rebid',
+                  type: 'outbid_stopped',
                   listingId: lid,
                   itemId: tracked.itemId,
                   itemName: tracked.itemName,
@@ -859,62 +1158,43 @@ function createMarketSniperService({
                   qty: tracked.qty,
                   icon: tracked.icon,
                   outbidAmount,
-                  refund: Number(msg.refund) || 0,
-                  newBid: nextBid,
+                  refund: refundZeny,
+                  maxBidCapTotal: tracked.maxBidCapTotal,
                   cleanRefUnitPrice: tracked.cleanRefUnitPrice,
-                  flipUnitPrice: tracked.flipUnitPrice,
-                  expectedNetProfit: newProfit
+                  flipUnitPrice: tracked.flipUnitPrice
                 });
-              } catch (_) {}
+              }
+            } else if (d.reason === 'won') {
+              const dItemId = d.item ? Number(d.item.itemId ?? d.item.id) : 0;
+              const dNameLower = String((d.item && d.item.name) || d.name || '').trim().toLowerCase();
+              const tracked = activeAuctions.find(a => a && (Number(a.itemId) === dItemId || dNameLower.includes(String(a.itemName || '').trim().toLowerCase())));
+              if (!tracked) continue;
+              const lid = Number(tracked.listingId);
+              delete window.__pmSniperAuctions[lid];
+              const finalPrice = tracked.lastBidAmount || tracked.actionAmount;
+              console.log('%c[PmheeAether Sniper] 🏆 ชนะการประมูล! ' + tracked.itemName + ' ที่ราคา ' + finalPrice.toLocaleString() + ' z -> กำลังรับของและตั้งขายทำกำไร...', 'color: #10b981; font-weight: bold; font-size: 13px;');
+              const flipOut = await window.__pmSniperClaimAndFlip(tracked, finalPrice, 250);
+              const relisted = Boolean(flipOut && (flipOut.relisted || flipOut === true));
+              const netRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * 4 / 100);
+              window.__pmSniperEvents.push({
+                type: relisted ? 'won_and_relisted' : 'won_claimed',
+                relisted,
+                evictedItemName: flipOut && flipOut.evictedItemName ? flipOut.evictedItemName : null,
+                evictedItemPrice: flipOut && flipOut.evictedItemPrice ? flipOut.evictedItemPrice : 0,
+                listingId: lid,
+                itemId: tracked.itemId,
+                itemName: tracked.itemName,
+                refine: tracked.refine,
+                qty: tracked.qty,
+                icon: tracked.icon,
+                buyPriceTotal: finalPrice,
+                cleanRefUnitPrice: tracked.cleanRefUnitPrice,
+                flipUnitPrice: tracked.flipUnitPrice,
+                relistPriceTotal: tracked.relistPriceTotal,
+                expectedNetProfit: netRev - finalPrice
+              });
             }
-          } else {
-            console.log('%c[PmheeAether Sniper] ⏹️ หยุดสู้ราคา ' + tracked.itemName + ' (ราคา ' + outbidAmount.toLocaleString() + ' z เกินเพดานกำไร ' + tracked.maxBidCapTotal.toLocaleString() + ' z) — รับเงินคืนเรียบร้อย', 'color: #f87171; font-weight: bold;');
-            delete window.__pmSniperAuctions[lid];
-            window.__pmSniperEvents.push({
-              type: 'outbid_stopped',
-              listingId: lid,
-              itemId: tracked.itemId,
-              itemName: tracked.itemName,
-              refine: tracked.refine,
-              qty: tracked.qty,
-              icon: tracked.icon,
-              outbidAmount,
-              refund: Number(msg.refund) || 0,
-              maxBidCapTotal: tracked.maxBidCapTotal,
-              cleanRefUnitPrice: tracked.cleanRefUnitPrice,
-              flipUnitPrice: tracked.flipUnitPrice
-            });
           }
-        });
-
-        room.onMessage('market_won', async (msg) => {
-          if (!msg || !msg.listingId) return;
-          const lid = Number(msg.listingId);
-          const tracked = window.__pmSniperAuctions && window.__pmSniperAuctions[lid];
-          if (!tracked) {
-            try { room.send('market', { op: 'collect_all' }); } catch (_) {}
-            return;
-          }
-          delete window.__pmSniperAuctions[lid];
-          const finalPrice = Number(msg.price) || tracked.lastBidAmount || tracked.actionAmount;
-          console.log('%c[PmheeAether Sniper] 🏆 ชนะการประมูล! ' + tracked.itemName + ' ที่ราคา ' + finalPrice.toLocaleString() + ' z -> กำลังรับของและตั้งขายทำกำไร...', 'color: #10b981; font-weight: bold; font-size: 13px;');
-          const relisted = await window.__pmSniperClaimAndFlip(tracked, finalPrice);
-          const netRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * 4 / 100);
-          window.__pmSniperEvents.push({
-            type: relisted ? 'won_and_relisted' : 'won_claimed',
-            relisted,
-            listingId: lid,
-            itemId: tracked.itemId,
-            itemName: tracked.itemName,
-            refine: tracked.refine,
-            qty: tracked.qty,
-            icon: tracked.icon,
-            buyPriceTotal: finalPrice,
-            cleanRefUnitPrice: tracked.cleanRefUnitPrice,
-            flipUnitPrice: tracked.flipUnitPrice,
-            relistPriceTotal: tracked.relistPriceTotal,
-            expectedNetProfit: netRev - finalPrice
-          });
         });
       }
 
@@ -927,14 +1207,24 @@ function createMarketSniperService({
         const zenyBefore = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
         room.send('market', { op: 'buy', listingId: p.listingId, price: p.actionAmount });
         console.log('%c[PmheeAether Sniper] ⚡ ส่งคำสั่งช้อนซื้อทันที: ' + p.itemName + ' x' + p.qty + ' ที่ ' + p.actionAmount.toLocaleString() + ' z!', 'color: #10b981; font-weight: bold; font-size: 13px;');
-        const relisted = await window.__pmSniperClaimAndFlip(p, p.actionAmount);
+        const flipOut = await window.__pmSniperClaimAndFlip(p, p.actionAmount, 750);
+        const relisted = Boolean(flipOut && (flipOut.relisted || flipOut === true));
         const zenyAfter = (typeof window.__currentZeny === 'number') ? window.__currentZeny : zenyBefore;
-        return { success: true, mode: 'buy', amount: p.actionAmount, relisted, zenyBefore, zenyAfter };
+        return {
+          success: true,
+          mode: 'buy',
+          amount: p.actionAmount,
+          relisted,
+          evictedItemName: flipOut && flipOut.evictedItemName ? flipOut.evictedItemName : null,
+          evictedItemPrice: flipOut && flipOut.evictedItemPrice ? flipOut.evictedItemPrice : 0,
+          zenyBefore,
+          zenyAfter
+        };
       }
     })()`;
 
-    const res = await evalProfilePort(buyerScreen.debugPort, execCode, 8500);
-    return (res && res.ok && res.result) ? res.result : { success: false, error: 'คำสั่งไม่ตอบกลับ' };
+    const res = await evalProfilePort(buyerScreen.debugPort, execCode, 10500);
+    return (res && (res.success || res.ok) && res.result) ? res.result : { success: false, error: 'คำสั่งไม่ตอบกลับ' };
   }
 
   // Main scan cycle
@@ -999,7 +1289,7 @@ function createMarketSniperService({
       const scanRes = await evalProfilePort(scanner.debugPort, searchCode, 5000);
       state.stats.totalScans = (state.stats.totalScans || 0) + 1;
 
-      if (!scanRes || !scanRes.ok || !scanRes.result || !scanRes.result.ok) {
+      if (!scanRes || !(scanRes.success || scanRes.ok) || !scanRes.result || !scanRes.result.ok) {
         return { ok: false, reason: 'search_timeout' };
       }
 
@@ -1016,7 +1306,7 @@ function createMarketSniperService({
       const blacklist = getBlacklistSet();
       const watchlistLower = new Set(getWatchlistArray().map(s => s.toLowerCase()));
       const now = Date.now();
-      let historyFetchesRemaining = 5; // Cap history RPCs per tick so scans stay fast
+      let historyFetchesRemaining = 4; // Cap history RPCs per tick so scans stay fast
 
       // Prioritize items already in priceCache first, then cheapest unit price first
       const prioritizedListings = listings.slice().sort((a, b) => {
@@ -1026,8 +1316,8 @@ function createMarketSniperService({
         const kB = `${Number(itB.itemId ?? itB.id)}:${Number(itB.refine) || 0}`;
         const cA = state.priceCache[kA];
         const cB = state.priceCache[kB];
-        const freshA = Boolean(cA && (now - (Number(cA.updatedAt) || 0)) < PRICE_CACHE_TTL_MS);
-        const freshB = Boolean(cB && (now - (Number(cB.updatedAt) || 0)) < PRICE_CACHE_TTL_MS);
+        const freshA = Boolean(cA && cA.cacheVer === 3 && (now - (Number(cA.updatedAt) || 0)) < PRICE_CACHE_TTL_MS);
+        const freshB = Boolean(cB && cB.cacheVer === 3 && (now - (Number(cB.updatedAt) || 0)) < PRICE_CACHE_TTL_MS);
         if (freshA !== freshB) return freshA ? -1 : 1;
         const uA = Math.ceil((Number(a && (a.minBid || a.price)) || 0) / Math.max(1, Number(a && a.qty) || 1));
         const uB = Math.ceil((Number(b && (b.minBid || b.price)) || 0) / Math.max(1, Number(b && b.qty) || 1));
@@ -1069,7 +1359,7 @@ function createMarketSniperService({
 
         const cacheKey = `${itemId}:${refine}`;
         let refInfo = state.priceCache[cacheKey];
-        const cacheFresh = refInfo && (now - (Number(refInfo.updatedAt) || 0)) < PRICE_CACHE_TTL_MS;
+        const cacheFresh = refInfo && refInfo.cacheVer === 3 && (now - (Number(refInfo.updatedAt) || 0)) < PRICE_CACHE_TTL_MS;
 
         if (!cacheFresh) {
           if (historyFetchesRemaining <= 0) continue;
@@ -1087,9 +1377,9 @@ function createMarketSniperService({
         if (acquireUnitCost > maxAllowedUnitCost) continue;
 
         // Calculate profit using richest candidate screen's tax rate (4% Premium, 8% Free)
-        const buyerScreen = selectRichestBuyerProfile(onlineScreens, acquireTotalCost, lid);
+        const buyerScreen = selectRichestBuyerProfile(onlineScreens, acquireTotalCost, lid, qty, config.mode === 'auto_flip');
         const taxPercent = (buyerScreen && buyerScreen.premium) ? 4 : 8;
-        const flipUnitPrice = Math.max(refInfo.flipUnitPrice, refInfo.cleanRefUnitPrice);
+        const flipUnitPrice = refInfo.flipUnitPrice;
         const flipTotal = flipUnitPrice * qty;
         const netRevenueTotal = flipTotal - Math.floor(flipTotal * taxPercent / 100);
         const expectedNetProfit = netRevenueTotal - acquireTotalCost;
@@ -1221,9 +1511,29 @@ function createMarketSniperService({
             });
           } else {
             state.stats.totalWonOrBought = (state.stats.totalWonOrBought || 0) + 1;
+            const evictedNote = execResult.evictedItemName
+              ? ` (ถอด ${execResult.evictedItemName} @ ${Number(execResult.evictedItemPrice || 0).toLocaleString()} z ออกชั่วคราว)`
+              : '';
             if (execResult.relisted) {
+              buyerScreen.activeCount = Math.min(buyerScreen.maxListings || 20, (Number(buyerScreen.activeCount) || 0) + 1);
               state.stats.totalRelisted = (state.stats.totalRelisted || 0) + 1;
               state.stats.totalEstimatedNetProfit = (state.stats.totalEstimatedNetProfit || 0) + expectedNetProfit;
+            } else if (config.mode === 'auto_flip') {
+              enqueuePendingFlip({
+                listingId: lid,
+                itemId,
+                itemName,
+                refine,
+                qty,
+                icon: it.icon || null,
+                buyPriceTotal: acquireTotalCost,
+                cleanRefUnitPrice: refInfo.cleanRefUnitPrice,
+                flipUnitPrice,
+                relistPriceTotal: flipTotal,
+                expectedNetProfit,
+                buyerProfileId: buyerScreen.profileId,
+                buyerCharName: buyerScreen.charName || buyerScreen.profileName
+              });
             }
             upsertActiveBid({
               listingId: lid,
@@ -1243,11 +1553,11 @@ function createMarketSniperService({
               buyerProfileId: buyerScreen.profileId,
               buyerCharName: buyerScreen.charName || buyerScreen.profileName,
               auctionEndsAt: 0,
-              status: execResult.relisted ? 'relisted' : 'bought',
+              status: execResult.relisted ? 'relisted' : (config.mode === 'auto_flip' ? 'queued_flip' : 'bought'),
               relistedPrice: execResult.relisted ? flipTotal : 0,
               lastEventNote: execResult.relisted
-                ? `ช้อนซื้อทันที & ตั้งขายกลับที่ ${flipTotal.toLocaleString()} z สำเร็จ!`
-                : `ช้อนซื้อทันที & รับของเข้ากระเป๋าแล้ว`
+                ? `ช้อนซื้อทันที & ตั้งขายกลับที่ ${flipTotal.toLocaleString()} z สำเร็จ!${evictedNote}`
+                : (config.mode === 'auto_flip' ? `ช้อนซื้อแล้ว — ⏳ รอช่องตลาดว่างเพื่อตั้งขายกลับอัตโนมัติ` : `ช้อนซื้อทันที & รับของเข้ากระเป๋าแล้ว`)
             });
             recordHistoryEvent({
               listingId: lid,
@@ -1266,8 +1576,8 @@ function createMarketSniperService({
               buyerProfileId: buyerScreen.profileId,
               buyerCharName: buyerScreen.charName || buyerScreen.profileName,
               note: execResult.relisted
-                ? `ช้อนซื้อขาดที่ ${acquireTotalCost.toLocaleString()} z -> ตั้งขายกลับ ${flipTotal.toLocaleString()} z (กำไรสุทธิ +${expectedNetProfit.toLocaleString()} z)`
-                : `ช้อนซื้อขาดที่ ${acquireTotalCost.toLocaleString()} z และรับของเข้าตัวเรียบร้อย`
+                ? `ช้อนซื้อขาดที่ ${acquireTotalCost.toLocaleString()} z -> ตั้งขายกลับ ${flipTotal.toLocaleString()} z (กำไรสุทธิ +${expectedNetProfit.toLocaleString()} z)${evictedNote}`
+                : (config.mode === 'auto_flip' ? `ช้อนซื้อที่ ${acquireTotalCost.toLocaleString()} z -> เข้าคิวรอช่องตลาดว่างเพื่อตั้งขายกลับอัตโนมัติ` : `ช้อนซื้อขาดที่ ${acquireTotalCost.toLocaleString()} z และรับของเข้าตัวเรียบร้อย`)
             });
           }
         }
@@ -1280,96 +1590,198 @@ function createMarketSniperService({
     }
   }
 
-  // Periodic maintenance: check ended auctions, claim any stuck deliveries/refunds, and flip any unclaimed won items
+  // Periodic maintenance: check ended auctions, claim any stuck deliveries/refunds, and process Pending Flip Queue when slots open up
   async function runMaintenanceCycle() {
     if (!config.enabled || isMaintenanceTick) return;
     isMaintenanceTick = true;
     try {
       const now = Date.now();
+      const profiles = (typeof loadProfiles === 'function' ? loadProfiles() : []) || [];
+
+      // 1) Settle ended 5-minute auctions
       const expiredLeads = state.activeBids.filter(
         b => b && b.status === 'leading' && b.auctionEndsAt > 0 && now > (Number(b.auctionEndsAt) + 3000)
       );
-      if (!expiredLeads.length) return;
 
-      const profiles = (typeof loadProfiles === 'function' ? loadProfiles() : []) || [];
-      const byProfile = new Map();
-      for (const bid of expiredLeads) {
-        const pid = String(bid.buyerProfileId || '');
-        if (!pid) continue;
-        if (!byProfile.has(pid)) byProfile.set(pid, []);
-        byProfile.get(pid).push(bid);
-      }
+      if (expiredLeads.length > 0) {
+        const byProfile = new Map();
+        for (const bid of expiredLeads) {
+          const pid = String(bid.buyerProfileId || '');
+          if (!pid) continue;
+          if (!byProfile.has(pid)) byProfile.set(pid, []);
+          byProfile.get(pid).push(bid);
+        }
 
-      for (const [pid, bids] of byProfile.entries()) {
-        const prof = profiles.find(p => p && String(p.id) === pid && p.debugPort);
-        if (!prof) continue;
+        for (const [pid, bids] of byProfile.entries()) {
+          const prof = profiles.find(p => p && String(p.id) === pid && p.debugPort);
+          if (!prof) continue;
 
-        for (const bid of bids) {
-          const settleCode = `(async () => {
-            const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
-            if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
-            const lid = ${Number(bid.listingId)};
-            if (window.__pmSniperAuctions && window.__pmSniperAuctions[lid]) {
-              delete window.__pmSniperAuctions[lid];
-            }
-            if (typeof window.__pmSniperClaimAndFlip === 'function') {
-              const relisted = await window.__pmSniperClaimAndFlip({
-                itemId: ${Number(bid.itemId)},
-                refine: ${Number(bid.refine) || 0},
-                itemName: ${JSON.stringify(bid.itemName || '')},
-                qty: ${Number(bid.qty) || 1},
-                flipUnitPrice: ${Number(bid.flipUnitPrice) || 0},
-                relistPriceTotal: ${Number(bid.flipUnitPrice || 0) * Math.max(1, Number(bid.qty) || 1)},
-                relistDurationHours: ${Number(config.relistDurationHours) || 24},
-                autoFlip: ${config.mode === 'auto_flip'}
-              }, ${Number(bid.currentBid) || 0});
-              return { ok: true, relisted };
-            } else {
-              try { room.send('market', { op: 'collect_all' }); } catch (_) {}
-              return { ok: true, relisted: false };
-            }
-          })()`;
+          for (const bid of bids) {
+            const settleCode = `(async () => {
+              const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+              if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
+              const lid = ${Number(bid.listingId)};
+              if (window.__pmSniperAuctions && window.__pmSniperAuctions[lid]) {
+                delete window.__pmSniperAuctions[lid];
+              }
+              if (typeof window.__pmSniperClaimAndFlip === 'function') {
+                const flipOut = await window.__pmSniperClaimAndFlip({
+                  itemId: ${Number(bid.itemId)},
+                  refine: ${Number(bid.refine) || 0},
+                  itemName: ${JSON.stringify(bid.itemName || '')},
+                  qty: ${Number(bid.qty) || 1},
+                  flipUnitPrice: ${Number(bid.flipUnitPrice) || 0},
+                  relistPriceTotal: ${Number(bid.flipUnitPrice || 0) * Math.max(1, Number(bid.qty) || 1)},
+                  relistDurationHours: ${Number(config.relistDurationHours) || 24},
+                  autoFlip: ${config.mode === 'auto_flip'}
+                }, ${Number(bid.currentBid) || 0});
+                const relisted = Boolean(flipOut && (flipOut.relisted || flipOut === true));
+                return {
+                  ok: true,
+                  relisted,
+                  evictedItemName: flipOut && flipOut.evictedItemName ? flipOut.evictedItemName : null,
+                  evictedItemPrice: flipOut && flipOut.evictedItemPrice ? flipOut.evictedItemPrice : 0
+                };
+              } else {
+                try { room.send('market', { op: 'collect_all' }); } catch (_) {}
+                return { ok: true, relisted: false };
+              }
+            })()`;
 
-          const r = await evalProfilePort(prof.debugPort, settleCode, 6500);
-          if (r && r.ok && r.result && r.result.ok) {
-            const relisted = Boolean(r.result.relisted);
-            const flipTotal = (Number(bid.flipUnitPrice) || 0) * Math.max(1, Number(bid.qty) || 1);
-            if (relisted) {
-              state.stats.totalWonOrBought = (state.stats.totalWonOrBought || 0) + 1;
-              state.stats.totalRelisted = (state.stats.totalRelisted || 0) + 1;
-              state.stats.totalEstimatedNetProfit = (state.stats.totalEstimatedNetProfit || 0) + (Number(bid.expectedNetProfit) || 0);
-            }
-            upsertActiveBid({
-              listingId: bid.listingId,
-              status: relisted ? 'relisted' : 'won',
-              relistedPrice: relisted ? flipTotal : 0,
-              lastEventNote: relisted
-                ? `หมดเวลาประมูล 5 นาที -> รับของ & ตั้งขายกลับที่ ${flipTotal.toLocaleString()} z สำเร็จ!`
-                : `หมดเวลาประมูล 5 นาที -> กดรับของ/เงินคืนจากแท็บรับของเรียบร้อย`
-            });
-            if (relisted) {
-              recordHistoryEvent({
+            const r = await evalProfilePort(prof.debugPort, settleCode, 7500);
+            if (r && (r.success || r.ok) && r.result && r.result.ok) {
+              const relisted = Boolean(r.result.relisted);
+              const flipTotal = (Number(bid.flipUnitPrice) || 0) * Math.max(1, Number(bid.qty) || 1);
+              const evictedNote = r.result.evictedItemName
+                ? ` (ถอด ${r.result.evictedItemName} @ ${Number(r.result.evictedItemPrice || 0).toLocaleString()} z ออกชั่วคราว)`
+                : '';
+              if (relisted) {
+                state.stats.totalWonOrBought = (state.stats.totalWonOrBought || 0) + 1;
+                state.stats.totalRelisted = (state.stats.totalRelisted || 0) + 1;
+                state.stats.totalEstimatedNetProfit = (state.stats.totalEstimatedNetProfit || 0) + (Number(bid.expectedNetProfit) || 0);
+              } else if (config.mode === 'auto_flip') {
+                enqueuePendingFlip({
+                  listingId: bid.listingId,
+                  itemId: bid.itemId,
+                  itemName: bid.itemName,
+                  refine: bid.refine || 0,
+                  qty: bid.qty || 1,
+                  icon: bid.icon || null,
+                  buyPriceTotal: bid.currentBid || 0,
+                  cleanRefUnitPrice: bid.cleanRefUnitPrice || 0,
+                  flipUnitPrice: bid.flipUnitPrice || 0,
+                  relistPriceTotal: flipTotal,
+                  expectedNetProfit: bid.expectedNetProfit || 0,
+                  buyerProfileId: bid.buyerProfileId,
+                  buyerCharName: bid.buyerCharName
+                });
+              }
+              upsertActiveBid({
                 listingId: bid.listingId,
-                itemId: bid.itemId,
-                itemName: bid.itemName,
-                refine: bid.refine || 0,
-                qty: bid.qty || 1,
-                icon: bid.icon || null,
-                action: 'relisted',
-                buyPriceTotal: bid.currentBid,
-                buyUnitPrice: Math.round((Number(bid.currentBid) || 0) / Math.max(1, Number(bid.qty) || 1)),
-                cleanRefUnitPrice: bid.cleanRefUnitPrice || 0,
-                relistPriceTotal: flipTotal,
-                relistUnitPrice: bid.flipUnitPrice || 0,
-                expectedNetProfit: bid.expectedNetProfit || 0,
-                buyerProfileId: bid.buyerProfileId,
-                buyerCharName: bid.buyerCharName,
-                note: `ครบ 5 นาที ชนะประมูลที่ ${Number(bid.currentBid || 0).toLocaleString()} z -> ตั้งขายกลับ ${flipTotal.toLocaleString()} z`
+                status: relisted ? 'relisted' : (config.mode === 'auto_flip' ? 'queued_flip' : 'won'),
+                relistedPrice: relisted ? flipTotal : 0,
+                lastEventNote: relisted
+                  ? `หมดเวลาประมูล 5 นาที -> รับของ & ตั้งขายกลับที่ ${flipTotal.toLocaleString()} z สำเร็จ!${evictedNote}`
+                  : (config.mode === 'auto_flip' ? `หมดเวลาประมูล 5 นาที -> รับของแล้ว (รอช่องว่างเพื่อตั้งขายกลับ)` : `หมดเวลาประมูล 5 นาที -> กดรับของ/เงินคืนจากแท็บรับของเรียบร้อย`)
               });
+              if (relisted) {
+                recordHistoryEvent({
+                  listingId: bid.listingId,
+                  itemId: bid.itemId,
+                  itemName: bid.itemName,
+                  refine: bid.refine || 0,
+                  qty: bid.qty || 1,
+                  icon: bid.icon || null,
+                  action: 'relisted',
+                  buyPriceTotal: bid.currentBid,
+                  buyUnitPrice: Math.round((Number(bid.currentBid) || 0) / Math.max(1, Number(bid.qty) || 1)),
+                  cleanRefUnitPrice: bid.cleanRefUnitPrice || 0,
+                  relistPriceTotal: flipTotal,
+                  relistUnitPrice: bid.flipUnitPrice || 0,
+                  expectedNetProfit: bid.expectedNetProfit || 0,
+                  buyerProfileId: bid.buyerProfileId,
+                  buyerCharName: bid.buyerCharName,
+                  note: `ครบ 5 นาที ชนะประมูลที่ ${Number(bid.currentBid || 0).toLocaleString()} z -> ตั้งขายกลับ ${flipTotal.toLocaleString()} z${evictedNote}`
+                });
+              }
             }
           }
         }
       }
+
+      // 2) Process Pending Flip Queue (items waiting for a free market slot)
+      if (config.mode === 'auto_flip' && Array.isArray(state.pendingFlips) && state.pendingFlips.length > 0) {
+        const remainingQueue = [];
+        for (const item of state.pendingFlips) {
+          if (!item || (now - (Number(item.queuedAt) || now)) > 6 * 3600 * 1000) continue; // expire after 6h
+          const prof = profiles.find(p => p && String(p.id) === String(item.buyerProfileId) && p.debugPort);
+          if (!prof) {
+            remainingQueue.push(item);
+            continue;
+          }
+
+          const retryCode = `(async () => {
+            const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+            if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
+            if (typeof window.__pmSniperClaimAndFlip !== 'function') return { ok: false };
+            const flipOut = await window.__pmSniperClaimAndFlip({
+              itemId: ${Number(item.itemId)},
+              refine: ${Number(item.refine) || 0},
+              itemName: ${JSON.stringify(item.itemName || '')},
+              qty: ${Number(item.qty) || 1},
+              flipUnitPrice: ${Number(item.flipUnitPrice) || 0},
+              relistPriceTotal: ${Number(item.relistPriceTotal) || (Number(item.flipUnitPrice || 0) * Math.max(1, Number(item.qty) || 1))},
+              relistDurationHours: ${Number(config.relistDurationHours) || 24},
+              autoFlip: true
+            }, ${Number(item.buyPriceTotal) || 0}, -1);
+            const relisted = Boolean(flipOut && (flipOut.relisted || flipOut === true));
+            return {
+              ok: true,
+              relisted,
+              evictedItemName: flipOut && flipOut.evictedItemName ? flipOut.evictedItemName : null,
+              evictedItemPrice: flipOut && flipOut.evictedItemPrice ? flipOut.evictedItemPrice : 0
+            };
+          })()`;
+
+          const rr = await evalProfilePort(prof.debugPort, retryCode, 7500);
+          if (rr && (rr.success || rr.ok) && rr.result && rr.result.relisted) {
+            const flipTotal = Number(item.relistPriceTotal) || ((Number(item.flipUnitPrice) || 0) * Math.max(1, Number(item.qty) || 1));
+            const evictedNote = rr.result.evictedItemName
+              ? ` (ถอด ${rr.result.evictedItemName} @ ${Number(rr.result.evictedItemPrice || 0).toLocaleString()} z ออกชั่วคราว)`
+              : '';
+            state.stats.totalRelisted = (state.stats.totalRelisted || 0) + 1;
+            state.stats.totalEstimatedNetProfit = (state.stats.totalEstimatedNetProfit || 0) + (Number(item.expectedNetProfit) || 0);
+            upsertActiveBid({
+              listingId: item.listingId,
+              status: 'relisted',
+              relistedPrice: flipTotal,
+              lastEventNote: `ช่องตลาดว่างแล้ว -> ตั้งขายกลับจากคิวรอที่ ${flipTotal.toLocaleString()} z สำเร็จ!${evictedNote}`
+            });
+            recordHistoryEvent({
+              listingId: item.listingId,
+              itemId: item.itemId,
+              itemName: item.itemName,
+              refine: item.refine || 0,
+              qty: item.qty || 1,
+              icon: item.icon || null,
+              action: 'relisted',
+              buyPriceTotal: item.buyPriceTotal,
+              buyUnitPrice: Math.round((Number(item.buyPriceTotal) || 0) / Math.max(1, Number(item.qty) || 1)),
+              cleanRefUnitPrice: item.cleanRefUnitPrice || 0,
+              relistPriceTotal: flipTotal,
+              relistUnitPrice: item.flipUnitPrice || 0,
+              expectedNetProfit: item.expectedNetProfit || 0,
+              buyerProfileId: item.buyerProfileId,
+              buyerCharName: item.buyerCharName,
+              note: `ตั้งขายกลับจากคิวรอสำเร็จที่ ${flipTotal.toLocaleString()} z (กำไรสุทธิ +${Number(item.expectedNetProfit || 0).toLocaleString()} z)${evictedNote}`
+            });
+          } else {
+            remainingQueue.push(item);
+          }
+        }
+        state.pendingFlips = remainingQueue;
+      }
+
       savePersistedState(state);
     } finally {
       isMaintenanceTick = false;
@@ -1473,7 +1885,7 @@ function createMarketSniperService({
               room.send('market', { op: 'collect_all' });
               return { ok: true };
             })()`, 3000);
-            if (r && r.ok && r.result && r.result.ok) claimedScreens += 1;
+            if (r && (r.success || r.ok) && r.result && r.result.ok) claimedScreens += 1;
           } catch (_) {}
         }));
         replyJSON(200, { success: true, claimedScreens });
@@ -1482,6 +1894,7 @@ function createMarketSniperService({
 
       if (req.method === 'POST' && pathname === '/api/market-sniper/clear-history') {
         state.activeBids = [];
+        state.pendingFlips = [];
         state.history = [];
         listingLocks.clear();
         savePersistedState(state);

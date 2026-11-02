@@ -658,6 +658,7 @@
     if (status === 'won') return '<span class="ms-badge won">🏆 ชนะประมูล & รับของแล้ว</span>';
     if (status === 'bought') return '<span class="ms-badge bought">⚡ ช้อนซื้อสำเร็จ</span>';
     if (status === 'outbid_stopped') return '<span class="ms-badge stopped">⏹️ เกินเพดาน (รับเงินคืนแล้ว)</span>';
+    if (status === 'queued_flip') return '<span class="ms-badge won">⏳ รอช่องว่างตั้งขายกลับ</span>';
     if (status === 'dry_run') return '<span class="ms-badge dry">🧪 โหมดจำลอง (Dry-Run)</span>';
     return `<span class="ms-badge">${escapeHtml(status || '-')}</span>`;
   }

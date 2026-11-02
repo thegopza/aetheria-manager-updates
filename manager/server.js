@@ -4822,6 +4822,7 @@ function triggerWindowsAlertBeep() {
 
 const humanCheckFirstSeenByProfile = new Map();
 const prisonAlertedByProfile = new Map();
+const lastEmbeddedBridgePollAt = new Map();
 let humanCheckMonitorInFlight = false;
 
 function isJailMapName(mapStr) {
@@ -4910,7 +4911,7 @@ setInterval(async () => {
       const cached = clientStateCacheByPort.get(p.debugPort);
       return Boolean(cached && (Date.now() - cached.ts < 60000));
     });
-    const BATCH_SIZE = 10;
+    const BATCH_SIZE = 4;
     let shouldBeepNormal = false;
     let shouldBeepUrgent = false;
 
@@ -4919,7 +4920,11 @@ setInterval(async () => {
       await Promise.all(batch.map(async (p) => {
         try {
           const state = await queryClientState(p.debugPort);
-          await embeddedHumanCheckBridge.collect(p, state);
+          const nowPoll = Date.now();
+          if (state && ((state.humanCheck && state.humanCheck.active) || (nowPoll - (lastEmbeddedBridgePollAt.get(p.id) || 0) >= 15000))) {
+            lastEmbeddedBridgePollAt.set(p.id, nowPoll);
+            await embeddedHumanCheckBridge.collect(p, state);
+          }
           if (state && Array.isArray(state.humanCheckWrongAttempts) && state.humanCheckWrongAttempts.length > 0) {
             shouldBeepUrgent = true;
             if (typeof discordService.notifyHumanCheckWrongAttempt === 'function') {
@@ -4977,7 +4982,7 @@ setInterval(async () => {
   } catch (e) {} finally {
     humanCheckMonitorInFlight = false;
   }
-}, 2000);
+}, 3500);
 
 // Cloud Profile & Credential (ID / Password) Backup Sync & Restore
 let centralProfileBackupTimer = null;

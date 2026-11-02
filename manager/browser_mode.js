@@ -1594,7 +1594,16 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               ? code.replace('\nwindow.__pmScriptBootstrap.accept(', '\nreturn window.__pmScriptBootstrap.accept(')
               : code;
             const expression=`(async () => { if(String(performance.timeOrigin)!==${JSON.stringify(before.documentId)}) return {skipped:true,reason:'DOCUMENT_CHANGED'}; if(!window.__pmProfileId) window.__pmProfileId=${JSON.stringify(c.profileId)}; if(!window.__pmDeviceId) window.__pmDeviceId=${JSON.stringify(expectedDeviceId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} if(window.__pelicanBotVersion || window.__pmPayloadInitialized || ('__isBotRunning' in window) || typeof window.startMasterBot==='function' || document.getElementById('pelican-hud') || typeof window.__getClientLiveState==='function') return {skipped:true,reason:'ALREADY_RUNNING'}; if(window.__pmScriptBootstrap?.status?.()?.phase === 'failed') { try { delete window.__pmScriptBootstrap; delete window.__pmBrowserInjectionAttempted; } catch (_) { window.__pmScriptBootstrap = null; window.__pmBrowserInjectionAttempted = false; } } window.__pmBrowserInjectionAttempted=true; const evalResult = await (async () => { /*(0,eval)(*/\n${invokeCode}\n})(); return {attempted:true, evalResult}; })()`;
-            await evaluate(c,expression,25000,true);
+            c.pendingBootstrapScript = expression;
+            if (c.port) {
+              const fetchExpr = `(async () => { try { const r = await fetch('http://127.0.0.1:${c.port}/__pm_bootstrap.js?t=' + Date.now()); if (!r.ok) return { __pmFetchErr: 'HTTP_' + r.status }; const src = await r.text(); return await (0, eval)(src); } catch (e) { return { __pmFetchErr: String(e && e.message || e) }; } })()`;
+              const fRes = await evaluate(c, fetchExpr, 15000, true).catch(e => ({ __pmFetchErr: String(e && e.message || e) }));
+              if (fRes && fRes.__pmFetchErr) {
+                await evaluate(c, expression, 25000, true);
+              }
+            } else {
+              await evaluate(c, expression, 25000, true);
+            }
             await new Promise(r => setTimeout(r, 200));
           } finally {
             heavyInjectionInFlightCount = Math.max(0, heavyInjectionInFlightCount - 1);
@@ -2125,7 +2134,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   let phase2Running = false;
 
   // ---------- per-profile HTTP API (same as the Electron loader's) ----------
-  const MAX_CONCURRENT_CDP_EVALS = 8;
+  const MAX_CONCURRENT_CDP_EVALS = 10;
   let activeCdpEvals = 0;
   const cdpEvalWaiters = [];
   function acquireCdpEvalSlot(timeoutMs = 10000) {
@@ -2178,7 +2187,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   function acquireClientEvalLock(c, timeoutMs = 10000) {
     if (!isRealSession || !c || !c.profileId) return Promise.resolve(() => {});
     if (!c.evalWaiters) c.evalWaiters = [];
-    if ((c.evalInFlightCount || 0) >= 1 && c.evalWaiters.length >= 4) {
+    if ((c.evalInFlightCount || 0) >= 1 && c.evalWaiters.length >= 10) {
       return Promise.reject(new Error('CDP client busy'));
     }
     return new Promise((resolve, reject) => {
@@ -2284,7 +2293,22 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       req.setEncoding('utf8');
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Allow-Private-Network', 'true');
+      if (req.method === 'OPTIONS') {
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', '*');
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       const url = new URL(req.url, 'http://127.0.0.1');
+      if (url.pathname === '/__pm_bootstrap.js') {
+        res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.writeHead(200);
+        res.end(c.pendingBootstrapScript || 'void 0;');
+        return;
+      }
       const reply = (status, obj) => { res.writeHead(status); res.end(JSON.stringify(obj)); };
       try {
         if (url.pathname === '/api/eval') {
@@ -2296,7 +2320,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           }
           if (!code) return reply(400, { error: 'Missing code' });
           const isLiveStateProbe = code.includes('__getClientLiveState') && code.includes('grossZenyGained');
-          if (isRealSession && (!c.initialHealthChecked || (isLiveStateProbe && (heavyInjectionInFlightCount > 0 || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))))) {
+          const isBootstrapAccept = isRealSession && code.includes('__pmScriptBootstrap.accept(');
+          if (isRealSession && !isBootstrapAccept && (!c.initialHealthChecked || heavyInjectionInFlightCount > 0 || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
             if (isLiveStateProbe && c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 180000)) {
               return reply(200, { success: true, result: c.lastGoodState, cached: true });
             }

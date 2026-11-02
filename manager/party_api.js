@@ -32,7 +32,7 @@ const BUSY_FLAGS = ['__isNavigating', '__isWalkingToMap', '__isShopping', '__isR
   '__isMarketScanning', '__isWeightScrollBusy', '__isCheckingPostSellChannel', '__pendingPostSellChannelCheck'];
 
 const TIMING = {
-  tickMs: 2500,
+  tickMs: 4500,
   inviteCooldownMs: 15000,
   inviteMaxAttempts: 3,
   excludeAfterFailMs: 5 * 60 * 1000,
@@ -708,14 +708,19 @@ function createPartyService(opts) {
 
   async function refreshStates(force) {
     if (!force && now() - statesAt < 4000) return states;
+    if (!opts.timing && now() - statesAt < 2200) return states;
     const profiles = loadProfiles();
     const next = new Map();
-    await Promise.all(profiles.map(async p => {
-      if (!p.debugPort) { next.set(p.id, null); return; }
-      const r = await evalProfilePort(p.debugPort, READ_JS, 5000);
-      const s = r && r.success !== false && r.result && typeof r.result === 'object' ? r.result : null;
-      next.set(p.id, s && s.ok ? s : (s ? s : null));
-    }));
+    const batchSize = opts.timing ? Math.max(1, profiles.length) : 5;
+    for (let i = 0; i < profiles.length; i += batchSize) {
+      const batch = profiles.slice(i, i + batchSize);
+      await Promise.all(batch.map(async p => {
+        if (!p.debugPort) { next.set(p.id, null); return; }
+        const r = await evalProfilePort(p.debugPort, READ_JS, 5000);
+        const s = r && r.success !== false && r.result && typeof r.result === 'object' ? r.result : null;
+        next.set(p.id, s && s.ok ? s : (s ? s : null));
+      }));
+    }
     states = normalizeStates(next);
     statesAt = now();
     return states;
@@ -1124,7 +1129,7 @@ function createPartyService(opts) {
         const ft = resolveFollowTarget(party, id, profiles, states);
         effMode = ft.viaPriest ? 'none' : ft.mode;
       }
-      await act(P, ACTIONS.syncClientPartyState({
+      const syncPayload = {
         partyId: party.id,
         leaderName: L.name,
         priestFlow: priestFlowEnabled,
@@ -1142,7 +1147,17 @@ function createPartyService(opts) {
         partyNames: allPartyNames,
         membersNeedingBuff,
         buffQueue
-      }), 'sync-party-state');
+      };
+      const mState = mrt(party.id, id);
+      const syncSig = !opts.timing ? JSON.stringify(syncPayload) : '';
+      if (!opts.timing && mState.lastPartySyncSig === syncSig && membersNeedingBuff === 0 && (now() - (mState.lastPartySyncAt || 0) < 20000)) {
+        continue;
+      }
+      const syncRes = await act(P, ACTIONS.syncClientPartyState(syncPayload), 'sync-party-state');
+      if (syncRes && syncRes.ok) {
+        mState.lastPartySyncSig = syncSig;
+        mState.lastPartySyncAt = now();
+      }
     }
 
     rt.notes = notes;
@@ -1360,12 +1375,20 @@ function createPartyService(opts) {
       );
 
       if (S.helpers && S.helpers.updateSoloAvoidState) {
-        await act(P, ACTIONS.syncSoloAvoidState({
+        const soloAvoidPayload = {
           soloMapId: onFarm ? S.mapId : null,
           soloMapName: (onFarm ? S.mapName : S.targetMap) || null,
           avoidChannels: syncAvoidInfo.avoidChannels,
           otherPartyChannelsByMap: syncAvoidInfo.otherPartyChannelsByMap
-        }), 'sync-solo-avoid');
+        };
+        const soloSig = !opts.timing ? JSON.stringify(soloAvoidPayload) : '';
+        if (opts.timing || rt.lastAvoidPushSig !== soloSig || (now() - (rt.lastAvoidPushAt || 0) >= 25000)) {
+          const soloRes = await act(P, ACTIONS.syncSoloAvoidState(soloAvoidPayload), 'sync-solo-avoid');
+          if (soloRes && soloRes.ok) {
+            rt.lastAvoidPushSig = soloSig;
+            rt.lastAvoidPushAt = now();
+          }
+        }
       }
 
       if (chMode === 'no_overlap' && onFarm && !planBlocked(S) && !isBusy()) {

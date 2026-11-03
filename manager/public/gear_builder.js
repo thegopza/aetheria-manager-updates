@@ -109,6 +109,10 @@
           <label>▶️ เริ่มทำเซ็ตเมื่อเป็นอาชีพ</label>
           <select class="gb-start-sel"></select>
           <span class="gb-start-hint"></span>
+          <label style="margin-left:auto; display:inline-flex; align-items:center; gap:6px; color:#fbbf24; font-weight:600; font-size:12px;" title="กันเงินสำรองติดตัวไว้เสมอ (ไม่ซื้อของหรือแร่จนเงินเกลี้ยง 0 z) เพื่อเหลือไว้ซื้อลูกธนู ยา ใบน้ำหนัก และค่าธรรมเนียมตั้งขายตลาด">
+            💰 เงินสำรองติดตัว ≥
+            <input type="text" inputmode="numeric" class="gb-reserve-inp" style="width:96px; padding:3px 7px; border-radius:6px; border:1px solid rgba(251,191,36,0.45); background:rgba(15,23,42,0.85); color:#fbbf24; font-weight:700; text-align:right;" value="0"> z
+          </label>
         </div>
         <div class="gb-main">
           <div class="gb-board">
@@ -157,6 +161,8 @@
     if (!lineage().includes(gp().startClass)) gp().startClass = 'novice';
     sel.value = gp().startClass;
     m.querySelector('.gb-start-hint').textContent = `บอทจะเริ่มทำรายการแรกเมื่อตัวละครเป็น ${className(sel.value)} (หรืออาชีพถัดไปในสาย) แล้ว`;
+    const resInp = m.querySelector('.gb-reserve-inp');
+    if (resInp) resInp.value = num(gp().reserveZeny || 0);
     // map after the whole set is done (once)
     const dm = m.querySelector('.gb-done-sel');
     const groups = (typeof PLAN_MAP_OPTIONS !== 'undefined' && Array.isArray(PLAN_MAP_OPTIONS)) ? PLAN_MAP_OPTIONS : [];
@@ -339,13 +345,14 @@
             <select class="gb-opt-type" data-id="${esc(st.id)}"><option value="">+ เพิ่มออปชั่น</option>${OPTION_TYPES.map(o => `<option value="${o}">${o}</option>`).join('')}</select></div>` : ''}
           ${st.kind === 'equip' && st.flexSlot ? `<small class="gb-muted" style="color:#7dd3fc;">⚡ เลือกชิ้นไหนก็ได้ในช่องนี้ที่อาชีพในแผนใส่ได้ · ระดับ ${esc(RARITY_TH[st.minRarity] || st.minRarity || 'หายาก')} ขึ้นไป${st.minSlots ? ` · ต้องมีรูการ์ด [${st.minSlots}]` : ' (ถ้ามหากาพย์ถูกกว่าจะซื้อมหากาพย์ให้)'}</small>` : ''}
           ${st.kind === 'equip' && /^gem-/.test(st.slot || '') && /\d+(?:\.\d+)?\s*%?$/.test(st.itemName || '') ? `<small class="gb-muted" style="color:#7dd3fc;">💎 ขั้นต่ำตามชื่อที่เลือก — ถ้าเจมชนิดเดียวกันที่ % สูงกว่าในตลาดราคาถูกกว่าหรือเท่ากัน บอทจะซื้ออัน % สูงกว่าให้อัตโนมัติ</small>` : ''}
-          ${st.kind === 'refine' ? `<label class="gb-step-bless"><input type="checkbox" data-gb="bless" data-id="${esc(st.id)}" ${st.blessing !== false ? 'checked' : ''}> ใช้ Blacksmith Blessing ถ้ามีในกระเป๋า (กันแตก/ลดขั้น · หากไม่มีจะตีบวกต่อให้ทันที ไม่ค้างที่ +9)</label>` : ''}
-          ${st.kind === 'refine' && st.toLevel > 4 ? `<small class="gb-warn-text">⚠️ เกิน +4 (ขั้นปลอดภัย) ตีพลาดอาจลดขั้น${st.toLevel >= 10 ? ' · +10 มีโอกาสแตกหากไม่มี Blessing ในกระเป๋า' : ''}</small>` : ''}
-          ${st.kind === 'card' ? '<small class="gb-warn-text">🃏 ใส่แล้วถอดเองไม่ได้ · ไม่มีการ์ดในกระเป๋า = ซื้อในตลาด (ราคาไม่เกินเงินที่ตั้ง)</small>' : ''}
+          ${st.kind === 'refine' ? `<label class="gb-step-bless"><input type="checkbox" data-gb="bless" data-id="${esc(st.id)}" ${st.blessing !== false ? 'checked' : ''}> ใช้ Blacksmith Blessing เฉพาะขั้นสูง (+8 ถึง +10 หรือขั้นที่เสี่ยงแตก · ไม่เปลือง Blessing กับ +1 ถึง +7)</label>` : ''}
+          ${st.kind === 'refine' && st.toLevel > 4 ? `<small class="gb-warn-text">${['armor','garment','boots','head-upper','head-middle','head-lower','off-hand','gloves','legs'].includes(st.slot) && st.toLevel <= 7 ? '🛡️ ชุดเกราะ/โล่/ผ้าคลุม/รองเท้า/หมวก ตีบวกด้วย Elunium ถึง +7 โอกาสแตก 0% (พลาดอาจลดขั้น แต่ของไม่มีวันหาย)' : `⚠️ เกิน +4 ตีพลาดอาจลดขั้น (ไม่แตกที่ +5..+7)${st.toLevel >= 10 ? ' · +10 มีโอกาสแตกหากไม่มี Blessing ในกระเป๋า' : ''}`}</small>` : ''}
+          ${st.kind === 'card' ? '<small class="gb-warn-text">🃏 ใส่แล้วถอดเองไม่ได้ · ไม่มีการ์ดในกระเป๋า = ซื้อในตลาด (ราคาไม่เกินเพดานที่ตั้ง)</small>' : ''}
           ${orphan ? '<small class="gb-warn-text">⚠️ ต้องมีรายการซื้อ/สวมไอเทมนี้อยู่ก่อนหน้า — ไม่งั้นบอทจะข้ามรายการนี้</small>' : ''}
         </div>
         <div class="gb-conds">
-          <label class="gb-zeny" title="บอทเริ่มรายการนี้เมื่อเงินถึงจำนวนนี้ · ซื้อไอเทมในราคาไม่เกินจำนวนนี้">เมื่อเงิน ≥ <input type="text" inputmode="numeric" data-gb="zeny" data-id="${esc(st.id)}" value="${num(st.zeny)}"> z</label>
+          <label class="gb-zeny" title="บอทเริ่มรายการนี้เมื่อมีเงินในตัวถึงจำนวนนี้">เมื่อเงิน ≥ <input type="text" inputmode="numeric" data-gb="zeny" data-id="${esc(st.id)}" value="${num(st.zeny)}"> z</label>
+          ${st.kind !== 'refine' ? `<label class="gb-zeny" title="เพดานราคาสูงสุดที่ยอมซื้อจากตลาด (0 = ใช้ค่าเดียวกับ เมื่อเงิน ≥ หักเงินสำรอง)">ซื้อไม่เกิน ≤ <input type="text" inputmode="numeric" data-gb="maxprice" data-id="${esc(st.id)}" value="${num(st.maxPrice || 0)}"> z</label>` : ''}
           <label class="gb-lv" title="และ Base Lv. ถึงค่านี้ (0 = ไม่กำหนด)">เลเวล ≥ <input type="text" inputmode="numeric" data-gb="lv" data-id="${esc(st.id)}" value="${Number(st.minLevel) || 0}"></label>
         </div>
         <div class="gb-step-btns">
@@ -491,13 +498,17 @@
       return;
     }
     if (t.dataset.gb === 'bless') { const st = stepById(t.dataset.id); if (st) st.blessing = t.checked; return; }
+    if (t.classList.contains('gb-reserve-inp')) { t.value = num(parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0); return; }
     if (t.dataset.gb === 'zeny') { t.value = num(parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0); }
+    if (t.dataset.gb === 'maxprice') { t.value = num(parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0); }
     if (t.dataset.gb === 'lv') { t.value = Math.min(99, parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0); }
   }
   function onInput(e) {
     const t = e.target;
     if (t.classList.contains('gb-search')) { query = t.value; renderPicker(); return; }
+    if (t.classList.contains('gb-reserve-inp')) { gp().reserveZeny = parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0; return; }
     if (t.dataset.gb === 'zeny') { const st = stepById(t.dataset.id); if (st) st.zeny = parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0; }
+    if (t.dataset.gb === 'maxprice') { const st = stepById(t.dataset.id); if (st) st.maxPrice = parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0; }
     if (t.dataset.gb === 'lv') { const st = stepById(t.dataset.id); if (st) st.minLevel = Math.min(99, parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0); }
   }
 

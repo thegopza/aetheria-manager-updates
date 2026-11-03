@@ -68,7 +68,7 @@
           <span class="jl-header-icon">⛓️</span>
           <div>
             <h2>รายชื่อจอที่ติดคุก (Jail Monitor)</h2>
-            <p>ตรวจพบแมพคุก → ปิดจออัตโนมัติครั้งแรก · เปิดใหม่ไม่ปิดซ้ำ</p>
+            <p>ตรวจพบแมพคุก → แสดงการ์ดสีแดงแจ้งเตือนทันที (ไม่ปิดจออัตโนมัติ)</p>
           </div>
         </div>
         <div class="jl-header-actions">
@@ -222,8 +222,8 @@
           <div class="jl-empty-title">ไม่มีจอที่ติดคุกในขณะนี้</div>
           <div class="jl-empty-sub">
             หากระบบตรวจพบว่าไอดีไหนถูกย้ายเข้าแมพคุก<br>
-            จะทำการ<b>ปิดจอนั้นอัตโนมัติครั้งแรกทันที</b> แสดงกากบาทแดง ❌ บนการ์ด<br>
-            (หากคุณกดเปิดจอนั้นขึ้นมาใหม่เอง ระบบจะไม่สั่งปิดซ้ำ)
+            จะทำการ<b>เปลี่ยนการ์ดเป็นสีแดงแจ้งเตือนทันที</b> และหยุดบอทในเกมอัตโนมัติ<br>
+            (โดย<b>ไม่สั่งปิดจอเกม</b> เพื่อให้คุณตรวจสอบหน้าจอได้ทันที)
           </div>
         </div>
       `;
@@ -256,13 +256,13 @@
                 <span>•</span>
                 <span>🕒 ${esc(timeStr)}</span>
                 <span>•</span>
-                ${p.isRunning ? '<span style="color:#fde047;font-weight:700;">🖥️ เปิดจออยู่ (ไม่ปิดซ้ำ)</span>' : '<span style="color:#fca5a5;font-weight:700;">⏹️ ปิดจอแล้ว</span>'}
+                ${p.isRunning ? '<span style="color:#fde047;font-weight:700;">🖥️ เปิดจออยู่</span>' : '<span style="color:#fca5a5;font-weight:700;">⏹️ ปิดจออยู่</span>'}
               </div>
             </div>
           </div>
           <div class="jl-item-actions">
             <span class="jl-jump-pill">📍 เลื่อนไปที่การ์ด</span>
-            <button type="button" class="jl-clear-one-btn" data-clear-id="${esc(p.id)}" title="ล้างสถานะกากบาทแดงของจอนี้">✓ ล้างกากบาท</button>
+            <button type="button" class="jl-clear-one-btn" data-clear-id="${esc(p.id)}" title="ล้างสถานะแจ้งเตือนคุกของจอนี้">✓ ล้างสถานะคุก</button>
           </div>
         </div>
       `;

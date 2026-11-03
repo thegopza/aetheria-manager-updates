@@ -1387,7 +1387,7 @@ function buildProfileCard(p) {
     if (jobLv === null && nums[1]) jobLv = Number(nums[1]);
   }
 
-  const curMap = isJailed ? (p.jailedMap || state?.map || 'คุก (ปิดจออัตโนมัติ)') : (state && state.map ? state.map : p.targetMap);
+  const curMap = isJailed ? (p.jailedMap || state?.map || 'คุก') : (state && state.map ? state.map : p.targetMap);
   const curAmmo = state && typeof state.ammo === 'number' ? state.ammo.toLocaleString() : '--';
   const curPos = state && state.pos && state.pos.tileX ? `${state.pos.tileX}, ${state.pos.tileY}` : (state?.coords && state.coords !== '--' ? state.coords.split(' (')[0] : '--');
   const curZeny = (state && typeof state.zeny === 'number') ? state.zeny.toLocaleString() : '--';
@@ -1419,14 +1419,11 @@ function buildProfileCard(p) {
   // Bot Activity Status
   let activityText = "ออฟไลน์";
   let activityTone = "offline";
-  if (isJailed && !isOnline) {
-    activityText = "🚨 ติดคุก (ปิดจออัตโนมัติแล้ว)";
+  if (isJailed) {
+    activityText = isOnline ? "🚨 ติดคุก (เปิดจออยู่)" : "🚨 ติดคุก (ออฟไลน์)";
     activityTone = "danger";
   } else if (isOnline) {
-    if (isJailed) {
-      activityText = "⛓️ อยู่ในคุก (เปิดจอโดยผู้ใช้)";
-      activityTone = "danger";
-    } else if (isPreGameScreen) {
+    if (isPreGameScreen) {
       activityText = state.screenPhaseLabel || state.botStatus || "⏳ กำลังโหลดเข้าเกม...";
       activityTone = getActivityTone(activityText, screenPhase);
     } else if (state) {
@@ -1455,17 +1452,17 @@ function buildProfileCard(p) {
 
   return `
     <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isActivelyFarming ? 'is-farming' : ''} ${isErrorScreen ? 'is-screen-error' : ''} ${isJailed ? 'is-jailed' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
-      ${isJailed && !isOnline ? `
-      <div class="card-jail-cross-overlay" title="ตัวละครนี้ตรวจพบว่าอยู่ในคุก ระบบได้ทำการปิดจอเกมอัตโนมัติแล้ว (เปิดจอใหม่ได้โดยไม่ปิดซ้ำ)">
+      ${isJailed ? `
+      <div class="card-jail-cross-overlay" title="ตรวจพบตัวละครนี้อยู่ในแมพคุก (แสดงสถานะสีแดงแจ้งเตือนโดยไม่ปิดจออัตโนมัติ)">
         <svg class="jail-cross-svg" viewBox="0 0 200 200" preserveAspectRatio="none" aria-hidden="true">
           <line x1="12" y1="12" x2="188" y2="188" />
           <line x1="188" y1="12" x2="12" y2="188" />
         </svg>
         <div class="jail-cross-center-badge">
-          <div class="jail-cross-icon">❌</div>
-          <div class="jail-cross-title">ติดคุก · ปิดจออัตโนมัติแล้ว</div>
+          <div class="jail-cross-icon">🚨</div>
+          <div class="jail-cross-title">ติดคุก · ${isOnline ? 'เปิดจออยู่' : 'จอปิดอยู่'}</div>
           <div class="jail-cross-sub">${escapeHTML(p.jailedMap || 'แมพคุก')}${p.jailedAt ? ` · ${formatThaiTime(p.jailedAt)}` : ''}</div>
-          <button type="button" class="btn-clear-jail-badge" onclick="clearProfileJail('${p.id}', event)" title="ล้างสถานะกากบาทแดงของจอนี้">✓ ล้างกากบาท</button>
+          <button type="button" class="btn-clear-jail-badge" onclick="clearProfileJail('${p.id}', event)" title="ล้างสถานะแจ้งเตือนคุกของจอนี้">✓ ล้างสถานะคุก</button>
         </div>
       </div>` : ''}
       <div class="card-hero">
@@ -1480,7 +1477,7 @@ function buildProfileCard(p) {
         <div class="card-identity">
           <div class="card-title-row">
             <h3 class="profile-title" title="${escapeHTML(p.name)}">${escapeHTML(p.name)}</h3>
-            ${isJailed ? `<span class="jail-card-badge" title="ตัวละครนี้ถูกส่งเข้าคุกและปิดจออัตโนมัติแล้ว">⛓️ ติดคุก</span>` : ''}
+            ${isJailed ? `<span class="jail-card-badge" title="ตัวละครนี้อยู่ในแมพคุก">⛓️ ติดคุก</span>` : ''}
             ${hasPremium ? `<span class="premium-card-badge" title="ตัวละครนี้มีสถานะ Premium (สามารถแลกเปลี่ยน/เทรดโอนเงินได้)">👑 PREMIUM</span>` : ''}
             ${p.isMain ? `<span class="chip chip-main">★ MAIN</span>` : ''}
           </div>

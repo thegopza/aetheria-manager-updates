@@ -363,10 +363,13 @@ body.jl-open #jl-drawer {
 /* ==========================================
    PROFILE CARD RED CROSS OVERLAY (`.is-jailed`)
    ========================================== */
-.profile-card.is-jailed {
-  border-color: rgba(239, 68, 68, 0.9) !important;
-  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.45), 0 12px 32px rgba(185, 28, 28, 0.35) !important;
-  background: linear-gradient(180deg, rgba(69, 10, 10, 0.55) 0%, rgba(15, 23, 42, 0.95) 100%) !important;
+.profile-card.is-jailed,
+.profile-card.is-jailed.is-online,
+.profile-card.is-jailed.is-premium,
+.profile-card.is-jailed.is-farming {
+  border: 2px solid #ef4444 !important;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.6), 0 0 28px rgba(220, 38, 38, 0.55) !important;
+  background: linear-gradient(180deg, rgba(153, 27, 27, 0.72) 0%, rgba(89, 13, 13, 0.85) 55%, rgba(28, 7, 11, 0.96) 100%) !important;
 }
 .profile-card.is-jailed.menu-open .card-hero {
   z-index: 30;
@@ -381,7 +384,7 @@ body.jl-open #jl-drawer {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(circle at center, rgba(127, 29, 29, 0.32) 0%, rgba(69, 10, 10, 0.14) 100%);
+  background: radial-gradient(circle at center, rgba(185, 28, 28, 0.36) 0%, rgba(127, 29, 29, 0.22) 100%);
 }
 .jail-cross-svg {
   position: absolute;

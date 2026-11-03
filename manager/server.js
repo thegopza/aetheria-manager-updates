@@ -4829,6 +4829,7 @@ function isJailMapName(mapStr) {
   if (typeof mapStr !== 'string') return false;
   const s = mapStr.trim();
   if (!s || s === '--') return false;
+  if (/คุกใต้ดิน/i.test(s)) return false;
   return /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(s);
 }
 
@@ -4847,48 +4848,53 @@ async function recordProfileJailedAndStop(profile, state) {
   const pid = String(profile.id);
   const now = Date.now();
   const mapName = (state && typeof state.map === 'string' && state.map.trim()) ? state.map.trim() : 'คุก';
-  let shouldStop = false;
+  let newlyJailed = false;
   try {
     const fresh = loadProfiles();
     const target = fresh.find(f => String(f.id) === pid);
     if (target) {
-      shouldStop = !target.jailAutoStopped;
+      if (target.jailDismissedAt) return false;
+      newlyJailed = !target.isJailed;
+      const changed = !target.isJailed || target.jailedMap !== mapName || !target.jailedAt || Boolean(target.jailAutoStopped);
       target.isJailed = true;
-      target.jailAutoStopped = true;
       target.jailedAt = target.jailedAt || now;
       target.jailedMap = mapName;
+      delete target.jailAutoStopped;
       if (state && state.charName) target.lastCharName = state.charName;
       if (state && state.charClass) target.lastCharClass = state.charClass;
-      saveProfiles(fresh);
+      if (changed) saveProfiles(fresh);
     }
   } catch (_) {}
 
-  if (shouldStop && !jailStoppingInFlight.has(pid)) {
+  if (newlyJailed && !jailStoppingInFlight.has(pid)) {
     jailStoppingInFlight.add(pid);
     try {
-      console.warn(`[JAIL AUTO-STOP] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุกครั้งแรก (${mapName}) — ปิดจออัตโนมัติทันที!`);
-      await stopSingleProfile(pid);
+      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — แสดงสถานะการ์ดสีแดงและหยุดบอทในเกม (ไม่ปิดจอ)!`);
+      if (profile.debugPort) {
+        evalProfilePort(profile.debugPort, 'if (typeof window.stopMasterBot === "function" && window.__isBotRunning) window.stopMasterBot();', 2500).catch(() => {});
+      }
     } catch (_) {} finally {
       setTimeout(() => jailStoppingInFlight.delete(pid), 4000);
     }
   }
-  return shouldStop;
+  return newlyJailed;
 }
 
-function clearProfileJailStatus(profileId, resetAutoStop = false) {
+function clearProfileJailStatus(profileId, resetDismissed = false) {
   const pid = String(profileId || '');
   const fresh = loadProfiles();
   let changed = false;
   for (const p of fresh) {
     if (!profileId || String(p.id) === pid) {
-      if (p.isJailed || p.jailedAt || p.jailedMap || (resetAutoStop && p.jailAutoStopped) || (!resetAutoStop && !p.jailAutoStopped)) {
+      if (p.isJailed || p.jailedAt || p.jailedMap || p.jailAutoStopped || (resetDismissed && p.jailDismissedAt) || (!resetDismissed && !p.jailDismissedAt)) {
         delete p.isJailed;
         delete p.jailedAt;
         delete p.jailedMap;
-        if (resetAutoStop) {
-          delete p.jailAutoStopped;
+        delete p.jailAutoStopped;
+        if (resetDismissed) {
+          delete p.jailDismissedAt;
         } else {
-          p.jailAutoStopped = true;
+          p.jailDismissedAt = Date.now();
         }
         changed = true;
       }
@@ -4955,17 +4961,19 @@ setInterval(async () => {
             discordService.clearHumanCheck(p.id);
           }
           if (state && isJailMapName(state.map)) {
-            if (!p.jailAutoStopped) {
-              const lastPrisonBeep = prisonAlertedByProfile.get(p.id) || 0;
-              if (Date.now() - lastPrisonBeep > 60000) {
-                prisonAlertedByProfile.set(p.id, Date.now());
-                shouldBeepUrgent = true;
+            if (!p.jailDismissedAt) {
+              if (!p.isJailed) {
+                const lastPrisonBeep = prisonAlertedByProfile.get(p.id) || 0;
+                if (Date.now() - lastPrisonBeep > 60000) {
+                  prisonAlertedByProfile.set(p.id, Date.now());
+                  shouldBeepUrgent = true;
+                }
               }
               await recordProfileJailedAndStop(p, state);
             }
           } else if (isConfirmedOutOfJailMap(state)) {
             prisonAlertedByProfile.delete(p.id);
-            if (p.isJailed || p.jailAutoStopped) clearProfileJailStatus(p.id, true);
+            if (p.isJailed || p.jailAutoStopped || p.jailDismissedAt) clearProfileJailStatus(p.id, true);
           }
           if (state && state.unexpectedTown && state.unexpectedTown.active) {
             discordService.notifyUnexpectedTown({ profile: p, unexpectedTown: state.unexpectedTown });
@@ -6385,20 +6393,19 @@ const server = http.createServer(async (req, res) => {
 
         if (alive && liveState && !liveState.error && !liveState._syntheticLoading && liveState.map) {
           if (isJailMapName(liveState.map)) {
-            if (!p.jailAutoStopped) {
-              recordProfileJailedAndStop(p, liveState).catch(() => {});
+            if (!p.jailDismissedAt) {
+              if (!p.isJailed || p.jailedMap !== liveState.map) {
+                recordProfileJailedAndStop(p, liveState).catch(() => {});
+              }
               p.isJailed = true;
-              p.jailAutoStopped = true;
               p.jailedAt = p.jailedAt || Date.now();
               p.jailedMap = liveState.map;
-              alive = false;
-            } else {
-              p.jailedMap = liveState.map;
             }
-          } else if (isConfirmedOutOfJailMap(liveState) && (p.isJailed || p.jailAutoStopped)) {
+          } else if (isConfirmedOutOfJailMap(liveState) && (p.isJailed || p.jailAutoStopped || p.jailDismissedAt)) {
             clearProfileJailStatus(p.id, true);
             p.isJailed = false;
             p.jailAutoStopped = false;
+            p.jailDismissedAt = null;
             p.jailedAt = null;
             p.jailedMap = null;
           }
@@ -6607,7 +6614,8 @@ const server = http.createServer(async (req, res) => {
         delete p.isJailed;
         delete p.jailedAt;
         delete p.jailedMap;
-        p.jailAutoStopped = true;
+        delete p.jailAutoStopped;
+        p.jailDismissedAt = Date.now();
         clearedCount++;
       }
     });
@@ -7257,10 +7265,6 @@ const server = http.createServer(async (req, res) => {
     const profilesForLaunch = loadProfiles();
     const p0 = profilesForLaunch.find(p => p.id === id);
     if (!p0) return sendJSON({ success: false, error: "Profile not found" }, 404);
-    if (!p0.jailAutoStopped) {
-      p0.jailAutoStopped = true;
-      saveProfiles(profilesForLaunch);
-    }
     // already open (also after a Manager restart, or as the other kind of window): bring it up, don't open a 2nd
     if (!browserMode.isOpen(id) && await clientAlreadyOpen(p0)) {
       http.get(`http://127.0.0.1:${p0.debugPort}/api/window?action=top`, r => r.resume()).on("error", () => {});
@@ -7369,14 +7373,6 @@ const server = http.createServer(async (req, res) => {
     const openFlags = await Promise.all(allProfiles.map(p => clientAlreadyOpen(p)));
     const skipped = allProfiles.filter((p, i) => openFlags[i]).map(p => p.name);
     const toOpen = allProfiles.filter((p, i) => !openFlags[i]);
-    let jailGuardUpdated = false;
-    for (const p0 of toOpen) {
-      if (!p0.jailAutoStopped) {
-        p0.jailAutoStopped = true;
-        jailGuardUpdated = true;
-      }
-    }
-    if (jailGuardUpdated) saveProfiles(allProfiles);
     if (isBrowserMode()) {
       (async () => {
         const launched = [], failed = [];

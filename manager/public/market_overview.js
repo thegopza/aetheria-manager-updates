@@ -332,6 +332,9 @@
           <button type="button" class="mko-btn ${s.underHoursCount > 0 ? 'danger' : ''}" data-mko-act="cancel-under-hours" ${s.onlineCount === 0 ? 'disabled' : ''} title="ยกเลิกรายการขายทุกจอที่เหลือเวลาในตลาดต่ำกว่า ${underH} ชั่วโมง และรับของกลับเข้ากระเป๋าทันที">
             🚫 ยกเลิกของ &lt; ${underH} ชม. ${s.underHoursCount > 0 ? `(${s.underHoursCount})` : '(0)'}
           </button>
+          <button type="button" class="mko-btn danger" data-mko-act="cancel-unconfigured" ${s.onlineCount === 0 ? 'disabled' : ''} title="ยกเลิกรายการที่วางขายอยู่ทุกจอที่ไม่อยู่ในรายการ Auto-Sell และไม่ใช่ของ Sniper พร้อมรับของคืนเข้ากระเป๋าทันที">
+            🧹 ยกเลิกของนอก Auto-Sell ทุกจอ
+          </button>
           ${s.emptyAutoSellCharsCount > 0 ? `
             <button type="button" class="mko-btn purple" data-mko-act="restore-empty-autosell" title="คัดลอกรายการ List Auto-Sell (${s.maxPeerRulesCount} รายการ) จากจอหลักไปใส่ให้จอที่ List ว่างอยู่ (${s.emptyAutoSellCharsCount} จอ) ทันที">
               🔄 กู้คืน List จอที่ว่าง (${s.emptyAutoSellCharsCount})
@@ -395,6 +398,98 @@
     });
   }
 
+  function doesListingMatchQuery(c, l, q) {
+    if (!q) return true;
+    const query = String(q).trim().toLowerCase();
+    if (!query) return true;
+    const it = (l && l.item) || {};
+    const disp = itemDisplayName(it).toLowerCase();
+    const rawName = String(it.name || l.name || '').toLowerCase();
+    const charName = String((c && c.charName) || '').toLowerCase();
+    const profName = String((c && c.name) || '').toLowerCase();
+    return disp.includes(query) || rawName.includes(query) || charName.includes(query) || profName.includes(query);
+  }
+
+  function getMatchedListings(filteredClients) {
+    const rows = [];
+    for (const c of filteredClients) {
+      const act = Array.isArray(c.active) ? c.active : [];
+      for (const l of act) {
+        if (state.filterMode === 'under_hours' && !isListingUnderHours(l)) continue;
+        if (state.searchQuery && !doesListingMatchQuery(c, l, state.searchQuery)) continue;
+        const it = l.item || {};
+        const qty = Math.max(1, Number(l.qty) || 1);
+        const total = Number(l.price) || 0;
+        const unit = Math.round(total / qty);
+        rows.push({
+          client: c,
+          listing: l,
+          item: it,
+          listingId: Number(l.listingId ?? l.id) || 0,
+          qty,
+          total,
+          unit,
+          expiresAt: Number(l.expiresAt) || 0
+        });
+      }
+    }
+    return rows;
+  }
+
+  function renderSearchActionBannerHtml(filteredClients) {
+    if (!state.searchQuery) return '';
+    const q = state.searchQuery;
+    const matchedRows = getMatchedListings(filteredClients);
+    const onlineRows = matchedRows.filter(r => r.client && r.client.online);
+    const totalQty = onlineRows.reduce((s, r) => s + r.qty, 0);
+    const totalZeny = onlineRows.reduce((s, r) => s + r.total, 0);
+    const charIds = new Set(onlineRows.map(r => r.client.id));
+
+    let matchedAsRulesCount = 0;
+    let matchedAsCharsCount = 0;
+    for (const c of state.clients) {
+      const rules = (c.autoSell && Array.isArray(c.autoSell.rules)) ? c.autoSell.rules : [];
+      const hit = rules.filter(r => r && String(r.itemName || r.name || '').toLowerCase().includes(q)).length;
+      if (hit > 0) {
+        matchedAsRulesCount += hit;
+        matchedAsCharsCount++;
+      }
+    }
+
+    return `
+      <div class="mko-char-card" style="margin-bottom:12px; border:1px solid rgba(244,63,94,0.45); background:linear-gradient(135deg, rgba(15,23,42,0.95), rgba(88,28,45,0.38)); padding:12px 16px;">
+        <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px;">
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <div style="font-size:14px; font-weight:700; color:#f8fafc;">
+              🔍 ผลการค้นหา <span style="color:#38bdf8;">"${esc(q)}"</span>:
+              ${onlineRows.length > 0
+                ? `<span style="color:#fda4af;">พบกำลังวางขาย <b>${onlineRows.length} รายการ</b> (รวม ${totalQty.toLocaleString()} ชิ้น · ${charIds.size} จอ · มูลค่ารวม <b style="color:#fde047;">${fmtZ(totalZeny)}</b>)</span>`
+                : `<span style="color:#94a3b8;">ไม่พบรายการที่กำลังวางขายอยู่ในขณะนี้</span>`}
+            </div>
+            <div style="font-size:12px; color:#cbd5e1;">
+              ${matchedAsRulesCount > 0
+                ? `📋 พบอยู่ในรายการ <b>List Auto-Sell</b> ของ <b>${matchedAsCharsCount} จอ</b> — สามารถกดยกเลิกขายพร้อมลบออกจาก Auto-Sell ทุกจอได้ทันที`
+                : `💡 กดปุ่มด้านขวาเพื่อยกเลิกรายการที่ค้นหาทั้งหมดทุกจอและดึงของกลับเข้ากระเป๋าได้ในคลิกเดียว`}
+            </div>
+          </div>
+          <div style="display:flex; flex-wrap:wrap; align-items:center; gap:8px;">
+            <button type="button" class="mko-btn danger" data-mko-act="cancel-matched" ${onlineRows.length === 0 ? 'disabled' : ''} title="ยกเลิกรายการที่ตรงกับคำค้นหาทั้งหมดทุกจอ และรับของคืนเข้ากระเป๋าทันที">
+              🚫 ยกเลิกขายที่ค้นหาทั้งหมด (${onlineRows.length} รายการ) + รับของคืน
+            </button>
+            ${(onlineRows.length > 0 || matchedAsRulesCount > 0) ? `
+              <button type="button" class="mko-btn purple" data-mko-act="cancel-and-remove-autosell" title="ยกเลิกขายที่ค้นหาทั้งหมด รับของคืนเข้ากระเป๋า และลบออกจาก List Auto-Sell ทุกจอเพื่อไม่ให้บอทนำกลับมาตั้งขายซ้ำ">
+                🗑️ ยกเลิกขาย + ลบออกจาก Auto-Sell ทุกจอ${matchedAsCharsCount > 0 ? ` (${matchedAsCharsCount} จอ)` : ''}
+              </button>
+            ` : ''}
+            <button type="button" class="mko-btn" data-mko-act="clear-search" title="ล้างคำค้นหา">
+              ✖ ล้างคำค้นหา
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function filterClients() {
     return state.clients.filter(c => {
       const act = Array.isArray(c.active) ? c.active : [];
@@ -415,7 +510,7 @@
           c.charName,
           c.job,
           c.currentMap,
-          ...act.map(l => (l && l.item && l.item.name) || ''),
+          ...act.map(l => itemDisplayName((l && l.item) || {}) + ' ' + ((l && l.item && l.item.name) || '')),
           ...deliv.map(d => (d && d.item && d.item.name) || d.name || ''),
           ...((c.autoSell && c.autoSell.rules) || []).map(r => r.itemName || '')
         ]
@@ -441,13 +536,24 @@
     const subProfile = c.charName && c.charName !== c.name ? `(${c.name})` : '';
     const lvJobText = [c.job || '', c.baseLv ? `Lv.${c.baseLv}${c.jobLv ? '/' + c.jobLv : ''}` : ''].filter(Boolean).join(' ');
 
+    const charSelfMatches = state.searchQuery
+      ? [c.name, c.charName, c.job, c.currentMap].join(' ').toLowerCase().includes(state.searchQuery)
+      : true;
+    const matchedActOnChar = state.searchQuery
+      ? act.filter(l => doesListingMatchQuery(c, l, state.searchQuery))
+      : act;
+    const visibleAct = (state.searchQuery && !charSelfMatches) ? matchedActOnChar : act;
+    const visibleDeliv = (state.searchQuery && !charSelfMatches)
+      ? deliv.filter(d => String((d && d.item && d.item.name) || d.name || '').toLowerCase().includes(state.searchQuery))
+      : deliv;
+
     // Active listings cards
     let activeHtml = '';
-    if (act.length > 0 || deliv.length > 0) {
+    if (visibleAct.length > 0 || visibleDeliv.length > 0) {
       const itemCards = [];
 
       // Deliveries waiting to claim first (highlighted in gold)
-      for (const d of deliv) {
+      for (const d of visibleDeliv) {
         const it = d.item || null;
         const did = d.deliveryId ?? d.id;
         const reason = String(d.reason || '').toLowerCase();
@@ -486,7 +592,7 @@
 
       // Active listings
       const underH = Math.max(1, Math.min(47, Number(state.globalSettings.cancelUnderHours) || 6));
-      for (const l of act) {
+      for (const l of visibleAct) {
         const it = l.item || {};
         const lid = l.listingId ?? l.id;
         const qty = Math.max(1, Number(l.qty) || 1);
@@ -526,6 +632,8 @@
       }
 
       activeHtml = `<div class="mko-listings-grid">${itemCards.join('')}</div>`;
+    } else if (state.searchQuery && act.length > 0) {
+      activeHtml = `<div class="mko-empty-inline">🔍 ไม่มีไอเทมที่กำลังวางขายตรงกับ "${esc(state.searchQuery)}" บนตัวละครนี้ (พบเฉพาะในรายการ Auto-Sell ด้านล่าง)</div>`;
     } else {
       activeHtml = `<div class="mko-empty-inline">${c.online ? '✨ ตอนนี้ยังไม่มีไอเทมที่กำลังวางขายในตลาดกลาง — กดปุ่ม "🎒 ขายของ (กระเป๋า)" ด้านขวาเพื่อเลือกไอเทมลงขายได้ทันที' : '⚪ จอนี้ออฟไลน์อยู่ — สามารถกดดูหรือแก้ไข "📋 List Auto-Sell" ล่วงหน้าได้'}</div>`;
     }
@@ -575,6 +683,7 @@
             ${c.premium ? `<span class="mko-badge vip">💎 VIP (20 ช่อง)</span>` : `<span class="mko-badge">ทั่วไป (${lim} ช่อง)</span>`}
             <span class="mko-badge zeny">💰 ${fmtZ(c.zeny)}</span>
             <span class="mko-badge slots ${isFull ? 'full' : ''}">📦 วางขาย ${act.length}/${lim} ช่อง</span>
+            ${state.searchQuery && matchedActOnChar.length > 0 ? `<span class="mko-badge slots full">🔍 ตรงที่ค้นหา ${matchedActOnChar.length} รายการ</span>` : ''}
             ${charUnderCount > 0 ? `<span class="mko-badge slots full">⚠️ เหลือ &lt; ${underHLabel} ชม. (${charUnderCount})</span>` : ''}
             ${deliv.length > 0 ? `<span class="mko-badge deliv">📬 รอรับ ${deliv.length} รายการ${pendingZeny > 0 ? ` (+${fmtZ(pendingZeny)})` : ''}</span>` : ''}
           </div>
@@ -599,6 +708,12 @@
               🎒 ขายของ (กระเป๋า)
             </button>
 
+            ${state.searchQuery && matchedActOnChar.length > 0 ? `
+              <button type="button" class="mko-btn danger sm" data-mko-cancel-matched-profile="${esc(c.id)}" ${c.online ? '' : 'disabled'} title="ยกเลิกเฉพาะรายการของตัวละครนี้ที่ตรงกับคำค้นหา '${esc(state.searchQuery)}' (${matchedActOnChar.length} รายการ) และรับคืนเข้ากระเป๋า">
+                🚫 ยกเลิกที่ค้นหา (${matchedActOnChar.length})
+              </button>
+            ` : ''}
+
             ${charUnderCount > 0 ? `
               <button type="button" class="mko-btn danger sm" data-mko-cancel-under-profile="${esc(c.id)}" ${c.online ? '' : 'disabled'} title="ยกเลิกเฉพาะรายการของตัวละครนี้ที่เหลือเวลาต่ำกว่า ${underHLabel} ชั่วโมง และดึงกลับเข้ากระเป๋า">
                 🚫 ยกเลิก &lt; ${underHLabel} ชม. (${charUnderCount})
@@ -620,25 +735,7 @@
   }
 
   function renderAllListingsTableHtml(filteredClients) {
-    const rows = [];
-    for (const c of filteredClients) {
-      const act = Array.isArray(c.active) ? c.active : [];
-      for (const l of act) {
-        const it = l.item || {};
-        const qty = Math.max(1, Number(l.qty) || 1);
-        const total = Number(l.price) || 0;
-        const unit = Math.round(total / qty);
-        rows.push({
-          client: c,
-          listing: l,
-          item: it,
-          qty,
-          total,
-          unit,
-          expiresAt: Number(l.expiresAt) || 0
-        });
-      }
-    }
+    const rows = getMatchedListings(filteredClients);
 
     if (rows.length === 0) {
       return `<div class="mko-char-card"><div class="mko-empty-inline" style="text-align:center; padding:24px;">📦 ไม่มีรายการไอเทมที่กำลังวางขายอยู่ตามเงื่อนไขที่เลือก</div></div>`;
@@ -651,8 +748,23 @@
       return b.total - a.total;
     });
 
+    const totalQty = rows.reduce((s, r) => s + r.qty, 0);
+    const totalZeny = rows.reduce((s, r) => s + r.total, 0);
+
     return `
       <div class="mko-table-wrap">
+        <div style="display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; padding:10px 14px; border-bottom:1px solid rgba(148,163,184,0.15); background:rgba(15,23,42,0.6);">
+          <div style="font-size:13px; color:#cbd5e1;">
+            📋 แสดงรายการวางขาย <b>${rows.length} รายการ</b> (รวม <b>${totalQty.toLocaleString()} ชิ้น</b> · มูลค่ารวม <b style="color:#fde047;">${fmtZ(totalZeny)}</b>)
+          </div>
+          <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+            <span style="font-size:12px; color:#94a3b8;">เรียงตาม:</span>
+            <button type="button" class="mko-pill ${state.listingSort === 'price_desc' ? 'active' : ''}" data-mko-sort="price_desc">💰 ราคารวมสูงสุด</button>
+            <button type="button" class="mko-pill ${state.listingSort === 'price_asc' ? 'active' : ''}" data-mko-sort="price_asc">🏷️ ราคาต่อชิ้นต่ำสุด</button>
+            <button type="button" class="mko-pill ${state.listingSort === 'exp_asc' ? 'active' : ''}" data-mko-sort="exp_asc">⏳ เวลาเหลือน้อยสุด</button>
+            <button type="button" class="mko-pill ${state.listingSort === 'char_asc' ? 'active' : ''}" data-mko-sort="char_asc">👤 ชื่อตัวละคร</button>
+          </div>
+        </div>
         <table class="mko-table">
           <thead>
             <tr>
@@ -711,15 +823,16 @@
     if (!bodyEl) return;
 
     const filtered = filterClients();
+    const bannerHtml = renderSearchActionBannerHtml(filtered);
     if (filtered.length === 0) {
-      bodyEl.innerHTML = `<div class="mko-char-card"><div class="mko-empty-inline" style="text-align:center; padding:24px;">🔍 ไม่พบตัวละครหรือรายการตลาดที่ตรงกับเงื่อนไขการค้นหา</div></div>`;
+      bodyEl.innerHTML = bannerHtml + `<div class="mko-char-card"><div class="mko-empty-inline" style="text-align:center; padding:24px;">🔍 ไม่พบตัวละครหรือรายการตลาดที่ตรงกับเงื่อนไขการค้นหา</div></div>`;
       return;
     }
 
     if (state.viewMode === 'listings') {
-      bodyEl.innerHTML = renderAllListingsTableHtml(filtered);
+      bodyEl.innerHTML = bannerHtml + renderAllListingsTableHtml(filtered);
     } else {
-      bodyEl.innerHTML = `<div class="mko-char-list">${filtered.map(renderCharacterCardHtml).join('')}</div>`;
+      bodyEl.innerHTML = bannerHtml + `<div class="mko-char-list">${filtered.map(renderCharacterCardHtml).join('')}</div>`;
     }
   }
 
@@ -741,6 +854,64 @@
     if (viewBtn) {
       state.viewMode = viewBtn.dataset.mkoView || 'chars';
       renderAll();
+      return;
+    }
+
+    const sortBtn = e.target.closest('[data-mko-sort]');
+    if (sortBtn) {
+      state.listingSort = sortBtn.dataset.mkoSort || 'price_desc';
+      renderBodyOnly();
+      return;
+    }
+
+    // Cancel matched listings for a single character
+    const cancelMatchedProfBtn = e.target.closest('[data-mko-cancel-matched-profile]');
+    if (cancelMatchedProfBtn) {
+      const profileId = cancelMatchedProfBtn.dataset.mkoCancelMatchedProfile;
+      const q = state.searchQuery;
+      if (!q) return;
+      const cl = state.clients.find(c => c.id === profileId);
+      const matched = cl ? (Array.isArray(cl.active) ? cl.active.filter(l => doesListingMatchQuery(cl, l, q)) : []) : [];
+      if (!confirm(`ยืนยันยกเลิกรายการขายที่ตรงกับ "${q}" ของตัวละคร "${(cl && (cl.charName || cl.name)) || profileId}" จำนวน ${matched.length} รายการ และรับของคืนเข้ากระเป๋าทันที?`)) {
+        return;
+      }
+      cancelMatchedProfBtn.disabled = true;
+      const orig = cancelMatchedProfBtn.textContent;
+      cancelMatchedProfBtn.textContent = '⏳ กำลังยกเลิก...';
+      try {
+        const listingIdsByProfile = {
+          [profileId]: matched.map(l => Number(l.listingId ?? l.id)).filter(x => x > 0)
+        };
+        const res = await fetch('/api/market/overview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            op: 'cancel_matched_listings',
+            profileId,
+            query: q,
+            mode: 'search',
+            listingIdsByProfile,
+            autoCollect: true
+          })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          if (Array.isArray(data.clients)) state.clients = data.clients;
+          const lockedHint = (data.lockedAuctionCount || 0) > 0
+            ? ` (ติดเวลาประมูล 5 นาทีแรก ${data.lockedAuctionCount} รายการ รอครบ 5 นาทีแล้วกดอีกครั้งได้เลยครับ)`
+            : '';
+          notify(`🚫 ยกเลิกรายการที่ตรงกับ "${q}" สำเร็จ ${data.cancelledCount || 0} รายการ (รับกลับเข้ากระเป๋าแล้ว)!${lockedHint}`, 'success');
+          updateMainTabBadges();
+          renderAll();
+        } else {
+          notify(`❌ ยกเลิกไม่สำเร็จ: ${(data && data.error) || ''}`, 'error');
+        }
+      } catch (err) {
+        notify(`❌ เกิดข้อผิดพลาด: ${err.message}`, 'error');
+      } finally {
+        cancelMatchedProfBtn.disabled = false;
+        cancelMatchedProfBtn.textContent = orig;
+      }
       return;
     }
 
@@ -958,6 +1129,115 @@
     if (act === 'refresh') {
       await fetchOverview(true);
       notify('🔄 อัปเดตข้อมูลตลาดกลางทุกจอเรียบร้อยแล้ว', 'success');
+      return;
+    }
+
+    if (act === 'clear-search') {
+      state.searchQuery = '';
+      const searchInp = document.getElementById('mko-search-input');
+      if (searchInp) searchInp.value = '';
+      renderBodyOnly();
+      return;
+    }
+
+    if (act === 'cancel-matched' || act === 'cancel-and-remove-autosell') {
+      const q = state.searchQuery;
+      if (!q) return;
+      const removeFromAutoSell = act === 'cancel-and-remove-autosell';
+      const filtered = filterClients();
+      const matchedRows = getMatchedListings(filtered).filter(r => r.client && r.client.online);
+      const listingIdsByProfile = {};
+      for (const r of matchedRows) {
+        if (!listingIdsByProfile[r.client.id]) listingIdsByProfile[r.client.id] = [];
+        if (r.listingId > 0) listingIdsByProfile[r.client.id].push(r.listingId);
+      }
+      const charCount = Object.keys(listingIdsByProfile).length;
+      const confirmMsg = removeFromAutoSell
+        ? `ยืนยันยกเลิกการวางขายที่ตรงกับ "${q}" ทั้งหมด ${matchedRows.length} รายการ (${charCount} จอ) รับของคืนเข้ากระเป๋า และลบ "${q}" ออกจาก List Auto-Sell ทุกจอทันที?`
+        : `ยืนยันยกเลิกการวางขายที่ตรงกับ "${q}" ทั้งหมด ${matchedRows.length} รายการ (${charCount} จอ) และดึงของกลับเข้ากระเป๋าทันที?`;
+      if (!confirm(confirmMsg)) return;
+
+      actBtn.disabled = true;
+      const orig = actBtn.textContent;
+      actBtn.textContent = '⏳ กำลังยกเลิกรายการที่ค้นหา...';
+      try {
+        const res = await fetch('/api/market/overview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            op: 'cancel_matched_listings',
+            profileId: 'all',
+            query: q,
+            mode: 'search',
+            listingIdsByProfile,
+            removeFromAutoSell,
+            autoCollect: true
+          })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          if (Array.isArray(data.clients)) state.clients = data.clients;
+          const lockedHint = (data.lockedAuctionCount || 0) > 0
+            ? ` (มี ${data.lockedAuctionCount} รายการยังติดเวลาประมูล 5 นาทีแรกของเซิร์ฟเวอร์ รอครบ 5 นาทีแล้วกดซ้ำได้เลยครับ)`
+            : '';
+          const removedAsHint = removeFromAutoSell
+            ? ` พร้อมลบออกจาก List Auto-Sell รวม ${data.removedRulesTotal || 0} รายการ`
+            : '';
+          notify(`🚫 ยกเลิกขายที่ตรงกับ "${q}" สำเร็จ ${data.cancelledCount || 0} รายการ (${data.affectedProfilesCount || 0} จอ) และรับของคืนเข้ากระเป๋าแล้ว${removedAsHint}!${lockedHint}`, 'success');
+          updateMainTabBadges();
+          renderAll();
+        } else {
+          notify(`❌ ยกเลิกไม่สำเร็จ: ${(data && data.error) || ''}`, 'error');
+        }
+      } catch (err) {
+        notify(`❌ เกิดข้อผิดพลาด: ${err.message}`, 'error');
+      } finally {
+        actBtn.disabled = false;
+        actBtn.textContent = orig;
+      }
+      return;
+    }
+
+    if (act === 'cancel-unconfigured') {
+      if (!confirm('ยืนยันตรวจสอบทุกจอและยกเลิกรายการขายที่ "ไม่อยู่ใน List Auto-Sell" และ "ไม่ใช่ของทำกำไรจาก Sniper" ทั้งหมด พร้อมดึงของกลับเข้ากระเป๋าทันที?')) {
+        return;
+      }
+      actBtn.disabled = true;
+      const orig = actBtn.textContent;
+      actBtn.textContent = '⏳ กำลังตรวจสอบและยกเลิก...';
+      try {
+        const res = await fetch('/api/market/overview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            op: 'cancel_matched_listings',
+            profileId: 'all',
+            mode: 'unconfigured',
+            autoCollect: true
+          })
+        });
+        const data = await res.json();
+        if (data && data.success) {
+          if (Array.isArray(data.clients)) state.clients = data.clients;
+          const lockedHint = (data.lockedAuctionCount || 0) > 0
+            ? ` (มี ${data.lockedAuctionCount} รายการยังติดเวลาประมูล 5 นาทีแรก รอครบ 5 นาทีแล้วกดซ้ำได้เลยครับ)`
+            : '';
+          if ((data.cancelledCount || 0) > 0) {
+            notify(`🧹 ยกเลิกไอเทมที่ไม่อยู่ใน Auto-Sell สำเร็จ ${data.cancelledCount} รายการ (${data.affectedProfilesCount || 0} จอ) และดึงกลับเข้ากระเป๋าแล้ว!${lockedHint}`, 'success');
+          } else {
+            notify(`✅ ไม่พบรายการขายที่อยู่นอกเหนือจาก Auto-Sell / Sniper ในขณะนี้${lockedHint}`, 'info');
+          }
+          updateMainTabBadges();
+          renderAll();
+        } else {
+          notify(`❌ ยกเลิกไม่สำเร็จ: ${(data && data.error) || ''}`, 'error');
+        }
+      } catch (err) {
+        notify(`❌ เกิดข้อผิดพลาด: ${err.message}`, 'error');
+      } finally {
+        actBtn.disabled = false;
+        actBtn.textContent = orig;
+      }
       return;
     }
 

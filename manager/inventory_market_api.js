@@ -546,6 +546,27 @@ function buildMarketCode(p) {
         if (${JSON.stringify(p.op)} === 'mine') {
           mine = await awaitReply(room, 'market_mine', () => { ${actionJs} }, 4500);
         } else {
+          if (${targetCancelId} > 0) {
+            if (!(window.__pmSeenCancelledClosedIds instanceof Set)) window.__pmSeenCancelledClosedIds = new Set();
+            window.__pmSeenCancelledClosedIds.add(${targetCancelId});
+            if (Array.isArray(window.__pmAutoRelistAfterCancel)) {
+              window.__pmAutoRelistAfterCancel = window.__pmAutoRelistAfterCancel.filter(x => Number(x && x.listingId) !== ${targetCancelId});
+            }
+            if (window.__lastMarketMine && Array.isArray(window.__lastMarketMine.active)) {
+              const prevEntry = window.__lastMarketMine.active.find(e => Number(e && (e.listingId ?? e.id)) === ${targetCancelId});
+              const prevName = String((prevEntry && prevEntry.item && prevEntry.item.name) || (prevEntry && prevEntry.name) || '').trim().toLowerCase();
+              if (prevName) {
+                if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
+                window.__autoSellRuleBackoffUntil[prevName] = Date.now() + 30 * 60 * 1000;
+                if (Array.isArray(window.__pmAutoRelistAfterCancel)) {
+                  window.__pmAutoRelistAfterCancel = window.__pmAutoRelistAfterCancel.filter(x => String(x && x.normName || '').toLowerCase() !== prevName);
+                }
+              }
+            }
+            if (typeof window.__pmSaveAutoRelistState === 'function') {
+              try { window.__pmSaveAutoRelistState(); } catch (_) {}
+            }
+          }
           try { ${actionJs} } catch (_) {}
           await new Promise(r => setTimeout(r, 420));
           mine = await awaitReply(room, 'market_mine', () => {
@@ -2011,6 +2032,180 @@ function buildCancelUnderHoursProfileCode(underHours, autoCollect = true) {
   })()`;
 }
 
+function buildCancelMatchedProfileCode({ query = '', mode = 'search', explicitIds = [], profileName = '', removeFromAutoSell = false, autoCollect = true }) {
+  const safeQuery = String(query || '').trim().toLowerCase();
+  const safeMode = mode === 'unconfigured' ? 'unconfigured' : 'search';
+  const safeExplicitIds = (Array.isArray(explicitIds) ? explicitIds : []).map(x => Number(x)).filter(x => x > 0);
+  const globalSettings = loadGlobalMarketSettings();
+  return `(async () => {
+    ${buildMarketGlobalRuntimeSnippet(globalSettings)};
+    const room = ${ROOM_JS};
+    const q = ${JSON.stringify(safeQuery)};
+    const mode = ${JSON.stringify(safeMode)};
+    const explicitSet = new Set(${JSON.stringify(safeExplicitIds)});
+    const profNameLower = ${JSON.stringify(String(profileName || '').trim().toLowerCase())};
+    const removeAs = ${Boolean(removeFromAutoSell)};
+
+    let removedRulesCount = 0;
+    if (removeAs && q && window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
+      const beforeLen = window.__autoMarketSellConfig.rules.length;
+      window.__autoMarketSellConfig.rules = window.__autoMarketSellConfig.rules.filter(r => {
+        if (!r) return false;
+        const nm = String(r.itemName || r.name || '').trim().toLowerCase();
+        return !nm.includes(q);
+      });
+      removedRulesCount = Math.max(0, beforeLen - window.__autoMarketSellConfig.rules.length);
+      if (removedRulesCount > 0) {
+        try {
+          const pid = window.__pmProfileId;
+          const rawStr = JSON.stringify(window.__autoMarketSellConfig);
+          localStorage.setItem('pelican_auto_market_sell_cfg', rawStr);
+          if (pid) localStorage.setItem('pelican_' + pid + '__auto_market_sell_cfg', rawStr);
+        } catch (_) {}
+      }
+    }
+
+    if (!room || !room.connection?.isOpen) {
+      return { success: false, error: 'ไม่ได้เชื่อมต่อเกม', removedRulesCount };
+    }
+    const awaitReply = ${AWAIT_REPLY_JS};
+    const icon = ${ICON_JS};
+    let mine = await awaitReply(room, 'market_mine', () => {
+      try { room.send('market', { op: 'mine' }); } catch (_) {}
+    }, 3500);
+    if (!mine && window.__lastMarketMine) mine = window.__lastMarketMine;
+    if (!mine) return { success: false, error: 'เซิร์ฟเวอร์ตลาดไม่ตอบกลับ', removedRulesCount };
+
+    const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
+    const charNameLower = String((window.__botState && window.__botState.charName) || ch.name || '').trim().toLowerCase();
+    const activeList = Array.isArray(mine.active) ? mine.active : [];
+
+    const targets = activeList.filter(e => {
+      const lid = Number(e && (e.listingId ?? e.id));
+      if (!(lid > 0)) return false;
+      if (explicitSet.has(lid)) return true;
+      const it = (e && e.item) || e || {};
+      const rawName = String(it.name || e.name || '').trim();
+      const normName = rawName.toLowerCase();
+      const dispName = (it.refine ? '+' + it.refine + ' ' : '') + rawName;
+      const dispLower = dispName.toLowerCase();
+      if (mode === 'unconfigured') {
+        if (typeof window.__pmIsAllowedAutoRelistItem === 'function') {
+          return !window.__pmIsAllowedAutoRelistItem(normName);
+        }
+        return false;
+      }
+      if (!q) return false;
+      return dispLower.includes(q) || normName.includes(q) || charNameLower.includes(q) || profNameLower.includes(q);
+    });
+
+    if (!(window.__pmSeenCancelledClosedIds instanceof Set)) window.__pmSeenCancelledClosedIds = new Set();
+    if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
+    if (!window.__pmSniperEvictedItemNames) window.__pmSniperEvictedItemNames = new Set();
+
+    const cancelledItems = [];
+    let lockedAuctionCount = 0;
+    if (targets.length > 0) {
+      window.__pmAutoCancellingMarketNow = true;
+      try {
+        for (const t of targets) {
+          const lid = Number(t.listingId ?? t.id);
+          const it = (t && t.item) || t || {};
+          const itemName = String(it.name || t.name || 'Item').trim();
+          const normName = itemName.toLowerCase();
+          window.__pmSeenCancelledClosedIds.add(lid);
+          if (normName) {
+            window.__autoSellRuleBackoffUntil[normName] = Date.now() + 30 * 60 * 1000;
+            window.__pmSniperEvictedItemNames.add(normName);
+            if (Array.isArray(window.__pmAutoRelistAfterCancel)) {
+              window.__pmAutoRelistAfterCancel = window.__pmAutoRelistAfterCancel.filter(x => String(x && x.normName || '').toLowerCase() !== normName && Number(x && x.listingId) !== lid);
+            }
+            if (window.__pmKnownMyMarketItems && typeof window.__pmKnownMyMarketItems === 'object') {
+              delete window.__pmKnownMyMarketItems[normName];
+            }
+            if (window.__pmSniperProtectedItems instanceof Set) {
+              window.__pmSniperProtectedItems.delete(normName);
+            }
+          }
+          cancelledItems.push({
+            listingId: lid,
+            name: itemName,
+            qty: Number(t.qty ?? it.qty) || 1,
+            price: Number(t.price) || 0,
+            auctionEndsAt: Number(t.auctionEndsAt) || 0
+          });
+          try { room.send('market', { op: 'cancel', listingId: lid }); } catch (_) {}
+          await new Promise(r => setTimeout(r, 260));
+        }
+        if (${Boolean(autoCollect)}) {
+          await new Promise(r => setTimeout(r, 450));
+          try { room.send('market', { op: 'collect_all' }); } catch (_) {}
+        }
+        await new Promise(r => setTimeout(r, 450));
+        const refreshed = await awaitReply(room, 'market_mine', () => {
+          try { room.send('market', { op: 'mine' }); } catch (_) {}
+        }, 3800);
+        if (refreshed) {
+          mine = refreshed;
+          if (Array.isArray(refreshed.closed)) {
+            for (const c of refreshed.closed) {
+              const cid = Number(c && (c.listingId ?? c.id));
+              if (cid > 0) window.__pmSeenCancelledClosedIds.add(cid);
+            }
+          }
+        }
+        if (typeof window.__pmSaveAutoRelistState === 'function') {
+          try { window.__pmSaveAutoRelistState(); } catch (_) {}
+        }
+      } finally {
+        window.__pmAutoCancellingMarketNow = false;
+      }
+    }
+
+    const enrich = list => (Array.isArray(list) ? list : []).map(entry => {
+      if (entry && entry.item) {
+        entry.item.icon = entry.item.icon || icon(entry.item, entry.item.name);
+      }
+      if (entry && entry.id === undefined) {
+        if (entry.listingId !== undefined) entry.id = entry.listingId;
+        else if (entry.deliveryId !== undefined) entry.id = entry.deliveryId;
+      }
+      return entry;
+    });
+    const stillActiveIds = new Set((Array.isArray(mine.active) ? mine.active : []).map(e => Number(e && (e.listingId ?? e.id))));
+    const actuallyCancelled = [];
+    for (const ci of cancelledItems) {
+      if (stillActiveIds.has(Number(ci.listingId)) && Number(ci.auctionEndsAt) > Date.now()) {
+        lockedAuctionCount++;
+      } else {
+        actuallyCancelled.push(ci);
+      }
+    }
+    const actuallyCancelledSet = new Set(actuallyCancelled.map(x => Number(x.listingId)));
+    const active = enrich(mine.active).filter(e => !actuallyCancelledSet.has(Number(e && (e.listingId ?? e.id))));
+    const closed = enrich(mine.closed);
+    const deliveries = ${Boolean(autoCollect)} && actuallyCancelled.length > 0 ? [] : enrich(mine.deliveries);
+    window.__lastMarketMine = { active, closed, deliveries };
+    window.__myMarketActiveCount = active.length;
+    const premium = Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token');
+    const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : 0);
+    const activeLimit = premium ? 20 : 5;
+    return {
+      success: true,
+      cancelledCount: actuallyCancelled.length,
+      cancelledItems: actuallyCancelled,
+      lockedAuctionCount,
+      removedRulesCount,
+      active,
+      closed,
+      deliveries,
+      activeLimit,
+      premium,
+      zeny
+    };
+  })()`;
+}
+
 function buildOverviewProfileCode(fetchMine = true) {
   const globalSettings = loadGlobalMarketSettings();
   return `(async () => {
@@ -2398,6 +2593,108 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           affectedProfilesCount,
           cancelledDetails,
           globalSettings,
+          clients
+        });
+        return true;
+      }
+
+      if (op === 'cancel_matched_listings') {
+        const query = String(payload.query || '').trim().toLowerCase();
+        const mode = payload.mode === 'unconfigured' ? 'unconfigured' : 'search';
+        const removeFromAutoSell = Boolean(payload.removeFromAutoSell);
+        const autoCollect = payload.autoCollect !== false;
+        const listingIdsByProfile = (payload.listingIdsByProfile && typeof payload.listingIdsByProfile === 'object')
+          ? payload.listingIdsByProfile
+          : {};
+
+        if (mode === 'search' && !query && Object.keys(listingIdsByProfile).length === 0) {
+          sendJSON({ success: false, error: 'กรุณาระบุคำค้นหาหรือรายการที่ต้องการยกเลิก' }, 400);
+          return true;
+        }
+
+        // If removeFromAutoSell is requested, also update stored Auto-Sell configs on disk for all profiles (including offline)
+        let removedRulesTotal = 0;
+        if (removeFromAutoSell && query) {
+          for (const p of profiles) {
+            if (!p || !p.id) continue;
+            try {
+              const existing = loadProfileAutoSellStore(p.id);
+              if (existing && Array.isArray(existing.rules) && existing.rules.length > 0) {
+                const beforeLen = existing.rules.length;
+                const filteredRules = existing.rules.filter(r => {
+                  if (!r) return false;
+                  const nm = String(r.itemName || r.name || '').trim().toLowerCase();
+                  return !nm.includes(query);
+                });
+                if (filteredRules.length !== beforeLen) {
+                  removedRulesTotal += (beforeLen - filteredRules.length);
+                  saveProfileAutoSellStore(p.id, Object.assign({}, existing, { rules: filteredRules }), { allowEmptyOverwrite: true });
+                }
+              }
+            } catch (_) {}
+          }
+        }
+
+        const targets = (pid && pid !== 'all')
+          ? profiles.filter(p => p && p.id === pid && p.debugPort)
+          : profiles.filter(p => p && p.debugPort);
+
+        let totalCancelled = 0;
+        let affectedProfilesCount = 0;
+        let totalLockedAuction = 0;
+        const cancelledDetails = [];
+
+        await runWithConcurrency(targets, 5, async (p) => {
+          try {
+            const explicitIds = Array.isArray(listingIdsByProfile[p.id]) ? listingIdsByProfile[p.id] : [];
+            const cancelCode = buildCancelMatchedProfileCode({
+              query,
+              mode,
+              explicitIds,
+              profileName: p.name || p.id,
+              removeFromAutoSell,
+              autoCollect
+            });
+            const r = await evalProfilePort(p.debugPort, cancelCode, 15000);
+            const resObj = r && r.result;
+            if (resObj && resObj.success) {
+              const cnt = Number(resObj.cancelledCount) || 0;
+              totalLockedAuction += Number(resObj.lockedAuctionCount) || 0;
+              if (cnt > 0) {
+                totalCancelled += cnt;
+                affectedProfilesCount++;
+                cancelledDetails.push({
+                  profileId: p.id,
+                  name: p.name || p.id,
+                  count: cnt,
+                  items: Array.isArray(resObj.cancelledItems) ? resObj.cancelledItems : []
+                });
+              }
+              overviewMarketCache.set(p.id, {
+                updatedAt: Date.now(),
+                active: Array.isArray(resObj.active) ? resObj.active : [],
+                closed: Array.isArray(resObj.closed) ? resObj.closed : [],
+                deliveries: Array.isArray(resObj.deliveries) ? resObj.deliveries : [],
+                activeLimit: Number(resObj.activeLimit) || (resObj.premium ? 20 : 5),
+                premium: Boolean(resObj.premium),
+                zeny: Number(resObj.zeny) || 0
+              });
+            }
+          } catch (_) {}
+        });
+
+        const clients = await runWithConcurrency(profiles, 6, p =>
+          querySingleProfileOverview(p, evalProfilePort, false)
+        );
+        sendJSON({
+          success: true,
+          query,
+          mode,
+          cancelledCount: totalCancelled,
+          affectedProfilesCount,
+          lockedAuctionCount: totalLockedAuction,
+          removedRulesTotal,
+          cancelledDetails,
           clients
         });
         return true;

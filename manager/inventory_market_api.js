@@ -323,13 +323,13 @@ function loadGlobalHalloweenStore() {
       const parsed = JSON.parse(fs.readFileSync(HALLOWEEN_STORE_PATH, 'utf8'));
       if (parsed && typeof parsed === 'object') {
         return {
-          enabled: parsed.enabled !== false,
+          enabled: parsed.enabled === true,
           rules: (parsed.rules && typeof parsed.rules === 'object') ? parsed.rules : {}
         };
       }
     }
   } catch (_) {}
-  return { enabled: true, rules: {} };
+  return { enabled: false, rules: {} };
 }
 
 function saveGlobalHalloweenStore(cfg) {
@@ -346,7 +346,7 @@ function saveGlobalHalloweenStore(cfg) {
     }
   });
   const out = {
-    enabled: cfg && cfg.enabled !== undefined ? !!cfg.enabled : true,
+    enabled: cfg && cfg.enabled !== undefined ? !!cfg.enabled : false,
     rules: cleanRules,
     updatedAt: Date.now()
   };
@@ -848,7 +848,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(CFG_KEY) || 'null'); } catch (_) {}
     window.__halloweenExchangeConfig = {
-      enabled: saved && typeof saved.enabled === 'boolean' ? saved.enabled : true,
+      enabled: false,
       rules: (saved && saved.rules && typeof saved.rules === 'object') ? saved.rules : {},
       quotaState: (saved && saved.quotaState && typeof saved.quotaState === 'object') ? saved.quotaState : {}
     };
@@ -1064,10 +1064,15 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       });
     }
     if (!witchKey) {
-      window.__halloweenNextTryAt = Date.now() + 60000;
+      window.__halloweenEventEnded = true;
+      window.__halloweenNextTryAt = Date.now() + 365 * 86400000;
+      if (window.__halloweenExchangeConfig) {
+        window.__halloweenExchangeConfig.enabled = false;
+        window.saveHalloweenExchangeConfig();
+      }
       window.__planJobChangeHoldUntil = 0;
       if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
-      return { success: false, error: 'ไม่พบ NPC Witch Hazel ในเมืองหลวง' };
+      return { success: false, error: 'ไม่พบ NPC Witch Hazel ในเมืองหลวง (ปิดระบบแลกฮาโลวีนอัตโนมัติ)' };
     }
     window.__isHalloweenExchanging = true;
     window.__planJobChangeHoldUntil = Date.now() + 45000;

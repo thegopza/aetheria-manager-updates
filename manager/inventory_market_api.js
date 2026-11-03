@@ -1365,7 +1365,12 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         const normName = itemName.toLowerCase();
         if (window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(normName)) continue;
         const qty = Math.max(1, Number(entry.qty ?? (itemObj && itemObj.qty)) || 1);
-        const unitPrice = Math.max(1, Math.round(totalPrice / qty));
+        let unitPrice = Math.max(1, Math.round(totalPrice / qty));
+        const rawFlip = window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[normName];
+        const flipRef = (rawFlip && typeof rawFlip === 'object') ? (Number(rawFlip.unitPrice || rawFlip.price) || 0) : (Number(rawFlip) || 0);
+        if (flipRef > 0 && unitPrice > flipRef * 1.15) {
+          unitPrice = flipRef;
+        }
         const itemId = Number((itemObj && (itemObj.itemId ?? itemObj.id)) ?? entry.itemId) || 0;
         const refine = Number((itemObj && itemObj.refine) ?? entry.refine) || 0;
         window.__pmSniperProtectedItems.add(normName);
@@ -1454,7 +1459,12 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         const refine = Number((itemObj && itemObj.refine) ?? t.refine) || 0;
         const qty = Math.max(1, Number(t.qty ?? (itemObj && itemObj.qty)) || 1);
         const totalPrice = Math.max(0, Number(t.price) || 0);
-        const prevUnitPrice = totalPrice > 0 ? Math.max(1, Math.round(totalPrice / qty)) : 0;
+        let prevUnitPrice = totalPrice > 0 ? Math.max(1, Math.round(totalPrice / qty)) : 0;
+        const rawFlip = window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[normName];
+        const flipRef = (rawFlip && typeof rawFlip === 'object') ? (Number(rawFlip.unitPrice || rawFlip.price) || 0) : (Number(rawFlip) || 0);
+        if (flipRef > 0 && prevUnitPrice > flipRef * 1.15) {
+          prevUnitPrice = flipRef;
+        }
 
         if (window.__pmSniperBlockCheapAutoSell && totalPrice > 0 && totalPrice <= 50000) continue;
         if (window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(normName)) continue;
@@ -1653,7 +1663,10 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
           const rawSniperRef = window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[entry.normName];
           const sniperRef = typeof rawSniperRef === 'object' && rawSniperRef ? (Number(rawSniperRef.unitPrice || rawSniperRef.price) || 0) : (Number(rawSniperRef) || 0);
           const knownRef = (window.__pmKnownMyMarketItems && window.__pmKnownMyMarketItems[entry.normName] && Number(window.__pmKnownMyMarketItems[entry.normName].unitPrice)) || 0;
-          const fallbackUnit = Math.max(Number(entry.prevUnitPrice) || 0, sniperRef, knownRef);
+          if (sniperRef > 0 && unitPrice > sniperRef * 1.15) {
+            unitPrice = sniperRef;
+          }
+          const fallbackUnit = sniperRef > 0 ? sniperRef : Math.max(Number(entry.prevUnitPrice) || 0, knownRef);
           if (!(unitPrice > 0) && fallbackUnit > 0) {
             unitPrice = fallbackUnit;
           }
@@ -1838,9 +1851,9 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       return { relistedCount };
     };
 
-    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 5) {
+    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 6) {
       if (window.__pmMarketGlobalTimer) { try { clearInterval(window.__pmMarketGlobalTimer); } catch (_) {} }
-      window.__pmMarketGlobalTimerVer = 5;
+      window.__pmMarketGlobalTimerVer = 6;
       setTimeout(() => {
         try {
           const rmInit = ${ROOM_JS};

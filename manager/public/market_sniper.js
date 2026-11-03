@@ -327,10 +327,10 @@
               <div class="ms-kpi-val" id="ms-kpi-actions" style="color: #e2e8f0;">0 ประมูล · 0 ได้ของ · 0 ตั้งขาย</div>
               <div class="ms-kpi-sub" id="ms-kpi-refunds">รับเงินคืนเมื่อโดนปาดอัตโนมัติ: 0 ครั้ง</div>
             </div>
-            <div class="ms-kpi-card" style="border-color: rgba(16, 185, 129, 0.35); background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(15, 23, 42, 0.85));">
-              <div class="ms-kpi-label">📈 กำไรสุทธิคาดการณ์รวม (หักภาษี 4% แล้ว)</div>
-              <div class="ms-kpi-val" id="ms-kpi-profit" style="color: #34d399;">+0 z</div>
-              <div class="ms-kpi-sub">คำนวณจากส่วนต่างราคาช้อนกับราคาตั้งขายกลับจริง</div>
+            <div class="ms-kpi-card" style="border-color: rgba(16, 185, 129, 0.35); background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(15, 23, 42, 0.85)); cursor: pointer;" id="ms-kpi-profit-card" title="คลิกเพื่อดูรายละเอียดแยกของที่ขายออกแล้ว (ทุนไม่จม) vs ของที่ยังค้าง Stock">
+              <div class="ms-kpi-label">📈 กำไรสุทธิ: ขายออกแล้ว (ไม่จมทุน) vs ค้าง Stock</div>
+              <div class="ms-kpi-val" id="ms-kpi-profit" style="color: #34d399; font-size: 14.5px; line-height: 1.35;">+0 z</div>
+              <div class="ms-kpi-sub" id="ms-kpi-profit-sub" style="line-height: 1.4;">กำลังตรวจสอบสถานะของค้าง Stock & ยอดขายจริง...</div>
             </div>
           </div>
 
@@ -420,9 +420,12 @@
           <!-- LIVE FEED & TABLES -->
           <div class="ms-panel" style="flex: 1; display: flex; flex-direction: column; min-height: 240px;">
             <div class="ms-panel-title">
-              <div class="ms-subtabs">
+              <div class="ms-subtabs" style="flex-wrap: wrap;">
                 <button type="button" class="ms-subtab-btn active" data-ms-tab="active">
                   🔨 รายการประมูล & ช้อนล่าสุด (<span id="ms-count-active">0</span>)
+                </button>
+                <button type="button" class="ms-subtab-btn" data-ms-tab="stock">
+                  📦 ของค้าง Stock vs ขายออกแล้ว (<span id="ms-count-stock">0</span>)
                 </button>
                 <button type="button" class="ms-subtab-btn" data-ms-tab="history">
                   📜 ประวัติการช้อน & ตั้งขายทำกำไร (<span id="ms-count-history">0</span>)
@@ -450,6 +453,15 @@
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) closeModal();
     });
+
+    const profitCard = document.getElementById('ms-kpi-profit-card');
+    if (profitCard) {
+      profitCard.addEventListener('click', () => {
+        activeSubTab = 'stock';
+        overlay.querySelectorAll('.ms-subtab-btn').forEach(b => b.classList.toggle('active', b.getAttribute('data-ms-tab') === 'stock'));
+        renderTables();
+      });
+    }
 
     document.getElementById('ms-enable-toggle').addEventListener('change', async () => {
       await saveCurrentConfigFromUi();
@@ -650,13 +662,42 @@
       refEl.innerText = `พบของเข้าเกณฑ์: ${Number(st.totalOpportunitiesFound) || 0} รายการ · กดรับเงินคืนประมูล: ${Number(st.totalRefundedCount) || 0} ครั้ง`;
     }
 
+    const sb = sniperStatus.stockBreakdown || null;
+    const soldSum = sb?.soldSummary || null;
+    const stockSum = sb?.inStockSummary || null;
+
     const profEl = document.getElementById('ms-kpi-profit');
+    const profSubEl = document.getElementById('ms-kpi-profit-sub');
     if (profEl) {
-      profEl.innerText = `+${fmtZeny(st.totalEstimatedNetProfit || 0)}`;
+      if (soldSum && stockSum) {
+        const realized = Number(soldSum.realizedNetProfitZeny) || 0;
+        const recovered = Number(soldSum.costRecoveredZeny) || 0;
+        const tiedUp = Number(stockSum.costTiedUpZeny) || 0;
+        const stockProfit = Number(stockSum.realisticNetProfitZeny) || 0;
+        const overpricedLots = Number(stockSum.overpricedLotsCount) || 0;
+
+        profEl.innerHTML = `
+          <div style="color:#34d399;">✅ ขายออกแล้ว: ${realized >= 0 ? '+' : ''}${fmtZeny(realized)} <span style="font-size:11px;font-weight:600;color:#a7f3d0;">(คืนทุน ${fmtZeny(recovered)} · ไม่จม)</span></div>
+          <div style="color:#fbbf24;font-size:12.5px;margin-top:2px;">📦 ค้าง Stock: ทุนจม ${fmtZeny(tiedUp)} <span style="font-size:11px;font-weight:600;color:${stockProfit >= 0 ? '#fde047' : '#fca5a5'};">(${stockProfit >= 0 ? 'คาดการณ์ +' : ''}${fmtZeny(stockProfit)})</span></div>
+        `;
+        if (profSubEl) {
+          profSubEl.innerHTML = overpricedLots > 0
+            ? `<span style="color:#f87171;font-weight:700;">⚠️ พบของค้างตั้งราคาสูงเกินตลาดจริง ${overpricedLots} รายการ (${Number(stockSum.overpricedUnitsCount || 0).toLocaleString()} ชิ้น) — คลิกที่นี่เพื่อปรับราคา!</span>`
+            : `ขายออกแล้ว ${soldSum.lotsCount || 0} รายการ (${Number(soldSum.unitsCount || 0).toLocaleString()} ชิ้น) · ค้างในตลาด ${stockSum.lotsCount || 0} รายการ (${Number(stockSum.unitsCount || 0).toLocaleString()} ชิ้น)`;
+        }
+      } else {
+        profEl.innerText = `+${fmtZeny(st.totalEstimatedNetProfit || 0)}`;
+      }
     }
 
     const cActive = document.getElementById('ms-count-active');
     if (cActive) cActive.innerText = String((sniperStatus.activeBids || []).length);
+    const cStock = document.getElementById('ms-count-stock');
+    if (cStock) {
+      const byItemCount = Array.isArray(sb?.byItem) ? sb.byItem.length : 0;
+      const opCount = Number(stockSum?.overpricedLotsCount) || 0;
+      cStock.innerText = opCount > 0 ? `${byItemCount} ชนิด · ⚠️ ${opCount} ราคาเว่อร์` : String(byItemCount);
+    }
     const cHist = document.getElementById('ms-count-history');
     if (cHist) cHist.innerText = String((sniperStatus.history || []).length);
     const cScr = document.getElementById('ms-count-screens');
@@ -665,7 +706,17 @@
     renderTables();
   }
 
-  function renderStatusBadgeHtml(status) {
+  function renderStatusBadgeHtml(status, row) {
+    if (row && row.stockState === 'sold') {
+      const buyerTxt = Array.isArray(row.buyers) && row.buyers.length ? ` (${escapeHtml(row.buyers[0])})` : '';
+      return `<span class="ms-badge relisted">✅ ขายออกแล้ว · คืนทุนแล้ว${buyerTxt}</span>`;
+    }
+    if (row && row.stockState === 'in_stock') {
+      if (row.isOverpriced) {
+        return `<span class="ms-badge stopped">📦 ค้าง Stock · ⚠️ ตั้งราคาสูงเกินตลาด</span>`;
+      }
+      return `<span class="ms-badge won">📦 ค้าง Stock · กำลังวางขาย</span>`;
+    }
     if (status === 'leading') return '<span class="ms-badge leading">🔨 ประมูลนำอยู่</span>';
     if (status === 'relisted') return '<span class="ms-badge relisted">🏷️ ตั้งขายทำกำไรแล้ว</span>';
     if (status === 'won') return '<span class="ms-badge won">🏆 ชนะประมูล & รับของแล้ว</span>';
@@ -676,9 +727,179 @@
     return `<span class="ms-badge">${escapeHtml(status || '-')}</span>`;
   }
 
+  async function triggerRepriceOverpriced(itemName = '', btnEl = null) {
+    if (btnEl) {
+      btnEl.disabled = true;
+      btnEl.innerText = '⏳ กำลังดึงของลงมาตั้งราคาตลาดจริง...';
+    }
+    try {
+      const res = await fetch('/api/market-sniper/reprice-overpriced-stock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemName })
+      });
+      const data = await res.json();
+      await fetchStatus(false);
+      if (btnEl && data && data.success) {
+        btnEl.innerText = `✅ ปรับราคาสำเร็จ ${data.repricedListingsCount || 0} รายการ!`;
+        setTimeout(() => { fetchStatus(false); }, 1500);
+      }
+    } catch (_) {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.innerText = '🔄 ลองอีกครั้ง';
+      }
+    }
+  }
+
   function renderTables() {
     const box = document.getElementById('ms-table-container');
     if (!box || !sniperStatus) return;
+
+    if (activeSubTab === 'stock') {
+      const sb = sniperStatus.stockBreakdown || {};
+      const soldSum = sb.soldSummary || { lotsCount: 0, unitsCount: 0, costRecoveredZeny: 0, grossRevenueZeny: 0, netRevenueZeny: 0, realizedNetProfitZeny: 0 };
+      const stockSum = sb.inStockSummary || { lotsCount: 0, unitsCount: 0, costTiedUpZeny: 0, listedGrossZeny: 0, realisticGrossZeny: 0, realisticNetRevenueZeny: 0, realisticNetProfitZeny: 0, overpricedLotsCount: 0, overpricedUnitsCount: 0 };
+      const bidSum = sb.biddingSummary || { lotsCount: 0, tiedUpBidZeny: 0 };
+      const byItem = Array.isArray(sb.byItem) ? sb.byItem : [];
+
+      box.innerHTML = `
+        <div style="padding: 12px; display: flex; flex-direction: column; gap: 12px;">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px;">
+            <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.45); border-radius: 10px; padding: 11px 14px;">
+              <div style="font-size: 11.5px; font-weight: 700; color: #6ee7b7;">✅ ของที่ขายออกแล้ว (ได้ทุนคืนแล้ว · ทุนไม่จม)</div>
+              <div style="font-size: 18px; font-weight: 800; color: #34d399; margin-top: 4px;">
+                กำไรสุทธิรับจริง: ${soldSum.realizedNetProfitZeny >= 0 ? '+' : ''}${fmtZeny(soldSum.realizedNetProfitZeny)}
+              </div>
+              <div style="font-size: 11.5px; color: #d1fae5; margin-top: 4px;">
+                💰 <b>ทุนหมุนเวียนที่ได้คืนแล้ว: ${fmtZeny(soldSum.costRecoveredZeny)}</b>
+              </div>
+              <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">
+                ยอดขายรับสุทธิ (หักภาษี 4%): ${fmtZeny(soldSum.netRevenueZeny)} · ขายออก ${soldSum.lotsCount} รายการ (${Number(soldSum.unitsCount).toLocaleString()} ชิ้น)
+              </div>
+            </div>
+
+            <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(250, 204, 21, 0.45); border-radius: 10px; padding: 11px 14px;">
+              <div style="font-size: 11.5px; font-weight: 700; color: #fde047;">📦 ของที่ยังค้าง Stock (กำลังวางขาย · ทุนยังจมอยู่)</div>
+              <div style="font-size: 18px; font-weight: 800; color: #fbbf24; margin-top: 4px;">
+                ทุนที่จมอยู่ใน Stock: ${fmtZeny(stockSum.costTiedUpZeny)}
+              </div>
+              <div style="font-size: 11.5px; color: #fef08a; margin-top: 4px;">
+                📊 มูลค่าตามราคาตลาดคงที่จริง (หักภาษี 4%): <b>${fmtZeny(stockSum.realisticNetRevenueZeny)}</b>
+                <span style="color:${stockSum.realisticNetProfitZeny >= 0 ? '#34d399' : '#fca5a5'}; font-weight:700;">
+                  (${stockSum.realisticNetProfitZeny >= 0 ? '+' : ''}${fmtZeny(stockSum.realisticNetProfitZeny)})
+                </span>
+              </div>
+              <div style="font-size: 11px; color: #94a3b8; margin-top: 2px;">
+                ค้างอยู่ในตลาด ${stockSum.lotsCount} รายการ (${Number(stockSum.unitsCount).toLocaleString()} ชิ้น)${bidSum.lotsCount > 0 ? ` · กำลังประมูล ${bidSum.lotsCount} รายการ (${fmtZeny(bidSum.tiedUpBidZeny)})` : ''}
+              </div>
+            </div>
+
+            <div style="background: rgba(239, 68, 68, 0.10); border: 1px solid rgba(248, 113, 113, 0.4); border-radius: 10px; padding: 11px 14px; display: flex; flex-direction: column; justify-content: space-between;">
+              <div>
+                <div style="font-size: 11.5px; font-weight: 700; color: #fca5a5;">🎯 ตรวจสอบของค้างที่ตั้งราคาสูงเกินตลาดจริง</div>
+                <div style="font-size: 13px; font-weight: 700; color: #f8fafc; margin-top: 4px;">
+                  ${stockSum.overpricedLotsCount > 0
+                    ? `⚠️ พบ ${stockSum.overpricedLotsCount} รายการ (${Number(stockSum.overpricedUnitsCount).toLocaleString()} ชิ้น) ตั้งราคาสูงเกินค่าเฉลี่ยคงที่!`
+                    : `✅ ทุกรายการในตลาดตั้งอยู่ในช่วงราคาขายออกจริงแล้ว`}
+                </div>
+                <div style="font-size: 10.5px; color: #94a3b8; margin-top: 3px;">
+                  คำนวณราคาอ้างอิงจากกลุ่มราคาที่คงที่สุดใน 10–20 รายการซื้อขายล่าสุด (ตัดรายการโอนเงิน/ปั่นราคาออกอัตโนมัติ)
+                </div>
+              </div>
+              ${stockSum.overpricedLotsCount > 0 ? `
+                <button type="button" id="btn-ms-reprice-all" class="btn btn-warning btn-sm" style="margin-top: 8px; font-weight: 800; font-size: 11.5px; padding: 6px 10px;">
+                  🔄 ดึงของตั้งราคาเว่อร์ทั้งหมด (${stockSum.overpricedLotsCount} รายการ) ลงมาขายราคาตลาดจริง
+                </button>
+              ` : ''}
+            </div>
+          </div>
+
+          <table class="ms-table">
+            <thead>
+              <tr>
+                <th>ไอเทม</th>
+                <th>ราคาตลาดคงที่จริง (10–20 ล่าสุด)</th>
+                <th>✅ ขายออกแล้ว (ไม่จมทุน)</th>
+                <th>💰 ทุนที่ได้คืนแล้ว / กำไรรับจริง</th>
+                <th>📦 ยังค้าง Stock (กำลังวางขาย)</th>
+                <th>🔒 ทุนที่จมอยู่ / กำไรตามราคาตลาดจริง</th>
+                <th>การจัดการ Stock</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${byItem.length === 0 ? `
+                <tr><td colspan="7" style="text-align:center;color:#64748b;padding:24px;">ยังไม่มีรายการช้อนในระบบ</td></tr>
+              ` : byItem.map(g => {
+                const iconHtml = g.icon ? `<img src="${escapeHtml(g.icon)}" onerror="this.style.display='none'" style="width:24px;height:24px;border-radius:5px;object-fit:contain;background:#090d16;border:1px solid rgba(255,255,255,0.1);">` : '📦';
+                const buyersTxt = Array.isArray(g.buyers) && g.buyers.length ? `<div style="font-size:10px;color:#6ee7b7;">ผู้ซื้อ: ${escapeHtml(g.buyers.slice(0, 3).join(', '))}</div>` : '';
+                const overpricedWarn = g.overpricedLots > 0
+                  ? `<div style="font-size:10px;color:#fca5a5;font-weight:700;">⚠️ ตั้งค้างไว้ ${fmtZeny(g.avgListedUnitPrice)}/ชิ้น (${g.overpricedLots} รายการ)</div>`
+                  : (g.inStockUnits > 0 ? `<div style="font-size:10px;color:#94a3b8;">ตั้งขายอยู่ ${fmtZeny(g.avgListedUnitPrice)}/ชิ้น</div>` : '');
+                return `
+                  <tr>
+                    <td>
+                      <div style="display:flex;align-items:center;gap:8px;">
+                        ${iconHtml}
+                        <div>
+                          <div style="font-weight:700;color:#f8fafc;">${escapeHtml(g.itemName)}</div>
+                          <div style="font-size:10px;color:#94a3b8;">ทุนช้อนเฉลี่ย ${fmtZeny(g.avgBuyUnitPrice)}/ชิ้น</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <b style="color:#38bdf8;">${fmtZeny(g.trueRefUnitPrice)}/ชิ้น</b>
+                      <div style="font-size:10px;color:#64748b;">กลุ่มราคาคงที่ 10–20 ล่าสุด</div>
+                    </td>
+                    <td>
+                      ${g.soldUnits > 0
+                        ? `<span class="ms-badge relisted">✅ ${g.soldLots} รายการ (${Number(g.soldUnits).toLocaleString()} ชิ้น)</span>${buyersTxt}`
+                        : `<span style="color:#64748b;">ยังไม่ขายออก</span>`}
+                    </td>
+                    <td>
+                      ${g.soldUnits > 0
+                        ? `<div style="color:#a7f3d0;font-weight:700;">คืนทุน ${fmtZeny(g.costRecoveredZeny)}</div>
+                           <div style="color:${g.realizedNetProfitZeny >= 0 ? '#34d399' : '#fca5a5'};font-size:11px;font-weight:700;">กำไรสุทธิ ${g.realizedNetProfitZeny >= 0 ? '+' : ''}${fmtZeny(g.realizedNetProfitZeny)}</div>`
+                        : `<span style="color:#64748b;">-</span>`}
+                    </td>
+                    <td>
+                      ${g.inStockUnits > 0
+                        ? `<span class="ms-badge ${g.overpricedLots > 0 ? 'stopped' : 'won'}">📦 ${g.inStockLots} รายการ (${Number(g.inStockUnits).toLocaleString()} ชิ้น)</span>${overpricedWarn}`
+                        : `<span class="ms-badge relisted">🎉 ขายหมดแล้ว (ไม่ค้าง Stock)</span>`}
+                    </td>
+                    <td>
+                      ${g.inStockUnits > 0
+                        ? `<div style="color:#fbbf24;font-weight:700;">ทุนจม ${fmtZeny(g.costTiedUpZeny)}</div>
+                           <div style="color:${g.realisticNetProfitZeny >= 0 ? '#34d399' : '#fca5a5'};font-size:11px;font-weight:700;">ตามตลาดจริง ${g.realisticNetProfitZeny >= 0 ? '+' : ''}${fmtZeny(g.realisticNetProfitZeny)}</div>`
+                        : `<span style="color:#34d399;font-weight:700;">ทุนจม 0 z</span>`}
+                    </td>
+                    <td>
+                      ${g.overpricedLots > 0
+                        ? `<button type="button" class="btn btn-warning btn-sm btn-ms-reprice-item" data-item-name="${escapeHtml(g.itemName)}" style="font-size:11px;padding:4px 9px;font-weight:700;">
+                             🔄 ปรับเป็น ${fmtZeny(g.trueRefUnitPrice)}/ชิ้น
+                           </button>`
+                        : `<span style="color:#64748b;font-size:11px;">ราคาเหมาะสมแล้ว</span>`}
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+
+      const allBtn = document.getElementById('btn-ms-reprice-all');
+      if (allBtn) {
+        allBtn.addEventListener('click', (e) => triggerRepriceOverpriced('', e.currentTarget));
+      }
+      box.querySelectorAll('.btn-ms-reprice-item').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const nm = e.currentTarget.getAttribute('data-item-name') || '';
+          triggerRepriceOverpriced(nm, e.currentTarget);
+        });
+      });
+      return;
+    }
 
     if (activeSubTab === 'active') {
       const list = sniperStatus.activeBids || [];
@@ -693,18 +914,24 @@
               <th>ไอเทม</th>
               <th>ราคาที่ช้อน / ประมูล</th>
               <th>เพดานประมูลสู้สูงสุด</th>
-              <th>ราคาขายจริง (Flip)</th>
-              <th>กำไรสุทธิคาดการณ์</th>
+              <th>ราคาตั้งขาย vs ตลาดคงที่จริง</th>
+              <th>กำไรสุทธิ (ตามราคาตลาดจริง)</th>
               <th>จอที่รับหน้าที่ซื้อ</th>
-              <th>สถานะล่าสุด</th>
+              <th>สถานะ Stock / ล่าสุด</th>
             </tr>
           </thead>
           <tbody>
             ${list.map(b => {
-              const qtyBadge = (Number(b.qty) > 1) ? ` <b style="color:#fde047;">×${Number(b.qty).toLocaleString()}</b>` : '';
+              const qty = Math.max(1, Number(b.qty) || 1);
+              const qtyBadge = (qty > 1) ? ` <b style="color:#fde047;">×${qty.toLocaleString()}</b>` : '';
               const refBadge = b.refine ? `<span style="color:#c084fc; font-weight:700;">+${b.refine} </span>` : '';
               const iconHtml = b.icon ? `<img src="${escapeHtml(b.icon)}" onerror="this.style.display='none'" style="width:24px;height:24px;border-radius:5px;object-fit:contain;background:#090d16;border:1px solid rgba(255,255,255,0.1);">` : '💎';
-              const flipTotal = (Number(b.flipUnitPrice) || 0) * Math.max(1, Number(b.qty) || 1);
+              const trueRefUnit = Number(b.trueRefUnitPrice || b.cleanRefUnitPrice) || 0;
+              const listedUnit = Number(b.listedUnitPrice || b.flipUnitPrice) || trueRefUnit;
+              const flipTotal = listedUnit * qty;
+              const profitVal = b.stockState === 'sold'
+                ? Number(b.realizedNetProfit ?? b.expectedNetProfit) || 0
+                : Number(b.realisticNetProfit ?? b.expectedNetProfit) || 0;
               return `
                 <tr>
                   <td>
@@ -718,17 +945,20 @@
                   </td>
                   <td>
                     <b style="color:#38bdf8;">${fmtZeny(b.currentBid)}</b>
-                    ${b.discountPct ? `<div style="font-size:10px;color:#34d399;">ต่ำกว่าตลาด -${b.discountPct}%</div>` : ''}
+                    <div style="font-size:10px;color:#94a3b8;">(${fmtZeny(Math.round((Number(b.currentBid) || 0) / qty))}/ชิ้น)</div>
                   </td>
                   <td style="color:#cbd5e1;">${fmtZeny(b.maxBidCapTotal)}</td>
                   <td>
-                    <b style="color:#fde047;">${fmtZeny(flipTotal)}</b>
-                    <div style="font-size:10px;color:#94a3b8;">(ค่ากลาง ${fmtZeny(b.cleanRefUnitPrice)}/ชิ้น)</div>
+                    <b style="color:${b.isOverpriced ? '#fca5a5' : '#fde047'};">${fmtZeny(flipTotal)} (${fmtZeny(listedUnit)}/ชิ้น)</b>
+                    <div style="font-size:10px;color:#38bdf8;">ราคาตลาดคงที่จริง: ${fmtZeny(trueRefUnit)}/ชิ้น</div>
                   </td>
-                  <td><b style="color:#34d399;">+${fmtZeny(b.expectedNetProfit)}</b></td>
+                  <td>
+                    <b style="color:${profitVal >= 0 ? '#34d399' : '#fca5a5'};">${profitVal >= 0 ? '+' : ''}${fmtZeny(profitVal)}</b>
+                    <div style="font-size:10px;color:#94a3b8;">${b.stockState === 'sold' ? 'รับเงินเข้ากระเป๋าแล้ว' : 'คำนวณตามราคาตลาดจริง'}</div>
+                  </td>
                   <td><span style="color:#e2e8f0;font-weight:600;">${escapeHtml(b.buyerCharName || b.buyerProfileId || '-')}</span></td>
                   <td>
-                    ${renderStatusBadgeHtml(b.status)}
+                    ${renderStatusBadgeHtml(b.status, b)}
                     <div style="font-size:10px;color:#94a3b8;margin-top:2px;">${escapeHtml(b.lastEventNote || '')}</div>
                   </td>
                 </tr>
@@ -753,25 +983,46 @@
               <th>เวลา</th>
               <th>ไอเทม</th>
               <th>ราคาช้อน</th>
-              <th>ราคาตั้งขายกลับ</th>
+              <th>ราคาตั้งขาย vs ตลาดจริง</th>
               <th>กำไรสุทธิ</th>
+              <th>สถานะ Stock (เช็คทุนจม)</th>
               <th>จอที่ดำเนินการ</th>
-              <th>รายละเอียด</th>
             </tr>
           </thead>
           <tbody>
             ${list.map(h => {
-              const qtyBadge = (Number(h.qty) > 1) ? ` <b style="color:#fde047;">×${Number(h.qty).toLocaleString()}</b>` : '';
+              const qty = Math.max(1, Number(h.qty) || 1);
+              const qtyBadge = (qty > 1) ? ` <b style="color:#fde047;">×${qty.toLocaleString()}</b>` : '';
               const refBadge = h.refine ? `<span style="color:#c084fc; font-weight:700;">+${h.refine} </span>` : '';
+              const trueRefUnit = Number(h.trueRefUnitPrice || h.cleanRefUnitPrice) || 0;
+              const listedUnit = Number(h.listedUnitPrice || h.relistUnitPrice) || trueRefUnit;
+              const profitVal = h.stockState === 'sold'
+                ? Number(h.realizedNetProfit ?? h.expectedNetProfit) || 0
+                : Number(h.realisticNetProfit ?? h.expectedNetProfit) || 0;
               return `
                 <tr>
                   <td style="white-space:nowrap;color:#94a3b8;font-size:11px;">${fmtTimeAgo(h.at)}</td>
                   <td style="font-weight:700;color:#f8fafc;">${refBadge}${escapeHtml(h.itemName)}${qtyBadge}</td>
-                  <td style="color:#38bdf8;font-weight:700;">${fmtZeny(h.buyPriceTotal)}</td>
-                  <td style="color:#fde047;font-weight:700;">${h.relistPriceTotal ? fmtZeny(h.relistPriceTotal) : (h.relistUnitPrice ? fmtZeny(h.relistUnitPrice * (h.qty || 1)) : '-')}</td>
-                  <td style="color:#34d399;font-weight:700;">${h.expectedNetProfit > 0 ? '+' + fmtZeny(h.expectedNetProfit) : '-'}</td>
+                  <td style="color:#38bdf8;font-weight:700;">
+                    ${fmtZeny(h.buyPriceTotal)}
+                    <div style="font-size:10px;color:#94a3b8;">(${fmtZeny(Math.round((Number(h.buyPriceTotal) || 0) / qty))}/ชิ้น)</div>
+                  </td>
+                  <td>
+                    <b style="color:${h.isOverpriced ? '#fca5a5' : '#fde047'};">${listedUnit ? fmtZeny(listedUnit * qty) : '-'}</b>
+                    <div style="font-size:10px;color:#38bdf8;">ตลาดคงที่จริง: ${fmtZeny(trueRefUnit)}/ชิ้น</div>
+                  </td>
+                  <td style="color:${profitVal >= 0 ? '#34d399' : '#fca5a5'};font-weight:700;">
+                    ${h.stockState === 'refunded' ? '-' : ((profitVal >= 0 ? '+' : '') + fmtZeny(profitVal))}
+                  </td>
+                  <td>
+                    ${renderStatusBadgeHtml(h.action, h)}
+                    <div style="font-size:10px;color:#94a3b8;margin-top:2px;">
+                      ${h.stockState === 'sold'
+                        ? `คืนทุน ${fmtZeny(h.buyPriceTotal)} แล้ว (ไม่จม)`
+                        : (h.stockState === 'in_stock' ? `ทุนจมอยู่ ${fmtZeny(h.buyPriceTotal)}` : escapeHtml(h.note || ''))}
+                    </div>
+                  </td>
                   <td style="color:#e2e8f0;">${escapeHtml(h.buyerCharName || h.buyerProfileId || '-')}</td>
-                  <td style="color:#cbd5e1;font-size:11px;">${escapeHtml(h.note || '')}</td>
                 </tr>
               `;
             }).join('')}

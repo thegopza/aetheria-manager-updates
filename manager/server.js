@@ -4899,7 +4899,19 @@ async function recordProfileJailedAndStop(profile, state) {
   if (newlyJailed && !jailStoppingInFlight.has(pid)) {
     jailStoppingInFlight.add(pid);
     try {
-      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — แสดงสถานะการ์ดสีแดงและหยุดบอทในเกม (ไม่ปิดจอ)!`);
+      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — แสดงสถานะการ์ดสีแดง, สุ่ม Device/Machine ID ใหม่ และหยุดบอทในเกม (ไม่ปิดจอ)!`);
+      if (typeof browserMode !== 'undefined' && browserMode && typeof browserMode.rotateDeviceGroup === 'function') {
+        browserMode.rotateDeviceGroup(pid).then(grp => {
+          if (grp && Array.isArray(grp.profileIds)) {
+            for (const gpid of grp.profileIds) {
+              if (windowStates[gpid]) {
+                delete windowStates[gpid].syncedDeviceId;
+                delete windowStates[gpid].syncedMachineId;
+              }
+            }
+          }
+        }).catch(() => {});
+      }
       if (profile.debugPort) {
         evalProfilePort(profile.debugPort, 'if (typeof window.stopMasterBot === "function" && window.__isBotRunning) window.stopMasterBot();', 2500).catch(() => {});
       }
@@ -4914,9 +4926,11 @@ function clearProfileJailStatus(profileId, resetDismissed = false) {
   const pid = String(profileId || '');
   const fresh = loadProfiles();
   let changed = false;
+  const unjailedPids = [];
   for (const p of fresh) {
     if (!profileId || String(p.id) === pid) {
       if (p.isJailed || p.jailedAt || p.jailedMap || p.jailAutoStopped || (resetDismissed && p.jailDismissedAt) || (!resetDismissed && !p.jailDismissedAt)) {
+        if (p.isJailed) unjailedPids.push(String(p.id));
         delete p.isJailed;
         delete p.jailedAt;
         delete p.jailedMap;
@@ -4930,7 +4944,23 @@ function clearProfileJailStatus(profileId, resetDismissed = false) {
       }
     }
   }
-  if (changed) saveProfiles(fresh);
+  if (changed) {
+    saveProfiles(fresh);
+    if (unjailedPids.length > 0 && typeof browserMode !== 'undefined' && browserMode && typeof browserMode.rotateDeviceGroup === 'function') {
+      for (const upid of unjailedPids) {
+        browserMode.rotateDeviceGroup(upid).then(grp => {
+          if (grp && Array.isArray(grp.profileIds)) {
+            for (const gpid of grp.profileIds) {
+              if (windowStates[gpid]) {
+                delete windowStates[gpid].syncedDeviceId;
+                delete windowStates[gpid].syncedMachineId;
+              }
+            }
+          }
+        }).catch(() => {});
+      }
+    }
+  }
   return changed;
 }
 

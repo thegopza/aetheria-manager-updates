@@ -1160,6 +1160,27 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if (!window.__pmMachineId || typeof window.__pmMachineId !== 'string' || window.__pmMachineId.length !== 64) {
         window.__pmMachineId = __mintMachineId();
       }
+      try {
+        if (typeof navigator !== 'undefined' && navigator.webdriver) {
+          Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', { get: function() { return false; }, configurable: true });
+        }
+      } catch (_) {}
+      if (!window.__pmConsoleDebugHookInstalled && typeof console !== 'undefined' && typeof console.debug === 'function') {
+        window.__pmConsoleDebugHookInstalled = true;
+        const __origConsoleDebug = console.debug.bind(console);
+        console.debug = function() {
+          try {
+            for (let i = 0; i < arguments.length; i++) {
+              const arg = arguments[i];
+              if (arg && (arg instanceof Error || typeof arg === 'object')) {
+                const desc = Object.getOwnPropertyDescriptor(arg, 'stack');
+                if (desc && typeof desc.get === 'function') return;
+              }
+            }
+          } catch (_) {}
+          return __origConsoleDebug.apply(console, arguments);
+        };
+      }
       if (!window.__pmSubtleDigestHookInstalled && typeof crypto !== 'undefined' && crypto.subtle && typeof crypto.subtle.digest === 'function') {
         window.__pmSubtleDigestHookInstalled = true;
         const __origDigest = crypto.subtle.digest.bind(crypto.subtle);
@@ -1302,8 +1323,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           let isEnterWorld = false;
           try {
             const urlStr = typeof input === 'string' ? input : (input && typeof input.url === 'string' ? input.url : '');
+            const isRegisterCall = urlStr.includes('/auth/register');
             if (urlStr === '/world/enter' || urlStr.endsWith('/world/enter') || urlStr.includes('/world/enter?')) {
               isEnterWorld = true;
+            }
+            if (isEnterWorld || isRegisterCall || (init && typeof init.body === 'string' && (init.body.includes('"deviceId"') || init.body.includes('"machineId"')))) {
               if (!window.__pmDeviceId || window.__pmDeviceId === 'unknown-device') {
                 window.__pmDeviceId = __mintUuid();
               }
@@ -1313,8 +1337,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               if (init && typeof init.body === 'string') {
                 const parsed = JSON.parse(init.body);
                 if (parsed && typeof parsed === 'object') {
-                  parsed.deviceId = window.__pmDeviceId;
-                  parsed.machineId = window.__pmMachineId;
+                  if (isEnterWorld || isRegisterCall || 'deviceId' in parsed) parsed.deviceId = window.__pmDeviceId;
+                  if (isEnterWorld || isRegisterCall || 'machineId' in parsed) parsed.machineId = window.__pmMachineId;
                   init = Object.assign({}, init, { body: JSON.stringify(parsed) });
                 }
               }
@@ -1573,14 +1597,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       t.unref?.();
     };
     try {
-      if (!isRealSession) {
-        await ensureSessionHooks(c.sessionId, c.profileId, c);
-      }
+      await ensureSessionHooks(c.sessionId, c.profileId, c).catch(() => {});
       await send('Page.reload', { ignoreCache: false }, c.sessionId, isRealSession ? 3000 : 8000);
       schedulePostReloadInject();
       return true;
     } catch (_) {
       try {
+        await ensureSessionHooks(c.sessionId, c.profileId, c).catch(() => {});
         await send('Page.navigate', { url: gameUrl }, c.sessionId, isRealSession ? 4000 : 8000);
         schedulePostReloadInject();
         return true;
@@ -1588,9 +1611,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         try {
           const { sessionId } = await send('Target.attachToTarget', { targetId: c.targetId, flatten: true }, undefined, 4000);
           c.sessionId = sessionId;
-          if (!isRealSession) {
-            await ensureSessionHooks(sessionId, c.profileId, c);
-          }
+          await ensureSessionHooks(sessionId, c.profileId, c).catch(() => {});
           await send('Page.reload', { ignoreCache: false }, sessionId, 3000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 4000));
           schedulePostReloadInject();
           return true;
@@ -1880,23 +1901,20 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, undefined, 15000);
     try {
-    let addedInit = null;
-    if (!fastRediscover) {
-      const initScript = profileInitScript(profileId);
-      const resInit = await Promise.all([
-        send('Page.enable', {}, sessionId, 3500).catch(() => {}),
-        configureSessionAssetCache(sessionId),
-        send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId, 3500).catch(() => null)
-      ]);
-      addedInit = resInit[2];
-      if (!skipIdentityProbe) {
-        try {
-          const identity = await evaluate({ sessionId }, `(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`, 4000);
-          if (identity && identity !== profileId) throw Error('PROFILE_ID_CONFLICT');
-          await evaluate({ sessionId }, initScript, 4000).catch(() => {});
-        } catch (probeErr) {
-          if (probeErr && probeErr.message === 'PROFILE_ID_CONFLICT') throw probeErr;
-        }
+    const initScript = profileInitScript(profileId);
+    const resInit = await Promise.all([
+      send('Page.enable', {}, sessionId, 3500).catch(() => {}),
+      configureSessionAssetCache(sessionId),
+      send('Page.addScriptToEvaluateOnNewDocument', { source: initScript }, sessionId, 3500).catch(() => null)
+    ]);
+    const addedInit = resInit[2];
+    if (!fastRediscover && !skipIdentityProbe) {
+      try {
+        const identity = await evaluate({ sessionId }, `(() => { if(!window.__pmProfileId)window.__pmProfileId=${JSON.stringify(profileId)}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', window.__pmProfileId); } catch (_) {} return window.__pmProfileId; })()`, 4000);
+        if (identity && identity !== profileId) throw Error('PROFILE_ID_CONFLICT');
+        await evaluate({ sessionId }, initScript, 4000).catch(() => {});
+      } catch (probeErr) {
+        if (probeErr && probeErr.message === 'PROFILE_ID_CONFLICT') throw probeErr;
       }
     }
     if(stoppedProfiles.has(profileId))throw Error('PROFILE_STOPPED');

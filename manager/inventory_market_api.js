@@ -891,13 +891,19 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
   };
   window.syncHalloweenWhitelist = function () {
     const cfg = window.__halloweenExchangeConfig || {};
+    const sellCfg = window.__sellConfig;
+    if (!sellCfg || typeof sellCfg !== 'object' || typeof sellCfg.weaponRarity !== 'string') {
+      return (sellCfg && sellCfg.whitelist) || '';
+    }
+    if (!cfg.enabled) {
+      return sellCfg.whitelist || '';
+    }
     const rules = cfg.rules || {};
     const enabledNames = ['Halloween Candy', 'Golden Pumpkin'];
     (window.WITCH_HAZEL_ITEMS || []).forEach(it => {
       const r = rules[String(it.itemId)];
       if (r && r.enabled) enabledNames.push(it.name);
     });
-    const sellCfg = window.__sellConfig || (window.__sellConfig = {});
     const list = String(sellCfg.whitelist || '').split(',').map(s => s.trim()).filter(Boolean);
     let changed = false;
     enabledNames.forEach(name => {
@@ -2930,7 +2936,7 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           const clientHasRules = Object.keys(clientRules).some(k => clientRules[k] && clientRules[k].enabled);
           if (!hasGlobalRules && clientHasRules && Object.keys(store.rules || {}).length === 0) {
             store = saveGlobalHalloweenStore({ enabled: st.enabled !== false, rules: clientRules });
-          } else if (hasGlobalRules && !clientHasRules) {
+          } else if (store.enabled && hasGlobalRules && !clientHasRules) {
             const syncRes = await evalProfilePort(p.debugPort, buildHalloweenSaveCode(store), 2800);
             if (syncRes && syncRes.result && syncRes.result.success) st = syncRes.result;
           }

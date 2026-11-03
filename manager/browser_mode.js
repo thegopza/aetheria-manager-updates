@@ -119,6 +119,43 @@ function mergeAuthConfigString(existingRaw, incomingRaw) {
   }
 }
 
+function isStubSellWhitelist(wl) {
+  const s = String(wl || '').trim();
+  return !s || s === 'Halloween Candy, Golden Pumpkin' || s === 'Phracon, Rough Elunium, Enchant Rune, Composite Bow, Crossbow, Gakkung, Hunter Bow';
+}
+
+function mergeSellConfigString(existingRaw, incomingRaw) {
+  if (!existingRaw) return incomingRaw;
+  if (!incomingRaw) return existingRaw;
+  try {
+    const a = JSON.parse(existingRaw);
+    const b = JSON.parse(incomingRaw);
+    if (!a || typeof a !== 'object') return incomingRaw;
+    if (!b || typeof b !== 'object') return existingRaw;
+    const aComplete = typeof a.weaponRarity === 'string' && typeof a.armorRarity === 'string' && Object.keys(a).length >= 8;
+    const bComplete = typeof b.weaponRarity === 'string' && typeof b.armorRarity === 'string' && Object.keys(b).length >= 8;
+    if (aComplete && !bComplete) {
+      const out = { ...a, ...b };
+      if (a.whitelist && String(a.whitelist).length > 50 && isStubSellWhitelist(b.whitelist)) {
+        out.whitelist = a.whitelist;
+      }
+      if (a.forceSellList && String(a.forceSellList).trim() && !(b.forceSellList && String(b.forceSellList).trim())) {
+        out.forceSellList = a.forceSellList;
+      }
+      if (a.statsFilter && typeof a.statsFilter === 'object' && (!b.statsFilter || typeof b.statsFilter !== 'object')) {
+        out.statsFilter = a.statsFilter;
+      }
+      return JSON.stringify(out);
+    }
+    if (aComplete && bComplete && !b.__userSavedAt && isStubSellWhitelist(b.whitelist) && a.whitelist && String(a.whitelist).length > 80 && b.weaponRarity === 'normal' && b.armorRarity === 'normal' && !b.forceSellList) {
+      return existingRaw;
+    }
+    return incomingRaw;
+  } catch (_) {
+    return incomingRaw;
+  }
+}
+
 function readVarint(buf, offset, limit) {
   let res = 0, shift = 0, pos = offset;
   const end = limit !== undefined ? limit : buf.length;
@@ -237,6 +274,7 @@ function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) 
   const recordEntry = (kStr, vStr) => {
     if (!kStr || typeof vStr !== 'string' || !kStr.startsWith('pelican_')) return;
     const isAuth = kStr.endsWith('__auth_cfg') || kStr === 'pelican_auth_cfg';
+    const isSell = kStr.endsWith('__sell_cfg') || kStr === 'pelican_sell_cfg';
     const m = kStr.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
     if (m && m[1]) {
       const pid = m[1];
@@ -244,6 +282,8 @@ function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) 
       if (isAuth) recordAuthHistory(pid, vStr);
       if (isAuth && byProfile[pid][kStr]) {
         byProfile[pid][kStr] = mergeAuthConfigString(byProfile[pid][kStr], vStr);
+      } else if (isSell && byProfile[pid][kStr]) {
+        byProfile[pid][kStr] = mergeSellConfigString(byProfile[pid][kStr], vStr);
       } else {
         byProfile[pid][kStr] = vStr;
       }
@@ -252,6 +292,8 @@ function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) 
       if (isAuth) recordAuthHistory(fallbackProfileId || null, vStr);
       if (isAuth && unprefixed[kStr]) {
         unprefixed[kStr] = mergeAuthConfigString(unprefixed[kStr], vStr);
+      } else if (isSell && unprefixed[kStr]) {
+        unprefixed[kStr] = mergeSellConfigString(unprefixed[kStr], vStr);
       } else {
         unprefixed[kStr] = vStr;
       }
@@ -259,6 +301,8 @@ function extractPelicanStorageFromLevelDb(levelDbDir, fallbackProfileId = null) 
         if (!byProfile[fallbackProfileId]) byProfile[fallbackProfileId] = {};
         if (isAuth && byProfile[fallbackProfileId][kStr]) {
           byProfile[fallbackProfileId][kStr] = mergeAuthConfigString(byProfile[fallbackProfileId][kStr], vStr);
+        } else if (isSell && byProfile[fallbackProfileId][kStr]) {
+          byProfile[fallbackProfileId][kStr] = mergeSellConfigString(byProfile[fallbackProfileId][kStr], vStr);
         } else {
           byProfile[fallbackProfileId][kStr] = vStr;
         }
@@ -470,6 +514,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         }
         if (targetKey.endsWith('__auth_cfg') && merged[targetKey]) {
           merged[targetKey] = mergeAuthConfigString(merged[targetKey], v);
+        } else if ((targetKey.endsWith('__sell_cfg') || targetKey === 'pelican_sell_cfg') && merged[targetKey]) {
+          merged[targetKey] = mergeSellConfigString(merged[targetKey], v);
         } else {
           merged[targetKey] = v;
         }
@@ -1041,16 +1087,24 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (profileId && machineId) {
       saved[`pelican_${profileId}__aetheria_machine`] = machineId;
     }
-    const hasSaved = Object.keys(saved).length > 0;
+    const orderedSaved = {};
+    const isPriorityStorageKey = k => k.endsWith('_cfg') || k.endsWith('_config') || k.endsWith('__script_plan') || k.endsWith('__plan_script_enabled') || k.endsWith('__auto_loop') || k.endsWith('__farm_map') || k.endsWith('__target_map') || k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine') || k.startsWith('__ss:');
+    for (const [k, v] of Object.entries(saved)) {
+      if (isPriorityStorageKey(k)) orderedSaved[k] = v;
+    }
+    for (const [k, v] of Object.entries(saved)) {
+      if (!Object.prototype.hasOwnProperty.call(orderedSaved, k)) orderedSaved[k] = v;
+    }
+    const hasSaved = Object.keys(orderedSaved).length > 0;
     const restoreJs = hasSaved
-      ? `try { const __s = ${JSON.stringify(saved)}; const __rawGet = (window.__pmRawStorage && window.__pmRawStorage.get) || Storage.prototype.getItem; const __rawSet = (window.__pmRawStorage && window.__pmRawStorage.set) || Storage.prototype.setItem; const __rawDel = (window.__pmRawStorage && window.__pmRawStorage.del) || Storage.prototype.removeItem; if (window.localStorage && window.__pmProfileId && __rawGet.call(window.localStorage, 'pelican_auth_cfg') !== null) { const __rm = []; for (let i = 0; i < window.localStorage.length; i++) { const lk = window.localStorage.key(i); if (lk && lk.startsWith('pelican_') && lk.indexOf('__') === -1 && lk !== 'pelican_icon_manifest' && lk !== 'pelican_item_catalog') __rm.push(lk); } for (const lk of __rm) { try { __rawDel.call(window.localStorage, lk); } catch (_) {} } } for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string' || k === 'aetheria.device' || k === 'aetheria.machine') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && __rawGet.call(window.sessionStorage, sk) === null) __rawSet.call(window.sessionStorage, sk, v); } else if (window.localStorage && (k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine') || __rawGet.call(window.localStorage, k) === null)) { __rawSet.call(window.localStorage, k, v); } } window.__pmStorageRestored = true; if (typeof window.reloadBotConfigsFromLocalStorage === 'function') { try { window.reloadBotConfigsFromLocalStorage(); } catch (_) {} } } catch (_) { window.__pmStorageRestored = true; }`
+      ? `try { const __s = ${JSON.stringify(orderedSaved)}; const __rawGet = (window.__pmRawStorage && window.__pmRawStorage.get) || Storage.prototype.getItem; const __rawSet = (window.__pmRawStorage && window.__pmRawStorage.set) || Storage.prototype.setItem; const __rawDel = (window.__pmRawStorage && window.__pmRawStorage.del) || Storage.prototype.removeItem; if (window.localStorage && window.__pmProfileId && __rawGet.call(window.localStorage, 'pelican_auth_cfg') !== null) { const __rm = []; for (let i = 0; i < window.localStorage.length; i++) { const lk = window.localStorage.key(i); if (lk && lk.startsWith('pelican_') && lk.indexOf('__') === -1 && lk !== 'pelican_icon_manifest' && lk !== 'pelican_item_catalog') __rm.push(lk); } for (const lk of __rm) { try { __rawDel.call(window.localStorage, lk); } catch (_) {} } } for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string' || k === 'aetheria.device' || k === 'aetheria.machine') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && __rawGet.call(window.sessionStorage, sk) === null) { try { __rawSet.call(window.sessionStorage, sk, v); } catch (_) {} } } else if (window.localStorage) { const curV = __rawGet.call(window.localStorage, k); const isClobberedSell = (k.endsWith('__sell_cfg') || k === 'pelican_sell_cfg') && curV !== null && curV.indexOf('"weaponRarity"') === -1 && v.indexOf('"weaponRarity"') !== -1; if (k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine') || curV === null || isClobberedSell) { try { __rawSet.call(window.localStorage, k, v); } catch (_) { if (typeof __freeStorageQuota === 'function') __freeStorageQuota(window.localStorage, __rawDel); try { __rawSet.call(window.localStorage, k, v); } catch (__) {} } } } } window.__pmStorageRestored = true; if (typeof window.reloadBotConfigsFromLocalStorage === 'function') { try { window.reloadBotConfigsFromLocalStorage(); } catch (_) {} } } catch (_) { window.__pmStorageRestored = true; }`
       : `window.__pmStorageRestored = true;`;
     // IMPORTANT: Do NOT use regex literals (/.../) inside this template string, because \/ unescapes to / and // becomes a JS line comment!
     const deviceHookJs = `try {
       const __isTransientStorageKey = function(k) {
         if (!k || typeof k !== 'string') return false;
         if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k === 'pelican_embedded_human_check_cfg' || k.startsWith('webgame.chat.')) return true;
-        return k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.endsWith('__embedded_human_check_cfg');
+        return k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.endsWith('__embedded_human_check_cfg') || (k.indexOf('__gear_bought_') !== -1 && k.endsWith('_pending'));
       };
       const __freeStorageQuota = function(ls, rawDel) {
         try {
@@ -1181,11 +1235,28 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               }
             }
             const mk = __mapKey(this, k);
+            let finalVal = v;
+            if ((mk.endsWith('__sell_cfg') || mk === 'pelican_sell_cfg') && typeof v === 'string' && v.indexOf('"weaponRarity"') === -1) {
+              try {
+                const prevSell = __rawGet.call(this, mk);
+                if (prevSell && prevSell.indexOf('"weaponRarity"') !== -1) {
+                  const pa = JSON.parse(prevSell);
+                  const pb = JSON.parse(v);
+                  if (pa && pb && typeof pa === 'object' && typeof pb === 'object') {
+                    const mergedSell = Object.assign({}, pa, pb);
+                    if (pa.whitelist && String(pa.whitelist).length > 50 && (!pb.whitelist || String(pb.whitelist).trim() === 'Halloween Candy, Golden Pumpkin')) {
+                      mergedSell.whitelist = pa.whitelist;
+                    }
+                    finalVal = JSON.stringify(mergedSell);
+                  }
+                }
+              } catch (_) {}
+            }
             try {
-              return __rawSet.call(this, mk, v);
+              return __rawSet.call(this, mk, finalVal);
             } catch (_) {
               __freeStorageQuota(this, __rawDel);
-              try { return __rawSet.call(this, mk, v); } catch (__) { return; }
+              try { return __rawSet.call(this, mk, finalVal); } catch (__) { return; }
             }
           }
           return __rawSet.call(this, k, v);
@@ -2780,4 +2851,4 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   return { launch, stop, isOpen, start, dispose, findBrowser, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
 }
 
-module.exports = { createBrowserMode, findBrowser, HEALTH_JS, MAX_SCREENS_PER_DEVICE, extractPelicanStorageFromLevelDb, mergeAuthConfigString };
+module.exports = { createBrowserMode, findBrowser, HEALTH_JS, MAX_SCREENS_PER_DEVICE, extractPelicanStorageFromLevelDb, mergeAuthConfigString, mergeSellConfigString };

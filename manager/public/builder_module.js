@@ -315,8 +315,49 @@ function countPlannedFacets(plan) {
   return total;
 }
 
+function normalizePlanSkillBuild(plan) {
+  if (!plan) return;
+  if (!plan.skillBuild || typeof plan.skillBuild !== 'object') {
+    plan.skillBuild = { skillPointQueue: [], plannedLevels: {}, facets: {} };
+    return;
+  }
+  const sb = plan.skillBuild;
+  if (!Array.isArray(sb.skillPointQueue)) sb.skillPointQueue = [];
+  if (!sb.plannedLevels || typeof sb.plannedLevels !== 'object') sb.plannedLevels = {};
+  if (!sb.facets || typeof sb.facets !== 'object') sb.facets = {};
+  if (sb.skillPointQueue.length === 0) {
+    const c1 = plan.class1Target || 'archer';
+    const c2 = plan.class2Target || 'hunter';
+    const classMaps = [sb.novice, sb[c1], sb[c2]].filter(x => x && typeof x === 'object' && !Array.isArray(x));
+    if (classMaps.length > 0) {
+      const rawQ = [];
+      const novObj = (sb.novice && typeof sb.novice === 'object') ? sb.novice : { 'basic-skill': 9 };
+      for (const [sId, cnt] of Object.entries(novObj)) {
+        for (let i = 0; i < (Number(cnt) || 0); i++) rawQ.push(sId);
+      }
+      for (const tier of [c1, c2]) {
+        const obj = sb[tier];
+        if (!obj || typeof obj !== 'object') continue;
+        for (const [sId, cnt] of Object.entries(obj)) {
+          for (let i = 0; i < (Number(cnt) || 0); i++) rawQ.push(sId);
+        }
+      }
+      const prevPlan = activeEditingPlan;
+      activeEditingPlan = plan;
+      const fixed = repairSkillQueue(rawQ, true);
+      activeEditingPlan = prevPlan;
+      sb.skillPointQueue = fixed.queue;
+      sb.plannedLevels = fixed.levels;
+      delete sb.novice;
+      delete sb[c1];
+      delete sb[c2];
+    }
+  }
+}
+
 function updatePlanEditorBadges() {
   if (!activeEditingPlan) return;
+  normalizePlanSkillBuild(activeEditingPlan);
   if (typeof window.updateGearBadge === 'function') window.updateGearBadge();
   const skillBadge = document.getElementById("plan-skill-count-badge");
   const statBadge = document.getElementById("plan-stat-summary-badge");
@@ -345,18 +386,7 @@ function updatePlanEditorBadges() {
 // 3. Open Skill Builder Modal
 function openSkillBuilderModal() {
   if (!activeEditingPlan) return;
-  if (!activeEditingPlan.skillBuild) {
-    activeEditingPlan.skillBuild = { skillPointQueue: [], plannedLevels: {}, facets: {} };
-  }
-  if (!Array.isArray(activeEditingPlan.skillBuild.skillPointQueue)) {
-    activeEditingPlan.skillBuild.skillPointQueue = [];
-  }
-  if (!activeEditingPlan.skillBuild.plannedLevels) {
-    activeEditingPlan.skillBuild.plannedLevels = {};
-  }
-  if (!activeEditingPlan.skillBuild.facets || typeof activeEditingPlan.skillBuild.facets !== 'object') {
-    activeEditingPlan.skillBuild.facets = {};
-  }
+  normalizePlanSkillBuild(activeEditingPlan);
 
   // Update Tab Names
   const c1NameEl = document.getElementById("skill-tab-class1-name");
@@ -826,32 +856,221 @@ function applySkillPreset() {
     activeEditingPlan.skillBuild.facets = {};
   }
 
-  // 1. Novice: 9x basic-skill
-  for (let i = 0; i < 9; i++) {
-    addSkillPoint('basic-skill', true);
-  }
+  const pushMany = (id, count) => {
+    for (let i = 0; i < count; i++) addSkillPoint(id, true);
+  };
 
-  // 2. Class 1 Archer preset
+  // 1. Novice: 9x basic-skill
+  pushMany('basic-skill', 9);
+
+  // 2. Class 1 presets (49 points each)
   if (c1 === 'archer') {
-    for (let i = 0; i < 10; i++) addSkillPoint('owl-eye', true);
-    for (let i = 0; i < 10; i++) addSkillPoint('vulture-eye', true);
-    for (let i = 0; i < 10; i++) addSkillPoint('double-strafe', true);
-    for (let i = 0; i < 10; i++) addSkillPoint('improve-concentration', true);
-    for (let i = 0; i < 9; i++) addSkillPoint('arrow-shower', true);
+    pushMany('double-strafe', 10);
+    pushMany('owl-eye', 10);
+    pushMany('vulture-eye', 10);
+    pushMany('improve-concentration', 10);
+    pushMany('arrow-shower', 9);
     activeEditingPlan.skillBuild.facets['double-strafe'] = [0, 1, 0];
     activeEditingPlan.skillBuild.facets['arrow-shower'] = [0, 1, 0];
+  } else if (c1 === 'swordsman') {
+    pushMany('bash', 5);
+    pushMany('sword-mastery', 10);
+    pushMany('hp-recovery', 5);
+    pushMany('bash', 5);
+    pushMany('provoke', 5);
+    pushMany('endure', 3);
+    if (c2 === 'knight') {
+      pushMany('magnum-break', 3);
+      pushMany('hp-recovery', 5);
+      pushMany('provoke', 5);
+      pushMany('endure', 3);
+    } else {
+      pushMany('hp-recovery', 5);
+      pushMany('provoke', 5);
+      pushMany('endure', 6);
+    }
+    activeEditingPlan.skillBuild.facets['bash'] = [0, 1, 0];
+    activeEditingPlan.skillBuild.facets['provoke'] = [2, 2, 0];
+  } else if (c1 === 'mage') {
+    pushMany('fire-bolt', 5);
+    pushMany('cold-bolt', 5);
+    pushMany('frost-diver', 5);
+    pushMany('lightning-bolt', 5);
+    pushMany('napalm-beat', 5);
+    pushMany('staff-mastery', 10);
+    pushMany('sp-recovery', 10);
+    pushMany('fire-bolt', 4);
+    activeEditingPlan.skillBuild.facets['fire-bolt'] = [0, 0, 0];
+    activeEditingPlan.skillBuild.facets['cold-bolt'] = [0, 0, 0];
+    activeEditingPlan.skillBuild.facets['lightning-bolt'] = [0, 0, 0];
+  } else if (c1 === 'thief') {
+    pushMany('dagger-mastery', 10);
+    pushMany('double-attack', 10);
+    pushMany('improve-dodge', 10);
+    pushMany('steal', 5);
+    pushMany('hiding', 3);
+    pushMany('envenom', 5);
+    pushMany('steal', 5);
+    pushMany('back-slide', 1);
+    activeEditingPlan.skillBuild.facets['envenom'] = [0, 0, 0];
+  } else if (c1 === 'acolyte') {
+    pushMany('heal', 3);
+    pushMany('holy-light', 5);
+    pushMany('divine-protection', 5);
+    pushMany('blessing', 10);
+    pushMany('increase-agi', 10);
+    pushMany('divine-protection', 5);
+    pushMany('heal', 7);
+    pushMany('defense-increase', 4);
+    activeEditingPlan.skillBuild.facets['holy-light'] = [0, 0, 2];
+  } else if (c1 === 'merchant') {
+    pushMany('axe-mastery', 10);
+    pushMany('enlarge-weight', 3);
+    pushMany('discount', 3);
+    pushMany('loud-exclamation', 1);
+    pushMany('hagglers-wit', 10);
+    pushMany('mammonite', 8);
+    pushMany('discount', 7);
+    pushMany('enlarge-weight', 7);
+    activeEditingPlan.skillBuild.facets['mammonite'] = [0, 0, 0];
   }
 
-  // 3. Class 2 Hunter preset
+  // 3. Class 2 presets (49 points each)
   if (c2 === 'hunter') {
-    addSkillPoint('falconry-mastery', true);
-    for (let i = 0; i < 10; i++) addSkillPoint('blitz-beat', true);
-    for (let i = 0; i < 10; i++) addSkillPoint('steel-crow', true);
-    for (let i = 0; i < 5; i++) addSkillPoint('auto-blitz-beat', true);
-    for (let i = 0; i < 10; i++) addSkillPoint('land-mine', true);
-    for (let i = 0; i < 10; i++) addSkillPoint('ankle-snare', true);
-    for (let i = 0; i < 3; i++) addSkillPoint('claymore-trap', true);
-    activeEditingPlan.skillBuild.facets['blitz-beat'] = [0, 2, 1];
+    pushMany('falconry-mastery', 1);
+    pushMany('blitz-beat', 10);
+    pushMany('steel-crow', 10);
+    pushMany('auto-blitz-beat', 5);
+    pushMany('detecting', 1);
+    pushMany('land-mine', 10);
+    pushMany('ankle-snare', 10);
+    pushMany('claymore-trap', 2);
+    activeEditingPlan.skillBuild.facets['blitz-beat'] = [0, 1, 0];
+    activeEditingPlan.skillBuild.facets['detecting'] = [2, 0, 0];
+  } else if (c2 === 'bard') {
+    pushMany('musical-strike', 10);
+    pushMany('poem-of-bragi', 3);
+    pushMany('apple-of-idun', 10);
+    pushMany('poem-of-bragi', 7);
+    pushMany('assassin-cross-of-sunset', 10);
+    pushMany('frost-joke', 9);
+    activeEditingPlan.skillBuild.facets['musical-strike'] = [0, 2, 1];
+    activeEditingPlan.skillBuild.facets['frost-joke'] = [0, 1, 0];
+  } else if (c2 === 'dancer') {
+    pushMany('throw-arrow', 10);
+    pushMany('service-for-you', 3);
+    pushMany('fortune-kiss', 10);
+    pushMany('service-for-you', 7);
+    pushMany('humming', 10);
+    pushMany('scream', 9);
+    activeEditingPlan.skillBuild.facets['throw-arrow'] = [0, 2, 1];
+    activeEditingPlan.skillBuild.facets['scream'] = [0, 2, 0];
+  } else if (c2 === 'knight') {
+    pushMany('two-hand-sword-mastery', 10);
+    pushMany('two-hand-quicken', 10);
+    pushMany('bowling-bash', 10);
+    pushMany('parry', 10);
+    pushMany('peco-peco-ride', 1);
+    pushMany('peco-peco-master', 5);
+    pushMany('charge-attack', 1);
+    pushMany('pierce', 2);
+    activeEditingPlan.skillBuild.facets['bowling-bash'] = [0, 1, 0];
+    activeEditingPlan.skillBuild.facets['charge-attack'] = [0, 1, 0];
+  } else if (c2 === 'crusader') {
+    pushMany('faith', 5);
+    pushMany('auto-guard', 5);
+    pushMany('defender', 5);
+    pushMany('guardians-oath', 5);
+    pushMany('shield-charge', 3);
+    pushMany('shield-boomerang', 6);
+    pushMany('faith', 5);
+    pushMany('auto-guard', 5);
+    pushMany('defender', 5);
+    pushMany('guardians-oath', 5);
+    activeEditingPlan.skillBuild.facets['guardians-oath'] = [1, 1, 0];
+    activeEditingPlan.skillBuild.facets['shield-boomerang'] = [0, 0, 0];
+  } else if (c2 === 'wizard') {
+    pushMany('jupitel-thunder', 5);
+    pushMany('storm-gust', 10);
+    pushMany('heavens-drive', 3);
+    pushMany('meteor-storm', 10);
+    pushMany('arcane-amplify', 10);
+    pushMany('quagmire', 5);
+    pushMany('safety-wall', 6);
+    activeEditingPlan.skillBuild.facets['storm-gust'] = [0, 2, 1];
+    activeEditingPlan.skillBuild.facets['meteor-storm'] = [0, 1, 2];
+  } else if (c2 === 'sage') {
+    pushMany('advanced-book', 10);
+    pushMany('auto-spell', 10);
+    pushMany('twin-bolt', 5);
+    pushMany('dragonology', 5);
+    pushMany('earth-spike', 10);
+    pushMany('endow-blaze', 2);
+    pushMany('flame-field', 5);
+    pushMany('create-converter', 1);
+    pushMany('land-protector', 1);
+    activeEditingPlan.skillBuild.facets['earth-spike'] = [0, 0, 0];
+  } else if (c2 === 'assassin') {
+    pushMany('katar-mastery', 10);
+    pushMany('sonic-blow', 10);
+    pushMany('sonic-acceleration', 5);
+    pushMany('cloaking', 5);
+    pushMany('grimtooth', 10);
+    pushMany('enchant-poison', 9);
+    activeEditingPlan.skillBuild.facets['sonic-blow'] = [0, 1, 0];
+    activeEditingPlan.skillBuild.facets['grimtooth'] = [0, 2, 0];
+  } else if (c2 === 'rogue') {
+    pushMany('back-stab', 10);
+    pushMany('raid', 10);
+    pushMany('snatcher', 10);
+    pushMany('strip-armor', 9);
+    pushMany('plagiarism', 10);
+    activeEditingPlan.skillBuild.facets['back-stab'] = [0, 0, 0];
+    activeEditingPlan.skillBuild.facets['raid'] = [0, 2, 0];
+    activeEditingPlan.skillBuild.facets['strip-armor'] = [2, 1, 1];
+  } else if (c2 === 'priest') {
+    pushMany('magnus-exorcismus', 10);
+    pushMany('impositio-manus', 10);
+    pushMany('kyrie-eleison', 10);
+    pushMany('gloria', 5);
+    pushMany('pneuma', 1);
+    pushMany('purifying-light', 1);
+    pushMany('resurrection', 1);
+    pushMany('sanctuary', 7);
+    pushMany('aspersio', 4);
+    activeEditingPlan.skillBuild.facets['magnus-exorcismus'] = [0, 0, 0];
+    activeEditingPlan.skillBuild.facets['pneuma'] = [2, 1, 0];
+    activeEditingPlan.skillBuild.facets['resurrection'] = [0, 0, 0];
+    activeEditingPlan.skillBuild.facets['purifying-light'] = [0, 0, 0];
+  } else if (c2 === 'monk') {
+    pushMany('iron-fists', 10);
+    pushMany('triple-attack', 10);
+    pushMany('call-spirits', 5);
+    pushMany('investigate', 10);
+    pushMany('finger-offensive', 3);
+    pushMany('asura-strike', 10);
+    pushMany('fury', 1);
+    activeEditingPlan.skillBuild.facets['investigate'] = [0, 1, 0];
+    activeEditingPlan.skillBuild.facets['asura-strike'] = [0, 0, 0];
+  } else if (c2 === 'blacksmith') {
+    pushMany('hammer-fall', 9);
+    pushMany('adrenaline-rush', 4);
+    pushMany('over-thrust', 10);
+    pushMany('weaponry-research', 2);
+    pushMany('weapon-perfection', 10);
+    pushMany('adrenaline-rush', 6);
+    pushMany('weaponry-research', 8);
+    activeEditingPlan.skillBuild.facets['hammer-fall'] = [0, 1, 0];
+  } else if (c2 === 'alchemist') {
+    pushMany('alchemy-mastery', 10);
+    pushMany('acid-terror', 10);
+    pushMany('flask-frenzy', 10);
+    pushMany('demonstration', 10);
+    pushMany('potion-pitcher', 3);
+    pushMany('berserk-elixir', 5);
+    pushMany('chemical-protection', 1);
+    activeEditingPlan.skillBuild.facets['acid-terror'] = [0, 2, 0];
+    activeEditingPlan.skillBuild.facets['demonstration'] = [0, 0, 0];
   }
 
   renderSkillBuilderUI();
@@ -908,8 +1127,9 @@ function normalizeStatQueue(q) {
 function statQueueOf(sb) {
   if (!sb) return [];
   if (Array.isArray(sb.queue) && sb.queue.length) return normalizeStatQueue(sb.queue);
-  const t = sb.targets || {};
-  const pr = Array.isArray(sb.priorityOrder) && sb.priorityOrder.length ? sb.priorityOrder : ['DEX', 'AGI', 'LUK', 'VIT', 'INT', 'STR'];
+  const t = sb.targets || sb.caps || {};
+  const rawPr = Array.isArray(sb.priorityOrder) && sb.priorityOrder.length ? sb.priorityOrder : (Array.isArray(sb.priority) ? sb.priority : []);
+  const pr = rawPr.length ? rawPr : ['DEX', 'AGI', 'LUK', 'VIT', 'INT', 'STR'];
   return normalizeStatQueue(pr.map(k => ({ stat: k, to: t[String(k).toUpperCase()] })));
 }
 function statFinal(q) {

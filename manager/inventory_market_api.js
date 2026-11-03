@@ -1344,6 +1344,28 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       } catch (_) {}
     }
 
+    window.__pmIsAllowedAutoRelistItem = function (normName) {
+      if (!normName) return false;
+      const n = String(normName).trim().toLowerCase();
+      if (!n) return false;
+      const inRules = Boolean(
+        window.__autoMarketSellConfig &&
+        Array.isArray(window.__autoMarketSellConfig.rules) &&
+        window.__autoMarketSellConfig.rules.some(r => {
+          if (!r || r.enabled === false) return false;
+          const rid = String(r.id || '');
+          const rNorm = String(r.itemName || r.name || '').trim().toLowerCase();
+          if (rNorm !== n) return false;
+          if (rid.startsWith('rule_sniper_') || rid.startsWith('rule_relist_')) {
+            return Boolean(window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[n]);
+          }
+          return true;
+        })
+      );
+      if (inRules) return true;
+      return Boolean(window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[n]);
+    };
+
     window.__pmSyncKnownMarketItems = function (mine) {
       if (!mine || typeof mine !== 'object') return;
       if (!window.__pmKnownMyMarketItems || typeof window.__pmKnownMyMarketItems !== 'object') {
@@ -1352,6 +1374,13 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
       let changed = false;
       const nowTs = Date.now();
+      for (const k of Object.keys(window.__pmKnownMyMarketItems)) {
+        if (!window.__pmIsAllowedAutoRelistItem(k)) {
+          delete window.__pmKnownMyMarketItems[k];
+          window.__pmSniperProtectedItems.delete(k);
+          changed = true;
+        }
+      }
       const allLists = []
         .concat(Array.isArray(mine.active) ? mine.active : [])
         .concat(Array.isArray(mine.closed) ? mine.closed.filter(c => c && (c.status === 'cancelled' || c.reason === 'cancelled')) : []);
@@ -1363,6 +1392,7 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         const itemName = String((itemObj && itemObj.name) || entry.name || '').trim();
         if (!itemName) continue;
         const normName = itemName.toLowerCase();
+        if (!window.__pmIsAllowedAutoRelistItem(normName)) continue;
         if (window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(normName)) continue;
         const qty = Math.max(1, Number(entry.qty ?? (itemObj && itemObj.qty)) || 1);
         let unitPrice = Math.max(1, Math.round(totalPrice / qty));
@@ -1455,6 +1485,9 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         const itemName = String((itemObj && itemObj.name) || t.name || '').trim();
         if (!itemName) continue;
         const normName = itemName.toLowerCase();
+        if (typeof window.__pmIsAllowedAutoRelistItem === 'function' && !window.__pmIsAllowedAutoRelistItem(normName)) {
+          continue;
+        }
         const itemId = Number((itemObj && (itemObj.itemId ?? itemObj.id)) ?? t.itemId) || 0;
         const refine = Number((itemObj && itemObj.refine) ?? t.refine) || 0;
         const qty = Math.max(1, Number(t.qty ?? (itemObj && itemObj.qty)) || 1);
@@ -1505,7 +1538,7 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       if (!window.__pmAutoRelistCooldownUntil) window.__pmAutoRelistCooldownUntil = {};
       if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
 
-      // Step A: Recover recently cancelled listings (> 50,000 z) from market_mine.closed if not yet seen
+      // Step A: Recover recently cancelled listings (> 50,000 z) from market_mine.closed ONLY for configured Auto-Sell or Sniper items
       if (window.__lastMarketMine && typeof window.__pmSyncKnownMarketItems === 'function') {
         try { window.__pmSyncKnownMarketItems(window.__lastMarketMine); } catch (_) {}
       }
@@ -1526,64 +1559,21 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         window.__pmQueueCancelledForRelist(newlyDiscoveredClosed);
       }
 
-      // Step B: Recover unlocked Sniper flip items, previously listed market items & high-value Craft materials sitting in bag
-      const cfg = window.__pmMarketGlobalSettings;
-      const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
-      if (cfg && cfg.autoCancelEnabled) {
-        const bagNow = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-        const flippedMap = (window.__pmSniperFlippedItems && typeof window.__pmSniperFlippedItems === 'object')
-          ? window.__pmSniperFlippedItems
-          : {};
-        const knownMap = (window.__pmKnownMyMarketItems && typeof window.__pmKnownMyMarketItems === 'object')
-          ? window.__pmKnownMyMarketItems
-          : {};
-        for (const b of bagNow) {
-          if (!b || b.locked || b.equipped) continue;
-          const bName = String(b.name || '').trim();
-          if (!bName) continue;
-          const bNorm = bName.toLowerCase();
-          const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
-          const bQty = Math.max(1, Number(b.qty) || 1);
-          if (window.__pmAutoRelistCooldownUntil[bNorm] > Date.now()) continue;
-          if (window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(bNorm)) continue;
-          if (window.__pmSniperKnownCheapItems && window.__pmSniperKnownCheapItems.has(bNorm)) continue;
-          if (typeof window.isStashOnlyItem === 'function' && window.isStashOnlyItem(bName)) continue;
-          if (typeof window.shouldKeepGearByStatRule === 'function' && window.shouldKeepGearByStatRule(b)) continue;
-
-          const alreadyQueued = window.__pmAutoRelistAfterCancel.some(
-            x => x && x.normName === bNorm && Number(x.refine || 0) === bRef
-          );
-          if (alreadyQueued) continue;
-
-          const hasActiveRule = Boolean(
-            window.__autoMarketSellConfig &&
-            window.__autoMarketSellConfig.enabled &&
-            Array.isArray(window.__autoMarketSellConfig.rules) &&
-            window.__autoMarketSellConfig.rules.some(r => r && r.enabled !== false && String(r.itemName || r.name || '').trim().toLowerCase() === bNorm && bQty >= Math.max(1, Number(r.minQty) || 1))
-          );
-          if (hasActiveRule) continue;
-
-          const sniperEntry = flippedMap[bNorm];
-          const sniperRefUnit = typeof sniperEntry === 'object' && sniperEntry ? (Number(sniperEntry.unitPrice || sniperEntry.price) || 0) : (Number(sniperEntry) || 0);
-          const knownEntry = knownMap[bNorm];
-          const knownRefUnit = knownEntry && typeof knownEntry === 'object' ? (Number(knownEntry.unitPrice) || 0) : 0;
-          const isCraftStack = (b.type === 'Craft' || (b.raw && b.raw.type === 'Craft')) && bQty >= 20 && curZeny >= 100000;
-          if (sniperRefUnit > 0 || knownRefUnit > 0 || isCraftStack) {
-            window.__pmSniperProtectedItems.add(bNorm);
-            window.__pmAutoRelistAfterCancel.push({
-              listingId: 0,
-              itemId: Number((b.raw && b.raw.itemId) ?? b.id) || 0,
-              itemName: bName,
-              normName: bNorm,
-              refine: bRef,
-              qty: bQty,
-              prevUnitPrice: sniperRefUnit || knownRefUnit,
-              queuedAt: Date.now()
-            });
-          }
+      // Purge any unconfigured items from the relist queue so monster drops not in Auto-Sell are never listed
+      if (typeof window.__pmIsAllowedAutoRelistItem === 'function') {
+        const beforeLen = window.__pmAutoRelistAfterCancel.length;
+        window.__pmAutoRelistAfterCancel = window.__pmAutoRelistAfterCancel.filter(entry => {
+          if (!entry || !entry.normName) return false;
+          const ok = window.__pmIsAllowedAutoRelistItem(entry.normName);
+          if (!ok && window.__pmSniperProtectedItems) window.__pmSniperProtectedItems.delete(entry.normName);
+          return ok;
+        });
+        if (window.__pmAutoRelistAfterCancel.length !== beforeLen && typeof window.__pmSaveAutoRelistState === 'function') {
+          window.__pmSaveAutoRelistState();
         }
       }
 
+      const cfg = window.__pmMarketGlobalSettings;
       if (!window.__pmAutoRelistAfterCancel.length) return { relistedCount: 0 };
 
       window.__pmRelistingCancelledNow = true;
@@ -1614,6 +1604,10 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         const remainingQueue = [];
         for (const entry of window.__pmAutoRelistAfterCancel) {
           if (!entry || !entry.normName) continue;
+          if (typeof window.__pmIsAllowedAutoRelistItem === 'function' && !window.__pmIsAllowedAutoRelistItem(entry.normName)) {
+            if (window.__pmSniperProtectedItems) window.__pmSniperProtectedItems.delete(entry.normName);
+            continue;
+          }
           const nowTs = Date.now();
           if (nowTs - (Number(entry.queuedAt) || nowTs) > 6 * 3600 * 1000) continue;
           if ((window.__pmAutoRelistCooldownUntil[entry.normName] || 0) > nowTs) {
@@ -1677,27 +1671,8 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
             continue;
           }
 
-          const isSingle = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(String(sampleItem.name || entry.itemName || '')) ||
+          const isSingle = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(String(sampleItem.name || entry.itemName || '')) ||
             sampleItem.type === 'Equipment' || (sampleItem.raw && sampleItem.raw.type === 'Equipment');
-
-          if (isSingle && /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(String(sampleItem.name || '')) &&
-              window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
-            const hasRule = window.__autoMarketSellConfig.rules.some(
-              r => r && String(r.itemName || r.name || '').trim().toLowerCase() === entry.normName
-            );
-            if (!hasRule) {
-              window.__autoMarketSellConfig.rules.unshift({
-                id: 'rule_relist_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-                itemName: String(sampleItem.name || entry.itemName),
-                minQty: 1,
-                sellMode: 'min',
-                enabled: true
-              });
-              if (typeof window.saveMarketSellConfig === 'function') {
-                try { window.saveMarketSellConfig(); } catch (_) {}
-              }
-            }
-          }
 
           const activeSameCount = activeList.filter(
             a => a && String((a.item && a.item.name) || '').trim().toLowerCase() === entry.normName
@@ -1851,9 +1826,9 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       return { relistedCount };
     };
 
-    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 6) {
+    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 7) {
       if (window.__pmMarketGlobalTimer) { try { clearInterval(window.__pmMarketGlobalTimer); } catch (_) {} }
-      window.__pmMarketGlobalTimerVer = 6;
+      window.__pmMarketGlobalTimerVer = 7;
       setTimeout(() => {
         try {
           const rmInit = ${ROOM_JS};

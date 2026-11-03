@@ -191,14 +191,14 @@ function inferItemCategory(item) {
 function isSingleUnitFlipItem(itemOrName) {
   if (!itemOrName) return false;
   if (typeof itemOrName === 'string') {
-    return /\b(card|stone)\b|การ์ด|ศิลา/i.test(itemOrName);
+    return /\bcard\b|\bstone\s*\(|การ์ด|ศิลา/i.test(itemOrName);
   }
   const cat = inferItemCategory(itemOrName);
   if (cat === 'card' || cat === 'stone' || cat === 'weapon' || cat === 'armor' || cat === 'accessory') return true;
-  return /\b(card|stone)\b|การ์ด|ศิลา/i.test(String(itemOrName.name || itemOrName.itemName || ''));
+  return /\bcard\b|\bstone\s*\(|การ์ด|ศิลา/i.test(String(itemOrName.name || itemOrName.itemName || ''));
 }
 
-const PRICE_CACHE_VER = 5;
+const PRICE_CACHE_VER = 6;
 
 // Find the Most-Stable Price Cluster from the last 10–20 individual trades (`recent` array).
 // Groups trades whose unit prices fall within ±15% (fallback ±22%) of each other, picks the cluster
@@ -304,6 +304,8 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
       }
     }
 
+    const maxAgeMs = is24h ? (24 * 3600 * 1000) : (7 * 86400 * 1000);
+    const max7dMs = 7 * 86400 * 1000;
     let countFromRecent = 0;
     for (const r of recent) {
       if (!r) continue;
@@ -311,12 +313,16 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
       const price = Number(r.price) || 0;
       const u = Math.round(price / qty);
       const at = Number(r.at) || 0;
+      const withinRange = at > 0 ? ((now - at) >= -300000 && (now - at) <= maxAgeMs) : (countFromPoints > 0);
+      const within7d = at > 0 ? ((now - at) >= -300000 && (now - at) <= max7dMs) : (countFromPoints > 0);
       if (u > 0) {
-        countFromRecent += 1;
-        const rKey = `${at}:${price}:${qty}`;
-        if (!seenRecentKeys.has(rKey)) {
-          seenRecentKeys.add(rKey);
-          recentTrades.push({ u, at, qty, price });
+        if (withinRange) countFromRecent += 1;
+        if (within7d) {
+          const rKey = `${at}:${price}:${qty}`;
+          if (!seenRecentKeys.has(rKey)) {
+            seenRecentKeys.add(rKey);
+            recentTrades.push({ u, at, qty, price });
+          }
         }
       }
     }
@@ -330,7 +336,7 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   collectFromHistory(history7d, false);
 
   const totalSales = Math.max(sales7d, sales24h);
-  // Sort newest trades first so slice(0, 20) is strictly the 10–20 most recent trades
+  // Sort newest trades first so slice(0, 20) is strictly the 10–20 most recent trades within the last 7 days
   recentTrades.sort((a, b) => (b.at || 0) - (a.at || 0));
   const latest20UnitPrices = recentTrades.slice(0, 20).map(t => t.u);
 
@@ -342,6 +348,10 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
 
   if (primaryPool.length === 0 || totalSales === 0) {
     return { valid: false, reason: 'no_history', totalSales: 0, sales24h: 0, sales7d: 0 };
+  }
+  // Reject dead/illiquid RMT transfer items that have 0 real sales in the last 24h ("ยังไม่มีการซื้อขายในช่วงนี้")
+  if (sales24h < 1) {
+    return { valid: false, reason: 'no_recent_24h_sales', totalSales, sales24h, sales7d };
   }
 
   const cluster20 = findMostStableClusterAvg(primaryPool);
@@ -388,6 +398,10 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
 
   // Cap cleanRefUnitPrice by the 2nd/3rd cheapest active listing from other sellers so we never overvalue
   // an item that already has multiple sellers offering it at a lower price right now.
+  if (allActiveUnitPrices.length >= 1 && allActiveUnitPrices[0] < cleanRefUnitPrice * 0.25 && allActiveUnitPrices.filter(p => p >= cleanRefUnitPrice * 0.50).length === 0) {
+    // Active market price is < 25% of historical price with zero listings near the historical price -> RMT transfer history!
+    return { valid: false, reason: 'rmt_history_mismatch', totalSales, sales24h, sales7d };
+  }
   if (allActiveUnitPrices.length >= 3) {
     const thirdCheapest = allActiveUnitPrices[2];
     if (thirdCheapest > 0 && thirdCheapest < cleanRefUnitPrice) {
@@ -686,7 +700,7 @@ function createMarketSniperService({
           let evictedInfo = null;
           let listedUnitsCount = 0;
           const normName = String(targetInfo.itemName || '').trim().toLowerCase();
-          const isSingle = Boolean(targetInfo.singleUnit || /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(normName));
+          const isSingle = Boolean(targetInfo.singleUnit || /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(normName));
           if (normName && window.__pmSniperProtectedItems) window.__pmSniperProtectedItems.add(normName);
 
           const findMatchingInBag = () => {
@@ -858,13 +872,21 @@ function createMarketSniperService({
         const sniperAutoFlip = Boolean(config.enabled && config.mode === 'auto_flip');
         const reserveSlots = sniperAutoFlip ? 2 : 0;
 
-        // Build map of verified clean reference prices (ONLY from cacheVer === PRICE_CACHE_VER and verified baseline, never from old inflated history)
+        // Build map ONLY of items actually bought/relisted by Sniper (never all scanned items in state.priceCache!)
         const sniperFlippedMap = Object.assign({}, VERIFIED_STABLE_REF_BY_NAME);
-        if (state.priceCache && typeof state.priceCache === 'object') {
-          for (const entry of Object.values(state.priceCache)) {
-            if (!entry || entry.cacheVer !== PRICE_CACHE_VER || !entry.valid) continue;
-            const nm = String(entry.name || '').trim().toLowerCase();
-            const refP = Number(entry.flipUnitPrice || entry.cleanRefUnitPrice) || 0;
+        for (const h of (state.history || [])) {
+          if (!h || !h.itemName) continue;
+          if (h.action === 'relisted' || h.action === 'buy' || h.action === 'won') {
+            const nm = String(h.itemName).trim().toLowerCase();
+            const refP = getTrueRefUnitPrice(h.itemId, h.refine || 0, h.itemName, h.cleanRefUnitPrice);
+            if (nm && refP > 0) sniperFlippedMap[nm] = refP;
+          }
+        }
+        for (const b of (state.activeBids || [])) {
+          if (!b || !b.itemName) continue;
+          if (b.status === 'relisted' || b.status === 'queued_flip' || b.status === 'won' || b.status === 'bought') {
+            const nm = String(b.itemName).trim().toLowerCase();
+            const refP = getTrueRefUnitPrice(b.itemId, b.refine || 0, b.itemName, b.cleanRefUnitPrice);
             if (nm && refP > 0) sniperFlippedMap[nm] = refP;
           }
         }
@@ -914,7 +936,7 @@ function createMarketSniperService({
                     window.__myMarketActiveNameCounts = nameCounts;
                     window.__myMarketActiveIdCounts = idCounts;
                     window.__myMarketStackedCards = nonAuction
-                      .filter(a => a && Number(a.qty) > 1 && /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(String((a.item && a.item.name) || '')))
+                      .filter(a => a && Number(a.qty) > 1 && /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(String((a.item && a.item.name) || '')))
                       .map(a => ({
                         listingId: Number(a.listingId),
                         itemId: Number(a.item && (a.item.itemId ?? a.item.id)) || 0,
@@ -936,7 +958,7 @@ function createMarketSniperService({
                     const slotItem = bag.find(b => b && Number(b.slot) === Number(data.slot));
                     const itemName = String((slotItem && slotItem.name) || '').trim();
                     const norm = itemName.toLowerCase();
-                    const isCardOrStone = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(itemName);
+                    const isCardOrStone = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(itemName);
                     if (isCardOrStone && Number(data.qty) > 1) {
                       const unitP = Math.max(1, Math.round((Number(data.price) || 0) / Math.max(1, Number(data.qty) || 1)));
                       data.qty = 1;
@@ -984,7 +1006,7 @@ function createMarketSniperService({
             }
           }
           const runtimeInstalled = Boolean(
-            window.__pmMarketGlobalTimerVer === 5 &&
+            window.__pmMarketGlobalTimerVer === 7 &&
             typeof window.__pmSniperClaimAndFlip === 'function' &&
             window.__pmSniperMineHookedRoomV3 === room &&
             window.__pmSniperSendGuardRoom === room
@@ -1004,31 +1026,24 @@ function createMarketSniperService({
             window.__pmLastSniperRuleSyncAt = Date.now();
             if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
             let changedCardRule = false;
-            const existingRuleNames = new Set(window.__autoMarketSellConfig.rules.map(r => String((r && (r.itemName || r.name)) || '').trim().toLowerCase()).filter(Boolean));
-            const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-            for (const b of bag) {
-              if (!b || b.locked) continue;
-              const bName = String(b.name || '').trim();
-              const bNorm = bName.toLowerCase();
-              const isCardOrStoneItem = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(bName) || b.type === 'Card' || b.type === 'AwakeningStone' || b.type === 'WeaponStone';
-              if (bName && isCardOrStoneItem && !existingRuleNames.has(bNorm)) {
-                window.__autoMarketSellConfig.rules.unshift({
-                  id: 'rule_sniper_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-                  itemName: bName,
-                  minQty: 1,
-                  sellMode: 'min',
-                  enabled: true
-                });
-                existingRuleNames.add(bNorm);
-                changedCardRule = true;
+            // Remove any previously auto-injected rule_sniper_ / rule_relist_ for non-Sniper items (like Echo Stone)
+            const beforeLen = window.__autoMarketSellConfig.rules.length;
+            window.__autoMarketSellConfig.rules = window.__autoMarketSellConfig.rules.filter(r => {
+              if (!r) return false;
+              const rid = String(r.id || '');
+              const rNorm = String(r.itemName || r.name || '').trim().toLowerCase();
+              if ((rid.startsWith('rule_sniper_') || rid.startsWith('rule_relist_')) && !verifiedFlipMap[rNorm]) {
+                return false;
               }
-            }
+              return true;
+            });
+            if (window.__autoMarketSellConfig.rules.length !== beforeLen) changedCardRule = true;
             for (const r of window.__autoMarketSellConfig.rules) {
               if (!r) continue;
               const rName = String(r.itemName || r.name || '').trim();
               const rNorm = rName.toLowerCase();
               const rKey = r.id || rNorm;
-              const isCardOrStone = /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(rName);
+              const isCardOrStone = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(rName);
               if (isCardOrStone && (r.sellMode !== 'min' || Number(r.minQty) !== 1)) {
                 r.sellMode = 'min';
                 r.minQty = 1;

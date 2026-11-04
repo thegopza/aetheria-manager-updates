@@ -2150,6 +2150,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       else unknownPages.push(t);
     }
     if (knownPages.length > 0) {
+      if (screenProxy && screenProxy.isEnabled() && typeof screenProxy.acquireLeasesForProfiles === 'function') {
+        await screenProxy.acquireLeasesForProfiles(knownPages.map(x => x.knownMatch.id)).catch(() => {});
+      }
       await Promise.all(knownPages.map(async ({ t, knownMatch }) => {
         try {
           if (stoppedProfiles.has(knownMatch.id)) stoppedProfiles.delete(knownMatch.id);

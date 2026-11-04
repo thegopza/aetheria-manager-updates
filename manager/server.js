@@ -4634,14 +4634,20 @@ const isBrowserMode = () => {
 
 async function syncScreenProxyForOpenProfiles() {
   const profiles = loadProfiles() || [];
+  let knownBrowserTargetIds = {};
+  try {
+    const ktFile = path.join(SESSIONS_DIR, "_browser_targets.json");
+    if (fs.existsSync(ktFile)) {
+      knownBrowserTargetIds = JSON.parse(fs.readFileSync(ktFile, "utf8")) || {};
+    }
+  } catch (_) {}
   const openProfiles = [];
   for (const p of profiles) {
-    const isOpen = browserMode.isOpen(p.id) || (runningProcesses[p.id] && isProcessAlive(runningProcesses[p.id].pid)) || (p.debugPort && await portAnswers(p.debugPort));
+    const isOpen = browserMode.isOpen(p.id) || Boolean(knownBrowserTargetIds[p.id]) || (runningProcesses[p.id] && isProcessAlive(runningProcesses[p.id].pid)) || (p.debugPort && await portAnswers(p.debugPort));
     if (isOpen) openProfiles.push(p);
   }
   if (openProfiles.length === 0) return [];
   if (!screenProxy.isEnabled()) {
-    await screenProxy.releaseAll().catch(() => {});
     for (const p of openProfiles) {
       try { await screenProxy.ensureProfileTunnel(p.id, p.debugPort); } catch (_) {}
     }
@@ -9445,13 +9451,7 @@ server.listen(PORT, "127.0.0.1", () => {
   planSync.start();
   if(!TEST_INSTANCE)authSync.start();
   if (!TEST_INSTANCE) {
-    try {
-      const spSettings = screenProxy.loadSettings();
-      if (spSettings.enabled || spSettings.forceDisableRev !== "2026-10-21-off") {
-        screenProxy.saveSettings({ enabled: false, forceDisableRev: "2026-10-21-off" });
-      }
-      screenProxy.releaseAll().catch(() => {});
-    } catch (_) {}
+    syncScreenProxyForOpenProfiles().catch(() => {});
   }
   browserMode.start();
   if (!TEST_INSTANCE) {
@@ -9460,7 +9460,7 @@ server.listen(PORT, "127.0.0.1", () => {
         browserMode.syncAssetCacheToOpenWindows().catch(() => {});
       }
       syncScreenProxyForOpenProfiles().catch(() => {});
-    }, 2800);
+    }, 3800);
     setInterval(() => {
       if (screenProxy.isEnabled()) {
         syncScreenProxyForOpenProfiles().catch(() => {});

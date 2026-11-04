@@ -408,9 +408,10 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     return Boolean(getProxyBlockInfo(proxyOrLease));
   }
 
-  // Load persisted sticky history (with Anti-Clone HWID check)
+  // Load persisted sticky history and active leases (with Anti-Clone HWID check)
   try {
     const savedLeases = readJson(leasesFile, {});
+    const initEnabled = readJson(settingsFile, {})?.enabled === true;
     if (savedLeases && savedLeases.machineHwid && savedLeases.machineHwid !== currentMachineHwid) {
       cloneDetectedOnBoot = true;
       console.warn('[Anti-Clone Guard] 🛡️ ตรวจพบไฟล์คิว Proxy (screen_proxy_leases.json) จากเครื่องอื่น -> รีเซ็ตการจับคู่ Sticky IP ใหม่สำหรับเครื่องนี้!');
@@ -418,19 +419,30 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         machineHwid: currentMachineHwid,
         cloneResetAt: now(),
         updatedAt: now(),
-        sticky: {}
+        sticky: {},
+        activeLeases: {}
       });
-    } else if (savedLeases && typeof savedLeases.sticky === 'object') {
-      for (const [k, v] of Object.entries(savedLeases.sticky)) {
-        if (typeof k === 'string' && typeof v === 'string' && !blockedProxies.has(v)) {
-          stickyHistory.set(k, v);
+    } else if (savedLeases && typeof savedLeases === 'object') {
+      if (savedLeases.sticky && typeof savedLeases.sticky === 'object') {
+        for (const [k, v] of Object.entries(savedLeases.sticky)) {
+          if (typeof k === 'string' && typeof v === 'string' && !blockedProxies.has(v)) {
+            stickyHistory.set(k, v);
+          }
+        }
+      }
+      if (initEnabled && savedLeases.activeLeases && typeof savedLeases.activeLeases === 'object') {
+        for (const [pid, l] of Object.entries(savedLeases.activeLeases)) {
+          if (pid && l && typeof l === 'object' && l.assigned && (l.proxyHost || l.ip) && !isProxyBlocked(l)) {
+            activeLeases.set(pid, { ...l, expiresAt: Math.max(Number(l.expiresAt) || 0, now() + LEASE_TTL_MS) });
+          }
         }
       }
       if (!savedLeases.machineHwid) {
         writeJson(leasesFile, {
           machineHwid: currentMachineHwid,
           updatedAt: now(),
-          sticky: Object.fromEntries(stickyHistory)
+          sticky: Object.fromEntries(stickyHistory),
+          activeLeases: Object.fromEntries(activeLeases)
         });
       }
     }
@@ -438,10 +450,17 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
   function saveStickyHistory() {
     try {
+      const persistedActive = {};
+      for (const [pid, l] of activeLeases.entries()) {
+        if (pid && l && l.assigned && !isProxyBlocked(l)) {
+          persistedActive[pid] = l;
+        }
+      }
       writeJson(leasesFile, {
         machineHwid: currentMachineHwid,
         updatedAt: now(),
-        sticky: Object.fromEntries(stickyHistory)
+        sticky: Object.fromEntries(stickyHistory),
+        activeLeases: persistedActive
       });
     } catch (_) {}
   }
@@ -966,22 +985,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     if (assetCache && typeof assetCache.setEnabled === 'function') {
       assetCache.setEnabled(next.localAssetCache !== false);
     }
+    syncDaemonState().catch(() => {});
     return loadSettings();
   }
 
-  // Force-disable previously auto-enabled proxy settings and sync localAssetCache flag
   try {
-    if (fs.existsSync(settingsFile)) {
-      const initRaw = readJson(settingsFile, null);
-      if (initRaw && initRaw.forceDisableRev !== FORCE_DISABLE_REVISION) {
-        writeJson(settingsFile, {
-          ...initRaw,
-          enabled: false,
-          forceDisableRev: FORCE_DISABLE_REVISION,
-          updatedAt: now()
-        });
-      }
-    }
     const initSt = loadSettings();
     if (assetCache && typeof assetCache.setEnabled === 'function') {
       assetCache.setEnabled(initSt.localAssetCache !== false);
@@ -1379,8 +1387,178 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       if (m) l.activeOnIp = m.size;
       l.maxScreens = maxPerIp;
     }
-    if (stickyChanged) saveStickyHistory();
+    saveStickyHistory();
+    syncDaemonState().catch(() => {});
     return results;
+  }
+
+  // If proxy is enabled on boot and we have local pool IPs, pre-allocate leases for known profiles immediately
+  try {
+    const bootSettings = loadSettings();
+    if (bootSettings.enabled && typeof loadProfiles === 'function') {
+      const bootProfiles = loadProfiles() || [];
+      const missingBoot = bootProfiles.filter(p => p && p.id && !activeLeases.has(p.id)).map(p => ({ profileId: p.id }));
+      if (missingBoot.length > 0 && loadPool().proxies.length > 0) {
+        allocateFromLocalPool(missingBoot);
+      }
+    }
+  } catch (_) {}
+
+  const usePersistentDaemon = Boolean(
+    process.env.PELICAN_TEST_INSTANCE !== '1' &&
+    path.resolve(dataDir).toLowerCase() === path.resolve(__dirname, 'data').toLowerCase()
+  );
+  const daemonControlPort = Number(process.env.PELICAN_TUNNEL_DAEMON_PORT) || 18989;
+  const supervisorPid = process.env.PELICAN_SERVER_CHILD === '1' ? process.ppid : process.pid;
+  let daemonSpawnPromise = null;
+
+  function daemonRequest(method, urlPath, bodyObj = null, timeoutMs = 2500) {
+    return new Promise((resolve, reject) => {
+      const payload = bodyObj !== null ? JSON.stringify(bodyObj) : '';
+      const req = http.request({
+        host: '127.0.0.1',
+        port: daemonControlPort,
+        method,
+        path: urlPath,
+        headers: bodyObj !== null ? {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Length': String(Buffer.byteLength(payload, 'utf8'))
+        } : {},
+        timeout: timeoutMs
+      }, res => {
+        let raw = '';
+        res.setEncoding('utf8');
+        res.on('data', c => { raw += c; });
+        res.on('end', () => {
+          try {
+            const parsed = raw ? JSON.parse(raw) : {};
+            if (res.statusCode >= 200 && res.statusCode < 300) resolve(parsed);
+            else reject(new Error(parsed.error || `HTTP_${res.statusCode}`));
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+      req.on('timeout', () => req.destroy(new Error('DAEMON_TIMEOUT')));
+      req.on('error', reject);
+      if (bodyObj !== null) req.write(payload);
+      req.end();
+    });
+  }
+
+  function buildDaemonSyncPayload() {
+    const leasesObj = {};
+    for (const [pid, l] of activeLeases.entries()) {
+      if (pid && l && l.assigned && !isProxyBlocked(l)) {
+        leasesObj[pid] = l;
+      }
+    }
+    return {
+      supervisorPid,
+      settings: loadSettings(),
+      leases: leasesObj,
+      replaceLeases: true,
+      blockedProxies: Array.from(blockedProxies.values())
+    };
+  }
+
+  async function ensureDaemonRunning() {
+    if (!usePersistentDaemon) return false;
+    try {
+      const ping = await daemonRequest('GET', '/ping', null, 1200);
+      if (ping && ping.ok) {
+        if (Array.isArray(ping.tunnels)) {
+          for (const dt of ping.tunnels) {
+            if (dt && dt.profileId && dt.port && !tunnels.has(dt.profileId)) {
+              tunnels.set(dt.profileId, {
+                profileId: dt.profileId,
+                port: dt.port,
+                proxyUrl: dt.proxyUrl || `http://127.0.0.1:${dt.port}`,
+                daemonManaged: true,
+                server: { listening: true, close: cb => cb && cb() },
+                sockets: new Set()
+              });
+            }
+          }
+        }
+        return true;
+      }
+    } catch (_) {}
+
+    if (daemonSpawnPromise) return daemonSpawnPromise;
+    daemonSpawnPromise = (async () => {
+      try {
+        const { spawn } = require('child_process');
+        const daemonScript = path.join(__dirname, 'proxy_tunnel_daemon.js');
+        if (!fs.existsSync(daemonScript)) return false;
+        const child = spawn(process.execPath, [
+          daemonScript,
+          '--data-dir', dataDir,
+          '--port', String(daemonControlPort),
+          '--supervisor-pid', String(supervisorPid)
+        ], {
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true
+        });
+        child.unref?.();
+        for (let i = 0; i < 15; i++) {
+          await new Promise(r => setTimeout(r, 100));
+          try {
+            const ping = await daemonRequest('GET', '/ping', null, 1000);
+            if (ping && ping.ok) {
+              await daemonRequest('POST', '/sync', buildDaemonSyncPayload(), 2000).catch(() => {});
+              return true;
+            }
+          } catch (_) {}
+        }
+      } catch (_) {}
+      return false;
+    })().finally(() => {
+      daemonSpawnPromise = null;
+    });
+    return daemonSpawnPromise;
+  }
+
+  async function syncDaemonState() {
+    if (!usePersistentDaemon) return false;
+    try {
+      const ok = await ensureDaemonRunning();
+      if (!ok) return false;
+      await daemonRequest('POST', '/sync', buildDaemonSyncPayload(), 2000);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function drainDaemonTraffic() {
+    if (!usePersistentDaemon) return;
+    try {
+      const res = await daemonRequest('POST', '/drain-traffic', {}, 1500);
+      if (res && res.ok && res.byProfile && typeof res.byProfile === 'object') {
+        for (const [pid, counts] of Object.entries(res.byProfile)) {
+          if (!counts || typeof counts !== 'object') continue;
+          const realPid = pid === '_global' ? null : pid;
+          if ((counts.proxyRxBytes || 0) > 0 || (counts.proxyTxBytes || 0) > 0) {
+            recordTraffic(realPid, counts.proxyRxBytes || 0, counts.proxyTxBytes || 0, true);
+          }
+          if ((counts.directRxBytes || 0) > 0 || (counts.directTxBytes || 0) > 0) {
+            recordTraffic(realPid, counts.directRxBytes || 0, counts.directTxBytes || 0, false);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (usePersistentDaemon) {
+    ensureDaemonRunning().then(ok => {
+      if (ok) syncDaemonState().catch(() => {});
+    }).catch(() => {});
+    const daemonDrainTimer = setInterval(() => {
+      drainDaemonTraffic().catch(() => {});
+    }, 3000);
+    daemonDrainTimer.unref?.();
   }
 
   async function acquireLeasesForProfiles(profileIds = []) {
@@ -1409,6 +1587,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
               }
             }
             saveStickyHistory();
+            syncDaemonState().catch(() => {});
             const unblockedIds = new Set(validLeases.filter(l => l.assigned).map(l => l.profileId));
             const fallbackNeeded = reqProfiles.filter(r => !unblockedIds.has(r.profileId));
             if (fallbackNeeded.length > 0 && loadPool().proxies.length > 0) {
@@ -1431,8 +1610,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   }
 
   function resetProfileSockets(profileId) {
+    if (usePersistentDaemon) {
+      daemonRequest('POST', '/reset-sockets', { profileId }, 1500).catch(() => {});
+    }
     const t = tunnels.get(profileId);
-    if (!t) return;
+    if (!t || !t.sockets) return;
     for (const sock of Array.from(t.sockets)) {
       try { sock.destroy(); } catch (_) {}
     }
@@ -1440,8 +1622,35 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   }
 
   async function ensureProfileTunnel(profileId, debugPort = 49876) {
+    if (usePersistentDaemon) {
+      try {
+        const daemonOk = await ensureDaemonRunning();
+        if (daemonOk) {
+          const res = await daemonRequest('POST', '/ensure-tunnel', {
+            supervisorPid,
+            profileId,
+            debugPort,
+            settings: loadSettings(),
+            lease: activeLeases.get(profileId) || null
+          }, 3000);
+          if (res && res.ok && res.port) {
+            const entry = {
+              profileId,
+              port: res.port,
+              proxyUrl: res.proxyUrl || `http://127.0.0.1:${res.port}`,
+              daemonManaged: true,
+              server: { listening: true, close: cb => cb && cb() },
+              sockets: new Set()
+            };
+            tunnels.set(profileId, entry);
+            return entry;
+          }
+        }
+      } catch (_) {}
+    }
+
     const existing = tunnels.get(profileId);
-    if (existing && existing.server && existing.server.listening) {
+    if (existing && !existing.daemonManaged && existing.server && existing.server.listening) {
       return existing;
     }
     if (existing && existing.starting) return existing.starting;
@@ -1637,8 +1846,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         lease: null
       };
     }
-    const res = await acquireLeasesForProfiles([profileId]);
-    const lease = res[0] || activeLeases.get(profileId) || null;
+    let lease = activeLeases.get(profileId) || null;
+    if (!lease || !lease.assigned || isProxyBlocked(lease)) {
+      const res = await acquireLeasesForProfiles([profileId]);
+      lease = res[0] || activeLeases.get(profileId) || null;
+    }
     if (!lease || !lease.assigned) {
       return {
         enabled: true,
@@ -1667,6 +1879,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   async function releaseProfile(profileId) {
     const hadLease = activeLeases.has(profileId);
     activeLeases.delete(profileId);
+    saveStickyHistory();
+    syncDaemonState().catch(() => {});
     resetProfileSockets(profileId);
     if (hadLease && typeof solver?.serviceRequest === 'function') {
       solver.serviceRequest('/v1/aetheria/proxy/screen-release', {
@@ -1679,6 +1893,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
   async function releaseAll() {
     activeLeases.clear();
+    saveStickyHistory();
+    syncDaemonState().catch(() => {});
+    if (usePersistentDaemon) {
+      daemonRequest('POST', '/reset-sockets', { all: true }, 1500).catch(() => {});
+    }
     for (const pid of tunnels.keys()) resetProfileSockets(pid);
     if (typeof solver?.serviceRequest === 'function') {
       solver.serviceRequest('/v1/aetheria/proxy/screen-release', {
@@ -1848,6 +2067,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   }
 
   async function getStatus(openProfileIds = []) {
+    await drainDaemonTraffic().catch(() => {});
     const pub = publicSettings();
     const { rawText, proxies } = loadPool();
     const enabledPool = proxies.filter(p => p.enabled !== false && !isProxyBlocked(p));

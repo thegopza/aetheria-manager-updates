@@ -198,13 +198,64 @@ function isSingleUnitFlipItem(itemOrName) {
   return /\bcard\b|\bstone\s*\(|การ์ด|ศิลา/i.test(String(itemOrName.name || itemOrName.itemName || ''));
 }
 
-const PRICE_CACHE_VER = 6;
+const ALLOWED_MISC_FLIP_NAMES = new Set([
+  'boss card fragment',
+  'rebirth feather'
+]);
+
+const KNOWN_NPC_TRASH_NAMES = new Set([
+  'clover',
+  'grasshopper leg',
+  'ice heart',
+  'cursed sigil',
+  'censer ash',
+  'sentinel wingstone',
+  'rotroot heartwood',
+  'bog hydra fang',
+  'plague moth wing',
+  'magma core',
+  'ember scale',
+  'sticky mucus',
+  'feeler',
+  'cricket fiddle',
+  'tarnished plate',
+  'soul flame',
+  'torn vestment',
+  'stone talon',
+  'rotten twig',
+  'bog scale',
+  'venom gland',
+  'moth dust',
+  'tidestone'
+]);
+
+// Hard block on NPC monster trash drops (type === 'Miscellaneous' without description/rarity, or monster drop ID ranges).
+// Scammers and RMT Zeny sellers use monster trash drops (like Bog Hydra Fang, Magma Core, Sticky Mucus) to wash-trade
+// and set 5-minute auction bait traps. Real functional Miscellaneous items (Boss Card Fragment, Rebirth Feather) have description & rarity.
+function isNpcVendorTrashItem(itemOrObj) {
+  if (!itemOrObj) return false;
+  const id = Number(itemOrObj.itemId ?? itemOrObj.id) || 0;
+  const nm = String(itemOrObj.name || itemOrObj.itemName || '').trim().toLowerCase();
+  if (nm && ALLOWED_MISC_FLIP_NAMES.has(nm)) return false;
+  if (nm && KNOWN_NPC_TRASH_NAMES.has(nm)) return true;
+  if ((id >= 90100 && id <= 90199) || (id >= 90400 && id <= 90799) || (id >= 92000 && id <= 92999)) {
+    return true;
+  }
+  const t = String(itemOrObj.type || '');
+  if (t === 'Miscellaneous') {
+    const hasDesc = Boolean(itemOrObj.description && String(itemOrObj.description).trim().length > 0);
+    const hasRarity = Boolean(itemOrObj.rarity && String(itemOrObj.rarity).trim().length > 0);
+    if (!hasDesc && !hasRarity) return true;
+  }
+  return false;
+}
+
+const PRICE_CACHE_VER = 7;
 
 // Find the Most-Stable Price Cluster from the last 10–20 individual trades (`recent` array).
 // Groups trades whose unit prices fall within ±15% (fallback ±22%) of each other, picks the cluster
-// with the highest number of trades (tie-breaking by lowest coefficient of variation / tightest stability
-// and lowest mean), and returns its trimmed average.
-// This ensures a single 50,000–70,000 z/unit RMT spike never distorts an item that trades 19 times at 15,000–16,000 z/unit!
+// with the highest number of trades (tie-breaking by lowest mean first so wash-trade clusters at higher fixed prices never win),
+// and returns its trimmed average.
 function findMostStableClusterAvg(samples) {
   if (!Array.isArray(samples) || samples.length === 0) {
     return { avg: 0, min: 0, max: 0, clusterCount: 0, totalCount: 0 };
@@ -233,11 +284,18 @@ function findMostStableClusterAvg(samples) {
       if (!best) {
         best = { members, count: n, mean, cv };
       } else if (n > best.count) {
+        // Only let a higher-priced cluster replace a lower-priced cluster if it has strictly more trades
+        // AND isn't just 1 trade larger when the lower cluster already has >= 3 trades at < 75% of the price
+        if (n === best.count + 1 && best.count >= 3 && best.mean < mean * 0.75) {
+          continue;
+        }
         best = { members, count: n, mean, cv };
       } else if (n === best.count) {
-        if (Math.abs(cv - best.cv) > 0.015) {
-          if (cv < best.cv) best = { members, count: n, mean, cv };
-        } else if (mean < best.mean) {
+        // Conservative tie-breaker: ALWAYS prefer the lower price cluster on a tie!
+        // Scammers who wash-trade 2-3 stacks at the exact same price have cv = 0, so tie-breaking by cv would pick the scammer's price.
+        if (mean < best.mean * 0.97) {
+          best = { members, count: n, mean, cv };
+        } else if (Math.abs(mean - best.mean) <= best.mean * 0.03 && cv < best.cv) {
           best = { members, count: n, mean, cv };
         }
       }
@@ -270,12 +328,18 @@ function findMostStableClusterAvg(samples) {
 }
 
 // Compute Clean Reference Price from the last 10–20 individual trades (`recent` array) using Most-Stable Cluster averaging
-// + active listings ceiling (excluding our own characters).
+// + unique-seller active listings ceiling + strict anti-bait / anti-wash-trade / anti-RMT guards.
 // Never uses `pt.high` from hourly buckets (`points[]`), which can be polluted by RMT Zeny transfers.
-function computeCleanReferencePrice(history24h, history7d, activeListingsForSameItem, undercutZeny = 1, ourCharNamesSet = null) {
+function computeCleanReferencePrice(history24h, history7d, activeListingsForSameItem, undercutZeny = 1, ourCharNamesSet = null, itemMeta = null) {
+  if (itemMeta && isNpcVendorTrashItem(itemMeta)) {
+    return { valid: false, reason: 'npc_trash_drop', totalSales: 0, sales24h: 0, sales7d: 0 };
+  }
+
   const now = Date.now();
   const seenRecentKeys = new Set();
+  const seenAllRecentKeys = new Set();
   const recentTrades = [];
+  const allRecentTrades = [];
   const fallbackBucketPrices = [];
   let sales24h = 0;
   let sales7d = 0;
@@ -317,12 +381,14 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
       const within7d = at > 0 ? ((now - at) >= -300000 && (now - at) <= max7dMs) : (countFromPoints > 0);
       if (u > 0) {
         if (withinRange) countFromRecent += 1;
-        if (within7d) {
-          const rKey = `${at}:${price}:${qty}`;
-          if (!seenRecentKeys.has(rKey)) {
-            seenRecentKeys.add(rKey);
-            recentTrades.push({ u, at, qty, price });
-          }
+        const rKey = `${at}:${price}:${qty}`;
+        if (!seenAllRecentKeys.has(rKey)) {
+          seenAllRecentKeys.add(rKey);
+          allRecentTrades.push({ u, at, qty, price });
+        }
+        if (within7d && !seenRecentKeys.has(rKey)) {
+          seenRecentKeys.add(rKey);
+          recentTrades.push({ u, at, qty, price });
         }
       }
     }
@@ -336,8 +402,11 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   collectFromHistory(history7d, false);
 
   const totalSales = Math.max(sales7d, sales24h);
+  const singleUnit = isSingleUnitFlipItem(itemMeta);
+
   // Sort newest trades first so slice(0, 20) is strictly the 10–20 most recent trades within the last 7 days
   recentTrades.sort((a, b) => (b.at || 0) - (a.at || 0));
+  allRecentTrades.sort((a, b) => (b.at || 0) - (a.at || 0));
   const latest20UnitPrices = recentTrades.slice(0, 20).map(t => t.u);
 
   const primaryPool = latest20UnitPrices.length >= 2
@@ -349,15 +418,39 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   if (primaryPool.length === 0 || totalSales === 0) {
     return { valid: false, reason: 'no_history', totalSales: 0, sales24h: 0, sales7d: 0 };
   }
-  // Reject dead/illiquid RMT transfer items that have 0 real sales in the last 24h ("ยังไม่มีการซื้อขายในช่วงนี้")
-  if (sales24h < 1) {
-    return { valid: false, reason: 'no_recent_24h_sales', totalSales, sales24h, sales7d };
+
+  // Strict Liquidity & Trade-Frequency Gate:
+  // A scammer can easily wash-trade 1–5 times on a dead item (like Bog Hydra Fang: sales24h=1, sales7d=5).
+  // Require real daily and weekly velocity before considering any item flippable.
+  const minRequired24h = singleUnit ? 3 : 8;
+  const minRequired7d = singleUnit ? 12 : 25;
+  const minRequiredRecent7d = singleUnit ? 6 : 10;
+  if (sales24h < minRequired24h) {
+    return { valid: false, reason: 'low_24h_liquidity', totalSales, sales24h, sales7d };
+  }
+  if (totalSales < minRequired7d || recentTrades.length < minRequiredRecent7d) {
+    return { valid: false, reason: 'low_7d_liquidity', totalSales, sales24h, sales7d };
   }
 
   const cluster20 = findMostStableClusterAvg(primaryPool);
+  const minRequiredCluster = singleUnit ? 4 : 6;
+  if (cluster20.clusterCount < minRequiredCluster) {
+    return { valid: false, reason: 'unstable_sparse_cluster', totalSales, sales24h, sales7d };
+  }
+
   let cleanRefUnitPrice = cluster20.avg;
 
-  // Also check the latest 10 trades specifically: if the newest 10 trades have a stable cluster
+  // RMT / Wash-Trade History Contamination Detector:
+  // If an item has multiple extreme RMT Zeny transfer spikes (> 5x cluster average) in its recent 20 trades
+  // and does not have massive organic daily volume, reject it as an RMT / wash-trade vehicle.
+  if (allRecentTrades.length >= 5 && cleanRefUnitPrice > 0) {
+    const rmtSpikeCount = allRecentTrades.filter(t => t.u > cleanRefUnitPrice * 5).length;
+    if (rmtSpikeCount >= 3 && sales24h < 40) {
+      return { valid: false, reason: 'rmt_contaminated_history', totalSales, sales24h, sales7d };
+    }
+  }
+
+  // Check the latest 10 trades specifically: if the newest 10 trades have a stable cluster
   // that is lower than the 20-trade cluster (market trending down), use the 10-trade stable cluster!
   if (latest20UnitPrices.length >= 6) {
     const latest10 = latest20UnitPrices.slice(0, 10);
@@ -367,11 +460,24 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     }
   }
 
+  // Latest-5 Crash Guard: if at least 3 of the newest 5 trades sold below 88% of cleanRefUnitPrice
+  // (e.g. Imperial Steel Shard crashing from 3,900 z yesterday to 1,702 z in the last hour), cap immediately!
+  if (latest20UnitPrices.length >= 4) {
+    const latest5 = latest20UnitPrices.slice(0, 5);
+    const lowerRecent = latest5.filter(u => u > 0 && u < cleanRefUnitPrice * 0.88);
+    if (lowerRecent.length >= 3) {
+      const recentLowAvg = Math.round(lowerRecent.reduce((s, v) => s + v, 0) / lowerRecent.length);
+      if (recentLowAvg > 0 && recentLowAvg < cleanRefUnitPrice) {
+        cleanRefUnitPrice = recentLowAvg;
+      }
+    }
+  }
+
   if (!cleanRefUnitPrice || cleanRefUnitPrice <= 0) {
     return { valid: false, reason: 'invalid_cluster', totalSales, sales24h, sales7d };
   }
 
-  // Stage 2: Competing Active Listings Ceiling & Flip Price (excluding all of our own characters)
+  // Stage 2: Competing Active Listings Ceiling & Flip Price (excluding all of our own characters, deduplicated by seller!)
   const isOurListing = (l) => {
     if (!l) return true;
     if (l.mine) return true;
@@ -383,6 +489,7 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   };
 
   const allActiveUnitPrices = [];
+  const buyNowBySeller = new Map();
   const normalActivePrices = [];
   if (Array.isArray(activeListingsForSameItem)) {
     for (const l of activeListingsForSameItem) {
@@ -392,17 +499,40 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
       if (u > 0) {
         allActiveUnitPrices.push(u);
       }
+      const inAuc = Boolean(l.auctionEndsAt && Number(l.auctionEndsAt) > now);
+      if (!inAuc) {
+        const buyNowU = Math.round((Number(l.price) || 0) / q);
+        if (buyNowU > 0) {
+          const sellerKey = String(l.sellerName || `anon_${l.listingId}`).trim().toLowerCase();
+          const prev = buyNowBySeller.get(sellerKey);
+          if (prev === undefined || buyNowU < prev) {
+            buyNowBySeller.set(sellerKey, buyNowU);
+          }
+        }
+      }
     }
   }
   allActiveUnitPrices.sort((a, b) => a - b);
+  const uniqueSellerBuyNowPrices = Array.from(buyNowBySeller.values()).sort((a, b) => a - b);
 
-  // Cap cleanRefUnitPrice by the 2nd/3rd cheapest active listing from other sellers so we never overvalue
-  // an item that already has multiple sellers offering it at a lower price right now.
+  // Active market price is < 25% of historical price with zero listings near the historical price -> RMT transfer history!
   if (allActiveUnitPrices.length >= 1 && allActiveUnitPrices[0] < cleanRefUnitPrice * 0.25 && allActiveUnitPrices.filter(p => p >= cleanRefUnitPrice * 0.50).length === 0) {
-    // Active market price is < 25% of historical price with zero listings near the historical price -> RMT transfer history!
     return { valid: false, reason: 'rmt_history_mismatch', totalSales, sales24h, sales7d };
   }
-  if (allActiveUnitPrices.length >= 3) {
+
+  // Cap cleanRefUnitPrice by unique sellers' Buy-Now prices so 1 seller posting 3 stacks (e.g. panda1031 x3)
+  // only counts as 1 seller, and we never value an item above existing Buy-Now supply on the market.
+  if (uniqueSellerBuyNowPrices.length >= 2) {
+    const secondUniqueSeller = uniqueSellerBuyNowPrices[1];
+    if (secondUniqueSeller > 0 && secondUniqueSeller < cleanRefUnitPrice) {
+      cleanRefUnitPrice = secondUniqueSeller;
+    }
+  } else if (uniqueSellerBuyNowPrices.length === 1) {
+    const onlyUniqueSeller = uniqueSellerBuyNowPrices[0];
+    if (onlyUniqueSeller > 0 && onlyUniqueSeller < cleanRefUnitPrice) {
+      cleanRefUnitPrice = onlyUniqueSeller;
+    }
+  } else if (allActiveUnitPrices.length >= 3) {
     const thirdCheapest = allActiveUnitPrices[2];
     if (thirdCheapest > 0 && thirdCheapest < cleanRefUnitPrice) {
       cleanRefUnitPrice = thirdCheapest;
@@ -414,15 +544,9 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     }
   }
 
-  if (Array.isArray(activeListingsForSameItem)) {
-    for (const l of activeListingsForSameItem) {
-      if (!l || isOurListing(l)) continue;
-      if (l.auctionEndsAt && Number(l.auctionEndsAt) > now) continue;
-      const q = Math.max(1, Number(l.qty) || 1);
-      const u = Math.round((Number(l.price) || 0) / q);
-      if (u >= Math.round(cleanRefUnitPrice * 0.78) && u <= cleanRefUnitPrice) {
-        normalActivePrices.push(u);
-      }
+  for (const u of uniqueSellerBuyNowPrices) {
+    if (u >= Math.round(cleanRefUnitPrice * 0.78) && u <= cleanRefUnitPrice) {
+      normalActivePrices.push(u);
     }
   }
   normalActivePrices.sort((a, b) => a - b);
@@ -450,6 +574,7 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     sales7d,
     recentCount: latest20UnitPrices.length,
     clusterCount: cluster20.clusterCount,
+    uniqueBuyNowSellersCount: uniqueSellerBuyNowPrices.length,
     minCleanSold: cluster20.min,
     maxCleanSold: cluster20.max
   };
@@ -505,19 +630,27 @@ function createMarketSniperService({
     let changed = false;
     if (state.priceCache && typeof state.priceCache === 'object') {
       for (const [k, entry] of Object.entries(state.priceCache)) {
-        if (!entry || entry.cacheVer !== PRICE_CACHE_VER) {
-          const nm = String((entry && entry.name) || '').trim().toLowerCase();
-          if (nm && VERIFIED_STABLE_REF_BY_NAME[nm]) {
-            entry.cleanRefUnitPrice = VERIFIED_STABLE_REF_BY_NAME[nm];
-            entry.flipUnitPrice = Math.max(1, VERIFIED_STABLE_REF_BY_NAME[nm] - Math.max(0, Number(config.relistUndercutZeny) || 0));
-            entry.cacheVer = PRICE_CACHE_VER;
-            changed = true;
-          } else {
-            delete state.priceCache[k];
-            changed = true;
-          }
+        if (!entry || entry.cacheVer !== PRICE_CACHE_VER || isNpcVendorTrashItem(entry)) {
+          delete state.priceCache[k];
+          changed = true;
         }
       }
+    }
+
+    if (Array.isArray(state.activeBids)) {
+      const beforeLen = state.activeBids.length;
+      state.activeBids = state.activeBids.filter(b => b && !isNpcVendorTrashItem(b));
+      if (state.activeBids.length !== beforeLen) changed = true;
+    }
+    if (Array.isArray(state.pendingFlips)) {
+      const beforeLen = state.pendingFlips.length;
+      state.pendingFlips = state.pendingFlips.filter(pf => pf && !isNpcVendorTrashItem(pf));
+      if (state.pendingFlips.length !== beforeLen) changed = true;
+    }
+    if (Array.isArray(state.history)) {
+      const beforeLen = state.history.length;
+      state.history = state.history.filter(h => h && !isNpcVendorTrashItem(h));
+      if (state.history.length !== beforeLen) changed = true;
     }
 
     const fixRecordValuation = (rec, isHistory) => {
@@ -1445,6 +1578,27 @@ function createMarketSniperService({
     const refine = Number(item.refine) || 0;
     const itemName = String(item.name || '').trim();
     const cacheKey = `${itemId}:${refine}`;
+    if (isNpcVendorTrashItem(item)) {
+      const rejectEntry = {
+        cacheVer: PRICE_CACHE_VER,
+        itemId,
+        refine,
+        name: itemName || `Item #${itemId}`,
+        valid: false,
+        reason: 'npc_trash_drop',
+        cleanRefUnitPrice: 0,
+        flipUnitPrice: 0,
+        totalSales: 0,
+        sales24h: 0,
+        sales7d: 0,
+        recentCount: 0,
+        clusterCount: 0,
+        uniqueBuyNowSellersCount: 0,
+        updatedAt: Date.now()
+      };
+      state.priceCache[cacheKey] = rejectEntry;
+      return rejectEntry;
+    }
     const cached = state.priceCache[cacheKey];
     if (cached && cached.cacheVer === PRICE_CACHE_VER && (Date.now() - (Number(cached.updatedAt) || 0)) < PRICE_CACHE_TTL_MS) {
       // Re-adjust flipUnitPrice against latest normal active listings if available (never above cleanRefUnitPrice)
@@ -1536,7 +1690,8 @@ function createMarketSniperService({
       res.result.h7d,
       sameItemListings,
       config.relistUndercutZeny,
-      ourCharNamesSet
+      ourCharNamesSet,
+      item
     );
 
     const entry = {
@@ -1553,6 +1708,7 @@ function createMarketSniperService({
       sales7d: calc.sales7d || 0,
       recentCount: calc.recentCount || 0,
       clusterCount: calc.clusterCount || 0,
+      uniqueBuyNowSellersCount: calc.uniqueBuyNowSellersCount || 0,
       minCleanSold: calc.minCleanSold || 0,
       maxCleanSold: calc.maxCleanSold || 0,
       updatedAt: Date.now()
@@ -2116,6 +2272,8 @@ function createMarketSniperService({
         const cat = inferItemCategory(it);
         const isWatched = watchlistLower.has(itemNameLower);
         if (!isWatched && (!config.categories || !config.categories[cat])) continue;
+        // Hard block: never auto-flip NPC vendor monster trash drops (e.g. Bog Hydra Fang, Magma Core, Sticky Mucus)
+        if (!isWatched && isNpcVendorTrashItem(it)) continue;
 
         const qty = Math.max(1, Number(l.qty) || 1);
         const singleUnit = isSingleUnitFlipItem(it);
@@ -2167,6 +2325,22 @@ function createMarketSniperService({
 
         if (!refInfo || !refInfo.valid || refInfo.cleanRefUnitPrice <= 0) continue;
         if (refInfo.totalSales < config.minSalesVolume) continue;
+
+        // Enforce strict anti-wash-trade liquidity minimums on stackables vs single-unit Cards/Stones
+        const minSales24h = singleUnit ? 3 : 8;
+        const minSales7d = singleUnit ? 12 : 25;
+        const minClusterCnt = singleUnit ? 4 : 6;
+        if ((Number(refInfo.sales24h) || 0) < minSales24h) continue;
+        if ((Number(refInfo.sales7d) || 0) < minSales7d) continue;
+        if ((Number(refInfo.clusterCount) || 0) < minClusterCnt) continue;
+
+        // Cornered-market auction bait guard:
+        // Scammers list 1-2 fake Buy-Now stacks at an inflated price and put a 3rd stack in a 5-min auction at 40% of that fake price.
+        // For stackable items in a 5-min auction, unless 24h trade volume is very high (>= 30 trades/day),
+        // require at least 3 distinct external Buy-Now sellers so a single scammer (or 2 accounts) cannot corner the book.
+        if (inAuction && !singleUnit && (Number(refInfo.sales24h) || 0) < 30 && (Number(refInfo.uniqueBuyNowSellersCount) || 0) < 3) {
+          continue;
+        }
 
         lastScanSummary.evaluatedCount += 1;
 
@@ -3565,5 +3739,6 @@ function createMarketSniperService({
 module.exports = {
   createMarketSniperService,
   computeCleanReferencePrice,
-  inferItemCategory
+  inferItemCategory,
+  isNpcVendorTrashItem
 };

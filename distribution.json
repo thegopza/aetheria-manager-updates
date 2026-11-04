@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "225fd97f05eb23784a4836f1cab6023692c4fcf7",
+  "sourceCommit": "42ab64127f232447b6daef87f06c50afa1c2dfee",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -88,7 +88,7 @@
     },
     {
       "path": "manager/market_sniper_api.js",
-      "sha256": "b5ec39320ff4782c64c0885a1984eead4914804e144843744ecc9f32dc1cc8aa"
+      "sha256": "8663cb2456a43c896449cbeb2ff2bda28c22be6014f4dcd5987e49313dbf5006"
     },
     {
       "path": "manager/offline_coordinator.js",
@@ -256,7 +256,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "61bc7382c892fd691e83d938123c38d82a89e15ebd98e5dd5609e098e10339f1"
+      "sha256": "61b4f584fa41fc55d4f2be8e5d333908f81ff832b9300a31441dc3c3ecb33c7d"
     },
     {
       "path": "manager/screen_proxy_manager.js",

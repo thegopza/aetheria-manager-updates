@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "ce06496f8ddf4d666b5c9b5075e339e19a5743ad",
+  "sourceCommit": "dd18f6b5ea3e23f74e47555734fe6294a8ae3383",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -256,7 +256,7 @@
     },
     {
       "path": "manager/screen_proxy_manager.js",
-      "sha256": "5dbf9e7086a80c0061ee63911f3865465b3eb5052d959b9a335dbe636811376d"
+      "sha256": "80bb0c35b9c2ed70068c3669eb8f719c71fd92969f8ccbfc6f981fbb24c27ac8"
     },
     {
       "path": "manager/script_bootstrap.js",

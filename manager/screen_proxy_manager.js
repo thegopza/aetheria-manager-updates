@@ -453,8 +453,10 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
   function createCleanBillingState(existingConfig = {}) {
     const pkgGb = Math.max(1, Number(existingConfig.packageGb) || DEFAULT_PACKAGE_GB);
-    const pkgMerit = Math.max(0, Number(existingConfig.packageMerit) ?? DEFAULT_PACKAGE_MERIT);
-    const ratePerGb = Number.isFinite(Number(existingConfig.ratePerGb)) && Number(existingConfig.ratePerGb) >= 0
+    const pkgMerit = Number.isFinite(Number(existingConfig.packageMerit)) && Number(existingConfig.packageMerit) >= 0
+      ? Number(existingConfig.packageMerit)
+      : DEFAULT_PACKAGE_MERIT;
+    const ratePerGb = Number.isFinite(Number(existingConfig.ratePerGb)) && Number(existingConfig.ratePerGb) > 0
       ? Number(existingConfig.ratePerGb)
       : Number((pkgMerit / pkgGb).toFixed(4));
     const ratePerScreenDay = Math.max(0, Number(existingConfig.ratePerScreenDay) || 0);
@@ -503,8 +505,10 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           return clean;
         }
         const pkgGb = Math.max(1, Number(saved.packageGb) || DEFAULT_PACKAGE_GB);
-        const pkgMerit = Math.max(0, Number(saved.packageMerit) ?? DEFAULT_PACKAGE_MERIT);
-        const ratePerGb = Number.isFinite(Number(saved.ratePerGb)) && Number(saved.ratePerGb) >= 0
+        const pkgMerit = Number.isFinite(Number(saved.packageMerit)) && Number(saved.packageMerit) >= 0
+          ? Number(saved.packageMerit)
+          : DEFAULT_PACKAGE_MERIT;
+        const ratePerGb = Number.isFinite(Number(saved.ratePerGb)) && Number(saved.ratePerGb) > 0
           ? Number(saved.ratePerGb)
           : Number((pkgMerit / pkgGb).toFixed(4));
         const normalized = {
@@ -782,7 +786,18 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       };
     }).filter(x => x.activeLease || x.todayProxyBytes > 0 || x.totalProxyBytes > 0);
 
+    const byProfileUi = {};
+    for (const row of perScreen) {
+      byProfileUi[row.profileId] = {
+        todayProxyBytes: row.todayProxyBytes,
+        totalProxyBytes: row.totalProxyBytes,
+        todayMeritPoints: row.todayMerit,
+        meritPoints: row.totalMerit
+      };
+    }
+
     return {
+      enabled: billingState.autoDeductWallet !== false,
       date: todayKey,
       machineHwid: currentMachineHwid.slice(0, 16),
       installationId: billingState.installationId,
@@ -791,33 +806,42 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       cloneResetCount: billingState.cloneResetCount || 0,
       lastCloneResetAt: billingState.lastCloneResetAt || null,
       packageGb: billingState.packageGb || DEFAULT_PACKAGE_GB,
-      packageMerit: billingState.packageMerit ?? DEFAULT_PACKAGE_MERIT,
+      packageMerit: Number.isFinite(Number(billingState.packageMerit)) ? Number(billingState.packageMerit) : DEFAULT_PACKAGE_MERIT,
       ratePerGb: Number(ratePerGb.toFixed(4)),
       ratePerScreenDay: Number(ratePerScreenDay.toFixed(4)),
       autoDeductWallet: billingState.autoDeductWallet !== false,
       todayProxyRxBytes: todayBucket.proxyRxBytes || 0,
       todayProxyTxBytes: todayBucket.proxyTxBytes || 0,
       todayProxyBytes,
+      todayBytes: todayProxyBytes,
       todayProxyGb: Number((todayProxyBytes / BYTES_PER_GB).toFixed(4)),
+      todayGb: Number((todayProxyBytes / BYTES_PER_GB).toFixed(4)),
       activeProxyScreensToday,
+      todayActiveScreensCount: activeProxyScreensToday,
       todayBandwidthMerit: Number(todayBandwidthMerit.toFixed(4)),
       todayScreenMerit: Number(todayScreenMerit.toFixed(4)),
       todayTotalMerit: Number(todayTotalMerit.toFixed(4)),
+      todayMeritPoints: Number(todayTotalMerit.toFixed(4)),
       totalProxyRxBytes: billingState.totalProxyRxBytes || 0,
       totalProxyTxBytes: billingState.totalProxyTxBytes || 0,
       totalProxyBytes: billingState.totalProxyBytes || 0,
       totalProxyGb: Number(((billingState.totalProxyBytes || 0) / BYTES_PER_GB).toFixed(4)),
+      totalGb: Number(((billingState.totalProxyBytes || 0) / BYTES_PER_GB).toFixed(4)),
       totalBandwidthMerit: Number(bwMerit.toFixed(4)),
       totalScreenMerit: Number(screenMerit.toFixed(4)),
       totalMerit: Number(totalMerit.toFixed(4)),
+      totalMeritPoints: Number(totalMerit.toFixed(4)),
       targetUnits,
       settledUnits,
+      syncedChargedUnits: settledUnits * 100,
       settledMerit: Number((settledUnits / 100).toFixed(2)),
       unsettledUnits,
+      pendingUnits: unsettledUnits * 100,
       unsettledMerit: Number((unsettledUnits / 100).toFixed(2)),
       lastSettledAt: billingState.lastSettledAt || null,
       lastSettlementError: billingState.lastSettlementError || null,
-      perScreen
+      perScreen,
+      byProfile: byProfileUi
     };
   }
 
@@ -838,6 +862,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     }
     if (typeof patch.autoDeductWallet === 'boolean') {
       billingState.autoDeductWallet = patch.autoDeductWallet;
+    } else if (typeof patch.enabled === 'boolean') {
+      billingState.autoDeductWallet = patch.enabled;
     }
     // Re-baseline settledUnitsTotal to current targetUnits if rate changed so changing the rate doesn't retroactively charge old bytes
     const { targetUnits } = computeTargetBillingUnits();

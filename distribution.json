@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "1f05a38501c126a81efc97054fe48360c93e06e6",
+  "sourceCommit": "791e1afc6d6bce4a05bde593efe3f4467eaec9aa",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -125,6 +125,10 @@
     {
       "path": "manager/proxy_register.js",
       "sha256": "b6dc84ba1878b46e5a02288a03fdde6c8d375a0c94dddcc56fc4afaf8d3eb3c4"
+    },
+    {
+      "path": "manager/proxy_tunnel_daemon.js",
+      "sha256": "84c45a7f7933a3e5a0270801b52f925000d66e0e4b4f745fc4e7a3f1d2a5b81e"
     },
     {
       "path": "manager/public/app.js",

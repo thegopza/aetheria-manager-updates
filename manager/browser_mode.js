@@ -527,6 +527,54 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k === 'pelican_embedded_human_check_cfg' || k.startsWith('webgame.chat.')) return true;
     return k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.endsWith('__embedded_human_check_cfg');
   }
+  function extractSessionJwtUserId(jwtStr) {
+    if (!jwtStr || typeof jwtStr !== 'string') return '';
+    try {
+      const parts = jwtStr.split('.');
+      if (parts.length < 2) return '';
+      const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+      return (payload && typeof payload.userId === 'string') ? payload.userId.trim() : '';
+    } catch (_) {
+      return '';
+    }
+  }
+  function isForeignAuthUsername(profileId, username) {
+    const u = String(username || '').trim().toLowerCase();
+    if (!u || !profileId || typeof loadProfiles !== 'function') return false;
+    try {
+      const list = loadProfiles() || [];
+      const self = list.find(p => p && p.id === profileId);
+      const selfAccount = String(self && self.account || '').trim().toLowerCase();
+      if (selfAccount && selfAccount === u) return false;
+      return list.some(p => p && p.id !== profileId && String(p.account || '').trim().toLowerCase() === u);
+    } catch (_) {
+      return false;
+    }
+  }
+  function isForeignOrMismatchedSessionJwt(profileId, jwtStr) {
+    const jwtUser = extractSessionJwtUserId(jwtStr);
+    if (!jwtUser || !profileId || typeof loadProfiles !== 'function') return false;
+    const u = jwtUser.toLowerCase();
+    try {
+      const list = loadProfiles() || [];
+      const self = list.find(p => p && p.id === profileId);
+      const selfAccount = String(self && self.account || '').trim().toLowerCase();
+      if (selfAccount && selfAccount !== u) return true;
+      return list.some(p => p && p.id !== profileId && String(p.account || '').trim().toLowerCase() === u);
+    } catch (_) {
+      return false;
+    }
+  }
+  function isForeignAuthCfgString(profileId, rawAuthStr) {
+    if (!rawAuthStr || typeof rawAuthStr !== 'string') return false;
+    try {
+      const parsed = JSON.parse(rawAuthStr);
+      if (parsed && typeof parsed === 'object' && parsed.username) {
+        return isForeignAuthUsername(profileId, parsed.username);
+      }
+    } catch (_) {}
+    return false;
+  }
   function saveProfileStorage(profileId, entries) {
     if (!storageDir || !profileId || !entries || typeof entries !== 'object') return;
     try {
@@ -537,10 +585,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const merged = {};
       for (const [k, v] of Object.entries(rawExisting || {})) {
         if (v === null || v === undefined || isTransientStorageKey(k)) continue;
+        if (k === '__ss:aetheria.session' && isForeignOrMismatchedSessionJwt(profileId, v)) continue;
         if (k.startsWith('pelican_')) {
           if (k.startsWith(pfx)) {
+            if (k.endsWith('__auth_cfg') && isForeignAuthCfgString(profileId, v)) continue;
             merged[k] = v;
-          } else if (!k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
+          } else if (!k.includes('__') && k !== 'pelican_auth_cfg' && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
             const mapped = pfx + k.slice(8);
             if (isTransientStorageKey(mapped)) continue;
             if (rawExisting[mapped] === undefined && merged[mapped] === undefined) merged[mapped] = v;
@@ -551,12 +601,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       }
       for (const [k, v] of Object.entries(entries)) {
         if (v === null || v === undefined || isTransientStorageKey(k)) continue;
+        if (k === '__ss:aetheria.session' && isForeignOrMismatchedSessionJwt(profileId, v)) continue;
         let targetKey = k;
         if (k.startsWith('pelican_')) {
           if (k.startsWith(pfx)) {
             targetKey = k;
           } else if (!k.includes('__')) {
-            if (k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_script_plan' || k === 'pelican_plan_script_enabled') continue;
+            if (k === 'pelican_auth_cfg' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_script_plan' || k === 'pelican_plan_script_enabled') continue;
             const mapped = pfx + k.slice(8);
             if (isTransientStorageKey(mapped)) continue;
             if (entries[mapped] !== undefined || merged[mapped] !== undefined) continue;
@@ -565,6 +616,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             continue;
           }
         }
+        if (targetKey.endsWith('__auth_cfg') && isForeignAuthCfgString(profileId, v)) continue;
         if (targetKey.endsWith('__auth_cfg') && merged[targetKey]) {
           merged[targetKey] = mergeAuthConfigString(merged[targetKey], v);
         } else if ((targetKey.endsWith('__sell_cfg') || targetKey === 'pelican_sell_cfg') && merged[targetKey]) {
@@ -1205,10 +1257,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const pfx = profileId ? `pelican_${profileId}__` : 'pelican_';
     for (const [k, v] of Object.entries(rawSaved || {})) {
       if (typeof v !== 'string' || isTransientStorageKey(k)) continue;
+      if (profileId && k === '__ss:aetheria.session' && isForeignOrMismatchedSessionJwt(profileId, v)) continue;
       if (profileId && k.startsWith('pelican_')) {
         if (k.startsWith(pfx)) {
+          if (k.endsWith('__auth_cfg') && isForeignAuthCfgString(profileId, v)) continue;
           saved[k] = v;
-        } else if (!k.includes('__') && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog') {
+        } else if (!k.includes('__') && k !== 'pelican_auth_cfg' && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog') {
           const mappedKey = pfx + k.slice(8);
           if (isTransientStorageKey(mappedKey)) continue;
           if (rawSaved[mappedKey] === undefined && saved[mappedKey] === undefined) saved[mappedKey] = v;
@@ -1341,9 +1395,21 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         const __rawSet = __sp.setItem;
         const __rawDel = __sp.removeItem;
         window.__pmRawStorage = { get: __rawGet, set: __rawSet, del: __rawDel };
+        const __getPid = function() {
+          if (window.__pmProfileId) return window.__pmProfileId;
+          try {
+            const s = window.sessionStorage && __rawGet.call(window.sessionStorage, '__pmProfileId');
+            if (s) {
+              window.__pmProfileId = s;
+              return s;
+            }
+          } catch (_) {}
+          return null;
+        };
         const __mapKey = function(st, k) {
-          if (st !== window.localStorage || !window.__pmProfileId || typeof k !== 'string') return k;
-          const pfx = 'pelican_' + window.__pmProfileId + '__';
+          const pid = __getPid();
+          if (st !== window.localStorage || !pid || typeof k !== 'string') return k;
+          const pfx = 'pelican_' + pid + '__';
           if (k === 'aetheria.device') return pfx + 'aetheria_device';
           if (k === 'aetheria.machine') return pfx + 'aetheria_machine';
           if (k.startsWith('pelican_') && !k.startsWith(pfx) && k.indexOf('__') === -1 && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog') {
@@ -1353,25 +1419,27 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         };
         __sp.getItem = function(k) {
           if (this === window.localStorage) {
-            if (window.__pmDeviceId && (k === 'aetheria.device' || (window.__pmProfileId && k === 'pelican_' + window.__pmProfileId + '__aetheria_device'))) {
+            const pid = __getPid();
+            if (window.__pmDeviceId && (k === 'aetheria.device' || (pid && k === 'pelican_' + pid + '__aetheria_device'))) {
               return window.__pmDeviceId;
             }
-            if (window.__pmMachineId && (k === 'aetheria.machine' || (window.__pmProfileId && k === 'pelican_' + window.__pmProfileId + '__aetheria_machine'))) {
+            if (window.__pmMachineId && (k === 'aetheria.machine' || (pid && k === 'pelican_' + pid + '__aetheria_machine'))) {
               return window.__pmMachineId;
             }
           }
           return __rawGet.call(this, __mapKey(this, k));
         };
         __sp.setItem = function(k, v) {
-          if (this === window.localStorage && window.__pmProfileId) {
+          const pid = __getPid();
+          if (this === window.localStorage && pid) {
             if (!__isTransientStorageKey(k)) {
               window.__pmStorageDirtyAt = Date.now();
             }
-            if (k === 'aetheria.device' || k === 'pelican_' + window.__pmProfileId + '__aetheria_device') {
+            if (k === 'aetheria.device' || k === 'pelican_' + pid + '__aetheria_device') {
               const incoming = String(v || '').trim();
               const dev = (incoming && incoming.length >= 16 && incoming !== 'unknown-device') ? incoming : (window.__pmDeviceId || __mintUuid());
               window.__pmDeviceId = dev;
-              const targetKey = 'pelican_' + window.__pmProfileId + '__aetheria_device';
+              const targetKey = 'pelican_' + pid + '__aetheria_device';
               try {
                 return __rawSet.call(this, targetKey, dev);
               } catch (_) {
@@ -1379,11 +1447,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 try { return __rawSet.call(this, targetKey, dev); } catch (__) { return; }
               }
             }
-            if (k === 'aetheria.machine' || k === 'pelican_' + window.__pmProfileId + '__aetheria_machine') {
+            if (k === 'aetheria.machine' || k === 'pelican_' + pid + '__aetheria_machine') {
               const incoming = String(v || '').trim().toLowerCase();
               const mach = (incoming && incoming.length === 64) ? incoming : (window.__pmMachineId || __mintMachineId());
               window.__pmMachineId = mach;
-              const targetKey = 'pelican_' + window.__pmProfileId + '__aetheria_machine';
+              const targetKey = 'pelican_' + pid + '__aetheria_machine';
               try {
                 return __rawSet.call(this, targetKey, mach);
               } catch (_) {
@@ -1419,7 +1487,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           return __rawSet.call(this, k, v);
         };
         __sp.removeItem = function(k) {
-          if (this === window.localStorage && window.__pmProfileId && (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_' + window.__pmProfileId + '__aetheria_device' || k === 'pelican_' + window.__pmProfileId + '__aetheria_machine')) {
+          const pid = __getPid();
+          if (this === window.localStorage && pid && (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_' + pid + '__aetheria_device' || k === 'pelican_' + pid + '__aetheria_machine')) {
             return;
           }
           return __rawDel.call(this, __mapKey(this, k));
@@ -1526,7 +1595,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                     register: false,
                     registerDone: true,
                     verifiedLoginAt: now,
-                    userEditedAt: isSameGen ? (cur.userEditedAt || 0) : now
+                    userEditedAt: Number(cur.userEditedAt) || 0
                   });
                   delete next.registerError;
                   window.__authConfig = next;
@@ -1594,6 +1663,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if (harvestAll) lastSharedHarvestAt = Date.now();
       const res = await evaluate(c, `(() => {
         if (!window.__pmStorageRestored) return { restored: false, out: {}, other: {} };
+        if (window.__pmProfileId && window.__pmProfileId !== ${JSON.stringify(c.profileId)}) return { restored: false, out: {}, other: {} };
         const curDirty = window.__pmStorageDirtyAt || 1;
         const doHarvest = ${Boolean(harvestAll)};
         const force = ${Boolean(forceHarvest)};
@@ -1778,6 +1848,14 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           ensureSessionHooks(c.sessionId, c.profileId, c).catch(() => {});
         }
         if (classify(c, before)) return;
+      }
+      if (before.profileId && before.profileId !== c.profileId) {
+        if (knownTargets.get(c.profileId) === c.targetId) {
+          knownTargets.delete(c.profileId);
+          saveKnownTargets();
+        }
+        drop(c);
+        return;
       }
       if (before.profileId !== c.profileId || before.deviceId !== expectedDeviceId || before.machineId !== expectedMachineId || !before.storageRestored) {
         await ensureSessionHooks(c.sessionId, c.profileId, c);
@@ -2174,7 +2252,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         const knownMatch = null;
         let identified = null;
         let probeFailed = false;
-        let pid = null, charName = null, sessionUserId = null, bodyText = '';
+        let pid = null, charName = null, sessionUserId = null, authUser = null, bodyText = '';
         if (!identified) {
           const { sessionId } = await send('Target.attachToTarget', { targetId: t.targetId, flatten: true }, undefined, isRealSession ? 4000 : 10000);
           try {
@@ -2192,6 +2270,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                   pid: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
                   charName: (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData() && window.getLiveCharacterData().name) || window.__charName || null,
                   sessionUserId: sUser,
+                  authUser: (window.__authConfig && typeof window.__authConfig.username === 'string' && window.__authConfig.username.trim()) || null,
                   bodyText: (typeof document !== 'undefined' && document.body && typeof document.body.innerText === 'string') ? document.body.innerText.slice(0, 1500) : ''
                 };
               })()`,
@@ -2204,6 +2283,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               pid = val.pid || null;
               charName = val.charName || null;
               sessionUserId = val.sessionUserId || null;
+              authUser = val.authUser || null;
               bodyText = String(val.bodyText || '');
             } else if (typeof val === 'string') {
               pid = val;
@@ -2224,25 +2304,39 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           } finally {
             await send('Target.detachFromTarget', { sessionId }).catch(() => {});
           }
-          identified = pid || allProfiles.find(p => knownTargets.get(p.id) === t.targetId)?.id || null;
+          if (pid && clients.has(pid)) {
+            continue;
+          }
+          identified = pid || allProfiles.find(p => !clients.has(p.id) && knownTargets.get(p.id) === t.targetId)?.id || null;
         }
         if (!identified) {
           const unclaimed = allProfiles.filter(p => !clients.has(p.id) && (!knownTargets.get(p.id) || !surviving.has(knownTargets.get(p.id))));
-          if (sessionUserId) {
-            const uLower = sessionUserId.toLowerCase();
-            const byUser = unclaimed.filter(p => String(p.account || '').trim().toLowerCase() === uLower);
-            if (byUser.length === 1) identified = byUser[0].id;
+          const effectiveUser = String(sessionUserId || authUser || '').trim().toLowerCase();
+          if (effectiveUser) {
+            const allByUser = allProfiles.filter(p => String(p.account || '').trim().toLowerCase() === effectiveUser);
+            const byUser = unclaimed.filter(p => String(p.account || '').trim().toLowerCase() === effectiveUser);
+            if (byUser.length === 1) {
+              identified = byUser[0].id;
+            } else if (allByUser.length > 0) {
+              continue;
+            }
           }
           if (!identified && (charName || bodyText)) {
             const tokens = new Set(bodyText.split(/[\r\n\s·•]+/).filter(Boolean));
-            const byChar = unclaimed.filter(p => {
+            const matchesChar = p => {
               const cn = String(p.lastCharName || '').trim();
               if (!cn) return false;
               return charName === cn || tokens.has(cn) || bodyText.includes(cn) || bodyText.includes('เข้าเกมด้วย ' + cn);
-            });
-            if (byChar.length === 1) identified = byChar[0].id;
+            };
+            const allByChar = allProfiles.filter(matchesChar);
+            const byChar = unclaimed.filter(matchesChar);
+            if (byChar.length === 1) {
+              identified = byChar[0].id;
+            } else if (allByChar.length > 0) {
+              continue;
+            }
           }
-          if (!identified && unattachedPages.length === 1 && unclaimed.length === 1 && clients.size > 0) {
+          if (!identified && allProfiles.length <= 1 && unattachedPages.length === 1 && unclaimed.length === 1) {
             identified = unclaimed[0].id;
           }
         }
@@ -2314,6 +2408,14 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 if (!cur || !cur.c || clients.get(cur.c.profileId) !== cur.c || stoppedProfiles.has(cur.c.profileId)) continue;
                 try {
                   const h = await health(cur.c, 3000);
+                  if (h && h.profileId && h.profileId !== cur.c.profileId) {
+                    if (knownTargets.get(cur.c.profileId) === cur.c.targetId) {
+                      knownTargets.delete(cur.c.profileId);
+                      saveKnownTargets();
+                    }
+                    drop(cur.c);
+                    continue;
+                  }
                   if (h && h.profileId === cur.c.profileId && h.version && h.hud && h.liveHook && classify(cur.c, h)) {
                     cur.c.initialHealthChecked = true;
                     readyTabs.push(cur.c);
@@ -2713,12 +2815,16 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (!existing) {
       const { targetInfos } = await send('Target.getTargets');
       const customContexts = await getCustomBrowserContexts();
+      const allProfiles = (typeof loadProfiles === 'function' ? loadProfiles() : []) || [];
+      const knownTargetId = knownTargets.get(profile.id);
       const claimedTargets = new Set([...Array.from(clients.values()).map(c => c.targetId), ...Array.from(knownTargets.entries()).filter(([k]) => k !== profile.id).map(([, v]) => v)]);
       const orphans = targetInfos.filter(t => t.type === 'page' && isGameUrl(t.url) && !claimedTargets.has(t.targetId));
-      if (orphans.length === 1) {
+      const matchedOrphan = orphans.find(t => knownTargetId && t.targetId === knownTargetId) ||
+        ((allProfiles.length <= 1 && orphans.length === 1 && clients.size === 0) ? orphans[0] : null);
+      if (matchedOrphan) {
         try {
-          const orphanCtx = (orphans[0].browserContextId && customContexts.has(orphans[0].browserContextId)) ? orphans[0].browserContextId : null;
-          existing = await attach(profile.id, orphans[0].targetId, true, orphanCtx);
+          const orphanCtx = (matchedOrphan.browserContextId && customContexts.has(matchedOrphan.browserContextId)) ? matchedOrphan.browserContextId : null;
+          existing = await attach(profile.id, matchedOrphan.targetId, true, orphanCtx);
         } catch (_) {}
       }
     }

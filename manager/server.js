@@ -541,6 +541,7 @@ function recoverProfilesFromLocalEvidence() {
 
     // 2a. sessions/_browser_storage/*.json
     const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
+    const seenRecoveredUsers = new Set();
     if (fs.existsSync(bsDir)) {
       for (const f of fs.readdirSync(bsDir)) {
         if (!f.endsWith(".json")) continue;
@@ -550,21 +551,25 @@ function recoverProfilesFromLocalEvidence() {
         try {
           const d = JSON.parse(fs.readFileSync(path.join(bsDir, f), "utf8"));
           const pfx = `pelican_${id}__`;
-          const rawAuth = d[`${pfx}auth_cfg`] || d["pelican_auth_cfg"];
+          const rawAuth = d[`${pfx}auth_cfg`];
           if (rawAuth) {
             try {
               const auth = JSON.parse(rawAuth);
               if (auth && typeof auth === "object") {
                 const verified = isVerifiedAuthConfig(auth);
-                if (verified && auth.username && String(auth.username).trim()) {
-                  p.account = String(auth.username).trim();
+                const candUser = auth.username ? String(auth.username).trim() : "";
+                const candLower = candUser.toLowerCase();
+                const isDupUser = Boolean(candLower && seenRecoveredUsers.has(candLower));
+                if (verified && candUser && !isDupUser) {
+                  seenRecoveredUsers.add(candLower);
+                  p.account = candUser;
                   p.hasRealEvidence = true;
                 }
-                if (auth.charName && String(auth.charName).trim()) {
+                if (!isDupUser && auth.charName && String(auth.charName).trim()) {
                   p.lastCharName = String(auth.charName).trim();
                   p.hasRealEvidence = true;
                 }
-                if (verified && auth.password && String(auth.password).trim() && !credentials.getPassword(id)) {
+                if (verified && !isDupUser && auth.password && String(auth.password).trim() && !credentials.getPassword(id)) {
                   credentials.setPassword(id, String(auth.password).trim());
                   p.hasRealEvidence = true;
                 }
@@ -5260,10 +5265,17 @@ function buildLocalProfileBackupPayload() {
   const deviceId = getEffectiveDeviceNickname();
   const cleanProfiles = [];
   const credsMap = {};
+  const seenBackupAccounts = new Set();
   for (const p of profiles) {
     if (!p || !p.id) continue;
     const password = credentials.getPassword(p.id) || "";
     const username = String(p.account || p.username || "").trim();
+    const uLower = username.toLowerCase();
+    // Never overwrite Central Backup with a clobbered duplicate account from another client
+    if (uLower && seenBackupAccounts.has(uLower)) {
+      continue;
+    }
+    if (uLower) seenBackupAccounts.add(uLower);
     const characterName = String((p.liveState && p.liveState.charName) || p.lastCharName || "").trim();
     const copy = { ...p };
     delete copy.liveState;
@@ -5657,6 +5669,176 @@ function hasProfilesMissingCredentialsOrAccount(list) {
   return Array.isArray(list) && list.some(p => p && p.id && (!p.account || !credentials.getPassword(p.id)));
 }
 
+function hasDuplicateProfileAccounts(list) {
+  if (!Array.isArray(list)) return false;
+  const seen = new Set();
+  for (const p of list) {
+    const u = String(p && p.account || "").trim().toLowerCase();
+    if (!u) continue;
+    if (seen.has(u)) return true;
+    seen.add(u);
+  }
+  return false;
+}
+
+async function healDuplicateClobberedProfiles(current) {
+  if (!Array.isArray(current) || !hasDuplicateProfileAccounts(current)) return false;
+  const byAccount = new Map();
+  for (const p of current) {
+    if (!p || !p.id) continue;
+    const u = String(p.account || "").trim().toLowerCase();
+    if (!u) continue;
+    if (!byAccount.has(u)) byAccount.set(u, []);
+    byAccount.get(u).push(p);
+  }
+  const dupGroups = Array.from(byAccount.entries()).filter(([, grp]) => grp.length > 1);
+  if (dupGroups.length === 0) return false;
+
+  const cloudById = new Map();
+  try {
+    const accountSettings = humanCheckSolver.loadSettings();
+    if (accountSettings && accountSettings.accountId) {
+      const restoreRes = await humanCheckSolver.serviceRequest("/v1/aetheria/machine/profile-restore", {
+        machineId: getEffectiveDeviceNickname(),
+        deletedProfileIds: Array.from(loadDeletedProfileIds())
+      }).catch(() => null);
+      if (restoreRes && restoreRes.success && Array.isArray(restoreRes.profiles)) {
+        for (const item of restoreRes.profiles) {
+          const id = String(item && (item.id || item.profileId) || "").trim();
+          if (id) cloudById.set(id, item);
+        }
+      }
+    }
+  } catch (_) {}
+
+  const localBackupById = new Map();
+  try {
+    const bFile = path.join(dataDir, "profiles.backup.json");
+    if (fs.existsSync(bFile)) {
+      const arr = JSON.parse(fs.readFileSync(bFile, "utf8"));
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          if (item && item.id) localBackupById.set(String(item.id), item);
+        }
+      }
+    }
+  } catch (_) {}
+
+  const usedAccounts = new Set(current.map(p => String(p && p.account || "").trim().toLowerCase()).filter(Boolean));
+  const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
+  let healedAny = false;
+
+  for (const [uLower, group] of dupGroups) {
+    let owner = group.find(p => {
+      const cItem = cloudById.get(p.id);
+      const cUser = String(cItem && (cItem.username || cItem.account) || "").trim().toLowerCase();
+      return cUser === uLower;
+    }) || group[0];
+
+    for (const victim of group) {
+      if (victim === owner) continue;
+      let restoredUser = "";
+      let restoredPass = "";
+      let restoredChar = "";
+
+      const cItem = cloudById.get(victim.id);
+      if (cItem) {
+        const cu = String(cItem.username || cItem.account || "").trim();
+        if (cu && cu.toLowerCase() !== uLower && !usedAccounts.has(cu.toLowerCase())) {
+          restoredUser = cu;
+          restoredPass = String(cItem.password || "").trim();
+          restoredChar = String(cItem.characterName || (cItem.profile && cItem.profile.lastCharName) || "").trim();
+        }
+      }
+
+      if (!restoredUser) {
+        const bItem = localBackupById.get(victim.id);
+        if (bItem) {
+          const bu = String(bItem.account || bItem.username || "").trim();
+          if (bu && bu.toLowerCase() !== uLower && !usedAccounts.has(bu.toLowerCase())) {
+            restoredUser = bu;
+            restoredChar = String(bItem.lastCharName || "").trim();
+          }
+        }
+      }
+
+      if (!restoredUser && Array.isArray(victim.authHistory)) {
+        for (const h of victim.authHistory) {
+          const hu = String(h && h.username || "").trim();
+          if (hu && hu.toLowerCase() !== uLower && !usedAccounts.has(hu.toLowerCase())) {
+            restoredUser = hu;
+            if (h.password) restoredPass = String(h.password).trim();
+            if (h.charName) restoredChar = String(h.charName).trim();
+            break;
+          }
+        }
+      }
+
+      if (restoredUser) {
+        usedAccounts.add(restoredUser.toLowerCase());
+        victim.account = restoredUser;
+        victim.autoRegister = false;
+        victim.generatedAccount = /^pm[a-z0-9]{8}$/i.test(restoredUser);
+        victim.registerError = "";
+        victim.loginSyncPending = true;
+        victim.lastAuthSyncPushAt = Date.now();
+        if (restoredChar) {
+          victim.lastCharName = restoredChar;
+        } else if (owner && victim.lastCharName && victim.lastCharName === owner.lastCharName) {
+          victim.lastCharName = "";
+        }
+        if (restoredPass) {
+          credentials.setPassword(victim.id, restoredPass);
+        }
+        try {
+          const bsFile = path.join(bsDir, `${victim.id}.json`);
+          if (fs.existsSync(bsFile)) {
+            const bsData = JSON.parse(fs.readFileSync(bsFile, "utf8")) || {};
+            delete bsData["__ss:aetheria.session"];
+            delete bsData["pelican_auth_cfg"];
+            const pfxKey = `pelican_${victim.id}__auth_cfg`;
+            const finalPw = restoredPass || credentials.getPassword(victim.id) || "";
+            bsData[pfxKey] = JSON.stringify({
+              enabled: true,
+              username: restoredUser,
+              password: finalPw,
+              charName: victim.lastCharName || "",
+              register: false,
+              registerDone: true,
+              generatedUser: Boolean(victim.generatedAccount),
+              lastManagerPushAt: Date.now(),
+              userEditedAt: 0
+            });
+            fs.writeFileSync(bsFile + ".tmp", JSON.stringify(bsData), "utf8");
+            fs.renameSync(bsFile + ".tmp", bsFile);
+          }
+        } catch (_) {}
+        if (victim.debugPort) {
+          const finalPw = restoredPass || credentials.getPassword(victim.id) || "";
+          evalProfilePort(victim.debugPort, `(() => {
+            try { window.sessionStorage && window.sessionStorage.removeItem('aetheria.session'); } catch (_) {}
+            if (typeof window.applyPelicanAuthConfig === 'function') {
+              return window.applyPelicanAuthConfig(${JSON.stringify({
+                enabled: true,
+                username: restoredUser,
+                password: finalPw,
+                register: false,
+                registerDone: true,
+                generatedUser: Boolean(victim.generatedAccount),
+                autoResumeBot: true
+              })});
+            }
+            return { success: true };
+          })()`, 3000).catch(() => {});
+        }
+        console.log(`[ProfileHeal] 🛡️ กู้คืนโปรไฟล์ที่ถูกเขียนทับ ${victim.name} (${victim.id}): "${uLower}" -> "${restoredUser}" (${victim.lastCharName || "-"})`);
+        healedAny = true;
+      }
+    }
+  }
+  return healedAny;
+}
+
 async function recoverAndEnrichProfilesFromBrowserAndLocal() {
   try {
     const current = loadProfiles() || [];
@@ -5720,7 +5902,7 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
       try {
         const d = JSON.parse(fs.readFileSync(f, "utf8"));
         const pfx = `pelican_${p.id}__`;
-        const rawAuth = d[`${pfx}auth_cfg`] || d["pelican_auth_cfg"];
+        const rawAuth = d[`${pfx}auth_cfg`];
         if (harvestedAuthHistory[p.id] && harvestedAuthHistory[p.id].length > 0) {
           const prevJson = JSON.stringify(p.authHistory || []);
           const nextJson = JSON.stringify(harvestedAuthHistory[p.id]);
@@ -5733,13 +5915,18 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
           const auth = JSON.parse(rawAuth);
           if (auth && typeof auth === "object") {
             const verified = isVerifiedAuthConfig(auth);
-            const clientEditStamp = Math.max(Number(auth.userEditedAt) || 0, Number(auth.verifiedLoginAt) || 0);
+            const manualUserEditedAt = Number(auth.userEditedAt) || 0;
             const managerPushStamp = Number(auth.lastManagerPushAt) || 0;
-            const isNewerUserCred = verified && !auth.generatedUser && clientEditStamp > 0 && clientEditStamp > managerPushStamp;
-            if (verified && auth.username && String(auth.username).trim() && (!p.account || isNewerUserCred)) {
-              const nextU = String(auth.username).trim();
-              if (p.account !== nextU) {
-                p.account = nextU;
+            const candUser = auth.username ? String(auth.username).trim() : "";
+            const ownedByOtherProfile = Boolean(
+              candUser &&
+              String(p.account || "").trim().toLowerCase() !== candUser.toLowerCase() &&
+              current.some(o => o && o.id !== p.id && String(o.account || "").trim().toLowerCase() === candUser.toLowerCase())
+            );
+            const isNewerUserCred = verified && !auth.generatedUser && !ownedByOtherProfile && manualUserEditedAt > 0 && manualUserEditedAt > managerPushStamp;
+            if (verified && candUser && !ownedByOtherProfile && (!p.account || isNewerUserCred)) {
+              if (p.account !== candUser) {
+                p.account = candUser;
                 p.autoRegister = false;
                 p.generatedAccount = Boolean(auth.generatedUser);
                 p.loginSyncPending = true;
@@ -5747,12 +5934,12 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
                 authChanged = true;
               }
             }
-            if (auth.charName && String(auth.charName).trim() && !p.lastCharName) {
+            if (!ownedByOtherProfile && auth.charName && String(auth.charName).trim() && !p.lastCharName) {
               p.lastCharName = String(auth.charName).trim();
               if (/^Client \d+$/.test(p.name || "")) p.name = p.lastCharName;
               changed = true;
             }
-            if (verified && auth.password && String(auth.password).trim() && (!credentials.getPassword(p.id) || isNewerUserCred)) {
+            if (verified && !ownedByOtherProfile && auth.password && String(auth.password).trim() && (!credentials.getPassword(p.id) || isNewerUserCred)) {
               const nextPw = String(auth.password).trim();
               if (credentials.getPassword(p.id) !== nextPw) {
                 credentials.setPassword(p.id, nextPw);
@@ -5764,6 +5951,11 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
           }
         }
       } catch (_) {}
+    }
+    const healed = await healDuplicateClobberedProfiles(current).catch(() => false);
+    if (healed) {
+      changed = true;
+      authChanged = true;
     }
     if (changed) {
       saveProfiles(current);
@@ -5778,13 +5970,13 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
 if (!TEST_INSTANCE) {
   setTimeout(async () => {
     const cur = loadProfiles() || [];
-    if (hasProfilesMissingCredentialsOrAccount(cur)) {
+    if (hasProfilesMissingCredentialsOrAccount(cur) || hasDuplicateProfileAccounts(cur)) {
       await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
     }
-  }, 15000);
+  }, 5000);
   setInterval(async () => {
     const cur = loadProfiles() || [];
-    if (hasProfilesMissingCredentialsOrAccount(cur)) {
+    if (hasProfilesMissingCredentialsOrAccount(cur) || hasDuplicateProfileAccounts(cur)) {
       await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
     } else {
       await syncProfileBackupToCentral().catch(() => {});
@@ -6713,16 +6905,19 @@ const server = http.createServer(async (req, res) => {
               const hasClientCreds = Boolean(cUser && cPass && !ca.register && !ca.registerError);
               if (hasClientCreds) {
                 const curProfPass = credentials.getPassword(p.id);
-                const clientEditStamp = Math.max(Number(ca.userEditedAt) || 0, Number(ca.verifiedLoginAt) || 0);
+                const ownedByOtherProfile = Boolean(
+                  cUser &&
+                  String(p.account || '').trim().toLowerCase() !== cUser.toLowerCase() &&
+                  profiles.some(o => o && o.id !== p.id && String(o.account || '').trim().toLowerCase() === cUser.toLowerCase())
+                );
+                const manualUserEditedAt = Number(ca.userEditedAt) || 0;
                 const lastManagerPushAt = Number(p.lastAuthSyncPushAt) || 0;
                 const managerMissingCreds = !p.account || !curProfPass;
-                const isCustomClientUser = Boolean(!ca.generatedUser && !/^pm[a-z0-9]{8}$/.test(cUser));
                 const isSameGeneratedAccount = Boolean(p.generatedAccount && p.account && cUser === p.account);
-                const shouldAdopt = !isSameGeneratedAccount && (
-                  clientEditStamp > lastManagerPushAt ||
+                const shouldAdopt = !isSameGeneratedAccount && !ownedByOtherProfile && (
+                  (manualUserEditedAt > 0 && manualUserEditedAt > lastManagerPushAt) ||
                   managerMissingCreds ||
-                  (!ca.generatedUser && (p.autoRegister || p.generatedAccount)) ||
-                  (isCustomClientUser && (cUser !== p.account || cPass !== curProfPass))
+                  (!ca.generatedUser && (p.autoRegister || p.generatedAccount))
                 );
                 if (shouldAdopt && (cUser !== p.account || cPass !== curProfPass || p.autoRegister || (p.generatedAccount && !ca.generatedUser))) {
                   credentials.setPassword(p.id, cPass);
@@ -6898,14 +7093,24 @@ const server = http.createServer(async (req, res) => {
         if (p.liveState && !p.liveState.error) {
           const hasChar = Boolean(p.liveState.charName);
           const inGamePhase = !p.liveState.screenPhase || p.liveState.screenPhase === 'in_game';
-          const portrait = hasChar && p.liveState.portrait && portraitPathFromSrc(p.liveState.portrait);
-          if (portrait) target.lastPortrait = p.lastPortrait = portrait;
-          if (hasChar) target.lastCharName = p.lastCharName = p.liveState.charName;
-          if (hasChar && p.liveState.charClass) target.lastCharClass = p.lastCharClass = p.liveState.charClass;
-          if (Number(p.liveState.premiumUntil) > 0) {
-            target.lastPremiumUntil = p.lastPremiumUntil = Number(p.liveState.premiumUntil);
-          } else if (inGamePhase && hasChar && p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
-            target.lastPremiumUntil = p.lastPremiumUntil = 0;
+          const liveCharLower = hasChar ? String(p.liveState.charName).trim().toLowerCase() : '';
+          const liveAuthLower = (p.liveState.authConfig && p.liveState.authConfig.username) ? String(p.liveState.authConfig.username).trim().toLowerCase() : '';
+          const charOrAuthOwnedByOther = fresh.some(o => {
+            if (!o || o.id === p.id) return false;
+            if (liveAuthLower && String(o.account || '').trim().toLowerCase() === liveAuthLower && String(target.account || '').trim().toLowerCase() !== liveAuthLower) return true;
+            if (liveCharLower && String(o.lastCharName || '').trim().toLowerCase() === liveCharLower && String(target.lastCharName || '').trim().toLowerCase() !== liveCharLower) return true;
+            return false;
+          });
+          if (!charOrAuthOwnedByOther) {
+            const portrait = hasChar && p.liveState.portrait && portraitPathFromSrc(p.liveState.portrait);
+            if (portrait) target.lastPortrait = p.lastPortrait = portrait;
+            if (hasChar) target.lastCharName = p.lastCharName = p.liveState.charName;
+            if (hasChar && p.liveState.charClass) target.lastCharClass = p.lastCharClass = p.liveState.charClass;
+            if (Number(p.liveState.premiumUntil) > 0) {
+              target.lastPremiumUntil = p.lastPremiumUntil = Number(p.liveState.premiumUntil);
+            } else if (inGamePhase && hasChar && p.liveState.hasPremium === false && Number(target.lastPremiumUntil || 0) > Date.now()) {
+              target.lastPremiumUntil = p.lastPremiumUntil = 0;
+            }
           }
         }
       });

@@ -467,17 +467,21 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     // 1. If the user manually entered ID/Password in the in-game Bot HUD, logged in manually on the game screen,
     // or the in-game Bot HUD already has credentials while Manager is empty or in autoRegister/generatedAccount mode,
     // adopt the user's credentials into the Manager profile instead of leaving Manager blank or overwriting with a bot account!
-    const clientEditStamp = Math.max(Number(cur.userEditedAt) || 0, Number(cur.verifiedLoginAt) || 0);
+    const allProfiles = (typeof loadProfiles === 'function' ? loadProfiles() : []) || [];
+    const ownedByOtherProfile = Boolean(
+      cur.username &&
+      String(profile.account || '').trim().toLowerCase() !== cur.username.toLowerCase() &&
+      allProfiles.some(o => o && o.id !== profile.id && String(o.account || '').trim().toLowerCase() === cur.username.toLowerCase())
+    );
+    const manualUserEditedAt = Number(cur.userEditedAt) || 0;
     const lastManagerPushAt = Number(profile.lastAuthSyncPushAt) || 0;
     const hasClientCreds = Boolean(cur.username && cur.password && !cur.register && !cur.registerError);
     const managerMissingCreds = !profile.account || !pw(profile);
-    const isCustomClientUser = Boolean(cur.username && !cur.generatedUser && !/^pm[a-z0-9]{8}$/.test(cur.username));
     const isSameGeneratedAccount = Boolean(profile.generatedAccount && profile.account && cur.username === profile.account);
-    const shouldAdoptFromClient = hasClientCreds && !isSameGeneratedAccount && (
-      clientEditStamp > lastManagerPushAt ||
+    const shouldAdoptFromClient = hasClientCreds && !isSameGeneratedAccount && !ownedByOtherProfile && (
+      (manualUserEditedAt > 0 && manualUserEditedAt > lastManagerPushAt) ||
       managerMissingCreds ||
-      (!cur.generatedUser && (profile.autoRegister || profile.generatedAccount)) ||
-      (isCustomClientUser && (cur.username !== profile.account || cur.password !== pw(profile)))
+      (!cur.generatedUser && (profile.autoRegister || profile.generatedAccount))
     );
 
     if (shouldAdoptFromClient) {
@@ -494,7 +498,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
         });
         pendingCreds.delete(profile.id);
         console.log(`[AuthSync] 🔄 ${profile.name}: ซิงค์ไอดี/รหัสจากเมนูบอทในเกม ("${cur.username}") เข้าโปรไฟล์ Manager อัตโนมัติ`);
-      } else if (clientEditStamp > lastManagerPushAt) {
+      } else if (manualUserEditedAt > lastManagerPushAt) {
         updateProfile(profile.id, { lastAuthSyncPushAt: Date.now() });
       }
       return;
@@ -502,7 +506,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
 
     if (profile.autoRegister) {
       // NEVER auto-register over a profile that already has a character or manual credentials in HUD!
-      if (cur.username && cur.password && !cur.register && !cur.registerError && !cur.generatedUser && !isSameGeneratedAccount) {
+      if (cur.username && cur.password && !cur.register && !cur.registerError && !cur.generatedUser && !isSameGeneratedAccount && !ownedByOtherProfile) {
         credentials.setPassword(profile.id, cur.password);
         updateProfile(profile.id, {
           account: cur.username,

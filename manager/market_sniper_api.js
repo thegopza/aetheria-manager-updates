@@ -250,6 +250,31 @@ function isNpcVendorTrashItem(itemOrObj) {
   return false;
 }
 
+// Compute retail-friendly split batch size for flipped items so buyers don't have to pay for a 999-stack all at once.
+// - Cards, Stones, Equipment, or expensive items (>= 100,000 z/unit): qty 1 per listing, up to 2 concurrent listings
+// - High-value consumables/fragments (20,000–99,999 z/unit, e.g. Swiftness Scroll, Fire Converter, Boss Card Fragment): qty 10, up to 3 concurrent
+// - Mid-high runes/materials (8,000–19,999 z/unit, e.g. Enchant Rune, Gale Feather): qty 25, up to 3 concurrent
+// - Mid-tier craft materials (1,800–7,999 z/unit, e.g. Glyph Leather, Tide Scale, Star Crumb): qty 50, up to 3 concurrent
+// - Ores & refine stones (< 1,800 z/unit, e.g. Enriched Elunium, Enriched Oridecon, Oridecon, Elunium, Mythril Ore): qty 100, up to 3 concurrent
+function getSmartFlipBatchConfig(itemName, unitPrice, isSingle = false) {
+  const norm = String(itemName || '').trim().toLowerCase();
+  const single = Boolean(isSingle || /\bcard\b|\bstone\s*\(|การ์ด|ศิลา/i.test(norm));
+  const u = Math.max(1, Number(unitPrice) || 1);
+  if (single || u >= 100000) {
+    return { batchQty: 1, maxConcurrent: 2, isSingle: true };
+  }
+  if (u >= 20000) {
+    return { batchQty: 10, maxConcurrent: 3, isSingle: false };
+  }
+  if (u >= 8000) {
+    return { batchQty: 25, maxConcurrent: 3, isSingle: false };
+  }
+  if (u >= 1800) {
+    return { batchQty: 50, maxConcurrent: 3, isSingle: false };
+  }
+  return { batchQty: 100, maxConcurrent: 3, isSingle: false };
+}
+
 const PRICE_CACHE_VER = 7;
 
 // Find the Most-Stable Price Cluster from the last 10–20 individual trades (`recent` array).
@@ -810,7 +835,18 @@ function createMarketSniperService({
         };
         window.__pmSniperWlHooked = true;
       }
-      if (typeof window.__pmSniperClaimAndFlip !== 'function') {
+      window.__pmGetSmartFlipBatchConfig = function (itemName, unitPrice, isSingle) {
+        const norm = String(itemName || '').trim().toLowerCase();
+        const single = Boolean(isSingle || /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(norm));
+        const u = Math.max(1, Number(unitPrice) || 1);
+        if (single || u >= 100000) return { batchQty: 1, maxConcurrent: 2, isSingle: true };
+        if (u >= 20000) return { batchQty: 10, maxConcurrent: 3, isSingle: false };
+        if (u >= 8000) return { batchQty: 25, maxConcurrent: 3, isSingle: false };
+        if (u >= 1800) return { batchQty: 50, maxConcurrent: 3, isSingle: false };
+        return { batchQty: 100, maxConcurrent: 3, isSingle: false };
+      };
+      if (window.__pmSniperRuntimeVer !== 2 || typeof window.__pmSniperClaimAndFlip !== 'function') {
+        window.__pmSniperRuntimeVer = 2;
         window.__pmSniperClaimAndFlip = async function (targetInfo, paidTotal, waitBeforeCollectMs = 750) {
           const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
           if (!room || !room.connection || !room.connection.isOpen) {
@@ -844,48 +880,68 @@ function createMarketSniperService({
               const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
               if (bId === Number(targetInfo.itemId) && bRef === Number(targetInfo.refine)) return true;
               return String(b.name || '').trim().toLowerCase() === normName && bRef === Number(targetInfo.refine);
-            });
+            }).sort((a, b) => (Number(b.qty) || 1) - (Number(a.qty) || 1));
           };
 
           const initialCandidates = findMatchingInBag();
-          foundInBag = initialCandidates.length > 0;
+          const totalBagQty = initialCandidates.reduce((s, c) => s + (Number(c.qty) || 1), 0);
+          const expectedLotQty = Math.max(1, Number(targetInfo.qty) || 1);
 
-          if (foundInBag && targetInfo.autoFlip && targetInfo.relistPriceTotal > paidTotal) {
-            const totalBagQty = initialCandidates.reduce((s, c) => s + (Number(c.qty) || 1), 0);
-            const totalWantedQty = Math.min(Number(targetInfo.qty) || 1, totalBagQty);
-            let unitPrice = Math.max(1, Number(targetInfo.flipUnitPrice) || Math.round((Number(targetInfo.relistPriceTotal) || 0) / Math.max(1, Number(targetInfo.qty) || 1)));
-            if (typeof window.fetchItemSmartSellPrice === 'function' && initialCandidates[0]) {
+          // Guard against false positive when outbid on a large stack (e.g. x999) while holding a few farmed drops in bag
+          if (!targetInfo.isRestock && expectedLotQty >= 20 && totalBagQty < Math.max(10, Math.floor(expectedLotQty * 0.4))) {
+            foundInBag = false;
+          } else {
+            foundInBag = totalBagQty > 0;
+          }
+
+          const paidUnitCost = Math.floor((Number(paidTotal) || 0) / expectedLotQty);
+          let unitPrice = Math.max(1, Number(targetInfo.flipUnitPrice) || Math.round((Number(targetInfo.relistPriceTotal) || 0) / expectedLotQty));
+
+          if (foundInBag && targetInfo.autoFlip && unitPrice > paidUnitCost) {
+            const totalWantedQty = targetInfo.isRestock ? totalBagQty : Math.min(expectedLotQty, totalBagQty);
+            if (!targetInfo.skipSmartPriceFetch && typeof window.fetchItemSmartSellPrice === 'function' && initialCandidates[0]) {
               try {
                 const rawSmart = await window.fetchItemSmartSellPrice(initialCandidates[0]);
                 const liveSmart = Number((rawSmart && typeof rawSmart === 'object') ? rawSmart.unitPrice : rawSmart) || 0;
-                if (liveSmart > 0 && (liveSmart * totalWantedQty) > paidTotal && liveSmart >= Math.round(unitPrice * 0.55)) {
+                if (liveSmart > paidUnitCost && liveSmart >= Math.round(unitPrice * 0.55) && liveSmart <= Math.round(unitPrice * 1.15)) {
                   unitPrice = liveSmart;
                 }
               } catch (_) {}
             }
-            const listingsToPost = isSingle ? Math.min(2, Math.max(1, totalWantedQty)) : 1;
-            const perListingQty = isSingle ? 1 : totalWantedQty;
-            const perListingPrice = isSingle ? unitPrice : (unitPrice * totalWantedQty);
-            const totalDepositFee = Math.max(1, Math.floor(perListingPrice * 2 / 100)) * listingsToPost;
+
+            const batchCfg = window.__pmGetSmartFlipBatchConfig(normName, unitPrice, isSingle);
+            const batchQty = Math.max(1, Number(targetInfo.batchQty) || batchCfg.batchQty);
+            const maxConcurrent = Math.max(1, Number(targetInfo.maxConcurrent) || batchCfg.maxConcurrent);
+
+            const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
+            const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
+            const hasPrem = Boolean(
+              (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
+              (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
+            );
+            const maxSlots = hasPrem ? 20 : 3;
+
+            const mineMsg = await new Promise(resolve => {
+              let unsub;
+              const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2200);
+              unsub = room.onMessage('market_mine', m => { clearTimeout(t); if (unsub) unsub(); resolve(m); });
+              try { room.send('market', { op: 'mine' }); } catch (_) { clearTimeout(t); if (unsub) unsub(); resolve(null); }
+            });
+
+            const activeList = (mineMsg && Array.isArray(mineMsg.active)) ? mineMsg.active : [];
+            const sameActiveCount = activeList.filter(a => a && String((a.item && a.item.name) || '').trim().toLowerCase() === normName).length;
+            const desiredNewBatches = Math.max(targetInfo.isRestock ? 0 : (sameActiveCount < maxConcurrent ? 1 : 0), maxConcurrent - sameActiveCount);
+            const maxBatchesFromBag = Math.max(1, Math.ceil(totalWantedQty / batchQty));
+            const listingsToPost = Math.min(desiredNewBatches, maxBatchesFromBag);
+            const sampleBatchQty = Math.min(batchQty, totalWantedQty);
+            const sampleBatchPrice = unitPrice * sampleBatchQty;
+            const totalDepositFee = Math.max(1, Math.floor(sampleBatchPrice * 2 / 100)) * Math.max(1, listingsToPost);
             const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
 
-            if (totalWantedQty > 0 && (unitPrice * totalWantedQty) > paidTotal && (curZeny === 0 || curZeny >= totalDepositFee)) {
-              const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
-              const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
-              const hasPrem = Boolean(
-                (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
-                (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
-              );
-              const maxSlots = hasPrem ? 20 : 3;
-
-              const mineMsg = await new Promise(resolve => {
-                let unsub;
-                const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2200);
-                unsub = room.onMessage('market_mine', m => { clearTimeout(t); if (unsub) unsub(); resolve(m); });
-                try { room.send('market', { op: 'mine' }); } catch (_) { clearTimeout(t); if (unsub) unsub(); resolve(null); }
-              });
-
-              const activeList = (mineMsg && Array.isArray(mineMsg.active)) ? mineMsg.active : [];
+            if (listingsToPost === 0 && sameActiveCount >= maxConcurrent) {
+              // Already has maxConcurrent batches active on market; remaining units stay protected in bag for drip restock
+              relisted = true;
+            } else if (listingsToPost > 0 && totalWantedQty > 0 && unitPrice > paidUnitCost && (curZeny === 0 || curZeny >= totalDepositFee)) {
               const freeSlotsNow = Math.max(0, maxSlots - activeList.length);
               const needEvictCount = Math.max(0, listingsToPost - freeSlotsNow);
 
@@ -923,9 +979,12 @@ function createMarketSniperService({
                 if (!freshCandidates.length) break;
                 const freshTarget = freshCandidates[0];
                 const beforeQty = Number(freshTarget.qty) || 1;
-                const qtyThisPost = Math.min(perListingQty, beforeQty);
+                // If remaining stack is within 20% of batchQty (e.g. 115 left when batchQty=100), list all of it so no tiny tail is left
+                const qtyThisPost = (batchQty > 1 && beforeQty <= Math.ceil(batchQty * 1.20))
+                  ? beforeQty
+                  : Math.min(batchQty, beforeQty);
                 if (qtyThisPost <= 0) break;
-                const priceThisPost = isSingle ? unitPrice : (unitPrice * qtyThisPost);
+                const priceThisPost = unitPrice * qtyThisPost;
 
                 window.__pmExplicitHoursOnce = true;
                 try {
@@ -964,13 +1023,19 @@ function createMarketSniperService({
               }
             }
           }
-          if (relisted && window.__pmSniperProtectedItems && listedUnitsCount >= (Number(targetInfo.qty) || 1)) {
-            window.__pmSniperProtectedItems.delete(normName);
+          const remAfter = findMatchingInBag().reduce((s, c) => s + (Number(c.qty) || 1), 0);
+          if (window.__pmSniperProtectedItems) {
+            if (foundInBag && remAfter > 0) {
+              window.__pmSniperProtectedItems.add(normName);
+            } else if (!foundInBag || remAfter <= 0) {
+              window.__pmSniperProtectedItems.delete(normName);
+            }
           }
           return {
             relisted,
             foundInBag,
             listedUnitsCount,
+            remainingBagQty: remAfter,
             evictedItemName: evictedInfo ? evictedInfo.name : null,
             evictedItemPrice: evictedInfo ? evictedInfo.price : 0
           };
@@ -1082,8 +1147,8 @@ function createMarketSniperService({
                   }
                 });
               }
-              if (room !== window.__pmSniperSendGuardRoom && typeof room.send === 'function') {
-                window.__pmSniperSendGuardRoom = room;
+              if (room !== window.__pmSniperSendGuardRoomV2 && typeof room.send === 'function') {
+                window.__pmSniperSendGuardRoomV2 = room;
                 const origRoomSend = room.send.bind(room);
                 room.send = function (type, data) {
                   if (type === 'market' && data && data.op === 'list') {
@@ -1092,10 +1157,17 @@ function createMarketSniperService({
                     const itemName = String((slotItem && slotItem.name) || '').trim();
                     const norm = itemName.toLowerCase();
                     const isCardOrStone = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(itemName);
+                    const isFlippedItem = Boolean(norm && window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[norm]);
+                    const unitP = Math.max(1, Math.round((Number(data.price) || 0) / Math.max(1, Number(data.qty) || 1)));
+                    const bCfg = (typeof window.__pmGetSmartFlipBatchConfig === 'function')
+                      ? window.__pmGetSmartFlipBatchConfig(norm, unitP, isCardOrStone)
+                      : { batchQty: isCardOrStone ? 1 : 100, maxConcurrent: isCardOrStone ? 2 : 3 };
                     if (isCardOrStone && Number(data.qty) > 1) {
-                      const unitP = Math.max(1, Math.round((Number(data.price) || 0) / Math.max(1, Number(data.qty) || 1)));
                       data.qty = 1;
                       data.price = unitP;
+                    } else if (isFlippedItem && Number(data.qty) > Math.ceil(bCfg.batchQty * 1.20)) {
+                      data.qty = bCfg.batchQty;
+                      data.price = unitP * bCfg.batchQty;
                     }
                     if (window.__isAutoSellingNow && window.__pmSniperBlockCheapAutoSell) {
                       if ((Number(data.price) || 0) > 0 && (Number(data.price) || 0) <= 50000) {
@@ -1106,9 +1178,9 @@ function createMarketSniperService({
                       if (norm && window.__pmSniperEvictedItemNames && window.__pmSniperEvictedItemNames.has(norm)) {
                         return;
                       }
-                      if (isCardOrStone && norm) {
+                      if ((isCardOrStone || isFlippedItem) && norm) {
                         const curSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[norm]) || 0;
-                        if (curSame >= 2) {
+                        if (curSame >= bCfg.maxConcurrent) {
                           return;
                         }
                         if (!window.__myMarketActiveNameCounts) window.__myMarketActiveNameCounts = {};
@@ -1140,9 +1212,10 @@ function createMarketSniperService({
           }
           const runtimeInstalled = Boolean(
             window.__pmMarketGlobalTimerVer === 7 &&
+            window.__pmSniperRuntimeVer === 2 &&
             typeof window.__pmSniperClaimAndFlip === 'function' &&
             window.__pmSniperMineHookedRoomV3 === room &&
-            window.__pmSniperSendGuardRoom === room
+            window.__pmSniperSendGuardRoomV2 === room
           );
           const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
           const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
@@ -1242,6 +1315,69 @@ function createMarketSniperService({
               };
             });
 
+          // Detect both stacked Cards/Stones (qty > 1) and oversized Sniper-flipped stacks (qty > batchQty * 1.35)
+          const nowTs = Date.now();
+          const nonAuctionActive = rawActive.filter(a => a && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs));
+          const stackedCards = [];
+          for (const a of nonAuctionActive) {
+            const nm = String((a.item && a.item.name) || '').trim();
+            const nmLower = nm.toLowerCase();
+            const q = Math.max(1, Number(a.qty) || 1);
+            const p = Number(a.price) || 0;
+            const unitP = Math.max(1, Math.round(p / q));
+            const isCardOrStone = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(nm);
+            const isFlippedItem = Boolean(nmLower && verifiedFlipMap[nmLower]);
+            if (!isCardOrStone && !isFlippedItem) continue;
+            const refUnit = verifiedFlipMap[nmLower] || unitP;
+            const bCfg = (typeof window.__pmGetSmartFlipBatchConfig === 'function')
+              ? window.__pmGetSmartFlipBatchConfig(nmLower, refUnit, isCardOrStone)
+              : { batchQty: isCardOrStone ? 1 : (refUnit >= 20000 ? 10 : (refUnit >= 8000 ? 25 : (refUnit >= 1800 ? 50 : 100))), maxConcurrent: isCardOrStone ? 2 : 3 };
+            if ((isCardOrStone && q > 1) || (isFlippedItem && q > Math.ceil(bCfg.batchQty * 1.35))) {
+              const safeUnitP = (verifiedFlipMap[nmLower] && unitP > Math.round(verifiedFlipMap[nmLower] * 1.25))
+                ? verifiedFlipMap[nmLower]
+                : unitP;
+              stackedCards.push({
+                listingId: Number(a.listingId) || 0,
+                itemId: Number(a.item && (a.item.itemId ?? a.item.id)) || 0,
+                refine: Number(a.item && a.item.refine) || 0,
+                name: nm,
+                qty: q,
+                price: p,
+                unitPrice: safeUnitP,
+                batchQty: bCfg.batchQty,
+                maxConcurrent: bCfg.maxConcurrent
+              });
+            }
+          }
+          window.__myMarketStackedCards = stackedCards;
+
+          // Collect unlocked bag items that match Sniper-flipped items so remaining split batches are protected & drip-restocked
+          const bagByNorm = new Map();
+          const bagItemsArr = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+          if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
+          for (const b of bagItemsArr) {
+            if (!b || b.locked) continue;
+            const nm = String(b.name || '').trim();
+            const nmLower = nm.toLowerCase();
+            if (!nmLower || !verifiedFlipMap[nmLower]) continue;
+            const q = Math.max(1, Number(b.qty) || 1);
+            const bId = Number((b.raw && b.raw.itemId) ?? b.id) || 0;
+            const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
+            if (!bagByNorm.has(nmLower)) {
+              bagByNorm.set(nmLower, {
+                name: nm,
+                nameLower: nmLower,
+                itemId: bId,
+                refine: bRef,
+                qty: 0,
+                unitPrice: Number(verifiedFlipMap[nmLower]) || 0
+              });
+            }
+            bagByNorm.get(nmLower).qty += q;
+            window.__pmSniperProtectedItems.add(nmLower);
+          }
+          const bagFlippedItems = Array.from(bagByNorm.values());
+
           const baseLevel = Number(ch.baseLevel ?? ch.level ?? live.level) || 0;
           const charName = ch.name || live.charName || window.__characterName || '';
           const activeCount = Number(window.__myMarketActiveCount) || myActiveListings.length || 0;
@@ -1249,7 +1385,6 @@ function createMarketSniperService({
           const evictableCheapCount = Number(window.__myMarketEvictableCheapCount) || 0;
           const activeNameCounts = window.__myMarketActiveNameCounts || {};
           const activeIdCounts = window.__myMarketActiveIdCounts || {};
-          const stackedCards = Array.isArray(window.__myMarketStackedCards) ? window.__myMarketStackedCards : [];
           const maxListings = premium ? 20 : 3;
           const weight = Number(ch.weight ?? live.weight) || 0;
           const weightLimit = Number(ch.weightLimit ?? live.weightLimit) || 0;
@@ -1268,6 +1403,7 @@ function createMarketSniperService({
             activeNameCounts,
             activeIdCounts,
             stackedCards,
+            bagFlippedItems,
             myActiveListings,
             mySoldListings,
             maxListings,
@@ -1756,183 +1892,14 @@ function createMarketSniperService({
       const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
       if (!room || !room.connection || !room.connection.isOpen) return { success: false, error: 'ไม่ได้เชื่อมต่อห้องเกม' };
 
-      if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
-      window.__pmSniperProtectedItems.add(String(p.itemName).trim().toLowerCase());
-
-      // Hook isSellWhitelisted so NPC auto-sell never sells a sniped item waiting to be flipped
-      if (typeof window.isSellWhitelisted === 'function' && !window.__pmSniperWlHooked) {
-        const origWl = window.isSellWhitelisted;
-        window.isSellWhitelisted = function (nm, customWl) {
-          if (nm && window.__pmSniperProtectedItems && window.__pmSniperProtectedItems.has(String(nm).trim().toLowerCase())) {
-            return true;
-          }
-          return origWl.call(this, nm, customWl);
-        };
-        window.__pmSniperWlHooked = true;
-      }
-
       if (!window.__pmSniperAuctions) window.__pmSniperAuctions = {};
       if (!window.__pmSniperHandledDeliveries) window.__pmSniperHandledDeliveries = new Set();
       if (!Array.isArray(window.__pmSniperEvents)) window.__pmSniperEvents = [];
 
-      // Helper to claim deliveries and auto-list won/bought item (with Smart Cheap-Item Eviction & Single-Unit Card Splitting)
-      window.__pmSniperClaimAndFlip = async function (targetInfo, paidTotal, waitBeforeCollectMs = 750) {
-        if (waitBeforeCollectMs >= 0) {
-          if (waitBeforeCollectMs > 0) {
-            await new Promise(r => setTimeout(r, waitBeforeCollectMs));
-          }
-          try {
-            room.send('market', { op: 'collect_all' });
-          } catch (_) {}
-          await new Promise(r => setTimeout(r, 850));
-          if (typeof window.refreshInventoryAndWeight === 'function') {
-            try { window.refreshInventoryAndWeight(); } catch (_) {}
-          }
-          await new Promise(r => setTimeout(r, 300));
-        }
-
-        let relisted = false;
-        let foundInBag = false;
-        let evictedInfo = null;
-        let listedUnitsCount = 0;
-        const normName = String(targetInfo.itemName || '').trim().toLowerCase();
-        const isSingle = Boolean(targetInfo.singleUnit || /\\b(card|stone)\\b|การ์ด|ศิลา/i.test(normName));
-
-        const findMatchingInBag = () => {
-          const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-          return bag.filter(b => {
-            if (!b || b.locked) return false;
-            const bId = Number((b.raw && b.raw.itemId) ?? b.id);
-            const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
-            if (bId === Number(targetInfo.itemId) && bRef === Number(targetInfo.refine)) return true;
-            return String(b.name || '').trim().toLowerCase() === normName && bRef === Number(targetInfo.refine);
-          });
-        };
-
-        const initialCandidates = findMatchingInBag();
-        foundInBag = initialCandidates.length > 0;
-
-        if (foundInBag && targetInfo.autoFlip && targetInfo.relistPriceTotal > paidTotal) {
-          const totalBagQty = initialCandidates.reduce((s, c) => s + (Number(c.qty) || 1), 0);
-          const totalWantedQty = Math.min(Number(targetInfo.qty) || 1, totalBagQty);
-          const unitPrice = Math.max(1, Number(targetInfo.flipUnitPrice) || Math.round((Number(targetInfo.relistPriceTotal) || 0) / Math.max(1, Number(targetInfo.qty) || 1)));
-          // Cards/Stones MUST be listed as qty: 1 per slot (never as a stack!). List up to 2 individual copies immediately; Auto-Sell lists any remaining 1 by 1 as they sell.
-          const listingsToPost = isSingle ? Math.min(2, Math.max(1, totalWantedQty)) : 1;
-          const perListingQty = isSingle ? 1 : totalWantedQty;
-          const perListingPrice = isSingle ? unitPrice : (unitPrice * totalWantedQty);
-          const totalDepositFee = Math.max(1, Math.floor(perListingPrice * 2 / 100)) * listingsToPost;
-          const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
-
-          if (totalWantedQty > 0 && (unitPrice * totalWantedQty) > paidTotal && (curZeny === 0 || curZeny >= totalDepositFee)) {
-            const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
-            const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
-            const hasPrem = Boolean(
-              (Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token')) ||
-              (Array.isArray(live.buffs) && live.buffs.some(b => b && (b.skillId === 'ui:token' || b === 'ui:token')))
-            );
-            const maxSlots = hasPrem ? 20 : 3;
-
-            const mineMsg = await new Promise(resolve => {
-              let unsub;
-              const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2200);
-              unsub = room.onMessage('market_mine', m => { clearTimeout(t); if (unsub) unsub(); resolve(m); });
-              try { room.send('market', { op: 'mine' }); } catch (_) { clearTimeout(t); if (unsub) unsub(); resolve(null); }
-            });
-
-            const activeList = (mineMsg && Array.isArray(mineMsg.active)) ? mineMsg.active : [];
-            const freeSlotsNow = Math.max(0, maxSlots - activeList.length);
-            const needEvictCount = Math.max(0, listingsToPost - freeSlotsNow);
-
-            if (needEvictCount > 0) {
-              const nowTs = Date.now();
-              const evictable = activeList
-                .filter(a => a && a.listingId && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs) && Number(a.price) > 0 && Number(a.price) <= 50000)
-                .sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
-
-              const toEvict = evictable.slice(0, needEvictCount);
-              if (toEvict.length > 0) {
-                if (!window.__pmSniperEvictedItemNames) window.__pmSniperEvictedItemNames = new Set();
-                if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
-                const evictedNames = [];
-                let firstEvictPrice = 0;
-                for (const targetEvict of toEvict) {
-                  const evName = (targetEvict.item && targetEvict.item.name) || 'Item';
-                  const evNorm = String(evName).trim().toLowerCase();
-                  const evPrice = Number(targetEvict.price) || 0;
-                  if (!firstEvictPrice) firstEvictPrice = evPrice;
-                  evictedNames.push(evName);
-                  window.__pmSniperEvictedItemNames.add(evNorm);
-                  window.__autoSellRuleBackoffUntil[evNorm] = Date.now() + 30 * 60 * 1000;
-                  try {
-                    room.send('market', { op: 'cancel', listingId: Number(targetEvict.listingId) });
-                  } catch (_) {}
-                  await new Promise(r => setTimeout(r, 320));
-                }
-                console.log('%c[PmheeAether Sniper] 🔄 ถอดไอเทมราคาถูก (' + evictedNames.join(', ') + ') ออกเพื่อเปิดช่องตั้งขายของทำกำไรทันที!', 'color: #f59e0b; font-weight: bold;');
-                try { room.send('market', { op: 'collect_all' }); } catch (_) {}
-                await new Promise(r => setTimeout(r, 500));
-                evictedInfo = { name: evictedNames.join(', '), price: firstEvictPrice, count: toEvict.length };
-              }
-            }
-
-            for (let u = 0; u < listingsToPost; u++) {
-              const freshCandidates = findMatchingInBag();
-              if (!freshCandidates.length) break;
-              const freshTarget = freshCandidates[0];
-              const beforeQty = Number(freshTarget.qty) || 1;
-              const qtyThisPost = Math.min(perListingQty, beforeQty);
-              if (qtyThisPost <= 0) break;
-              const priceThisPost = isSingle ? unitPrice : (unitPrice * qtyThisPost);
-
-              window.__pmExplicitHoursOnce = true;
-              try {
-                room.send('market', {
-                  op: 'list',
-                  slot: Number(freshTarget.slot),
-                  qty: qtyThisPost,
-                  price: priceThisPost,
-                  hours: Number(targetInfo.relistDurationHours) || 24
-                });
-              } finally {
-                window.__pmExplicitHoursOnce = false;
-              }
-
-              let postedOne = false;
-              for (let i = 0; i < 8; i++) {
-                await new Promise(r => setTimeout(r, 250));
-                const nowBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-                const nowSlot = nowBag.find(x => Number(x.slot) === Number(freshTarget.slot));
-                const left = nowSlot ? (Number(nowSlot.qty) || 0) : 0;
-                if (left <= beforeQty - qtyThisPost) {
-                  postedOne = true;
-                  listedUnitsCount += qtyThisPost;
-                  relisted = true;
-                  break;
-                }
-              }
-              if (!postedOne) break;
-              if (u + 1 < listingsToPost) {
-                await new Promise(r => setTimeout(r, 320));
-              }
-            }
-
-            if (relisted) {
-              try { room.send('market', { op: 'mine' }); } catch (_) {}
-              console.log('%c[PmheeAether Sniper] 🏷️ ตั้งขายทำกำไรอัตโนมัติสำเร็จ: ' + targetInfo.itemName + (isSingle ? ' (แยกทีละ 1 ใบ x' + listedUnitsCount + ' ช่อง)' : ' x' + listedUnitsCount) + ' @ ' + unitPrice.toLocaleString() + ' z/ชิ้น!', 'color: #10b981; font-weight: bold; font-size: 13px;');
-            }
-          }
-        }
-        if (relisted && window.__pmSniperProtectedItems && listedUnitsCount >= (Number(targetInfo.qty) || 1)) {
-          window.__pmSniperProtectedItems.delete(normName);
-        }
-        return {
-          relisted,
-          foundInBag,
-          listedUnitsCount,
-          evictedItemName: evictedInfo ? evictedInfo.name : null,
-          evictedItemPrice: evictedInfo ? evictedInfo.price : 0
-        };
-      };
+      ${buildSniperClaimAndFlipRuntimeJs()}
+      if (p.itemName && window.__pmSniperProtectedItems) {
+        window.__pmSniperProtectedItems.add(String(p.itemName).trim().toLowerCase());
+      }
 
       // Install real-time Colyseus listeners once per room (using market_badge + market_mine)
       if (room !== window.__pmSniperHookedRoom) {
@@ -2811,13 +2778,38 @@ function createMarketSniperService({
         state.pendingFlips = remainingQueue;
       }
 
-      // 3) Auto-unstack stacked Cards/Stones (qty > 1 -> qty: 1 per slot) & proactively evict cheap (<= 50,000 z) filler listings on Sniper buyer screens
+      // 3) Auto-split stacked Cards/Stones & oversized Sniper-flipped stacks, drip-restock split batches from bag, and evict cheap (<= 50,000 z) filler listings
       if (config.mode === 'auto_flip') {
         const onlineScreens = await getOnlineScreenStates();
+        const flippedByProfile = new Map();
+        const registerProfileFlip = (pid, itemName, itemId, refine, unitPrice) => {
+          const pKey = String(pid || '');
+          const nm = String(itemName || '').trim().toLowerCase();
+          if (!pKey || !nm) return;
+          if (!flippedByProfile.has(pKey)) flippedByProfile.set(pKey, new Map());
+          const trueRef = getTrueRefUnitPrice(itemId, refine || 0, itemName, unitPrice);
+          const safeU = (trueRef > 0 && Number(unitPrice) > Math.round(trueRef * 1.25))
+            ? trueRef
+            : (Number(unitPrice) || trueRef);
+          if (safeU > 0) {
+            flippedByProfile.get(pKey).set(nm, safeU);
+          }
+        };
+        for (const h of (state.history || [])) {
+          if (h && (h.action === 'relisted' || h.action === 'buy' || h.action === 'won')) {
+            registerProfileFlip(h.buyerProfileId, h.itemName, h.itemId, h.refine, h.relistUnitPrice || h.listedUnitPrice || h.cleanRefUnitPrice);
+          }
+        }
+        for (const b of (state.activeBids || [])) {
+          if (b && (b.status === 'relisted' || b.status === 'queued_flip' || b.status === 'won' || b.status === 'bought')) {
+            registerProfileFlip(b.buyerProfileId, b.itemName, b.itemId, b.refine, b.flipUnitPrice || b.listedUnitPrice || b.cleanRefUnitPrice);
+          }
+        }
+
         for (const scr of onlineScreens) {
           if (!scr || scr.busy || (Number(scr.zeny) || 0) < 300000) continue;
 
-          // 3a) Unstack 1 stacked Card/Stone listing per tick (e.g. Poison Toad Card x6, Magma Titan Card x4, Tidemark Seal Card x2, Snowman Card x2)
+          // 3a) Split 1 stacked Card/Stone or oversized Sniper-flipped stack per tick (e.g. Enriched Elunium x999 -> 3x 100, Glyph Leather x815 -> 3x 50, Enchant Rune x189 -> 3x 25, Cards -> 2x 1)
           if (Array.isArray(scr.stackedCards) && scr.stackedCards.length > 0) {
             const stCard = scr.stackedCards[0];
             const unstackCode = `(async () => {
@@ -2826,8 +2818,12 @@ function createMarketSniperService({
               const st = ${JSON.stringify(stCard)};
               const hours = ${Number(config.relistDurationHours) || 24};
               const norm = String(st.name || '').trim().toLowerCase();
+              const batchQty = Math.max(1, Number(st.batchQty) || 1);
+              const maxConcurrent = Math.max(1, Number(st.maxConcurrent) || (batchQty === 1 ? 2 : 3));
+              if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
+              if (norm) window.__pmSniperProtectedItems.add(norm);
 
-              // Query live active listings so we can also evict up to 2 cheap (<= 50k z) filler items if needed
+              // Query live active listings so we know how many slots are free and can evict cheap (<= 50k z) filler items if needed
               const mineMsg = await new Promise(resolve => {
                 let unsub;
                 const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2200);
@@ -2836,19 +2832,21 @@ function createMarketSniperService({
               });
               const activeList = (mineMsg && Array.isArray(mineMsg.active)) ? mineMsg.active : [];
               const nowTs = Date.now();
+              const otherSameActive = activeList.filter(a => a && Number(a.listingId) !== Number(st.listingId) && String((a.item && a.item.name) || '').trim().toLowerCase() === norm).length;
+              const toPostCount = Math.max(1, Math.min(Math.max(1, maxConcurrent - otherSameActive), Math.ceil((Number(st.qty) || 1) / batchQty)));
               const cheapEvictable = activeList
                 .filter(a => a && Number(a.listingId) !== Number(st.listingId) && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs) && Number(a.price) > 0 && Number(a.price) <= 50000)
                 .sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
 
-              // Cancel the stacked card listing first
+              // Cancel the oversized stack listing first
               try { room.send('market', { op: 'cancel', listingId: Number(st.listingId) }); } catch (_) {}
               await new Promise(r => setTimeout(r, 380));
 
-              // Cancel up to 2 cheap <= 50k items so we have room to split the card into individual x1 listings
+              // Cancel up to 2 cheap <= 50k items so we have room to split into individual batches
               if (!window.__pmSniperEvictedItemNames) window.__pmSniperEvictedItemNames = new Set();
               if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
               const evictedNames = [];
-              for (const ce of cheapEvictable.slice(0, 2)) {
+              for (const ce of cheapEvictable.slice(0, Math.max(0, toPostCount - 1))) {
                 const ceName = (ce.item && ce.item.name) || 'Item';
                 const ceNorm = String(ceName).trim().toLowerCase();
                 evictedNames.push(ceName);
@@ -2861,20 +2859,30 @@ function createMarketSniperService({
               try { room.send('market', { op: 'collect_all' }); } catch (_) {}
               await new Promise(r => setTimeout(r, 850));
 
-              // List up to 2 individual copies (qty: 1 each) at st.unitPrice
+              // List up to toPostCount split batches of batchQty each at st.unitPrice
               let posted = 0;
-              for (let u = 0; u < 2; u++) {
+              let postedUnits = 0;
+              const unitP = Math.max(1, Number(st.unitPrice) || 1);
+              for (let u = 0; u < toPostCount; u++) {
                 const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-                const targetSlot = bag.find(b => b && !b.locked && String(b.name || '').trim().toLowerCase() === norm && (Number(b.qty) || 0) >= 1);
+                const candidates = bag
+                  .filter(b => b && !b.locked && String(b.name || '').trim().toLowerCase() === norm && (Number(b.qty) || 0) >= 1)
+                  .sort((a, b) => (Number(b.qty) || 1) - (Number(a.qty) || 1));
+                const targetSlot = candidates[0];
                 if (!targetSlot) break;
                 const beforeQty = Number(targetSlot.qty) || 1;
+                const qtyThisPost = (batchQty > 1 && beforeQty <= Math.ceil(batchQty * 1.20))
+                  ? beforeQty
+                  : Math.min(batchQty, beforeQty);
+                if (qtyThisPost <= 0) break;
+                const priceThisPost = unitP * qtyThisPost;
                 window.__pmExplicitHoursOnce = true;
                 try {
                   room.send('market', {
                     op: 'list',
                     slot: Number(targetSlot.slot),
-                    qty: 1,
-                    price: Number(st.unitPrice),
+                    qty: qtyThisPost,
+                    price: priceThisPost,
                     hours
                   });
                 } finally {
@@ -2886,9 +2894,10 @@ function createMarketSniperService({
                   const nowBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
                   const nowSlot = nowBag.find(x => Number(x.slot) === Number(targetSlot.slot));
                   const left = nowSlot ? (Number(nowSlot.qty) || 0) : 0;
-                  if (left <= beforeQty - 1) {
+                  if (left <= beforeQty - qtyThisPost) {
                     okOne = true;
                     posted += 1;
+                    postedUnits += qtyThisPost;
                     break;
                   }
                 }
@@ -2896,15 +2905,64 @@ function createMarketSniperService({
                 await new Promise(r => setTimeout(r, 320));
               }
               try { room.send('market', { op: 'mine' }); } catch (_) {}
-              console.log('%c[PmheeAether Sniper] 🃏 แยกกองการ์ด ' + st.name + ' x' + st.qty + ' -> ตั้งขายแยกทีละ 1 ใบ (' + posted + ' ช่อง @ ' + Number(st.unitPrice).toLocaleString() + ' z/ใบ)!', 'color: #10b981; font-weight: bold;');
-              return { ok: true, posted, evictedNames };
+              console.log('%c[PmheeAether Sniper] 📦 แยกกอง ' + st.name + ' x' + st.qty + ' -> ตั้งขายแยกกองละ x' + batchQty + ' (' + posted + ' ช่อง รวม ' + postedUnits + ' ชิ้น @ ' + unitP.toLocaleString() + ' z/ชิ้น)!', 'color: #10b981; font-weight: bold;');
+              return { ok: true, posted, postedUnits, evictedNames };
             })()`;
 
-            await evalProfilePort(scr.debugPort, unstackCode, 9000);
+            await evalProfilePort(scr.debugPort, unstackCode, 9500);
             break; // Process 1 unstack operation per maintenance cycle
           }
 
-          // 3b) If a rich Sniper screen (>= 500k zeny) has cheap <= 50,000 z items taking up slots and fewer than 5 free slots, evict up to 3 cheap items per tick
+          // 3b) Drip-restock remaining split batches from bag when existing batches sell (curActiveSame < maxConcurrent)
+          const profFlippedMap = flippedByProfile.get(String(scr.profileId || ''));
+          if (profFlippedMap && Array.isArray(scr.bagFlippedItems) && scr.bagFlippedItems.length > 0) {
+            let didRestock = false;
+            for (const bagItem of scr.bagFlippedItems) {
+              if (!bagItem || !bagItem.nameLower) continue;
+              const flipUnit = profFlippedMap.get(bagItem.nameLower);
+              if (!flipUnit || flipUnit <= 0) continue;
+              const bCfg = getSmartFlipBatchConfig(bagItem.nameLower, flipUnit, isSingleUnitFlipItem(bagItem.name));
+              const minRestockQty = bCfg.batchQty === 1 ? 1 : Math.min(10, Math.max(2, Math.floor(bCfg.batchQty * 0.2)));
+              if ((Number(bagItem.qty) || 0) < minRestockQty) continue;
+
+              const curActiveSame = (scr.myActiveListings || []).filter(
+                a => a && String(a.name || '').trim().toLowerCase() === bagItem.nameLower
+              ).length;
+              if (curActiveSame >= bCfg.maxConcurrent) continue;
+
+              const restockCode = `(async () => {
+                const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
+                if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
+                ${buildSniperClaimAndFlipRuntimeJs()}
+                if (typeof window.__pmSniperClaimAndFlip !== 'function') return { ok: false };
+                const flipOut = await window.__pmSniperClaimAndFlip({
+                  itemId: ${Number(bagItem.itemId) || 0},
+                  refine: ${Number(bagItem.refine) || 0},
+                  itemName: ${JSON.stringify(bagItem.name || '')},
+                  qty: ${Number(bagItem.qty) || 1},
+                  singleUnit: ${Boolean(bCfg.isSingle)},
+                  batchQty: ${Number(bCfg.batchQty)},
+                  maxConcurrent: ${Number(bCfg.maxConcurrent)},
+                  flipUnitPrice: ${Number(flipUnit)},
+                  relistPriceTotal: ${Number(flipUnit) * Math.max(1, Number(bagItem.qty) || 1)},
+                  relistDurationHours: ${Number(config.relistDurationHours) || 24},
+                  autoFlip: true,
+                  isRestock: true,
+                  skipSmartPriceFetch: true
+                }, 0, -1);
+                return { ok: true, relisted: Boolean(flipOut && flipOut.relisted), listedUnitsCount: Number(flipOut && flipOut.listedUnitsCount) || 0 };
+              })()`;
+
+              const rsRes = await evalProfilePort(scr.debugPort, restockCode, 7500);
+              if (rsRes && (rsRes.success || rsRes.ok) && rsRes.result && rsRes.result.relisted) {
+                didRestock = true;
+                break;
+              }
+            }
+            if (didRestock) break;
+          }
+
+          // 3c) If a rich Sniper screen (>= 500k zeny) has cheap <= 50,000 z items taking up slots and fewer than 5 free slots, evict up to 3 cheap items per tick
           const freeSlots = Math.max(0, (Number(scr.maxListings) || 20) - (Number(scr.activeCount) || 0));
           if ((Number(scr.zeny) || 0) >= 500000 && (Number(scr.evictableCheapCount) || 0) > 0 && freeSlots < 5) {
             const evictBatchCode = `(async () => {
@@ -2980,8 +3038,9 @@ function createMarketSniperService({
       if (scr.profileName) ourCharNamesSet.add(String(scr.profileName).trim().toLowerCase());
     }
 
-    // 1. Pool all live active & sold listings across online screens
+    // 1. Pool all live active, bag-held, & sold listings across online screens
     const activePool = [];
+    const bagPool = [];
     const soldPool = [];
     for (const scr of (onlineScreens || [])) {
       if (!scr) continue;
@@ -3007,6 +3066,23 @@ function createMarketSniperService({
             price: Number(a.price) || 0,
             unitPrice: Math.max(1, Number(a.unitPrice) || Math.round((Number(a.price) || 0) / q)),
             expiresAt: Number(a.expiresAt) || 0
+          });
+        }
+      }
+      if (Array.isArray(scr.bagFlippedItems)) {
+        for (const b of scr.bagFlippedItems) {
+          if (!b || !b.nameLower || (Number(b.qty) || 0) <= 0) continue;
+          const q = Math.max(1, Number(b.qty) || 1);
+          bagPool.push({
+            profileId: pid,
+            charName: cname,
+            itemId: Number(b.itemId) || 0,
+            refine: Number(b.refine) || 0,
+            name: String(b.name || '').trim(),
+            nameLower: String(b.nameLower).trim(),
+            qty: q,
+            remQty: q,
+            unitPrice: Number(b.unitPrice) || 0
           });
         }
       }
@@ -3225,6 +3301,18 @@ function createMarketSniperService({
           rem -= take;
           inStockUnits += take;
           activeMatchedUnitPrice = a.unitPrice;
+        }
+      }
+
+      // Step B2: Match remaining split units waiting in the buyer character's bag (`bagPool`) before drip-restock
+      if (rem > 0) {
+        for (const bg of bagPool) {
+          if (rem <= 0) break;
+          if (bg.remQty <= 0 || bg.nameLower !== lot.nameLower || bg.profileId !== lot.buyerProfileId) continue;
+          const take = Math.min(rem, bg.remQty);
+          bg.remQty -= take;
+          rem -= take;
+          inStockUnits += take;
         }
       }
 

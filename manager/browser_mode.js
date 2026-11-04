@@ -460,6 +460,59 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   let deviceIdsInitialized = false;
   let lastGroupedOrderSignature = '';
 
+  // Anti-Clone Hardware Guard: if this folder was copied/cloned to another PC (different MachineGuid),
+  // automatically strip the old PC's spoofed Device/Machine IDs and stale browser target files so the cloned PC
+  // mints fresh Device/Machine IDs and never collides with the original PC.
+  if (storageDir) {
+    try {
+      let currentHwId = (screenProxy && typeof screenProxy.getMachineHwid === 'function') ? screenProxy.getMachineHwid() : '';
+      if (!currentHwId) {
+        let rawGuid = '';
+        try {
+          const { execSync } = require('child_process');
+          const regOut = execSync('reg query HKLM\\SOFTWARE\\Microsoft\\Cryptography /v MachineGuid', { encoding: 'utf8', windowsHide: true });
+          rawGuid = regOut.match(/MachineGuid\s+REG_SZ\s+([a-f0-9-]+)/i)?.[1]?.toUpperCase() || '';
+        } catch (_) {}
+        currentHwId = crypto.createHash('sha256').update('PMhee.MachineFingerprint.v1|' + (rawGuid || require('os').hostname().toUpperCase())).digest('hex').toUpperCase();
+      }
+      fs.mkdirSync(storageDir, { recursive: true });
+      const ownerFile = path.join(storageDir, '_machine_owner.json');
+      let savedOwner = null;
+      if (fs.existsSync(ownerFile)) {
+        try { savedOwner = JSON.parse(fs.readFileSync(ownerFile, 'utf8')); } catch (_) {}
+      }
+      if (savedOwner && savedOwner.machineHwid && savedOwner.machineHwid !== currentHwId) {
+        console.warn('[Anti-Clone Guard] 🛡️ ตรวจพบการคัดลอกโฟลเดอร์แอพมาจากเครื่องอื่น -> รีเซ็ต Device ID / Machine ID ยกชุดสำหรับเครื่องใหม่เพื่อป้องกันการชนกัน!');
+        const files = fs.readdirSync(storageDir).filter(f => f.endsWith('.json') && f !== '_machine_owner.json');
+        for (const f of files) {
+          try {
+            const fp = path.join(storageDir, f);
+            const obj = JSON.parse(fs.readFileSync(fp, 'utf8'));
+            if (obj && typeof obj === 'object') {
+              let modified = false;
+              for (const k of Object.keys(obj)) {
+                if (k === 'aetheria.device' || k === 'aetheria.machine' || k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine')) {
+                  delete obj[k];
+                  modified = true;
+                }
+              }
+              if (modified) {
+                fs.writeFileSync(fp + '.tmp', JSON.stringify(obj), 'utf8');
+                fs.renameSync(fp + '.tmp', fp);
+              }
+            }
+          } catch (_) {}
+        }
+        try { if (knownTargetsFile && fs.existsSync(knownTargetsFile)) fs.unlinkSync(knownTargetsFile); } catch (_) {}
+        try { if (wsUrlFile && fs.existsSync(wsUrlFile)) fs.unlinkSync(wsUrlFile); } catch (_) {}
+      }
+      if (!savedOwner || savedOwner.machineHwid !== currentHwId) {
+        fs.writeFileSync(ownerFile + '.tmp', JSON.stringify({ machineHwid: currentHwId, updatedAt: Date.now() }, null, 2), 'utf8');
+        fs.renameSync(ownerFile + '.tmp', ownerFile);
+      }
+    } catch (_) {}
+  }
+
   function loadProfileStorage(profileId) {
     if (!storageDir || !profileId) return {};
     try {
@@ -622,10 +675,62 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     return ordered;
   }
 
+  function getScreensPerIp() {
+    try {
+      const s = screenProxy && typeof screenProxy.loadSettings === 'function' ? screenProxy.loadSettings() : null;
+      const n = Number(s && s.maxScreensPerIp);
+      if (Number.isFinite(n) && n >= 1) {
+        return Math.max(1, Math.min(20, Math.floor(n)));
+      }
+    } catch (_) {}
+    return MAX_SCREENS_PER_DEVICE;
+  }
+
+  function buildDeviceGroupLayout(orderedIds, screensPerIp) {
+    const list = Array.isArray(orderedIds) ? orderedIds : [];
+    const perIp = Math.max(1, Math.min(20, Number(screensPerIp) || getScreensPerIp() || MAX_SCREENS_PER_DEVICE));
+    const devicesPerIp = Math.ceil(perIp / MAX_SCREENS_PER_DEVICE);
+    const deviceSubSizes = [];
+    for (let sub = 0; sub < devicesPerIp; sub++) {
+      deviceSubSizes.push(Math.min(MAX_SCREENS_PER_DEVICE, Math.max(1, perIp - sub * MAX_SCREENS_PER_DEVICE)));
+    }
+
+    const totalIpBlocks = Math.ceil(list.length / perIp);
+    const layout = [];
+    let globalGroupIdx = 0;
+
+    for (let ipIdx = 0; ipIdx < totalIpBlocks; ipIdx++) {
+      const ipSlice = list.slice(ipIdx * perIp, (ipIdx + 1) * perIp);
+      for (let sub = 0; sub < devicesPerIp; sub++) {
+        const subStart = sub * MAX_SCREENS_PER_DEVICE;
+        const subEnd = Math.min(perIp, (sub + 1) * MAX_SCREENS_PER_DEVICE);
+        const groupPids = ipSlice.slice(subStart, subEnd);
+        if (groupPids.length === 0) break;
+        globalGroupIdx++;
+        const subMax = Math.min(MAX_SCREENS_PER_DEVICE, Math.max(1, perIp - subStart));
+        layout.push({
+          groupIndex: globalGroupIdx,
+          ipIndex: ipIdx + 1,
+          deviceIndexInIp: sub + 1,
+          devicesPerIp,
+          screensPerIp: perIp,
+          deviceSubSizes,
+          maxScreens: subMax,
+          maxScreensPerDevice: MAX_SCREENS_PER_DEVICE,
+          ipSlotStart: subStart + 1,
+          ipProfileIds: ipSlice,
+          profileIds: groupPids
+        });
+      }
+    }
+    return layout;
+  }
+
   function rebalanceDeviceGroups(extraProfileId, forceRecheck = false) {
     try {
       const orderedIds = getOrderedProfileIds(extraProfileId);
-      const sig = orderedIds.join('|');
+      const perIp = getScreensPerIp();
+      const sig = `${perIp}::${orderedIds.join('|')}`;
       if (!forceRecheck && deviceIdsInitialized && sig === lastGroupedOrderSignature && (!extraProfileId || profileDeviceIds.has(extraProfileId))) {
         return;
       }
@@ -642,10 +747,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       }
 
       const claimedDevices = new Set();
-      const totalGroups = Math.ceil(orderedIds.length / MAX_SCREENS_PER_DEVICE);
+      const layout = buildDeviceGroupLayout(orderedIds, perIp);
 
-      for (let g = 0; g < totalGroups; g++) {
-        const groupPids = orderedIds.slice(g * MAX_SCREENS_PER_DEVICE, (g + 1) * MAX_SCREENS_PER_DEVICE);
+      for (const grp of layout) {
+        const groupPids = grp.profileIds;
         let groupDev = '';
         let candidateMach = '';
 
@@ -685,6 +790,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         const groupMach = getOrMintMachineIdForDevice(groupDev, candidateMach);
 
         for (const pid of groupPids) {
+          const prevMemDev = profileDeviceIds.get(pid) || '';
+          const prevMemMach = profileMachineIds.get(pid) || '';
           const devKey = `pelican_${pid}__aetheria_device`;
           const machKey = `pelican_${pid}__aetheria_machine`;
           const diskData = rawByProfile.get(pid) || {};
@@ -694,10 +801,18 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
           profileDeviceIds.set(pid, groupDev);
           profileMachineIds.set(pid, groupMach);
-          profileDeviceGroupIndex.set(pid, g + 1);
+          profileDeviceGroupIndex.set(pid, grp.groupIndex);
 
           if (diskDev !== groupDev || diskMach !== groupMach || hasLegacyRaw) {
             saveProfileStorage(pid, { [devKey]: groupDev, [machKey]: groupMach });
+          }
+
+          if (prevMemDev && (prevMemDev !== groupDev || prevMemMach !== groupMach)) {
+            const c = clients.get(pid);
+            if (c && c.sessionId) {
+              ensureSessionHooks(c.sessionId, pid, c).catch(() => {});
+              evaluate(c, profileInitScript(pid), 4500).catch(() => {});
+            }
           }
         }
       }
@@ -737,22 +852,41 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     initDeviceIdsFromStorage();
     rebalanceDeviceGroups(null, false);
     const orderedIds = getOrderedProfileIds();
-    const groups = [];
-    const totalGroups = Math.ceil(orderedIds.length / MAX_SCREENS_PER_DEVICE);
-    for (let g = 0; g < totalGroups; g++) {
-      const groupPids = orderedIds.slice(g * MAX_SCREENS_PER_DEVICE, (g + 1) * MAX_SCREENS_PER_DEVICE);
-      const firstPid = groupPids[0];
+    const perIp = getScreensPerIp();
+    const layout = buildDeviceGroupLayout(orderedIds, perIp);
+    let poolItems = [];
+    try {
+      if (screenProxy && typeof screenProxy.loadPool === 'function') {
+        const p = screenProxy.loadPool();
+        if (p && Array.isArray(p.proxies)) {
+          poolItems = p.proxies.filter(x => x && x.enabled !== false);
+        }
+      }
+    } catch (_) {}
+
+    return layout.map(grp => {
+      const firstPid = grp.profileIds[0];
       const deviceId = firstPid ? ensureProfileDeviceId(firstPid) : '';
       const machineId = firstPid ? ensureProfileMachineId(firstPid) : '';
-      groups.push({
-        groupIndex: g + 1,
+      const poolItem = poolItems[grp.ipIndex - 1] || null;
+      return {
+        groupIndex: grp.groupIndex,
+        ipIndex: grp.ipIndex,
+        deviceIndexInIp: grp.deviceIndexInIp,
+        devicesPerIp: grp.devicesPerIp,
+        screensPerIp: grp.screensPerIp,
+        deviceSubSizes: grp.deviceSubSizes,
+        ipSlotStart: grp.ipSlotStart,
+        ipProfileIds: grp.ipProfileIds,
+        proxyIp: poolItem ? (poolItem.labelIp || poolItem.host || null) : null,
+        proxyPort: poolItem ? (poolItem.port || null) : null,
         deviceId,
         machineId,
-        maxScreens: MAX_SCREENS_PER_DEVICE,
-        profileIds: groupPids
-      });
-    }
-    return groups;
+        maxScreens: grp.maxScreens,
+        maxScreensPerDevice: grp.maxScreensPerDevice,
+        profileIds: grp.profileIds
+      };
+    });
   }
 
   async function rotateDeviceGroup(target) {
@@ -760,34 +894,28 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     rebalanceDeviceGroups(null, false);
     const orderedIds = getOrderedProfileIds();
     if (orderedIds.length === 0) return null;
+    const perIp = getScreensPerIp();
+    const layout = buildDeviceGroupLayout(orderedIds, perIp);
+    if (layout.length === 0) return null;
 
-    let groupIndexZero = -1;
+    let targetGrp = null;
     if (typeof target === 'number' && Number.isFinite(target) && target >= 1) {
-      groupIndexZero = Math.floor(target) - 1;
+      targetGrp = layout[Math.floor(target) - 1] || null;
     } else if (typeof target === 'string' && target.trim()) {
       const t = target.trim();
       if (/^\d+$/.test(t)) {
-        groupIndexZero = Math.max(0, parseInt(t, 10) - 1);
+        targetGrp = layout[Math.max(0, parseInt(t, 10) - 1)] || null;
       } else {
-        const idx = orderedIds.indexOf(t);
-        if (idx !== -1) {
-          groupIndexZero = Math.floor(idx / MAX_SCREENS_PER_DEVICE);
-        } else {
-          for (let i = 0; i < orderedIds.length; i++) {
-            const pid = orderedIds[i];
-            if ((profileDeviceIds.get(pid) || '').toLowerCase() === t.toLowerCase()) {
-              groupIndexZero = Math.floor(i / MAX_SCREENS_PER_DEVICE);
-              break;
-            }
-          }
+        targetGrp = layout.find(g => g.profileIds.includes(t)) || null;
+        if (!targetGrp) {
+          targetGrp = layout.find(g => g.profileIds.some(pid => (profileDeviceIds.get(pid) || '').toLowerCase() === t.toLowerCase())) || null;
         }
       }
     }
 
-    const totalGroups = Math.ceil(orderedIds.length / MAX_SCREENS_PER_DEVICE);
-    if (groupIndexZero < 0 || groupIndexZero >= totalGroups) return null;
+    if (!targetGrp) return null;
 
-    const groupPids = orderedIds.slice(groupIndexZero * MAX_SCREENS_PER_DEVICE, (groupIndexZero + 1) * MAX_SCREENS_PER_DEVICE);
+    const groupPids = targetGrp.profileIds;
     const assigned = mintUniqueDeviceId();
     const assignedMach = mintUniqueMachineId('device-group:' + assigned.toLowerCase() + ':' + Date.now());
     deviceMachineMap.set(assigned.toLowerCase(), assignedMach);
@@ -797,7 +925,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const machKey = `pelican_${pid}__aetheria_machine`;
       profileDeviceIds.set(pid, assigned);
       profileMachineIds.set(pid, assignedMach);
-      profileDeviceGroupIndex.set(pid, groupIndexZero + 1);
+      profileDeviceGroupIndex.set(pid, targetGrp.groupIndex);
       saveProfileStorage(pid, { [devKey]: assigned, [machKey]: assignedMach });
       const c = clients.get(pid);
       if (c && c.sessionId) {
@@ -807,10 +935,18 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
 
     return {
-      groupIndex: groupIndexZero + 1,
+      groupIndex: targetGrp.groupIndex,
+      ipIndex: targetGrp.ipIndex,
+      deviceIndexInIp: targetGrp.deviceIndexInIp,
+      devicesPerIp: targetGrp.devicesPerIp,
+      screensPerIp: targetGrp.screensPerIp,
+      deviceSubSizes: targetGrp.deviceSubSizes,
+      ipSlotStart: targetGrp.ipSlotStart,
+      ipProfileIds: targetGrp.ipProfileIds,
       deviceId: assigned,
       machineId: assignedMach,
-      maxScreens: MAX_SCREENS_PER_DEVICE,
+      maxScreens: targetGrp.maxScreens,
+      maxScreensPerDevice: targetGrp.maxScreensPerDevice,
       profileIds: groupPids
     };
   }
@@ -827,10 +963,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     initDeviceIdsFromStorage();
     rebalanceDeviceGroups(null, false);
     const orderedIds = getOrderedProfileIds();
-    const totalGroups = Math.ceil(orderedIds.length / MAX_SCREENS_PER_DEVICE);
+    const layout = buildDeviceGroupLayout(orderedIds, getScreensPerIp());
     const rotatedByProfile = {};
     const groups = [];
-    for (let g = 1; g <= totalGroups; g++) {
+    for (let g = 1; g <= layout.length; g++) {
       const grp = await rotateDeviceGroup(g);
       if (grp) {
         groups.push(grp);
@@ -2866,7 +3002,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if(ws){const socket=ws;ws=null;socket.close();}
     for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(Error('BROWSER_MODE_DISPOSED'));}pending.clear();
   }
-  return { launch, stop, isOpen, start, dispose, findBrowser, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
+  return { launch, stop, isOpen, start, dispose, findBrowser, rebalanceDeviceGroups, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
 }
 
 module.exports = { createBrowserMode, findBrowser, HEALTH_JS, MAX_SCREENS_PER_DEVICE, extractPelicanStorageFromLevelDb, mergeAuthConfigString, mergeSellConfigString };

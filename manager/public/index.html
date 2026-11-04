@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="market_overview.css?v=4.49.3">
   <link rel="stylesheet" href="guild_manager.css?v=4.49.0">
   <link rel="stylesheet" href="jail_manager.css?v=4.51.9">
-  <link rel="stylesheet" href="device_manager.css?v=4.46.2">
+  <link rel="stylesheet" href="device_manager.css?v=4.53.6">
 </head>
 <body>
   <div class="app-container">
@@ -1186,7 +1186,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4381"></script>
-  <script src="app.js?v=4.51.9"></script>
+  <script src="app.js?v=4.53.6"></script>
   <script src="patcher_module.js?v=41744"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.53.0"></script>
@@ -1200,8 +1200,8 @@
   <script src="market_sniper.js?v=4.51.8"></script>
   <script src="guild_manager.js?v=4.49.0"></script>
   <script src="jail_manager.js?v=4.51.9"></script>
-  <script src="device_manager.js?v=4.46.2"></script>
-  <script src="update_log.js?v=4.53.5"></script>
+  <script src="device_manager.js?v=4.53.6"></script>
+  <script src="update_log.js?v=4.53.6"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 
@@ -1966,10 +1966,10 @@
           </div>
           <div>
             <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
-              ระบบแยก IP รายจอ (1 IP ต่อ 3 จอ)
+              <span id="sp-modal-title-text">ระบบแยก IP รายจอ (1 IP ต่อ 3 จอ)</span>
               <span id="screen-proxy-status-badge" style="font-size: 11px; padding: 2px 8px; border-radius: 99px; background: rgba(148, 163, 184, 0.15); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.3);">สถานะ: ปิด</span>
             </h3>
-            <p style="margin: 2px 0 0 0; font-size: 11px; color: #94a3b8;">จัดคิวจ่าย Static IP อัตโนมัติ (จำกัดไม่เกิน 3 จอต่อ 1 IP) พร้อม Split-Tunnel ประหยัดแบนด์วิดท์</p>
+            <p id="sp-modal-sub-text" style="margin: 2px 0 0 0; font-size: 11px; color: #94a3b8;">จัดคิวจ่าย Static IP อัตโนมัติ (จำกัดไม่เกิน 3 จอต่อ 1 IP) พร้อมแบ่งกลุ่ม Device Spoof อัตโนมัติ (ไม่เกิน 3 จอ/Device)</p>
           </div>
         </div>
         <button type="button" id="btn-screen-proxy-close" class="btn-icon" style="background: transparent; border: none; color: #94a3b8; font-size: 18px; cursor: pointer; padding: 4px 8px;">✕</button>
@@ -1985,7 +1985,7 @@
             <div id="sp-stat-pool-count" style="font-size: 16px; font-weight: 700; color: #38bdf8; margin-top: 2px;">0 IP</div>
           </div>
           <div style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 8px 10px;">
-            <div style="font-size: 10.5px; color: #94a3b8;">รองรับสูงสุด (1:3)</div>
+            <div id="sp-stat-total-slots-label" style="font-size: 10.5px; color: #94a3b8;">รองรับสูงสุด (1:3)</div>
             <div id="sp-stat-total-slots" style="font-size: 16px; font-weight: 700; color: #c084fc; margin-top: 2px;">0 จอ</div>
           </div>
           <div style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 8px 10px;">
@@ -2012,11 +2012,28 @@
                 <span>💻 จัดคิวเฉพาะในเครื่องนี้ (Local Pool)</span>
               </label>
             </div>
-            <div style="display: flex; align-items: center; gap: 6px;">
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
               <span style="font-size: 11px; color: #cbd5e1;">จำกัดจอต่อ 1 IP:</span>
-              <input type="number" id="sp-max-screens" min="1" max="10" value="3" style="width: 52px; padding: 3px 6px; border-radius: 5px; border: 1px solid rgba(168,85,247,0.4); background: #090d16; color: #f8fafc; font-size: 11.5px; text-align: center; font-weight: 700;">
+              <input type="number" id="sp-max-screens" min="1" max="20" value="3" style="width: 52px; padding: 3px 6px; border-radius: 5px; border: 1px solid rgba(168,85,247,0.4); background: #090d16; color: #f8fafc; font-size: 11.5px; text-align: center; font-weight: 700;">
               <span style="font-size: 11px; color: #94a3b8;">จอ</span>
+              <div style="display: inline-flex; gap: 4px; margin-left: 4px;">
+                <button type="button" class="btn-sp-max-preset" data-max="3" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 3 จอ (1 กลุ่ม Device: 3 จอ)">3</button>
+                <button type="button" class="btn-sp-max-preset" data-max="4" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 4 จอ (2 กลุ่ม Device: 3 + 1 จอ)">4</button>
+                <button type="button" class="btn-sp-max-preset" data-max="5" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 5 จอ (2 กลุ่ม Device: 3 + 2 จอ)">5</button>
+                <button type="button" class="btn-sp-max-preset" data-max="6" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 6 จอ (2 กลุ่ม Device: 3 + 3 จอ)">6</button>
+              </div>
             </div>
+          </div>
+
+          <!-- Live Device Spoof Split Preview per 1 IP -->
+          <div id="sp-device-split-box" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 7px 10px; border-radius: 7px; background: rgba(2, 132, 199, 0.14); border: 1px solid rgba(56, 189, 248, 0.32);">
+            <div id="sp-device-split-preview" style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: #e0f2fe;">
+              <span>⚙️ <b>การแบ่ง Device ต่อ 1 IP:</b></span>
+              <span>1 IP (3 จอ) = <b>1 กลุ่ม · 1 Device</b> (3 จอ)</span>
+            </div>
+            <button type="button" id="btn-sp-open-device-drawer" style="padding: 3px 9px; font-size: 10.5px; font-weight: 700; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.45); background: rgba(14, 165, 233, 0.2); color: #bae6fd; cursor: pointer; white-space: nowrap;" title="เปิดแถบจัดการ Device Spoof เพื่อดูกลุ่ม Device และ IP ของแต่ละจอ">
+              ⚙️ ดูกลุ่ม Device Spoof
+            </button>
           </div>
 
           <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06);">
@@ -2058,11 +2075,66 @@
           </div>
         </div>
 
+        <!-- Real Proxy Bandwidth & Screen Merit Billing + Anti-Clone HWID -->
+        <div style="background: linear-gradient(135deg, rgba(234, 179, 8, 0.1), rgba(15, 23, 42, 0.78)); border: 1px solid rgba(250, 204, 21, 0.35); border-radius: 9px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span style="font-size: 12px; font-weight: 700; color: #fde047;">💰 คิดส่วนบุญเพิ่มตามการใช้จริง (Proxy Bandwidth & จอที่ใช้ Proxy)</span>
+              <span id="sp-billing-hwid-badge" style="font-size: 10px; padding: 2px 7px; border-radius: 99px; background: rgba(16, 185, 129, 0.18); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.4); font-weight: 600;" title="ผูกตัวนับเน็ตและคิว IP กับรหัสฮาร์ดแวร์เครื่อง (MachineGuid) หากโคลนโฟลเดอร์ไปลงเครื่องอื่น ระบบจะรีเซ็ต Device ID และแยกบัญชีตัวนับอัตโนมัติ ไม่ให้ยอดซ้อนหรือบัค">🔒 Anti-Clone HWID ป้องกันโคลนแอพ</span>
+            </div>
+            <label style="display: flex; align-items: center; gap: 5px; font-size: 11px; color: #fef08a; cursor: pointer; font-weight: 600;">
+              <input type="checkbox" id="sp-bill-enabled" checked style="accent-color: #eab308;">
+              <span>เปิดคำนวณ & หักส่วนบุญตามใช้จริง</span>
+            </label>
+          </div>
+
+          <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; background: rgba(2, 6, 23, 0.55); border: 1px solid rgba(250, 204, 21, 0.22); border-radius: 7px; padding: 7px 10px; font-size: 11px; color: #e2e8f0;">
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <span style="color: #cbd5e1; font-weight: 600;">📦 เรทแพ็กเกจ:</span>
+              <input type="number" id="sp-bill-pkg-gb" min="1" max="1000000" step="100" value="5000" style="width: 68px; padding: 2px 6px; border-radius: 5px; border: 1px solid rgba(250,204,21,0.4); background: #090d16; color: #38bdf8; font-size: 11px; text-align: center; font-weight: 700;">
+              <span>GB =</span>
+              <input type="number" id="sp-bill-pkg-merit" min="0" max="1000000" step="50" value="1500" style="width: 64px; padding: 2px 6px; border-radius: 5px; border: 1px solid rgba(250,204,21,0.4); background: #090d16; color: #facc15; font-size: 11px; text-align: center; font-weight: 700;">
+              <span>ส่วนบุญ</span>
+              <span style="color: #94a3b8;">(เฉลี่ย <b id="sp-bill-rate-per-gb" style="color: #fde047;">0.3000</b> บุญ/GB)</span>
+              <span style="color: #64748b;">|</span>
+              <span style="color: #cbd5e1;">+ ค่าเช่าช่อง:</span>
+              <input type="number" id="sp-bill-rate-screen-day" min="0" max="1000" step="0.1" value="0" style="width: 52px; padding: 2px 5px; border-radius: 5px; border: 1px solid rgba(168,85,247,0.4); background: #090d16; color: #e9d5ff; font-size: 11px; text-align: center; font-weight: 700;" title="คิดส่วนบุญเพิ่มต่อจอที่ใช้ Proxy ในแต่ละวัน (ตั้ง 0 = คิดตามปริมาณ GB จริงอย่างเดียว)">
+              <span style="color: #94a3b8;">บุญ/จอ/วัน</span>
+            </div>
+            <button type="button" id="btn-sp-save-billing" class="btn btn-sm" style="padding: 3px 10px; font-size: 11px; font-weight: 700; background: rgba(234, 179, 8, 0.22); border: 1px solid rgba(250, 204, 21, 0.5); color: #fde047; border-radius: 6px; cursor: pointer;">
+              💾 บันทึกเรทส่วนบุญ
+            </button>
+          </div>
+
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;">
+            <div style="background: rgba(2, 6, 23, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 7px; padding: 6px 9px;">
+              <div style="font-size: 10px; color: #94a3b8;">📡 เน็ต Proxy วันนี้</div>
+              <div id="sp-bill-today-gb" style="font-size: 13px; font-weight: 700; color: #38bdf8; margin-top: 2px;">0 B</div>
+              <div id="sp-bill-today-gb-sub" style="font-size: 9.5px; color: #64748b; margin-top: 1px;">สะสมรวม 0.0000 GB</div>
+            </div>
+            <div style="background: rgba(2, 6, 23, 0.6); border: 1px solid rgba(255,255,255,0.06); border-radius: 7px; padding: 6px 9px;">
+              <div style="font-size: 10px; color: #94a3b8;">🖥️ จอที่ใช้ Proxy วันนี้</div>
+              <div id="sp-bill-today-screens" style="font-size: 13px; font-weight: 700; color: #c084fc; margin-top: 2px;">0 จอ</div>
+              <div id="sp-bill-today-screens-sub" style="font-size: 9.5px; color: #64748b; margin-top: 1px;">เฉพาะจอที่วิ่งผ่าน Proxy จริง</div>
+            </div>
+            <div style="background: rgba(2, 6, 23, 0.6); border: 1px solid rgba(250,204,21,0.22); border-radius: 7px; padding: 6px 9px;">
+              <div style="font-size: 10px; color: #fde68a;">🧧 ส่วนบุญค่าเน็ตวันนี้</div>
+              <div id="sp-bill-today-merit" style="font-size: 13px; font-weight: 700; color: #facc15; margin-top: 2px;">0.0000 บุญ</div>
+              <div id="sp-bill-today-merit-sub" style="font-size: 9.5px; color: #94a3b8; margin-top: 1px;">ตามปริมาณ GB จริง</div>
+            </div>
+            <div style="background: rgba(2, 6, 23, 0.6); border: 1px solid rgba(16,185,129,0.22); border-radius: 7px; padding: 6px 9px;">
+              <div style="font-size: 10px; color: #a7f3d0;">🏆 ส่วนบุญสะสมรวม</div>
+              <div id="sp-bill-total-merit" style="font-size: 13px; font-weight: 700; color: #34d399; margin-top: 2px;">0.0000 บุญ</div>
+              <div id="sp-bill-total-merit-sub" style="font-size: 9.5px; color: #64748b; margin-top: 1px;">ตัดยอดแล้ว 0.00 บุญ</div>
+            </div>
+          </div>
+        </div>
+
         <!-- IP Pool Input Textarea -->
         <div style="background: rgba(15, 23, 42, 0.55); border: 1px solid rgba(255, 255, 255, 0.09); border-radius: 9px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;">
           <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
             <div>
-              <span style="font-size: 12px; font-weight: 700; color: #e2e8f0;">📋 รายการ Static Proxy IP ในคิว (1 บรรทัด = 1 IP รองรับ 3 จอ)</span>
+              <span id="sp-pool-header-title" style="font-size: 12px; font-weight: 700; color: #e2e8f0;">📋 รายการ Static Proxy IP ในคิว (1 บรรทัด = 1 IP รองรับ 3 จอ)</span>
               <div style="font-size: 10.5px; color: #94a3b8;">รูปแบบที่รองรับ: <code style="color:#38bdf8;">ip:port:user:pass</code> หรือ <code style="color:#38bdf8;">http://user:pass@ip:port</code> หรือ <code style="color:#38bdf8;">socks5://user:pass@ip:port</code></div>
             </div>
             <div style="display: flex; gap: 6px;">
@@ -2088,6 +2160,30 @@
           </div>
           <div id="sp-leases-list" style="max-height: 170px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 11.5px;">
             <div style="text-align: center; color: #64748b; padding: 14px;">ยังไม่มีจอที่จับคู่ IP ในขณะนี้</div>
+          </div>
+        </div>
+
+        <!-- Auto-Blocked Banned / Jailed Proxy IP Blacklist -->
+        <div style="background: rgba(28, 12, 24, 0.65); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 9px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;">
+          <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span style="font-size: 12px; font-weight: 700; color: #fca5a5;">🚫 รายการ Proxy IP ที่ถูกบล็อคอัตโนมัติ (โดนแบน / เข้าคุก)</span>
+              <span id="sp-blocked-count-badge" style="font-size: 10.5px; padding: 1px 8px; border-radius: 99px; background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.45); font-weight: 700;">บล็อคแล้ว 0 IP</span>
+            </div>
+            <div style="display: flex; gap: 5px; flex-wrap: wrap;">
+              <button type="button" id="btn-sp-prune-blocked" class="btn btn-ghost btn-sm" style="font-size: 10.5px; padding: 2px 8px; border: 1px solid rgba(251, 146, 60, 0.4); color: #fdba74;" title="ลบบรรทัด IP ที่ถูกบล็อคออกจากช่องรายการ Static Proxy IP ด้านบนอย่างถาวร">
+                🧹 ลบ IP ที่โดนแบนออกจากคิวถาวร
+              </button>
+              <button type="button" id="btn-sp-clear-all-blocked" class="btn btn-ghost btn-sm" style="font-size: 10.5px; padding: 2px 8px; border: 1px solid rgba(148, 163, 184, 0.3); color: #cbd5e1;" title="ปลดบล็อค IP ทั้งหมดในรายการนี้">
+                🔓 ปลดบล็อคทั้งหมด
+              </button>
+            </div>
+          </div>
+          <div style="font-size: 10.5px; color: #fda4af; line-height: 1.4;">
+            เมื่อตรวจพบบัญชีขึ้นข้อความสีแดง <b>"บัญชีถูกระงับถึง..."</b> ในหน้าเลือกตัวละคร หรือตัวละครถูกดึงเข้าแมพ <b>"คุก"</b> ระบบจะหยุดบอททันที บล็อค IP นั้นเข้าบัญชีดำอัตโนมัติ และสลับจออื่นที่ใช้ IP เดียวกันไปใช้ IP ใหม่ทันทีเพื่อป้องกันการโดนแบนยกวง
+          </div>
+          <div id="sp-blocked-ips-list" style="max-height: 155px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 11px;">
+            <div style="text-align: center; color: #64748b; padding: 10px;">ยังไม่มี Proxy IP ที่ถูกบล็อค (ระบบเฝ้าระวังหน้าเลือกตัวละครและแมพคุกให้อัตโนมัติ)</div>
           </div>
         </div>
 

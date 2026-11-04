@@ -999,8 +999,35 @@ const LIVE_STATE_EVAL = `(() => {
         autoReloadAfterMs = 90000;
       }
     } else if (charPanel) {
+      try {
+        const selCard = charPanel.querySelector('.char-card.selected:not(.empty)') || charCards[0] || null;
+        if (selCard) {
+          const cName = String(selCard.querySelector('.char-name')?.innerText || '').trim();
+          const cSub = String(selCard.querySelector('.char-sub')?.innerText || '').trim();
+          const cMap = String(selCard.querySelector('.char-map')?.innerText || '').trim();
+          if (cName && !s.charName) s.charName = cName;
+          if (cSub && (!s.charClass || s.charClass === 'Novice')) {
+            const clsM = cSub.split('·')[0]?.trim();
+            if (clsM) s.charClass = clsM;
+          }
+          if (cMap && /คุก|เรือนจำ|prison|jail/i.test(cMap) && !/คุกใต้ดิน/i.test(cMap)) {
+            s.charSelectInJail = true;
+            s.map = 'คุก';
+          }
+        }
+      } catch (_) {}
       if (errText) {
-        if (/ตัวละครนี้ออนไลน์อยู่แล้ว|ตัวนี้ออนไลน์อยู่|already online/i.test(errText)) {
+        if (/บัญชีถูกระงับ|ถูกระงับถึง|ระงับการใช้งาน|account\s*(?:is\s*)?(?:banned|suspended)/i.test(errText)) {
+          screenPhase = 'account_banned';
+          s.accountBanned = true;
+          s.banReason = errText;
+          baseLabel = '🚫 บัญชีถูกระงับ (' + errText.slice(0, 42) + ')';
+          detail = '🚫 หน้าเลือกตัวละคร: ' + errText;
+          autoReloadAfterMs = 0;
+          window.__isBotRunning = false;
+          window.__autoLoopEnabled = false;
+          if (typeof window.stopMasterBot === 'function') { try { window.stopMasterBot(); } catch (_) {} }
+        } else if (/ตัวละครนี้ออนไลน์อยู่แล้ว|ตัวนี้ออนไลน์อยู่|already online/i.test(errText)) {
           screenPhase = 'char_select_online';
           baseLabel = '⚠️ ตัวละครค้างออนไลน์ (กำลังเคลียร์...)';
           detail = '⚠️ หน้าเลือกตัวละคร: ' + errText;
@@ -1045,17 +1072,28 @@ const LIVE_STATE_EVAL = `(() => {
         detail = errText ? ('⚠️ หน้าสมัครสมาชิก: ' + errText) : '📝 หน้าสมัครสมาชิก: กำลังกรอกข้อมูลสมัครบัญชีใหม่';
         autoReloadAfterMs = 0;
       } else if (errText) {
-        const isServerLoginErr = /เชื่อมต่อเซิร์ฟเวอร์ไม่ได้|เซิร์ฟเวอร์ไม่ตอบ|เซิร์ฟเวอร์เกมไม่ตอบ|HTTP\\s*5\\d\\d|network|failed to fetch|timeout|ลองเข้าเกมใหม่อีกครั้ง|เชื่อมต่อไม่ได้/i.test(errText);
-        if (isServerLoginErr) {
-          screenPhase = 'login_error';
-          baseLabel = '⚠️ เซิร์ฟเกมไม่ตอบ (Login Error)';
-          detail = '⚠️ หน้า Login: ' + errText;
-          autoReloadAfterMs = 15000;
-        } else {
-          screenPhase = 'login_auth_error';
-          baseLabel = '❌ ล็อกอินไม่ผ่าน: ' + errText.slice(0, 26);
-          detail = '❌ หน้า Login: ' + errText;
+        if (/บัญชีถูกระงับ|ถูกระงับถึง|ระงับการใช้งาน|account\s*(?:is\s*)?(?:banned|suspended)/i.test(errText)) {
+          screenPhase = 'account_banned';
+          s.accountBanned = true;
+          s.banReason = errText;
+          baseLabel = '🚫 บัญชีถูกระงับ (' + errText.slice(0, 42) + ')';
+          detail = '🚫 หน้า Login: ' + errText;
           autoReloadAfterMs = 0;
+          window.__isBotRunning = false;
+          window.__autoLoopEnabled = false;
+        } else {
+          const isServerLoginErr = /เชื่อมต่อเซิร์ฟเวอร์ไม่ได้|เซิร์ฟเวอร์ไม่ตอบ|เซิร์ฟเวอร์เกมไม่ตอบ|HTTP\\s*5\\d\\d|network|failed to fetch|timeout|ลองเข้าเกมใหม่อีกครั้ง|เชื่อมต่อไม่ได้/i.test(errText);
+          if (isServerLoginErr) {
+            screenPhase = 'login_error';
+            baseLabel = '⚠️ เซิร์ฟเกมไม่ตอบ (Login Error)';
+            detail = '⚠️ หน้า Login: ' + errText;
+            autoReloadAfterMs = 15000;
+          } else {
+            screenPhase = 'login_auth_error';
+            baseLabel = '❌ ล็อกอินไม่ผ่าน: ' + errText.slice(0, 26);
+            detail = '❌ หน้า Login: ' + errText;
+            autoReloadAfterMs = 0;
+          }
         }
       } else if (isSubmitting) {
         screenPhase = 'login_loading';
@@ -1115,7 +1153,7 @@ const LIVE_STATE_EVAL = `(() => {
       s.screenPhaseLabel = finalLabel;
       s.screenDetail = detail;
       s.botStatus = finalLabel;
-      s.map = 'ไม่ทราบแมพ';
+      s.map = s.charSelectInJail ? 'คุก' : 'ไม่ทราบแมพ';
     } else {
       s.screenPhaseLabel = null;
       s.screenDetail = null;
@@ -4268,20 +4306,35 @@ const BANDWIDTH_PROBE_INSTALL_JS = `(() => {
 
 function loadBandwidthStats() {
   if (bandwidthStatsCache) return bandwidthStatsCache;
+  const curHwid = typeof humanCheckSolver?.getMachineFingerprint === "function"
+    ? humanCheckSolver.getMachineFingerprint()
+    : "";
   try {
     if (fs.existsSync(BANDWIDTH_STATS_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(BANDWIDTH_STATS_FILE, "utf8"));
       if (parsed && typeof parsed === "object") {
+        // Anti-Clone HWID Guard: if bandwidth_stats.json came from another cloned PC, reset for this PC
+        if (parsed.machineHwid && curHwid && parsed.machineHwid !== curHwid) {
+          console.warn("[Anti-Clone Guard] 🛡️ ตรวจพบไฟล์สถิติแบนด์วิดท์ (bandwidth_stats.json) จากเครื่องอื่น -> รีเซ็ตตัวนับแบนด์วิดท์ใหม่สำหรับเครื่องนี้!");
+          bandwidthStatsCache = { machineHwid: curHwid, updatedAt: Date.now(), lastSession: {}, daily: {} };
+          bandwidthStatsDirty = true;
+          saveBandwidthStatsNow();
+          return bandwidthStatsCache;
+        }
         bandwidthStatsCache = {
+          machineHwid: curHwid || parsed.machineHwid || "",
           updatedAt: parsed.updatedAt || Date.now(),
           lastSession: (parsed.lastSession && typeof parsed.lastSession === "object") ? parsed.lastSession : {},
           daily: (parsed.daily && typeof parsed.daily === "object") ? parsed.daily : {}
         };
+        if (!parsed.machineHwid && curHwid) {
+          bandwidthStatsDirty = true;
+        }
         return bandwidthStatsCache;
       }
     }
   } catch (e) {}
-  bandwidthStatsCache = { updatedAt: Date.now(), lastSession: {}, daily: {} };
+  bandwidthStatsCache = { machineHwid: curHwid, updatedAt: Date.now(), lastSession: {}, daily: {} };
   return bandwidthStatsCache;
 }
 
@@ -4293,6 +4346,9 @@ function saveBandwidthStatsNow() {
     while (keys.length > 30) {
       const oldKey = keys.shift();
       delete bandwidthStatsCache.daily[oldKey];
+    }
+    if (!bandwidthStatsCache.machineHwid && typeof humanCheckSolver?.getMachineFingerprint === "function") {
+      bandwidthStatsCache.machineHwid = humanCheckSolver.getMachineFingerprint();
     }
     bandwidthStatsCache.updatedAt = Date.now();
     const tmpFile = BANDWIDTH_STATS_FILE + ".tmp";
@@ -4873,6 +4929,8 @@ function isConfirmedOutOfJailMap(state) {
 }
 
 const jailStoppingInFlight = new Set();
+const banStoppingInFlight = new Set();
+
 async function recordProfileJailedAndStop(profile, state) {
   if (!profile || !profile.id) return false;
   const pid = String(profile.id);
@@ -4899,7 +4957,21 @@ async function recordProfileJailedAndStop(profile, state) {
   if (newlyJailed && !jailStoppingInFlight.has(pid)) {
     jailStoppingInFlight.add(pid);
     try {
-      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — แสดงสถานะการ์ดสีแดง, สุ่ม Device/Machine ID ใหม่ และหยุดบอทในเกม (ไม่ปิดจอ)!`);
+      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — บล็อค Proxy IP อัตโนมัติ, สุ่ม Device/Machine ID ใหม่ และหยุดบอทในเกม!`);
+      if (typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.blockProxyForProfile === 'function') {
+        screenProxy.blockProxyForProfile(pid, {
+          reason: `ตัวละครถูกดึงเข้าคุก (${mapName})`,
+          trigger: 'jailed',
+          stopBannedProfile: false,
+          profileName: profile.name || pid,
+          charName: (state && state.charName) || profile.lastCharName || '',
+          account: profile.account || ''
+        }).then(blockRes => {
+          if (blockRes && blockRes.blocked && blockRes.entry) {
+            console.warn(`[Proxy Blacklist] 🚫 บล็อค IP ${blockRes.entry.ip}:${blockRes.entry.port || ''} ถาวร (สาเหตุ: ติดคุกจากจอ ${profile.name || pid})`);
+          }
+        }).catch(() => {});
+      }
       if (typeof browserMode !== 'undefined' && browserMode && typeof browserMode.rotateDeviceGroup === 'function') {
         browserMode.rotateDeviceGroup(pid).then(grp => {
           if (grp && Array.isArray(grp.profileIds)) {
@@ -4922,6 +4994,112 @@ async function recordProfileJailedAndStop(profile, state) {
   return newlyJailed;
 }
 
+function isAccountBannedState(state) {
+  if (!state || typeof state !== 'object') return false;
+  if (state.accountBanned || state.screenPhase === 'account_banned') return true;
+  const errStr = String(state.banReason || state.screenError || state.screenDetail || '').trim();
+  return /บัญชีถูกระงับ|ถูกระงับถึง|ระงับการใช้งาน|account\s*(?:is\s*)?(?:banned|suspended)/i.test(errStr);
+}
+
+async function recordProfileBannedAndBlockIp(profile, state) {
+  if (!profile || !profile.id || !isAccountBannedState(state)) return false;
+  const pid = String(profile.id);
+  const now = Date.now();
+  const rawReason = String(state.banReason || state.screenError || state.screenDetail || 'บัญชีถูกระงับการใช้งาน').replace(/^🚫\s*หน้าเลือกตัวละคร:\s*/i, '').trim();
+  const banReason = rawReason || 'บัญชีถูกระงับการใช้งาน';
+  const alsoInJail = Boolean(state.charSelectInJail || isJailMapName(state.map));
+  let newlyBanned = false;
+  try {
+    const fresh = loadProfiles();
+    const target = fresh.find(f => String(f.id) === pid);
+    if (target) {
+      if (target.banDismissedAt) return false;
+      newlyBanned = !target.isBanned;
+      let changed = !target.isBanned || target.banReason !== banReason || !target.bannedAt;
+      target.isBanned = true;
+      target.bannedAt = target.bannedAt || now;
+      target.banReason = banReason;
+      if (alsoInJail && !target.jailDismissedAt) {
+        if (!target.isJailed) changed = true;
+        target.isJailed = true;
+        target.jailedAt = target.jailedAt || now;
+        target.jailedMap = 'คุก';
+      }
+      if (state && state.charName) {
+        if (target.lastCharName !== state.charName) changed = true;
+        target.lastCharName = state.charName;
+      }
+      if (state && state.charClass) {
+        if (target.lastCharClass !== state.charClass) changed = true;
+        target.lastCharClass = state.charClass;
+      }
+      if (changed) saveProfiles(fresh);
+    }
+  } catch (_) {}
+
+  if (newlyBanned && !banStoppingInFlight.has(pid)) {
+    banStoppingInFlight.add(pid);
+    try {
+      console.warn(`[BAN ALERT] 🚫 ตรวจพบจอ "${profile.name || pid}" ถูกแบน (${banReason}) — บล็อค Proxy IP อัตโนมัติ, สุ่ม Device/Machine ID ใหม่ และหยุดบอททันที!`);
+      if (typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.blockProxyForProfile === 'function') {
+        screenProxy.blockProxyForProfile(pid, {
+          reason: banReason,
+          trigger: 'account_banned',
+          stopBannedProfile: true,
+          profileName: profile.name || pid,
+          charName: (state && state.charName) || profile.lastCharName || '',
+          account: profile.account || ''
+        }).then(blockRes => {
+          if (blockRes && blockRes.blocked && blockRes.entry) {
+            console.warn(`[Proxy Blacklist] 🚫 บล็อค IP ${blockRes.entry.ip}:${blockRes.entry.port || ''} ถาวร (สาเหตุ: ${banReason})`);
+          }
+        }).catch(() => {});
+      }
+      if (typeof browserMode !== 'undefined' && browserMode && typeof browserMode.rotateDeviceGroup === 'function') {
+        browserMode.rotateDeviceGroup(pid).then(grp => {
+          if (grp && Array.isArray(grp.profileIds)) {
+            for (const gpid of grp.profileIds) {
+              if (windowStates[gpid]) {
+                delete windowStates[gpid].syncedDeviceId;
+                delete windowStates[gpid].syncedMachineId;
+              }
+            }
+          }
+        }).catch(() => {});
+      }
+      if (profile.debugPort) {
+        evalProfilePort(profile.debugPort, 'window.__isBotRunning = false; window.__autoLoopEnabled = false; if (typeof window.stopMasterBot === "function") window.stopMasterBot();', 2500).catch(() => {});
+      }
+    } catch (_) {} finally {
+      setTimeout(() => banStoppingInFlight.delete(pid), 4000);
+    }
+  }
+  return newlyBanned;
+}
+
+function clearProfileBanStatus(profileId, resetDismissed = false) {
+  const pid = String(profileId || '');
+  const fresh = loadProfiles();
+  let changed = false;
+  for (const p of fresh) {
+    if (!profileId || String(p.id) === pid) {
+      if (p.isBanned || p.bannedAt || p.banReason || (resetDismissed && p.banDismissedAt) || (!resetDismissed && !p.banDismissedAt)) {
+        delete p.isBanned;
+        delete p.bannedAt;
+        delete p.banReason;
+        if (resetDismissed) {
+          delete p.banDismissedAt;
+        } else {
+          p.banDismissedAt = Date.now();
+        }
+        changed = true;
+      }
+    }
+  }
+  if (changed) saveProfiles(fresh);
+  return changed;
+}
+
 function clearProfileJailStatus(profileId, resetDismissed = false) {
   const pid = String(profileId || '');
   const fresh = loadProfiles();
@@ -4929,16 +5107,21 @@ function clearProfileJailStatus(profileId, resetDismissed = false) {
   const unjailedPids = [];
   for (const p of fresh) {
     if (!profileId || String(p.id) === pid) {
-      if (p.isJailed || p.jailedAt || p.jailedMap || p.jailAutoStopped || (resetDismissed && p.jailDismissedAt) || (!resetDismissed && !p.jailDismissedAt)) {
-        if (p.isJailed) unjailedPids.push(String(p.id));
+      if (p.isJailed || p.jailedAt || p.jailedMap || p.jailAutoStopped || p.isBanned || p.bannedAt || p.banReason || (resetDismissed && p.jailDismissedAt) || (!resetDismissed && !p.jailDismissedAt)) {
+        if (p.isJailed || p.isBanned) unjailedPids.push(String(p.id));
         delete p.isJailed;
         delete p.jailedAt;
         delete p.jailedMap;
         delete p.jailAutoStopped;
+        delete p.isBanned;
+        delete p.bannedAt;
+        delete p.banReason;
         if (resetDismissed) {
           delete p.jailDismissedAt;
+          delete p.banDismissedAt;
         } else {
           p.jailDismissedAt = Date.now();
+          p.banDismissedAt = Date.now();
         }
         changed = true;
       }
@@ -5019,6 +5202,13 @@ setInterval(async () => {
           } else if (state) {
             humanCheckFirstSeenByProfile.delete(p.id);
             discordService.clearHumanCheck(p.id);
+          }
+          if (state && isAccountBannedState(state)) {
+            if (!p.banDismissedAt) {
+              await recordProfileBannedAndBlockIp(p, state);
+            }
+          } else if (state && state.screenPhase === 'in_game' && !isJailMapName(state.map) && (p.isBanned || p.banDismissedAt)) {
+            clearProfileBanStatus(p.id, true);
           }
           if (state && isJailMapName(state.map)) {
             if (!p.jailDismissedAt) {
@@ -6205,13 +6395,16 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ==========================================
-  // PER-SCREEN IP QUEUE (1 IP : 3 SCREENS) API
+  // PER-SCREEN IP QUEUE (1 IP : N SCREENS) API
   // ==========================================
   if (pathname === "/api/screen-proxy/status" && req.method === "GET") {
     try {
       const refresh = parsedUrl.searchParams.get("refresh") === "1";
       const st = await screenProxy.getQueueStatus({ refreshBackend: refresh });
-      return sendJSON(st);
+      const deviceGroups = typeof browserMode.getDeviceGroupsSnapshot === "function"
+        ? browserMode.getDeviceGroupsSnapshot()
+        : [];
+      return sendJSON({ ...st, deviceGroups });
     } catch (e) {
       return sendJSON({ success: false, error: e.message }, 500);
     }
@@ -6221,7 +6414,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET") {
       try {
         const st = await screenProxy.getQueueStatus({ refreshBackend: false });
-        return sendJSON(st);
+        const deviceGroups = typeof browserMode.getDeviceGroupsSnapshot === "function"
+          ? browserMode.getDeviceGroupsSnapshot()
+          : [];
+        return sendJSON({ ...st, deviceGroups });
       } catch (e) {
         return sendJSON({ success: false, error: e.message }, 500);
       }
@@ -6236,6 +6432,15 @@ const server = http.createServer(async (req, res) => {
         try {
           const data = JSON.parse(body || "{}");
           const saved = await screenProxy.savePoolAndSettings(data);
+          if (typeof browserMode.rebalanceDeviceGroups === "function") {
+            browserMode.rebalanceDeviceGroups(null, true);
+          }
+          for (const wsState of Object.values(windowStates)) {
+            if (wsState) {
+              delete wsState.syncedDeviceId;
+              delete wsState.syncedMachineId;
+            }
+          }
           if (saved.settings && saved.settings.enabled) {
             await syncScreenProxyForOpenProfiles().catch(() => {});
           } else if (saved.settings && !saved.settings.enabled) {
@@ -6245,7 +6450,10 @@ const server = http.createServer(async (req, res) => {
             await browserMode.syncAssetCacheToOpenWindows().catch(() => {});
           }
           const status = await screenProxy.getQueueStatus({ refreshBackend: true });
-          sendJSON({ ...status, backendSync: saved.backendSync || null });
+          const deviceGroups = typeof browserMode.getDeviceGroupsSnapshot === "function"
+            ? browserMode.getDeviceGroupsSnapshot()
+            : [];
+          sendJSON({ ...status, deviceGroups, backendSync: saved.backendSync || null });
         } catch (e) {
           sendJSON({ success: false, error: e.message }, 400);
         }
@@ -6358,6 +6566,86 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/api/screen-proxy/block" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => {
+      body += c;
+      if (Buffer.byteLength(body, "utf8") > 16384) req.destroy();
+    });
+    req.on("end", async () => {
+      try {
+        const data = JSON.parse(body || "{}");
+        const resBlock = data.profileId
+          ? await screenProxy.blockProxyForProfile(data.profileId, {
+              reason: data.reason || "บล็อค IP จากหน้าจัดการ",
+              trigger: data.trigger || "manual",
+              profileName: data.profileName || "",
+              charName: data.charName || "",
+              account: data.account || ""
+            })
+          : await screenProxy.blockProxyManual(data);
+        const status = await screenProxy.getQueueStatus({ refreshBackend: false });
+        sendJSON({ ...status, blockResult: resBlock, success: Boolean(resBlock?.success) });
+      } catch (e) {
+        sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  if (pathname === "/api/screen-proxy/unblock" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => {
+      body += c;
+      if (Buffer.byteLength(body, "utf8") > 16384) req.destroy();
+    });
+    req.on("end", async () => {
+      try {
+        const data = JSON.parse(body || "{}");
+        const resUnblock = data.all
+          ? screenProxy.clearAllBlockedProxies()
+          : screenProxy.unblockProxy(data);
+        const status = await screenProxy.getQueueStatus({ refreshBackend: false });
+        sendJSON({ ...status, unblockResult: resUnblock, success: true });
+      } catch (e) {
+        sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  if (pathname === "/api/screen-proxy/prune-blocked" && req.method === "POST") {
+    try {
+      const pruned = screenProxy.pruneBlockedFromPool();
+      const status = await screenProxy.getQueueStatus({ refreshBackend: false });
+      return sendJSON({ ...status, pruneResult: pruned, success: true });
+    } catch (e) {
+      return sendJSON({ success: false, error: e.message }, 500);
+    }
+  }
+
+  if (pathname === "/api/screen-proxy/billing-config" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => {
+      body += c;
+      if (Buffer.byteLength(body, "utf8") > 16384) req.destroy();
+    });
+    req.on("end", async () => {
+      try {
+        const data = JSON.parse(body || "{}");
+        const billing = screenProxy.updateBillingConfig(data);
+        if (data.syncNow && typeof screenProxy.syncProxyBillingToServer === "function") {
+          await screenProxy.syncProxyBillingToServer().catch(() => {});
+        }
+        const status = await screenProxy.getQueueStatus({ refreshBackend: false });
+        sendJSON({ ...status, billing: screenProxy.getBillingStatus(), success: true });
+      } catch (e) {
+        sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
   // 1. GET /api/profiles
   if (req.method === "GET" && pathname === "/api/profiles") {
     lastProfilesZenyPollAt = Date.now();
@@ -6451,23 +6739,41 @@ const server = http.createServer(async (req, res) => {
           }
         }
 
-        if (alive && liveState && !liveState.error && !liveState._syntheticLoading && liveState.map) {
-          if (isJailMapName(liveState.map)) {
-            if (!p.jailDismissedAt) {
-              if (!p.isJailed || p.jailedMap !== liveState.map) {
-                recordProfileJailedAndStop(p, liveState).catch(() => {});
+        if (alive && liveState && !liveState.error && !liveState._syntheticLoading) {
+          if (isAccountBannedState(liveState)) {
+            if (!p.banDismissedAt) {
+              if (!p.isBanned) {
+                recordProfileBannedAndBlockIp(p, liveState).catch(() => {});
               }
-              p.isJailed = true;
-              p.jailedAt = p.jailedAt || Date.now();
-              p.jailedMap = liveState.map;
+              p.isBanned = true;
+              p.bannedAt = p.bannedAt || Date.now();
+              p.banReason = String(liveState.banReason || liveState.screenError || liveState.screenDetail || 'บัญชีถูกระงับการใช้งาน').replace(/^🚫\s*หน้าเลือกตัวละคร:\s*/i, '').trim();
             }
-          } else if (isConfirmedOutOfJailMap(liveState) && (p.isJailed || p.jailAutoStopped || p.jailDismissedAt)) {
-            clearProfileJailStatus(p.id, true);
-            p.isJailed = false;
-            p.jailAutoStopped = false;
-            p.jailDismissedAt = null;
-            p.jailedAt = null;
-            p.jailedMap = null;
+          } else if (liveState.screenPhase === 'in_game' && !isJailMapName(liveState.map) && (p.isBanned || p.banDismissedAt)) {
+            clearProfileBanStatus(p.id, true);
+            p.isBanned = false;
+            p.banDismissedAt = null;
+            p.bannedAt = null;
+            p.banReason = null;
+          }
+          if (liveState.map) {
+            if (isJailMapName(liveState.map)) {
+              if (!p.jailDismissedAt) {
+                if (!p.isJailed || p.jailedMap !== liveState.map) {
+                  recordProfileJailedAndStop(p, liveState).catch(() => {});
+                }
+                p.isJailed = true;
+                p.jailedAt = p.jailedAt || Date.now();
+                p.jailedMap = liveState.map;
+              }
+            } else if (isConfirmedOutOfJailMap(liveState) && (p.isJailed || p.jailAutoStopped || p.jailDismissedAt)) {
+              clearProfileJailStatus(p.id, true);
+              p.isJailed = false;
+              p.jailAutoStopped = false;
+              p.jailDismissedAt = null;
+              p.jailedAt = null;
+              p.jailedMap = null;
+            }
           }
         }
 
@@ -6623,6 +6929,8 @@ const server = http.createServer(async (req, res) => {
       deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : [],
       bandwidthSummary,
       screenProxySummary: screenProxy.publicSettings(),
+      proxyBilling: typeof screenProxy.getBillingStatus === "function" ? screenProxy.getBillingStatus() : null,
+      blockedProxies: typeof screenProxy.getBlockedProxies === "function" ? screenProxy.getBlockedProxies() : [],
       gameExe: getGameExe(),
       allWindowsHidden,
       captchaStats: getCaptchaStats(),
@@ -6665,17 +6973,28 @@ const server = http.createServer(async (req, res) => {
     return sendJSON({ success: true, cleared });
   }
 
+  // POST /api/profiles/:id/clear-ban
+  if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/clear-ban$/)) {
+    const id = pathname.split("/")[3];
+    const cleared = clearProfileBanStatus(id, false);
+    return sendJSON({ success: true, cleared });
+  }
+
   // POST /api/jail/clear-all
   if (req.method === "POST" && pathname === "/api/jail/clear-all") {
     const fresh = loadProfiles();
     let clearedCount = 0;
     fresh.forEach(p => {
-      if (p.isJailed) {
+      if (p.isJailed || p.isBanned) {
         delete p.isJailed;
         delete p.jailedAt;
         delete p.jailedMap;
         delete p.jailAutoStopped;
+        delete p.isBanned;
+        delete p.bannedAt;
+        delete p.banReason;
         p.jailDismissedAt = Date.now();
+        p.banDismissedAt = Date.now();
         clearedCount++;
       }
     });
@@ -6704,7 +7023,8 @@ const server = http.createServer(async (req, res) => {
     const groups = typeof browserMode.getDeviceGroupsSnapshot === "function"
       ? browserMode.getDeviceGroupsSnapshot()
       : [];
-    return sendJSON({ success: true, maxScreensPerDevice: 3, groups });
+    const screensPerIp = screenProxy.loadSettings().maxScreensPerIp || 3;
+    return sendJSON({ success: true, maxScreensPerDevice: 3, screensPerIp, groups });
   }
 
   // POST /api/device-groups/rotate
@@ -6959,6 +7279,17 @@ const server = http.createServer(async (req, res) => {
           delete profiles[idx].proxyFallbackBrowser;
           delete profiles[idx].proxyRegistrationState;
           credentials.setPassword(id, "");
+        }
+        if (changesIdentity) {
+          delete profiles[idx].isBanned;
+          delete profiles[idx].bannedAt;
+          delete profiles[idx].banReason;
+          delete profiles[idx].banDismissedAt;
+          delete profiles[idx].isJailed;
+          delete profiles[idx].jailedAt;
+          delete profiles[idx].jailedMap;
+          delete profiles[idx].jailAutoStopped;
+          delete profiles[idx].jailDismissedAt;
         }
         saveProfiles(profiles);
         if (nextPassword) credentials.setPassword(id, nextPassword);

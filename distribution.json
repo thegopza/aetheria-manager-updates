@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "2eca487961de5d0b2d0cf65958743afa4ba8296f",
+  "sourceCommit": "ce06496f8ddf4d666b5c9b5075e339e19a5743ad",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "81250d66e9ec4f9168e2498a7710b4d64443902b0e6706057f64192d01b1daa8"
+      "sha256": "0038180717dbfe34e4a8e9abeaf264b582428c334cf136901e1b6dcc4b0aa766"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -128,7 +128,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "6ab39386f1dd9298afb64cbb8d6c1703be647cc6f6b5bb720b007ea1f5a867bd"
+      "sha256": "7e62123e002a6268007c8d4f7febbf659e3986161a779802043aae8d78e0ccc1"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -156,11 +156,11 @@
     },
     {
       "path": "manager/public/device_manager.css",
-      "sha256": "0fa36c24155983a36d7e208416eb6260c6805cc8c366c601fa0fd87eb4eba9e9"
+      "sha256": "fde501c495dc731015419a59efbedb408691c46268c926095eb1a386abcd7843"
     },
     {
       "path": "manager/public/device_manager.js",
-      "sha256": "52c44a70feff388c95dd2757405edfd81a754cb5a09b0eacc541359dd95fe131"
+      "sha256": "eb4972be5a6b1b5286d876aeec3da6f8629c5f4dbdfac5fb58840e6d640046b3"
     },
     {
       "path": "manager/public/game-classes.json",
@@ -184,7 +184,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "e8bdf321fef8f25571d2dadf2e8dd21997ea15b44db275345138b5b2d9592ff4"
+      "sha256": "2f0aed364934a219e2d658693f3e171d58d8b321d31278525a1ff1c98cf186d6"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -252,11 +252,11 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "4308007b96351d728ed7ef8e08a8e81b8b68ec1ad975e0f705267e4de383dd47"
+      "sha256": "d5a102d2624d032772f0bcdfa2ca02e3356cce7aee5741aa78fe6b47250b550f"
     },
     {
       "path": "manager/screen_proxy_manager.js",
-      "sha256": "ce055029f99cace4e18cef18388b09d58f88201c89ab0d3c820254e9a461ca59"
+      "sha256": "5dbf9e7086a80c0061ee63911f3865465b3eb5052d959b9a335dbe636811376d"
     },
     {
       "path": "manager/script_bootstrap.js",
@@ -280,7 +280,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "c252f3dbd7306bb20959e05f18ad386ae5c393eb43a97ad436d89d0cf0ba0887"
+      "sha256": "f14fe40963630528d5bc5ecc95be302f63deaa8a28d6aba23e77bedba99cc924"
     },
     {
       "path": "manager/test_isolation.js",

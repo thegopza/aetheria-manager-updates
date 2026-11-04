@@ -220,7 +220,11 @@ async function fetchProfiles() {
           window.updateJailManagerFromProfiles(currentProfiles);
         }
         if (typeof window.updateDeviceManagerFromProfiles === 'function') {
-          window.updateDeviceManagerFromProfiles(currentProfiles, data.deviceGroups);
+          window.updateDeviceManagerFromProfiles(
+            currentProfiles,
+            data.deviceGroups,
+            data.screenProxySummary ? data.screenProxySummary.maxScreensPerIp : undefined
+          );
         }
 
         if (data.captchaStats && typeof data.captchaStats.totalSolved === 'number') {
@@ -1132,7 +1136,7 @@ function getPortraitSrc(p, state) {
 
 function getActivityTone(text, screenPhase) {
   if (screenPhase && screenPhase !== 'in_game') {
-    if (screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'login_auth_error' || screenPhase === 'char_select_online' || screenPhase === 'disconnected') return 'danger';
+    if (screenPhase === 'account_banned' || screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'login_auth_error' || screenPhase === 'char_select_online' || screenPhase === 'disconnected') return 'danger';
     if (screenPhase === 'char_select_limit' || screenPhase === 'loading' || screenPhase === 'char_select_loading') return 'warn';
     if (screenPhase === 'login' || screenPhase === 'login_loading' || screenPhase === 'char_select' || screenPhase === 'char_create' || screenPhase === 'register') return 'travel';
   }
@@ -1371,6 +1375,8 @@ function buildProfileCard(p) {
   const isMenuOpen = openCardMenuProfileId === p.id;
   const hasPremium = isProfilePremium(p);
   const isJailed = Boolean(p.isJailed || (state && typeof state.map === 'string' && /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(state.map)));
+  const isBanned = Boolean(p.isBanned || (state && (state.accountBanned || state.screenPhase === 'account_banned')));
+  const banReason = p.banReason || state?.banReason || '';
 
   const charName = state?.charName || p.lastCharName || null;
   const curClass = (state?.charName && state?.charClass) ? state.charClass : (p.lastCharClass || p.charClass || state?.charClass || 'Archer');
@@ -1413,13 +1419,16 @@ function buildProfileCard(p) {
 
   const screenPhase = state?.screenPhase || 'in_game';
   const isPreGameScreen = Boolean(isOnline && state && screenPhase && screenPhase !== 'in_game');
-  const isErrorScreen = Boolean(isPreGameScreen && (screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'login_auth_error' || screenPhase === 'char_select_online'));
-  const isActivelyFarming = Boolean(isBotRunning && !isPreGameScreen);
+  const isErrorScreen = Boolean(isPreGameScreen && (screenPhase === 'account_banned' || screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'login_auth_error' || screenPhase === 'char_select_online'));
+  const isActivelyFarming = Boolean(isBotRunning && !isPreGameScreen && !isBanned);
 
   // Bot Activity Status
   let activityText = "ออฟไลน์";
   let activityTone = "offline";
-  if (isJailed) {
+  if (isBanned) {
+    activityText = "🚫 บัญชีถูกระงับ (บล็อค IP แล้ว)";
+    activityTone = "danger";
+  } else if (isJailed) {
     activityText = isOnline ? "🚨 ติดคุก (เปิดจออยู่)" : "🚨 ติดคุก (ออฟไลน์)";
     activityTone = "danger";
   } else if (isOnline) {
@@ -1451,8 +1460,20 @@ function buildProfileCard(p) {
         </div>`;
 
   return `
-    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isActivelyFarming ? 'is-farming' : ''} ${isErrorScreen ? 'is-screen-error' : ''} ${isJailed ? 'is-jailed' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
-      ${isJailed ? `
+    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isActivelyFarming ? 'is-farming' : ''} ${isErrorScreen ? 'is-screen-error' : ''} ${(isJailed || isBanned) ? 'is-jailed' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
+      ${isBanned ? `
+      <div class="card-jail-cross-overlay" title="ตรวจพบบัญชีนี้ถูกระงับการใช้งาน ระบบได้หยุดบอทและบล็อค Proxy IP ของจอนี้เรียบร้อยแล้ว">
+        <svg class="jail-cross-svg" viewBox="0 0 200 200" preserveAspectRatio="none" aria-hidden="true">
+          <line x1="12" y1="12" x2="188" y2="188" />
+          <line x1="188" y1="12" x2="12" y2="188" />
+        </svg>
+        <div class="jail-cross-center-badge">
+          <div class="jail-cross-icon">🚫</div>
+          <div class="jail-cross-title">บัญชีถูกระงับ · บล็อค IP แล้ว</div>
+          <div class="jail-cross-sub" style="max-width: 240px; white-space: normal; line-height: 1.35;">${escapeHTML(banReason || 'บัญชีถูกระงับการใช้งาน')}</div>
+          <button type="button" class="btn-clear-jail-badge" onclick="clearProfileBan('${p.id}', event)" title="ล้างสถานะแจ้งเตือนแบนของจอนี้">✓ ล้างสถานะแบน</button>
+        </div>
+      </div>` : (isJailed ? `
       <div class="card-jail-cross-overlay" title="ตรวจพบตัวละครนี้อยู่ในแมพคุก (แสดงสถานะสีแดงแจ้งเตือนโดยไม่ปิดจออัตโนมัติ)">
         <svg class="jail-cross-svg" viewBox="0 0 200 200" preserveAspectRatio="none" aria-hidden="true">
           <line x1="12" y1="12" x2="188" y2="188" />
@@ -1464,7 +1485,7 @@ function buildProfileCard(p) {
           <div class="jail-cross-sub">${escapeHTML(p.jailedMap || 'แมพคุก')}${p.jailedAt ? ` · ${formatThaiTime(p.jailedAt)}` : ''}</div>
           <button type="button" class="btn-clear-jail-badge" onclick="clearProfileJail('${p.id}', event)" title="ล้างสถานะแจ้งเตือนคุกของจอนี้">✓ ล้างสถานะคุก</button>
         </div>
-      </div>` : ''}
+      </div>` : '')}
       <div class="card-hero">
         ${portraitSrc ? `<div class="card-hero-bg-wrap"><div class="card-hero-bg" style="background-image: url('${portraitSrc}');"></div></div>` : ''}
         <div class="avatar ${portraitSrc ? '' : 'no-img'}" onclick="openCharacterModal('${p.id}')" title="คลิกเพื่อดูหน้าต่างตัวละคร สวมใส่/ถอดอุปกรณ์ และดูสถานะ (Equipment & Stats)">
@@ -1477,6 +1498,7 @@ function buildProfileCard(p) {
         <div class="card-identity">
           <div class="card-title-row">
             <h3 class="profile-title" title="${escapeHTML(p.name)}">${escapeHTML(p.name)}</h3>
+            ${isBanned ? `<span class="jail-card-badge" title="${escapeHTML(banReason || 'บัญชีถูกระงับ')}">🚫 โดนแบน</span>` : ''}
             ${isJailed ? `<span class="jail-card-badge" title="ตัวละครนี้อยู่ในแมพคุก">⛓️ ติดคุก</span>` : ''}
             ${hasPremium ? `<span class="premium-card-badge" title="ตัวละครนี้มีสถานะ Premium (สามารถแลกเปลี่ยน/เทรดโอนเงินได้)">👑 PREMIUM</span>` : ''}
             ${p.isMain ? `<span class="chip chip-main">★ MAIN</span>` : ''}
@@ -2948,6 +2970,81 @@ function updateScreenProxyToolbarBtn(summary) {
 }
 window.updateScreenProxyToolbarBtn = updateScreenProxyToolbarBtn;
 
+function computeDeviceSubSizesForIp(screensPerIp) {
+  const perIp = Math.max(1, Math.min(20, Number(screensPerIp) || 3));
+  const maxPerDevice = 3;
+  const count = Math.ceil(perIp / maxPerDevice);
+  const sizes = [];
+  for (let i = 0; i < count; i++) {
+    sizes.push(Math.min(maxPerDevice, Math.max(1, perIp - i * maxPerDevice)));
+  }
+  return sizes;
+}
+window.computeDeviceSubSizesForIp = computeDeviceSubSizesForIp;
+
+function updateScreenProxyDynamicRatioLabels(maxScreensInput, poolCountInput, activeCountInput) {
+  const maxS = Math.max(1, Math.min(20, Number(maxScreensInput) || Number(currentScreenProxySettings.maxScreensPerIp) || 3));
+  const poolCount = Number.isFinite(Number(poolCountInput)) ? Number(poolCountInput) : (Number(currentScreenProxySettings.poolCount) || 0);
+  const activeCount = Number.isFinite(Number(activeCountInput)) ? Number(activeCountInput) : (Number(currentScreenProxySettings.activeLeaseCount) || 0);
+  const subSizes = computeDeviceSubSizesForIp(maxS);
+  const splitJoinText = subSizes.map(n => `${n} จอ`).join(" + ");
+
+  const titleEl = document.getElementById("sp-modal-title-text");
+  if (titleEl) {
+    titleEl.textContent = `ระบบแยก IP รายจอ (1 IP ต่อ ${maxS} จอ)`;
+  }
+
+  const subEl = document.getElementById("sp-modal-sub-text");
+  if (subEl) {
+    subEl.textContent = subSizes.length > 1
+      ? `จัดคิวจ่าย Static IP อัตโนมัติ (1 IP = ${maxS} จอ · แบ่งเป็น ${subSizes.length} กลุ่ม ${subSizes.length} Device: ${splitJoinText})`
+      : `จัดคิวจ่าย Static IP อัตโนมัติ (จำกัดไม่เกิน ${maxS} จอต่อ 1 IP · 1 กลุ่ม 1 Device) พร้อม Split-Tunnel ประหยัดแบนด์วิดท์`;
+  }
+
+  const statSlotsLabel = document.getElementById("sp-stat-total-slots-label");
+  if (statSlotsLabel) {
+    statSlotsLabel.textContent = `รองรับสูงสุด (1:${maxS})`;
+  }
+
+  const totalSlotsEl = document.getElementById("sp-stat-total-slots");
+  const freeSlotsEl = document.getElementById("sp-stat-free-slots");
+  const computedTotal = poolCount * maxS;
+  if (totalSlotsEl) totalSlotsEl.textContent = `${computedTotal} จอ`;
+  if (freeSlotsEl) freeSlotsEl.textContent = `${Math.max(0, computedTotal - activeCount)} ช่อง`;
+
+  const poolHeaderTitle = document.getElementById("sp-pool-header-title");
+  if (poolHeaderTitle) {
+    poolHeaderTitle.textContent = `📋 รายการ Static Proxy IP ในคิว (1 บรรทัด = 1 IP รองรับ ${maxS} จอ · ${subSizes.length} Device)`;
+  }
+
+  const previewEl = document.getElementById("sp-device-split-preview");
+  if (previewEl) {
+    const pillsHtml = subSizes.map((sz, i) => `
+      <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:99px;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.45);color:#7dd3fc;font-weight:700;font-size:10.5px;">
+        🖥️ Device #${i + 1}: <b>${sz} จอ</b>
+      </span>
+    `).join('<span style="color:#64748b;font-weight:700;">+</span>');
+    previewEl.innerHTML = `
+      <span>⚙️ <b>การแบ่ง Device ต่อ 1 IP:</b></span>
+      <span>1 IP (<b>${maxS} จอ</b>) ➜ แบ่งเป็น <b style="color:#fde047;">${subSizes.length} กลุ่ม · ${subSizes.length} Device</b></span>
+      <span style="display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap;">${pillsHtml}</span>
+    `;
+  }
+
+  document.querySelectorAll(".btn-sp-max-preset").forEach(btn => {
+    const val = Number(btn.getAttribute("data-max"));
+    const isAct = val === maxS;
+    btn.style.borderColor = isAct ? "#a855f7" : "rgba(148,163,184,0.3)";
+    btn.style.background = isAct ? "rgba(168,85,247,0.28)" : "rgba(15,23,42,0.8)";
+    btn.style.color = isAct ? "#f3e8ff" : "#cbd5e1";
+  });
+
+  const toggleBtn = document.getElementById("btn-screen-proxy-toggle-main");
+  if (toggleBtn && !currentScreenProxySettings.enabled) {
+    toggleBtn.textContent = `✅ เปิดใช้งานแยก IP (1:${maxS})`;
+  }
+}
+
 function renderScreenProxyModal(statusData) {
   if (!statusData) return;
   if (statusData.settings) {
@@ -2956,6 +3053,10 @@ function renderScreenProxyModal(statusData) {
   const s = currentScreenProxySettings;
   const enabled = !!s.enabled;
   const maxS = Number(s.maxScreensPerIp) || 3;
+
+  if (Array.isArray(statusData.deviceGroups) && typeof window.updateDeviceManagerFromProfiles === "function") {
+    window.updateDeviceManagerFromProfiles(currentProfiles, statusData.deviceGroups, maxS);
+  }
 
   const badge = document.getElementById("screen-proxy-status-badge");
   if (badge) {
@@ -2993,6 +3094,8 @@ function renderScreenProxyModal(statusData) {
   if (totalSlotsEl) totalSlotsEl.textContent = `${s.totalSlots || 0} จอ`;
   if (activeLeasesEl) activeLeasesEl.textContent = `${s.activeLeaseCount || 0} จอ`;
   if (freeSlotsEl) freeSlotsEl.textContent = `${s.freeSlots || 0} ช่อง`;
+
+  updateScreenProxyDynamicRatioLabels(maxS, s.poolCount || 0, s.activeLeaseCount || 0);
 
   const modeOwner = document.getElementById("sp-mode-owner");
   const modeLocal = document.getElementById("sp-mode-local");
@@ -3047,6 +3150,77 @@ function renderScreenProxyModal(statusData) {
     poolTextarea.value = s.poolText;
   }
 
+  // --- Proxy Merit Billing & Anti-Clone Guard ---
+  const bill = statusData.billing || {};
+  const billEnabledEl = document.getElementById("sp-bill-enabled");
+  if (billEnabledEl) billEnabledEl.checked = bill.enabled !== false;
+
+  const pkgGbEl = document.getElementById("sp-bill-pkg-gb");
+  if (pkgGbEl && document.activeElement !== pkgGbEl && bill.packageGb != null) {
+    pkgGbEl.value = String(bill.packageGb);
+  }
+  const pkgMeritEl = document.getElementById("sp-bill-pkg-merit");
+  if (pkgMeritEl && document.activeElement !== pkgMeritEl && bill.packageMerit != null) {
+    pkgMeritEl.value = String(bill.packageMerit);
+  }
+  const ratePerGbEl = document.getElementById("sp-bill-rate-per-gb");
+  if (ratePerGbEl) {
+    const rGb = Number(bill.ratePerGb != null ? bill.ratePerGb : 0.3);
+    ratePerGbEl.textContent = `${rGb.toFixed(4)} บุญ/GB`;
+  }
+  const rateScreenDayEl = document.getElementById("sp-bill-rate-screen-day");
+  if (rateScreenDayEl && document.activeElement !== rateScreenDayEl && bill.ratePerScreenDay != null) {
+    rateScreenDayEl.value = String(bill.ratePerScreenDay);
+  }
+  const hwidBadgeEl = document.getElementById("sp-billing-hwid-badge");
+  if (hwidBadgeEl) {
+    const hwidShort = (bill.machineHwid || "").slice(0, 12);
+    hwidBadgeEl.textContent = hwidShort
+      ? `🔒 Anti-Clone Guard: ผูกเครื่อง ${hwidShort}`
+      : `🔒 Anti-Clone HWID Guard ทำงานอยู่`;
+  }
+
+  const todayGbEl = document.getElementById("sp-bill-today-gb");
+  const todayGbSubEl = document.getElementById("sp-bill-today-gb-sub");
+  const todayScreensEl = document.getElementById("sp-bill-today-screens");
+  const todayScreensSubEl = document.getElementById("sp-bill-today-screens-sub");
+  const todayMeritEl = document.getElementById("sp-bill-today-merit");
+  const todayMeritSubEl = document.getElementById("sp-bill-today-merit-sub");
+  const totalMeritEl = document.getElementById("sp-bill-total-merit");
+  const totalMeritSubEl = document.getElementById("sp-bill-total-merit-sub");
+
+  if (todayGbEl) {
+    const tGb = Number(bill.todayGb) || 0;
+    todayGbEl.textContent = tGb >= 0.01 ? `${tGb.toFixed(3)} GB` : formatProxyBytes(bill.todayBytes || 0);
+  }
+  if (todayGbSubEl) {
+    todayGbSubEl.textContent = `รวมสะสม ${formatProxyBytes(bill.totalProxyBytes || 0)} (${(Number(bill.totalGb) || 0).toFixed(3)} GB)`;
+  }
+  if (todayScreensEl) {
+    todayScreensEl.textContent = `${Number(bill.todayActiveScreensCount) || 0} จอ`;
+  }
+  if (todayScreensSubEl) {
+    const rSd = Number(bill.ratePerScreenDay) || 0;
+    todayScreensSubEl.textContent = rSd > 0 ? `เหมา +${rSd} บุญ/จอ/วัน` : `คิดตาม GB จริงล้วน`;
+  }
+  if (todayMeritEl) {
+    todayMeritEl.textContent = `${(Number(bill.todayMeritPoints) || 0).toFixed(2)} บุญ`;
+  }
+  if (todayMeritSubEl) {
+    const rGb = Number(bill.ratePerGb != null ? bill.ratePerGb : 0.3);
+    todayMeritSubEl.textContent = `เรท ${rGb.toFixed(2)} บุญ/GB`;
+  }
+  if (totalMeritEl) {
+    totalMeritEl.textContent = `${(Number(bill.totalMeritPoints) || 0).toFixed(2)} บุญ`;
+  }
+  if (totalMeritSubEl) {
+    const syncedPts = (Number(bill.syncedChargedUnits) || 0) / 10000;
+    const pendingPts = (Number(bill.pendingUnits) || 0) / 10000;
+    totalMeritSubEl.textContent = pendingPts > 0
+      ? `ตัดแล้ว ${syncedPts.toFixed(2)} บุญ (รอตัด ${pendingPts.toFixed(2)})`
+      : `ตัดเข้าระบบแล้ว ${syncedPts.toFixed(2)} บุญ`;
+  }
+
   const leasesListEl = document.getElementById("sp-leases-list");
   if (leasesListEl) {
     const leases = Array.isArray(statusData.leases) ? statusData.leases : [];
@@ -3054,11 +3228,14 @@ function renderScreenProxyModal(statusData) {
       leasesListEl.innerHTML = `<div style="text-align: center; color: #64748b; padding: 14px;">ยังไม่มีจอที่จับคู่ IP ในขณะนี้ (เมื่อเปิดใช้งานและเปิดจอเกม ระบบจะจับคู่ให้อัตโนมัติ)</div>`;
     } else {
       const profById = new Map(currentProfiles.map(p => [p.id, p]));
+      const billByProf = bill.byProfile || {};
       leasesListEl.innerHTML = leases.map(l => {
         const prof = profById.get(l.profileId);
         const pName = prof ? prof.name : l.profileId;
         const isOnline = prof ? !!prof.isRunning : false;
         const pTraffic = (tr.byProfile && tr.byProfile[l.profileId]) ? tr.byProfile[l.profileId].proxyTotalBytes : 0;
+        const pBill = billByProf[l.profileId];
+        const pMerit = pBill ? Number(pBill.meritPoints) || 0 : 0;
         return `
           <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(2, 6, 23, 0.55); border: 1px solid rgba(255,255,255,0.06); border-radius: 6px; padding: 6px 10px;">
             <div style="display: flex; align-items: center; gap: 8px;">
@@ -3066,14 +3243,51 @@ function renderScreenProxyModal(statusData) {
               <strong style="color: #f8fafc;">${escapeHTML(pName)}</strong>
               <span style="color: #64748b; font-size: 10.5px;">(${escapeHTML(l.profileId)})</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: flex-end;">
               <span style="font-family: 'JetBrains Mono', Consolas, monospace; color: #38bdf8; font-weight: 600;">${escapeHTML(l.proxyHost)}:${escapeHTML(String(l.proxyPort || ''))}</span>
               <span style="background: rgba(168, 85, 247, 0.2); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.4); border-radius: 99px; padding: 1px 8px; font-size: 10.5px; font-weight: 700;">
                 ช่อง ${l.slotIndex || 1}/${l.maxScreensPerIp || maxS}
               </span>
               ${pTraffic > 0 ? `<span style="color: #7dd3fc; font-size: 10px; font-family: monospace;" title="เน็ตที่วิ่งผ่าน Proxy ของจอนี้">${formatProxyBytes(pTraffic)}</span>` : ''}
+              ${pMerit > 0 ? `<span style="color: #fbbf24; font-size: 10px; font-weight: 700;" title="ส่วนบุญสะสมของจอนี้">+${pMerit.toFixed(3)} บุญ</span>` : ''}
               ${l.tunnelPort ? `<span style="color: #10b981; font-size: 10px;" title="Local Forwarder Port">127.0.0.1:${l.tunnelPort}</span>` : ''}
+              <button type="button" onclick="blockScreenProxyIpManual('${escapeHTML(l.proxyId || '')}', '${escapeHTML(l.proxyHost || '')}', ${Number(l.proxyPort) || 0})" style="background: rgba(239, 68, 68, 0.16); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 5px; padding: 1px 6px; font-size: 10px; cursor: pointer;" title="บล็อค IP นี้และสลับจอไปใช้ IP ใหม่ทันที">🚫 บล็อค IP</button>
             </div>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  // --- Blocked / Banned Proxy IP Blacklist ---
+  const blockedList = Array.isArray(statusData.blockedProxies) ? statusData.blockedProxies : [];
+  const blockedBadgeEl = document.getElementById("sp-blocked-count-badge");
+  if (blockedBadgeEl) {
+    blockedBadgeEl.textContent = `${blockedList.length} IP`;
+  }
+  const blockedListEl = document.getElementById("sp-blocked-ips-list");
+  if (blockedListEl) {
+    if (blockedList.length === 0) {
+      blockedListEl.innerHTML = `<div style="text-align: center; color: #64748b; padding: 10px;">ยังไม่มี IP ที่ถูกบล็อค (เมื่อบอทพบข้อความสีแดง "บัญชีถูกระงับ..." หรือตัวละครติดคุก จะบล็อค IP ให้อัตโนมัติ)</div>`;
+    } else {
+      blockedListEl.innerHTML = blockedList.map(b => {
+        const hostPort = b.host ? `${b.host}${b.port ? ':' + b.port : ''}` : b.key;
+        const reasonStr = b.banMessage || b.reason || "ถูกระงับ / ติดคุก";
+        const charInfo = b.charName ? `ตัวละคร ${b.charName}` : (b.profileName || b.profileId || "");
+        const timeStr = b.blockedAt ? new Date(b.blockedAt).toLocaleString("th-TH", { hour12: false }) : "";
+        return `
+          <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; background: rgba(69, 10, 10, 0.35); border: 1px solid rgba(239, 68, 68, 0.32); border-radius: 6px; padding: 6px 10px;">
+            <div style="min-width: 0; flex: 1;">
+              <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                <span style="font-family: 'JetBrains Mono', Consolas, monospace; color: #fca5a5; font-weight: 700; font-size: 11.5px;">🚫 ${escapeHTML(hostPort)}</span>
+                ${charInfo ? `<span style="background: rgba(239, 68, 68, 0.22); color: #fecaca; border-radius: 4px; padding: 1px 6px; font-size: 10px;">${escapeHTML(charInfo)}</span>` : ''}
+                ${timeStr ? `<span style="color: #94a3b8; font-size: 10px;">${escapeHTML(timeStr)}</span>` : ''}
+              </div>
+              <div style="color: #f87171; font-size: 10.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHTML(reasonStr)}">
+                ${escapeHTML(reasonStr)}
+              </div>
+            </div>
+            <button type="button" onclick="unblockScreenProxyIp('${escapeHTML(b.key || hostPort)}')" style="background: rgba(15, 23, 42, 0.8); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.35); border-radius: 5px; padding: 3px 8px; font-size: 10.5px; cursor: pointer; flex-shrink: 0;">🔓 ปลดบล็อค</button>
           </div>
         `;
       }).join('');
@@ -3107,7 +3321,7 @@ window.closeScreenProxyModal = closeScreenProxyModal;
 async function saveScreenProxySettings(showToastFeedback = true) {
   const modeOwner = document.getElementById("sp-mode-owner");
   const mode = (modeOwner && modeOwner.checked) ? "owner-queue" : "local-pool";
-  const maxScreensPerIp = Math.max(1, Math.min(10, Number(document.getElementById("sp-max-screens")?.value) || 3));
+  const maxScreensPerIp = Math.max(1, Math.min(20, Number(document.getElementById("sp-max-screens")?.value) || 3));
   const onlyGameTraffic = document.getElementById("sp-only-game-traffic")?.checked !== false;
   const localAssetCache = document.getElementById("sp-local-asset-cache")?.checked !== false;
   const poolText = document.getElementById("sp-pool-textarea")?.value || "";
@@ -3121,10 +3335,16 @@ async function saveScreenProxySettings(showToastFeedback = true) {
       body: JSON.stringify({ mode, maxScreensPerIp, onlyGameTraffic, localAssetCache, poolText })
     }).then(r => r.json());
     if (res && res.success) {
-      await fetchScreenProxyStatus();
+      renderScreenProxyModal(res);
+      if (Array.isArray(res.deviceGroups) && typeof window.updateDeviceManagerFromProfiles === "function") {
+        window.updateDeviceManagerFromProfiles(currentProfiles, res.deviceGroups, maxScreensPerIp);
+      }
+      fetchProfiles();
       if (showToastFeedback) {
         const pCount = res.settings?.poolCount || 0;
-        showToast(`💾 บันทึกรายการ IP สำเร็จ (${pCount} IP = รองรับสูงสุด ${pCount * maxScreensPerIp} จอ)`, "success");
+        const subSizes = computeDeviceSubSizesForIp(maxScreensPerIp);
+        const splitDesc = `${subSizes.length} กลุ่ม · ${subSizes.length} Device (${subSizes.join("+")} จอ)`;
+        showToast(`💾 บันทึกสำเร็จ: 1 IP ต่อ ${maxScreensPerIp} จอ [แบ่ง ${splitDesc}] · รองรับสูงสุด ${pCount * maxScreensPerIp} จอ`, "success");
       }
       return res;
     } else {
@@ -3160,6 +3380,39 @@ function initScreenProxyControls() {
   const btnSave = document.getElementById("btn-sp-save-pool");
   if (btnSave) {
     btnSave.onclick = () => saveScreenProxySettings(true);
+  }
+
+  const maxScreensInput = document.getElementById("sp-max-screens");
+  if (maxScreensInput) {
+    maxScreensInput.addEventListener("input", () => {
+      const v = Math.max(1, Math.min(20, Number(maxScreensInput.value) || 3));
+      updateScreenProxyDynamicRatioLabels(v);
+    });
+    maxScreensInput.addEventListener("change", () => {
+      const v = Math.max(1, Math.min(20, Number(maxScreensInput.value) || 3));
+      maxScreensInput.value = String(v);
+      updateScreenProxyDynamicRatioLabels(v);
+      saveScreenProxySettings(true);
+    });
+  }
+
+  document.querySelectorAll(".btn-sp-max-preset").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const v = Math.max(1, Math.min(20, Number(btn.getAttribute("data-max")) || 3));
+      if (maxScreensInput) maxScreensInput.value = String(v);
+      updateScreenProxyDynamicRatioLabels(v);
+      saveScreenProxySettings(true);
+    });
+  });
+
+  const btnOpenDeviceDrawer = document.getElementById("btn-sp-open-device-drawer");
+  if (btnOpenDeviceDrawer) {
+    btnOpenDeviceDrawer.addEventListener("click", () => {
+      closeScreenProxyModal();
+      if (typeof window.toggleDeviceDrawer === "function") {
+        window.toggleDeviceDrawer(true);
+      }
+    });
   }
 
   const localCacheChk = document.getElementById("sp-local-asset-cache");
@@ -3301,8 +3554,176 @@ function initScreenProxyControls() {
     };
   }
 
+  // --- Proxy Merit Billing Config Controls ---
+  async function saveScreenProxyBillingConfig(showToastFeedback = true) {
+    const enabled = document.getElementById("sp-bill-enabled")?.checked !== false;
+    const packageGb = Math.max(1, Number(document.getElementById("sp-bill-pkg-gb")?.value) || 5000);
+    const packageMerit = Math.max(0, Number(document.getElementById("sp-bill-pkg-merit")?.value) || 1500);
+    const ratePerScreenDay = Math.max(0, Number(document.getElementById("sp-bill-rate-screen-day")?.value) || 0);
+    const ratePerGb = Number((packageMerit / packageGb).toFixed(6));
+
+    const rateLabel = document.getElementById("sp-bill-rate-per-gb");
+    if (rateLabel) rateLabel.textContent = `${ratePerGb.toFixed(4)} บุญ/GB`;
+
+    const btnSaveBill = document.getElementById("btn-sp-save-billing");
+    if (btnSaveBill) btnSaveBill.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/api/screen-proxy/billing-config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled, packageGb, packageMerit, ratePerGb, ratePerScreenDay })
+      }).then(r => r.json());
+      if (res && res.success) {
+        renderScreenProxyModal(res);
+        if (showToastFeedback) {
+          showToast(
+            `💰 บันทึกเรทส่วนบุญ Proxy แล้ว: ${packageGb} GB = ${packageMerit} ส่วนบุญ (${ratePerGb.toFixed(3)} บุญ/GB${ratePerScreenDay > 0 ? ` + ${ratePerScreenDay} บุญ/จอ/วัน` : ""})`,
+            "success"
+          );
+        }
+      } else if (showToastFeedback) {
+        showToast("❌ บันทึกเรทส่วนบุญไม่สำเร็จ: " + (res?.error || "Unknown"), "error");
+      }
+    } catch (e) {
+      if (showToastFeedback) showToast("❌ เกิดข้อผิดพลาด: " + e.message, "error");
+    } finally {
+      if (btnSaveBill) btnSaveBill.disabled = false;
+    }
+  }
+
+  const btnSaveBilling = document.getElementById("btn-sp-save-billing");
+  if (btnSaveBilling) {
+    btnSaveBilling.onclick = () => saveScreenProxyBillingConfig(true);
+  }
+  const billEnabledInput = document.getElementById("sp-bill-enabled");
+  if (billEnabledInput) {
+    billEnabledInput.onchange = () => saveScreenProxyBillingConfig(true);
+  }
+  ["sp-bill-pkg-gb", "sp-bill-pkg-merit", "sp-bill-rate-screen-day"].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener("input", () => {
+      const g = Math.max(1, Number(document.getElementById("sp-bill-pkg-gb")?.value) || 5000);
+      const m = Math.max(0, Number(document.getElementById("sp-bill-pkg-merit")?.value) || 1500);
+      const rEl = document.getElementById("sp-bill-rate-per-gb");
+      if (rEl) rEl.textContent = `${(m / g).toFixed(4)} บุญ/GB`;
+    });
+    el.addEventListener("change", () => saveScreenProxyBillingConfig(true));
+  });
+
+  // --- Blocked Proxy IP Controls ---
+  const btnPruneBlocked = document.getElementById("btn-sp-prune-blocked");
+  if (btnPruneBlocked) {
+    btnPruneBlocked.onclick = async () => {
+      btnPruneBlocked.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/screen-proxy/prune-blocked`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}"
+        }).then(r => r.json());
+        if (res && res.success) {
+          renderScreenProxyModal(res);
+          showToast(
+            res.removed > 0
+              ? `🧹 ลบ IP ที่โดนบล็อคออกจากรายการคิวแล้ว ${res.removed} IP (เหลือ ${res.remaining} IP)`
+              : "ℹ️ ไม่มี IP ที่โดนบล็อคค้างอยู่ในรายการคิว",
+            res.removed > 0 ? "success" : "info"
+          );
+        }
+      } catch (e) {
+        showToast("❌ ลบ IP ไม่สำเร็จ: " + e.message, "error");
+      } finally {
+        btnPruneBlocked.disabled = false;
+      }
+    };
+  }
+
+  const btnClearAllBlocked = document.getElementById("btn-sp-clear-all-blocked");
+  if (btnClearAllBlocked) {
+    btnClearAllBlocked.onclick = async () => {
+      btnClearAllBlocked.disabled = true;
+      try {
+        const res = await fetch(`${API_BASE}/api/screen-proxy/unblock`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ all: true })
+        }).then(r => r.json());
+        if (res && res.success) {
+          renderScreenProxyModal(res);
+          showToast(`🔓 ปลดบล็อค IP ทั้งหมดแล้ว (${res.cleared || 0} IP)`, "info");
+        }
+      } catch (e) {
+        showToast("❌ ปลดบล็อคไม่สำเร็จ: " + e.message, "error");
+      } finally {
+        btnClearAllBlocked.disabled = false;
+      }
+    };
+  }
+
   fetchScreenProxyStatus();
 }
+
+window.blockScreenProxyIpManual = async function(proxyId, host, port) {
+  try {
+    const res = await fetch(`${API_BASE}/api/screen-proxy/block`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        proxyId,
+        host,
+        port,
+        reason: "สั่งบล็อค IP ด้วยตัวเองจากหน้าจัดการ Proxy"
+      })
+    }).then(r => r.json());
+    if (res && res.success) {
+      renderScreenProxyModal(res);
+      fetchProfiles();
+      showToast(`🚫 บล็อค IP ${host}${port ? ':' + port : ''} และสลับจอไปใช้ IP ใหม่เรียบร้อย`, "warning");
+    } else {
+      showToast("❌ บล็อค IP ไม่สำเร็จ: " + (res?.error || "Unknown"), "error");
+    }
+  } catch (e) {
+    showToast("❌ เกิดข้อผิดพลาด: " + e.message, "error");
+  }
+};
+
+window.unblockScreenProxyIp = async function(key) {
+  try {
+    const res = await fetch(`${API_BASE}/api/screen-proxy/unblock`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key })
+    }).then(r => r.json());
+    if (res && res.success) {
+      renderScreenProxyModal(res);
+      showToast(`🔓 ปลดบล็อค IP ${key} เรียบร้อยแล้ว`, "success");
+    } else {
+      showToast("❌ ปลดบล็อคไม่สำเร็จ: " + (res?.error || "Unknown"), "error");
+    }
+  } catch (e) {
+    showToast("❌ เกิดข้อผิดพลาด: " + e.message, "error");
+  }
+};
+
+window.clearProfileBan = async function(profileId, event) {
+  if (event && typeof event.stopPropagation === "function") event.stopPropagation();
+  try {
+    const res = await fetch(`${API_BASE}/api/profiles/${encodeURIComponent(profileId)}/clear-ban`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    }).then(r => r.json());
+    if (res && res.success) {
+      fetchProfiles();
+      showToast(`✅ ล้างสถานะระงับของจอ ${profileId} เรียบร้อยแล้ว`, "success");
+    } else {
+      showToast("❌ ล้างสถานะไม่สำเร็จ: " + (res?.error || "Unknown"), "error");
+    }
+  } catch (e) {
+    showToast("❌ เกิดข้อผิดพลาด: " + e.message, "error");
+  }
+};
 
 // ==========================================
 // AUTO CAPTCHA POINT TOP-UP MODAL CONTROLLER

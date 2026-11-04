@@ -2050,7 +2050,10 @@ function buildClientActionEvalCode(payload) {
         if (patch.autoRevive !== undefined) window.__inGameAutoCombatConfig.autoRevive = !!patch.autoRevive;
         if (patch.autoReviveMax !== undefined) window.__inGameAutoCombatConfig.autoReviveMax = Math.max(1, Math.min(99, Math.round(Number(patch.autoReviveMax) || 10)));
         if (patch.pickupLoot !== undefined) window.__inGameAutoCombatConfig.pickupLoot = !!patch.pickupLoot;
-        if (patch.lootWhen === 'clear' || patch.lootWhen === 'first') window.__inGameAutoCombatConfig.lootWhen = patch.lootWhen;
+        if (patch.lootWhen === 'clear' || patch.lootWhen === 'first') {
+          const hasPet = (typeof window.hasCharacterPet === 'function') ? window.hasCharacterPet() : false;
+          window.__inGameAutoCombatConfig.lootWhen = (patch.lootWhen === 'clear' && hasPet) ? 'clear' : 'first';
+        }
         if (patch.flyWing !== undefined) window.__inGameAutoCombatConfig.flyWing = !!patch.flyWing;
       }
       try { localStorage.setItem('pelican_ingame_auto_cfg', JSON.stringify(window.__inGameAutoCombatConfig)); } catch (e) {}

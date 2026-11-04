@@ -1377,6 +1377,9 @@ function buildProfileCard(p) {
   const isJailed = Boolean(p.isJailed || (state && typeof state.map === 'string' && /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(state.map)));
   const isBanned = Boolean(p.isBanned || (state && (state.accountBanned || state.screenPhase === 'account_banned')));
   const banReason = p.banReason || state?.banReason || '';
+  const isPostSellOverweightStop = Boolean(state?.postSellOverweightStop || p.postSellOverweightStop);
+  const postSellStopReason = state?.postSellStopReason || p.postSellStopReason || 'ขายแล้วยังน้ำหนักเกิน';
+  const postSellStopDetail = state?.postSellStopDetail || p.postSellStopDetail || postSellStopReason;
 
   const charName = state?.charName || p.lastCharName || null;
   const curClass = (state?.charName && state?.charClass) ? state.charClass : (p.lastCharClass || p.charClass || state?.charClass || 'Archer');
@@ -1430,6 +1433,9 @@ function buildProfileCard(p) {
     activityTone = "danger";
   } else if (isJailed) {
     activityText = isOnline ? "🚨 ติดคุก (เปิดจออยู่)" : "🚨 ติดคุก (ออฟไลน์)";
+    activityTone = "danger";
+  } else if (isPostSellOverweightStop) {
+    activityText = `🛑 ${postSellStopReason}`;
     activityTone = "danger";
   } else if (isOnline) {
     if (isPreGameScreen) {
@@ -1500,6 +1506,7 @@ function buildProfileCard(p) {
             <h3 class="profile-title" title="${escapeHTML(p.name)}">${escapeHTML(p.name)}</h3>
             ${isBanned ? `<span class="jail-card-badge" title="${escapeHTML(banReason || 'บัญชีถูกระงับ')}">🚫 โดนแบน</span>` : ''}
             ${isJailed ? `<span class="jail-card-badge" title="ตัวละครนี้อยู่ในแมพคุก">⛓️ ติดคุก</span>` : ''}
+            ${isPostSellOverweightStop ? `<span class="jail-card-badge" style="background:rgba(239,68,68,0.24);color:#fecaca;border-color:#ef4444;" title="${escapeHTML(postSellStopDetail)}">⚠️ ${escapeHTML(postSellStopReason)}</span>` : ''}
             ${hasPremium ? `<span class="premium-card-badge" title="ตัวละครนี้มีสถานะ Premium (สามารถแลกเปลี่ยน/เทรดโอนเงินได้)">👑 PREMIUM</span>` : ''}
             ${p.isMain ? `<span class="chip chip-main">★ MAIN</span>` : ''}
           </div>
@@ -1642,6 +1649,18 @@ function buildProfileCard(p) {
             `;
           }).join('')}
         </div>
+      </div>` : ''}
+
+      ${isPostSellOverweightStop ? `
+      <div class="post-sell-overweight-alert" style="margin: 8px 12px 2px; background: linear-gradient(135deg, rgba(239, 68, 68, 0.22), rgba(245, 158, 11, 0.16)); border: 1.5px solid rgba(239, 68, 68, 0.65); border-radius: 9px; padding: 8px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px;">
+        <div style="display: flex; align-items: center; gap: 7px; min-width: 0;">
+          <span style="font-size: 15px;">🛑</span>
+          <div style="min-width: 0;">
+            <div style="font-weight: 800; color: #fecaca; font-size: 12.5px; line-height: 1.25;">${escapeHTML(postSellStopReason)}</div>
+            <div style="font-size: 11px; color: #fde68a; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHTML(postSellStopDetail)}">${escapeHTML(postSellStopDetail)}</div>
+          </div>
+        </div>
+        <span style="font-size: 10.5px; font-weight: 700; color: #fff; background: #dc2626; padding: 2px 7px; border-radius: 5px; white-space: nowrap;">STOP แล้ว</span>
       </div>` : ''}
 
       <div class="card-status-row">
@@ -2264,6 +2283,72 @@ function buildPartyGroupSection(party, idx, profileById, roleMap, soloAvgGpm) {
     </section>`;
 }
 
+function isProfileBotStopped(p) {
+  if (!p) return false;
+  const state = p.isRunning ? p.liveState : null;
+  if (Boolean(state?.postSellOverweightStop || p.postSellOverweightStop)) return true;
+  if (!p.isRunning || !state) return false;
+  const screenPhase = state.screenPhase || 'in_game';
+  if (screenPhase !== 'in_game') return false;
+  return !state.isBotRunning;
+}
+
+async function startAllStoppedBots(event) {
+  if (event) event.stopPropagation();
+  const stopped = currentProfiles.filter(p => p.isRunning && isProfileBotStopped(p));
+  if (stopped.length === 0) {
+    if (typeof showToast === 'function') showToast('ไม่มีบอทที่หยุดทำงานอยู่ในขณะนี้', 'info');
+    return;
+  }
+  if (typeof showToast === 'function') {
+    showToast(`▶️ กำลังสั่งเริ่มบอทที่หยุดอยู่ทั้งหมด (${stopped.length} จอ)...`, 'info');
+  }
+  for (const p of stopped) {
+    try {
+      await toggleBotExecution(p.id, true);
+    } catch (_) {}
+  }
+}
+
+function buildStoppedGroupSection(stoppedProfiles) {
+  const groupKey = 'stopped';
+  const isCollapsed = collapsedCardGroups.has(groupKey);
+  const sortedStopped = sortProfileList(stoppedProfiles);
+  const overweightCount = sortedStopped.filter(p => Boolean(p.liveState?.postSellOverweightStop || p.postSellOverweightStop)).length;
+  const onlineStoppedCount = sortedStopped.filter(p => p.isRunning).length;
+
+  return `
+    <section class="profile-group-section is-stopped-group ${isCollapsed ? 'is-collapsed' : ''}" data-group-id="group-stopped">
+      <header class="profile-group-header" onclick="toggleCardGroupCollapse('${groupKey}', event)">
+        <div class="pg-head-left">
+          <button type="button" class="pg-collapse-btn" title="${isCollapsed ? 'คลิกเพื่อขยายดูการ์ดบอทที่หยุดทำงาน' : 'คลิกเพื่อพับเก็บการ์ดบอทที่หยุดทำงาน'}">${isCollapsed ? '▶' : '▼'}</button>
+          <span class="pg-group-badge stopped">🛑 บอทที่หยุดทำงาน (Stopped)</span>
+          <div class="pg-title-block">
+            <div class="pg-title-main">
+              <span>จอที่บอทหยุดทำงาน (${sortedStopped.length} จอ)</span>
+              ${overweightCount > 0 ? `<span class="pg-top-earner-pill" style="background:rgba(239,68,68,0.22);border-color:rgba(239,68,68,0.55);color:#fecaca;" title="จำนวนจอที่ขายของแล้วน้ำหนักยังเกินหรือช่องกระเป๋าเต็ม ระบบจึงสั่ง STOP อัตโนมัติ">⚠️ ขายแล้วยังน้ำหนักเกิน: <b>${overweightCount} จอ</b></span>` : ''}
+            </div>
+            <div class="pg-meta-pills">
+              <span class="pg-meta-chip">🖥️ ออนไลน์ <b>${onlineStoppedCount}</b>/${sortedStopped.length} จอ</span>
+              <span class="pg-meta-chip">⏸️ สถานะ <b>STOP / ยืนรอ</b></span>
+              ${overweightCount > 0 ? `<span class="pg-meta-chip" style="color:#fca5a5;">⚖️ น้ำหนักเกินหลังขาย <b>${overweightCount}</b> จอ</span>` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div class="pg-head-right" onclick="event.stopPropagation()">
+          <div class="pg-head-actions">
+            ${onlineStoppedCount > 0 ? `<button type="button" class="btn btn-primary btn-sm pg-action-btn" onclick="startAllStoppedBots(event)" title="สั่งเริ่มบอท (START) ทุกจอที่หยุดอยู่ในหมวดนี้">▶️ เริ่มบอทที่หยุด (${onlineStoppedCount})</button>` : ''}
+          </div>
+        </div>
+      </header>
+      ${isCollapsed ? '' : `
+      <div class="profile-group-grid profiles-grid">
+        ${sortedStopped.length > 0 ? sortedStopped.map(buildProfileCard).join('') : `<div class="empty-state" style="padding: 20px;"><p style="margin:0;">ไม่มีบอทที่หยุดทำงานในขณะนี้ (บอททุกจอที่ออนไลน์กำลังทำงานปกติ)</p></div>`}
+      </div>`}
+    </section>`;
+}
+
 function buildSoloGroupSection(soloProfiles) {
   const groupKey = 'solo';
   const isCollapsed = collapsedCardGroups.has(groupKey);
@@ -2308,7 +2393,7 @@ function buildSoloGroupSection(soloProfiles) {
       </header>
       ${isCollapsed ? '' : `
       <div class="profile-group-grid profiles-grid">
-        ${sortedSolo.length > 0 ? sortedSolo.map(buildProfileCard).join('') : `<div class="empty-state" style="padding: 24px;"><p style="margin:0;">ทุกโปรไฟล์ถูกจัดอยู่ในปาร์ตี้หมดแล้ว</p></div>`}
+        ${sortedSolo.length > 0 ? sortedSolo.map(buildProfileCard).join('') : `<div class="empty-state" style="padding: 24px;"><p style="margin:0;">ทุกโปรไฟล์ถูกจัดอยู่ในปาร์ตี้หรือหมวดบอทที่หยุดทำงานแล้ว</p></div>`}
       </div>`}
     </section>`;
 }
@@ -2335,8 +2420,9 @@ function renderProfiles() {
     const profileById = new Map(currentProfiles.map(p => [p.id, p]));
     const roleMap = getPartyRoleMap();
 
+    const stoppedProfilesAll = currentProfiles.filter(p => isProfileBotStopped(p));
     const partyProfilesAll = currentProfiles.filter(p => roleMap.has(p.id));
-    const soloProfilesAll = currentProfiles.filter(p => !roleMap.has(p.id));
+    const soloProfilesAll = currentProfiles.filter(p => !roleMap.has(p.id) && !isProfileBotStopped(p));
     const partyStats = summarizeGroupStats(partyProfilesAll);
     const soloStats = summarizeGroupStats(soloProfilesAll);
 
@@ -2355,12 +2441,20 @@ function renderProfiles() {
     } else {
       html += parties.map((party, idx) => buildPartyGroupSection(party, idx, profileById, roleMap, soloStats.avgGpm)).join('');
     }
+    html += buildStoppedGroupSection(stoppedProfilesAll);
     html += buildSoloGroupSection(soloProfilesAll);
     tpl.innerHTML = html;
   } else {
     gridEl.classList.remove('grouped-mode');
-    const sorted = sortProfileList(currentProfiles);
-    tpl.innerHTML = sorted.map(buildProfileCard).join('');
+    const stoppedProfilesDefault = currentProfiles.filter(p => isProfileBotStopped(p));
+    const activeProfilesDefault = currentProfiles.filter(p => !isProfileBotStopped(p));
+    const sortedActive = sortProfileList(activeProfilesDefault);
+    let html = '';
+    if (stoppedProfilesDefault.length > 0) {
+      html += buildStoppedGroupSection(stoppedProfilesDefault);
+    }
+    html += sortedActive.map(buildProfileCard).join('');
+    tpl.innerHTML = html;
   }
 
   const newCards = Array.from(tpl.content.children);

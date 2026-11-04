@@ -3150,27 +3150,14 @@ function renderScreenProxyModal(statusData) {
     poolTextarea.value = s.poolText;
   }
 
-  // --- Proxy Merit Billing & Anti-Clone Guard ---
+  // --- Proxy Merit Billing & Anti-Clone Guard (Read-only rate synced from Admin Server) ---
   const bill = statusData.billing || {};
-  const billEnabledEl = document.getElementById("sp-bill-enabled");
-  if (billEnabledEl) billEnabledEl.checked = bill.enabled !== false;
-
-  const pkgGbEl = document.getElementById("sp-bill-pkg-gb");
-  if (pkgGbEl && document.activeElement !== pkgGbEl && bill.packageGb != null) {
-    pkgGbEl.value = String(bill.packageGb);
-  }
-  const pkgMeritEl = document.getElementById("sp-bill-pkg-merit");
-  if (pkgMeritEl && document.activeElement !== pkgMeritEl && bill.packageMerit != null) {
-    pkgMeritEl.value = String(bill.packageMerit);
-  }
   const ratePerGbEl = document.getElementById("sp-bill-rate-per-gb");
   if (ratePerGbEl) {
     const rGb = Number(bill.ratePerGb != null ? bill.ratePerGb : 0.3);
-    ratePerGbEl.textContent = `${rGb.toFixed(4)} บุญ/GB`;
-  }
-  const rateScreenDayEl = document.getElementById("sp-bill-rate-screen-day");
-  if (rateScreenDayEl && document.activeElement !== rateScreenDayEl && bill.ratePerScreenDay != null) {
-    rateScreenDayEl.value = String(bill.ratePerScreenDay);
+    const pGb = Number(bill.packageGb || 5000).toLocaleString();
+    const pMerit = Number(bill.packageMerit ?? 1500).toLocaleString();
+    ratePerGbEl.textContent = `${rGb.toFixed(2)} บุญ/GB (${pGb} GB = ${pMerit} บุญ)`;
   }
   const hwidBadgeEl = document.getElementById("sp-billing-hwid-badge");
   if (hwidBadgeEl) {

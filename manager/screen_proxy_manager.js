@@ -714,13 +714,21 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         bangkokDay: todayKey,
         deltaUnits: unsettledUnits,
         deltaBytes,
+        todayProxyBytes: todayBucket.proxyTotalBytes || 0,
         totalProxyBytes: billingState.totalProxyBytes || 0,
         activeScreensCount: Math.max(activeLeases.size, activeScreensToday),
         ratePerGb,
         ratePerScreenDay
       });
       if (res && res.success) {
-        billingState.settledUnitsTotal = targetUnits;
+        if (res.billingConfig && typeof res.billingConfig === 'object') {
+          if (res.billingConfig.packageGb) billingState.packageGb = Number(res.billingConfig.packageGb);
+          if (res.billingConfig.packageMerit !== undefined) billingState.packageMerit = Number(res.billingConfig.packageMerit);
+          if (res.billingConfig.ratePerGb !== undefined) billingState.ratePerGb = Number(res.billingConfig.ratePerGb);
+          if (res.billingConfig.ratePerScreenDay !== undefined) billingState.ratePerScreenDay = Number(res.billingConfig.ratePerScreenDay);
+          if (typeof res.billingConfig.enabled === 'boolean') billingState.autoDeductWallet = res.billingConfig.enabled;
+        }
+        billingState.settledUnitsTotal = Number.isFinite(Number(res.settledUnitsTotal)) ? Number(res.settledUnitsTotal) : targetUnits;
         billingState.settledProxyBytes = billingState.totalProxyBytes || 0;
         billingState.lastSettledAt = now();
         billingState.lastSettlementError = null;

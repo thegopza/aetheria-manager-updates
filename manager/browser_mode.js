@@ -2832,6 +2832,19 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const { targetInfos } = await send('Target.getTargets');
       if (targetInfos.some(t => t.targetId === existing.targetId)) {
         if (screenProxy && screenProxy.isEnabled()) {
+          if (isRealSession && !existing.browserContextId) {
+            await applyProxyModeToOpenWindows({ onlyProfileIds: [profile.id] }).catch(() => {});
+            const migrated = clients.get(profile.id);
+            if (migrated && migrated.browserContextId) {
+              await windowAction(migrated, 'focus', new URLSearchParams()).catch(() => {});
+              return {
+                success: true,
+                message: 'สลับจอเข้าโหมดแยก IP (Proxy) สำเร็จ',
+                alreadyOpen: true,
+                recovered: true
+              };
+            }
+          }
           await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort }).catch(() => {});
         }
         startProxy(existing, profile.debugPort);
@@ -3080,6 +3093,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     return levelDbHarvestPromise;
   }
 
+  let proxyMigrationInFlight = false;
   function start() {
     if(started)return;started=true;
     try {
@@ -3099,6 +3113,21 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           c.lastStorageSyncAt = now;
           syncClientStorage(c).catch(() => {});
           if (++syncedCount >= 4) break;
+        }
+      }
+      if (isRealSession && screenProxy && screenProxy.isEnabled() && !phase2Running && !proxyMigrationInFlight) {
+        const unproxiedIds = [];
+        for (const c of clients.values()) {
+          if (c && c.profileId && !c.browserContextId && !stoppedProfiles.has(c.profileId)) {
+            unproxiedIds.push(c.profileId);
+            if (unproxiedIds.length >= 4) break;
+          }
+        }
+        if (unproxiedIds.length > 0) {
+          proxyMigrationInFlight = true;
+          applyProxyModeToOpenWindows({ onlyProfileIds: unproxiedIds }).catch(() => {}).finally(() => {
+            proxyMigrationInFlight = false;
+          });
         }
       }
       rediscover().catch(()=>scheduleReconnect());

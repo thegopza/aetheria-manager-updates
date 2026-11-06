@@ -6644,8 +6644,14 @@ const server = http.createServer(async (req, res) => {
           }
           if (saved.settings && saved.settings.enabled) {
             await syncScreenProxyForOpenProfiles().catch(() => {});
+            if (isBrowserMode() && typeof browserMode.applyProxyModeToOpenWindows === "function") {
+              await browserMode.applyProxyModeToOpenWindows().catch(() => {});
+            }
           } else if (saved.settings && !saved.settings.enabled) {
             await screenProxy.releaseAll().catch(() => {});
+            if (isBrowserMode() && typeof browserMode.applyProxyModeToOpenWindows === "function") {
+              await browserMode.applyProxyModeToOpenWindows().catch(() => {});
+            }
           }
           if (isBrowserMode() && typeof browserMode.syncAssetCacheToOpenWindows === "function") {
             await browserMode.syncAssetCacheToOpenWindows().catch(() => {});

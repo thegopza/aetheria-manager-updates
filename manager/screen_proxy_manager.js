@@ -576,9 +576,28 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     } catch (_) {}
   }
 
+  let leaseRenewInFlight = false;
   const billingSaveInterval = setInterval(() => {
     if (billingDirty) saveBillingStateNow();
     syncProxyBillingToServer().catch(() => {});
+    if (!leaseRenewInFlight && activeLeases.size > 0) {
+      const settings = loadSettings();
+      if (settings.enabled && settings.mode === 'owner-queue') {
+        const nowMs = now();
+        const staleIds = [];
+        for (const [pid, l] of activeLeases.entries()) {
+          if (pid && (!l || !l.assigned || isProxyBlocked(l) || (nowMs - (l.renewedAt || 0) > 5 * 60 * 1000))) {
+            staleIds.push(pid);
+          }
+        }
+        if (staleIds.length > 0) {
+          leaseRenewInFlight = true;
+          acquireLeasesForProfiles(staleIds).catch(() => {}).finally(() => {
+            leaseRenewInFlight = false;
+          });
+        }
+      }
+    }
   }, 10000);
   billingSaveInterval.unref?.();
 
@@ -706,23 +725,33 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     };
   }
 
+  let lastSyncedProxyBytes = billingState.settledProxyBytes || 0;
+  let lastSyncedActiveScreens = -1;
+
   async function syncProxyBillingToServer({ force = false } = {}) {
     if (billingSyncInFlight) return null;
     if (!billingState.autoDeductWallet || typeof solver?.serviceRequest !== 'function') return null;
     const { targetUnits, ratePerGb, ratePerScreenDay } = computeTargetBillingUnits();
     const unsettledUnits = Math.max(0, targetUnits - (billingState.settledUnitsTotal || 0));
-    if (unsettledUnits < 1) return null;
-    if (!force && (now() - lastBillingSyncAt < 25000)) return null;
+    const settings = loadSettings();
+    const todayKey = getThaiDateKey();
+    const todayBucket = billingState.byDay[todayKey] || { proxyTotalBytes: 0, screens: {} };
+    const activeScreensToday = Object.keys(todayBucket.screens || {}).length;
+    const effectiveScreensCount = Math.max(activeLeases.size, activeScreensToday);
+    const hasActiveProxyState = Boolean(settings.enabled && effectiveScreensCount > 0);
+    const hasUnsyncedTraffic = (billingState.totalProxyBytes || 0) > lastSyncedProxyBytes;
+    const screensChanged = hasActiveProxyState && effectiveScreensCount !== lastSyncedActiveScreens;
+    const statusHeartbeatDue = (hasActiveProxyState || hasUnsyncedTraffic) && (screensChanged || (now() - lastBillingSyncAt >= 60000));
+    if (unsettledUnits < 1 && !force && !statusHeartbeatDue) return null;
+    if (!force && unsettledUnits < 1 && !screensChanged && (now() - lastBillingSyncAt < 25000)) return null;
+    if (!force && unsettledUnits >= 1 && (now() - lastBillingSyncAt < 15000)) return null;
 
     billingSyncInFlight = true;
     lastBillingSyncAt = now();
     try {
-      const todayKey = getThaiDateKey();
-      const todayBucket = billingState.byDay[todayKey] || { proxyTotalBytes: 0, screens: {} };
-      const activeScreensToday = Object.keys(todayBucket.screens || {}).length;
       const deltaBytes = Math.max(0, (billingState.totalProxyBytes || 0) - (billingState.settledProxyBytes || 0));
       const reportId = 'pxbw_' + crypto.createHash('sha256')
-        .update(`${currentMachineHwid}|${billingState.installationId}|${billingState.settledUnitsTotal}|${targetUnits}`)
+        .update(`${currentMachineHwid}|${billingState.installationId}|${billingState.settledUnitsTotal}|${targetUnits}|${billingState.totalProxyBytes || 0}|${effectiveScreensCount}`)
         .digest('hex')
         .slice(0, 32);
 
@@ -735,7 +764,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         deltaBytes,
         todayProxyBytes: todayBucket.proxyTotalBytes || 0,
         totalProxyBytes: billingState.totalProxyBytes || 0,
-        activeScreensCount: Math.max(activeLeases.size, activeScreensToday),
+        activeScreensCount: effectiveScreensCount,
         ratePerGb,
         ratePerScreenDay
       });
@@ -748,7 +777,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           if (typeof res.billingConfig.enabled === 'boolean') billingState.autoDeductWallet = res.billingConfig.enabled;
         }
         billingState.settledUnitsTotal = Number.isFinite(Number(res.settledUnitsTotal)) ? Number(res.settledUnitsTotal) : targetUnits;
-        billingState.settledProxyBytes = billingState.totalProxyBytes || 0;
+        if (unsettledUnits >= 1 || (Number(res.chargedUnits) || 0) > 0) {
+          billingState.settledProxyBytes = billingState.totalProxyBytes || 0;
+        }
+        lastSyncedProxyBytes = billingState.totalProxyBytes || 0;
+        lastSyncedActiveScreens = effectiveScreensCount;
         billingState.lastSettledAt = now();
         billingState.lastSettlementError = null;
         saveBillingStateNow();
@@ -1582,12 +1615,13 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           if (hasAnyAssigned || (!allEmpty && loadPool().proxies.length === 0)) {
             for (const l of validLeases) {
               if (l.assigned) {
-                activeLeases.set(l.profileId, { ...l, source: 'owner-queue' });
+                activeLeases.set(l.profileId, { ...l, source: 'owner-queue', renewedAt: now() });
                 stickyHistory.set(l.profileId, l.proxyId);
               }
             }
             saveStickyHistory();
             syncDaemonState().catch(() => {});
+            syncProxyBillingToServer().catch(() => {});
             const unblockedIds = new Set(validLeases.filter(l => l.assigned).map(l => l.profileId));
             const fallbackNeeded = reqProfiles.filter(r => !unblockedIds.has(r.profileId));
             if (fallbackNeeded.length > 0 && loadPool().proxies.length > 0) {
@@ -1851,17 +1885,17 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       const res = await acquireLeasesForProfiles([profileId]);
       lease = res[0] || activeLeases.get(profileId) || null;
     }
+    const tunnel = await ensureProfileTunnel(profileId, debugPort);
     if (!lease || !lease.assigned) {
       return {
         enabled: true,
-        tunnelPort: null,
-        proxyServer: null,
-        proxyServerUrl: null,
+        tunnelPort: tunnel.port,
+        proxyServer: tunnel.proxyUrl,
+        proxyServerUrl: tunnel.proxyUrl,
         lease,
         error: lease?.error || 'ไม่มี IP ว่างในคิว'
       };
     }
-    const tunnel = await ensureProfileTunnel(profileId, debugPort);
     return {
       enabled: true,
       tunnelPort: tunnel.port,
@@ -2074,7 +2108,13 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const maxPerIp = pub.maxScreensPerIp || DEFAULT_MAX_SCREENS_PER_IP;
 
     if (pub.enabled && Array.isArray(openProfileIds) && openProfileIds.length > 0) {
-      const missing = openProfileIds.filter(pid => !activeLeases.has(pid));
+      const nowMs = now();
+      const missing = openProfileIds.filter(pid => {
+        const l = activeLeases.get(pid);
+        if (!l || !l.assigned || isProxyBlocked(l)) return true;
+        if (pub.mode === 'owner-queue' && (nowMs - (l.renewedAt || 0) > 5 * 60 * 1000)) return true;
+        return false;
+      });
       if (missing.length > 0) {
         await acquireLeasesForProfiles(missing).catch(() => {});
       }

@@ -731,12 +731,12 @@ function createMarketSniperService({
   function extractOriginalListedUnitFromNote(note, qty = 1) {
     const s = String(note || '');
     if (!s) return 0;
-    const perUnitMatch = s.match(/@\s*([\d,]+)\s*z\/ชิ้น/);
+    const perUnitMatch = s.match(/(?:@|ตั้งขายกลับ)\s*([\d,]+)\s*z\s*\/\s*ชิ้น/);
     if (perUnitMatch && perUnitMatch[1]) {
       const u = Number(perUnitMatch[1].replace(/,/g, '')) || 0;
       if (u > 0) return u;
     }
-    const totalMatch = s.match(/ตั้งขายกลับ\s+([\d,]+)\s*z/);
+    const totalMatch = s.match(/ตั้งขายกลับ\s+([\d,]+)\s*z(?!\s*\/)/);
     if (totalMatch && totalMatch[1]) {
       const tot = Number(totalMatch[1].replace(/,/g, '')) || 0;
       if (tot > 0) return Math.max(1, Math.round(tot / Math.max(1, Number(qty) || 1)));
@@ -770,6 +770,19 @@ function createMarketSniperService({
       const beforeLen = state.history.length;
       state.history = state.history.filter(h => h && !isNpcVendorTrashItem(h));
       if (state.history.length !== beforeLen) changed = true;
+      if (state.history.some(h => h && Number(h.listingId) === 1794398) && !state.history.some(h => h && Number(h.listingId) === 1708619)) {
+        const recoveredHydras = [
+          { id: 'snp_1793772202664_o1y1g', at: 1793772202664, listingId: 1708619, itemId: 94016, itemName: 'Hydra Card', refine: 0, qty: 1, icon: 'https://www.aetheria-online.in.th/art/icons/items/card.webp', action: 'relisted', buyPriceTotal: 2746233, buyUnitPrice: 2746233, cleanRefUnitPrice: 1554848, relistPriceTotal: 3100000, relistUnitPrice: 3100000, initialListedUnitPrice: 3100000, expectedNetProfit: 229767, buyerProfileId: 'profile_1793794288694', buyerCharName: 'พุงกะทิ', note: 'ชนะประมูลที่ 2,746,233 z -> ตั้งขายกลับ 3,100,000 z (คาดการณ์กำไรสุทธิ +229,767 z)' },
+          { id: 'snp_1793772133018_v7u77', at: 1793772133018, listingId: 1708591, itemId: 94016, itemName: 'Hydra Card', refine: 0, qty: 1, icon: 'https://www.aetheria-online.in.th/art/icons/items/card.webp', action: 'relisted', buyPriceTotal: 2583677, buyUnitPrice: 2583677, cleanRefUnitPrice: 1554848, relistPriceTotal: 3100000, relistUnitPrice: 3100000, initialListedUnitPrice: 3100000, expectedNetProfit: 392323, buyerProfileId: 'profile_1793794288694', buyerCharName: 'พุงกะทิ', note: 'ชนะประมูลที่ 2,583,677 z -> ตั้งขายกลับ 3,100,000 z (คาดการณ์กำไรสุทธิ +392,323 z)' },
+          { id: 'snp_1793771746458_l07b4', at: 1793771746458, listingId: 1708345, itemId: 94016, itemName: 'Hydra Card', refine: 0, qty: 1, icon: 'https://www.aetheria-online.in.th/art/icons/items/card.webp', action: 'relisted', buyPriceTotal: 2646467, buyUnitPrice: 2646467, cleanRefUnitPrice: 1554848, relistPriceTotal: 3100000, relistUnitPrice: 3100000, initialListedUnitPrice: 3100000, expectedNetProfit: 329533, buyerProfileId: 'profile_1793794288694', buyerCharName: 'พุงกะทิ', note: 'ชนะประมูลที่ 2,646,467 z -> ตั้งขายกลับ 3,100,000 z (คาดการณ์กำไรสุทธิ +329,533 z)' }
+        ];
+        for (const rh of recoveredHydras) {
+          if (!state.history.some(h => h && Number(h.listingId) === rh.listingId)) {
+            state.history.push(rh);
+            changed = true;
+          }
+        }
+      }
       for (const h of state.history) {
         if (!h) continue;
         if ((h.action === 'bid' || h.action === 'rebid') && h.at && (nowTs - Number(h.at) > 10 * 60 * 1000)) {
@@ -794,7 +807,10 @@ function createMarketSniperService({
       const oldRef = Number(rec.cleanRefUnitPrice) || 0;
 
       if (isHistory) {
-        const origFromNote = extractOriginalListedUnitFromNote(rec.note, qty);
+        const rawOrigFromNote = extractOriginalListedUnitFromNote(rec.note, qty);
+        const origFromNote = (rawOrigFromNote > 0 && buyUnit > 0 && rawOrigFromNote > Math.round(buyUnit * 1.65) && rawOrigFromNote > Math.round(trueRef * 1.45))
+          ? Math.max(minBreakEvenUnit, trueRef)
+          : rawOrigFromNote;
         if (origFromNote > 0 && rec.initialListedUnitPrice !== origFromNote) {
           rec.initialListedUnitPrice = origFromNote;
           changed = true;
@@ -3316,7 +3332,12 @@ function createMarketSniperService({
           buySumByName[nmLower] = (buySumByName[nmLower] || 0) + buyTot;
           buyQtyByName[nmLower] = (buyQtyByName[nmLower] || 0) + q;
         }
-        const origFromNote = extractOriginalListedUnitFromNote(h.note, q);
+        const rawOrigFromNote = extractOriginalListedUnitFromNote(h.note, q);
+        const buyUnitH = Math.max(1, Math.round(buyTot / q));
+        const minBreakEvenH = buyTot > 0 ? Math.ceil(buyUnitH / 0.96) : 0;
+        const origFromNote = (rawOrigFromNote > 0 && buyUnitH > 0 && rawOrigFromNote > Math.round(buyUnitH * 1.65))
+          ? Math.max(minBreakEvenH, Number(h.relistUnitPrice) || 0)
+          : rawOrigFromNote;
         const listedU = Number(h.listedUnitPrice || h.relistUnitPrice || origFromNote || h.cleanRefUnitPrice) || 0;
         lotsMap.set(lid, {
           listingId: lid,
@@ -3327,7 +3348,7 @@ function createMarketSniperService({
           qty: q,
           icon: h.icon || null,
           buyPriceTotal: buyTot,
-          buyUnitPrice: Math.max(1, Math.round(buyTot / q)),
+          buyUnitPrice: buyUnitH,
           listedUnitPrice: listedU,
           initialListedUnitPrice: Number(h.initialListedUnitPrice || origFromNote || listedU) || 0,
           buyerProfileId: String(h.buyerProfileId || ''),

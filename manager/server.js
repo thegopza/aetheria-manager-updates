@@ -232,13 +232,100 @@ function planJobLevel(v, def) {
   return Number.isFinite(n) && n >= 1 && n <= 99 ? n : def;
 }
 
+const META_PLAN_STAT_EXTENSIONS = {
+  plan_meta_crusader_1_99: {
+    appendQueue: [
+      { stat: "INT", to: 70 },
+      { stat: "STR", to: 70 },
+      { stat: "DEX", to: 65 },
+      { stat: "INT", to: 85 },
+      { stat: "STR", to: 85 }
+    ],
+    targets: { STR: 85, AGI: 1, VIT: 99, INT: 85, DEX: 65, LUK: 1 }
+  },
+  plan_meta_priest_1_99: {
+    appendQueue: [
+      { stat: "VIT", to: 90 },
+      { stat: "DEX", to: 85 },
+      { stat: "VIT", to: 99 },
+      { stat: "DEX", to: 99 }
+    ],
+    targets: { STR: 1, AGI: 1, VIT: 99, INT: 99, DEX: 99, LUK: 1 }
+  },
+  plan_meta_hunter_1_99: {
+    appendQueue: [
+      { stat: "AGI", to: 90 },
+      { stat: "LUK", to: 65 },
+      { stat: "VIT", to: 40 },
+      { stat: "AGI", to: 99 },
+      { stat: "LUK", to: 80 }
+    ],
+    targets: { STR: 1, AGI: 99, VIT: 40, INT: 25, DEX: 99, LUK: 80 }
+  },
+  plan_meta_bard_1_99: {
+    appendQueue: [
+      { stat: "VIT", to: 70 },
+      { stat: "INT", to: 50 },
+      { stat: "AGI", to: 90 },
+      { stat: "VIT", to: 85 },
+      { stat: "AGI", to: 99 }
+    ],
+    targets: { STR: 1, AGI: 99, VIT: 85, INT: 50, DEX: 99, LUK: 1 }
+  },
+  plan_meta_dancer_1_99: {
+    appendQueue: [
+      { stat: "VIT", to: 70 },
+      { stat: "INT", to: 50 },
+      { stat: "AGI", to: 90 },
+      { stat: "VIT", to: 85 },
+      { stat: "AGI", to: 99 }
+    ],
+    targets: { STR: 1, AGI: 99, VIT: 85, INT: 50, DEX: 99, LUK: 1 }
+  },
+  plan_meta_blacksmith_1_99: {
+    appendQueue: [
+      { stat: "AGI", to: 85 },
+      { stat: "VIT", to: 70 },
+      { stat: "DEX", to: 65 },
+      { stat: "AGI", to: 95 },
+      { stat: "VIT", to: 85 }
+    ],
+    targets: { STR: 99, AGI: 95, VIT: 85, INT: 1, DEX: 65, LUK: 1 }
+  }
+};
+
 function normalizePlansData(raw) {
   if (raw && Array.isArray(raw.profiles)) {
-    return {
+    let migrated = false;
+    for (const p of raw.profiles) {
+      if (!p || !p.statBuild || !Array.isArray(p.statBuild.queue)) continue;
+      const ext = META_PLAN_STAT_EXTENSIONS[p.id];
+      if (ext) {
+        const q = p.statBuild.queue;
+        let planChanged = false;
+        for (const item of ext.appendQueue) {
+          if (!q.some(x => x && x.stat === item.stat && Number(x.to) >= item.to)) {
+            q.push({ stat: item.stat, to: item.to });
+            planChanged = true;
+          }
+        }
+        if (planChanged) {
+          p.statBuild.targets = { ...(p.statBuild.targets || {}), ...ext.targets };
+          p.updatedAt = Date.now();
+          migrated = true;
+        }
+      }
+    }
+    const result = {
       profiles: raw.profiles,
       assignments: raw.assignments || {},
       pendingEnable: raw.pendingEnable || {}
     };
+    if (migrated) {
+      try { writeJsonAtomic(PLANS_FILE, result); } catch (_) {}
+      try { writeJsonAtomic(PLANS_BACKUP_FILE, result); } catch (_) {}
+    }
+    return result;
   }
 
   // Initial starter plan matching user specifications:

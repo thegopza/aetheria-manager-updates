@@ -116,28 +116,30 @@ function saveConfig(cfg) {
 }
 
 function loadPersistedState() {
-  try {
-    if (fs.existsSync(STATE_FILE)) {
-      const d = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-      if (d && typeof d === 'object') {
-        return {
-          priceCache: (d.priceCache && typeof d.priceCache === 'object') ? d.priceCache : {},
-          activeBids: Array.isArray(d.activeBids) ? d.activeBids : [],
-          pendingFlips: Array.isArray(d.pendingFlips) ? d.pendingFlips : [],
-          history: Array.isArray(d.history) ? d.history.slice(0, 200) : [],
-          stats: Object.assign({
-            totalScans: 0,
-            totalOpportunitiesFound: 0,
-            totalBidsPlaced: 0,
-            totalWonOrBought: 0,
-            totalRelisted: 0,
-            totalEstimatedNetProfit: 0,
-            totalRefundedCount: 0
-          }, d.stats || {})
-        };
+  for (const candidate of [STATE_FILE, `${STATE_FILE}.bak`, `${STATE_FILE}.tmp`]) {
+    try {
+      if (fs.existsSync(candidate) && fs.statSync(candidate).size > 2) {
+        const d = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+        if (d && typeof d === 'object') {
+          return {
+            priceCache: (d.priceCache && typeof d.priceCache === 'object') ? d.priceCache : {},
+            activeBids: Array.isArray(d.activeBids) ? d.activeBids : [],
+            pendingFlips: Array.isArray(d.pendingFlips) ? d.pendingFlips : [],
+            history: Array.isArray(d.history) ? d.history.slice(0, 200) : [],
+            stats: Object.assign({
+              totalScans: 0,
+              totalOpportunitiesFound: 0,
+              totalBidsPlaced: 0,
+              totalWonOrBought: 0,
+              totalRelisted: 0,
+              totalEstimatedNetProfit: 0,
+              totalRefundedCount: 0
+            }, d.stats || {})
+          };
+        }
       }
-    }
-  } catch (_) {}
+    } catch (_) {}
+  }
   return {
     priceCache: {},
     activeBids: [],
@@ -158,13 +160,24 @@ function loadPersistedState() {
 function savePersistedState(state) {
   try {
     fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
-    fs.writeFileSync(STATE_FILE, JSON.stringify({
+    const raw = JSON.stringify({
       priceCache: state.priceCache || {},
       activeBids: (state.activeBids || []).slice(0, 100),
       pendingFlips: (state.pendingFlips || []).slice(0, 50),
       history: (state.history || []).slice(0, 200),
       stats: state.stats || {}
-    }, null, 2), 'utf8');
+    }, null, 2);
+    if (!raw || raw.length < 10) return;
+    const tmpFile = `${STATE_FILE}.tmp`;
+    fs.writeFileSync(tmpFile, raw, 'utf8');
+    try {
+      fs.renameSync(tmpFile, STATE_FILE);
+    } catch (_) {
+      fs.writeFileSync(STATE_FILE, raw, 'utf8');
+    }
+    try {
+      fs.writeFileSync(`${STATE_FILE}.bak`, raw, 'utf8');
+    } catch (_) {}
   } catch (_) {}
 }
 
@@ -275,12 +288,11 @@ function getSmartFlipBatchConfig(itemName, unitPrice, isSingle = false) {
   return { batchQty: 100, maxConcurrent: 3, isSingle: false };
 }
 
-const PRICE_CACHE_VER = 7;
+const PRICE_CACHE_VER = 8;
 
 // Find the Most-Stable Price Cluster from the last 10–20 individual trades (`recent` array).
-// Groups trades whose unit prices fall within ±15% (fallback ±22%) of each other, picks the cluster
-// with the highest number of trades (tie-breaking by lowest mean first so wash-trade clusters at higher fixed prices never win),
-// and returns its trimmed average.
+// Strips out minority 5-minute auction snipe wins (< 72% of main Buy-Now trade body when >= 50% of trades are normal Buy-Now sales)
+// so auction wins at 50–65% of market price never poison the item's true Buy-Now reference price!
 function findMostStableClusterAvg(samples) {
   if (!Array.isArray(samples) || samples.length === 0) {
     return { avg: 0, min: 0, max: 0, clusterCount: 0, totalCount: 0 };
@@ -293,7 +305,24 @@ function findMostStableClusterAvg(samples) {
     return { avg: Math.round(valid[0]), min: valid[0], max: valid[0], clusterCount: 1, totalCount: 1 };
   }
 
-  const sorted = valid.slice().sort((a, b) => a - b);
+  const rawSorted = valid.slice().sort((a, b) => a - b);
+  let sorted = rawSorted;
+
+  // Strip minority 5-minute auction snipe wins when the majority (>= 50%) of trades are normal Buy-Now sales around p60
+  if (rawSorted.length >= 5) {
+    const p60 = rawSorted[Math.floor(rawSorted.length * 0.60)];
+    if (p60 > 0) {
+      const mainBodyCount = rawSorted.filter(v => v >= p60 * 0.78 && v <= p60 * 1.40).length;
+      const auctionSnipeCount = rawSorted.filter(v => v < p60 * 0.72).length;
+      if (mainBodyCount >= Math.ceil(rawSorted.length * 0.50) && auctionSnipeCount > 0 && auctionSnipeCount <= Math.floor(rawSorted.length * 0.40)) {
+        const filtered = rawSorted.filter(v => v >= p60 * 0.72);
+        if (filtered.length >= 4) {
+          sorted = filtered;
+        }
+      }
+    }
+  }
+
   const pickBestCluster = (bandPct) => {
     let best = null;
     for (let i = 0; i < sorted.length; i++) {
@@ -309,15 +338,9 @@ function findMostStableClusterAvg(samples) {
       if (!best) {
         best = { members, count: n, mean, cv };
       } else if (n > best.count) {
-        // Only let a higher-priced cluster replace a lower-priced cluster if it has strictly more trades
-        // AND isn't just 1 trade larger when the lower cluster already has >= 3 trades at < 75% of the price
-        if (n === best.count + 1 && best.count >= 3 && best.mean < mean * 0.75) {
-          continue;
-        }
         best = { members, count: n, mean, cv };
       } else if (n === best.count) {
-        // Conservative tie-breaker: ALWAYS prefer the lower price cluster on a tie!
-        // Scammers who wash-trade 2-3 stacks at the exact same price have cv = 0, so tie-breaking by cv would pick the scammer's price.
+        // Conservative tie-breaker: prefer lower price cluster on a tie so wash-trade clusters at higher fixed prices never win
         if (mean < best.mean * 0.97) {
           best = { members, count: n, mean, cv };
         } else if (Math.abs(mean - best.mean) <= best.mean * 0.03 && cv < best.cv) {
@@ -336,9 +359,9 @@ function findMostStableClusterAvg(samples) {
   let cluster = (best && best.members && best.members.length > 0) ? best.members.slice() : sorted;
   // If no cluster of >= 2 formed at all (every single trade was wildly different), use the lower-half median
   if (cluster.length === 1 && sorted.length >= 2) {
-    const halfIdx = Math.max(0, Math.floor((sorted.length - 1) * 0.40));
+    const halfIdx = Math.max(0, Math.floor((sorted.length - 1) * 0.45));
     const med = sorted[halfIdx];
-    return { avg: Math.round(med), min: sorted[0], max: sorted[sorted.length - 1], clusterCount: 1, totalCount: sorted.length };
+    return { avg: Math.round(med), min: sorted[0], max: sorted[sorted.length - 1], clusterCount: 1, totalCount: rawSorted.length };
   }
 
   const trimmed = cluster.length >= 5 ? cluster.slice(1, -1) : cluster;
@@ -348,12 +371,12 @@ function findMostStableClusterAvg(samples) {
     min: cluster[0],
     max: cluster[cluster.length - 1],
     clusterCount: cluster.length,
-    totalCount: sorted.length
+    totalCount: rawSorted.length
   };
 }
 
 // Compute Clean Reference Price from the last 10–20 individual trades (`recent` array) using Most-Stable Cluster averaging
-// + unique-seller active listings ceiling + strict anti-bait / anti-wash-trade / anti-RMT guards.
+// + 7-day / 24h bucket baseline anti-pump guard + unique-seller active listings ceiling + strict anti-bait / anti-wash-trade / anti-RMT guards.
 // Never uses `pt.high` from hourly buckets (`points[]`), which can be polluted by RMT Zeny transfers.
 function computeCleanReferencePrice(history24h, history7d, activeListingsForSameItem, undercutZeny = 1, ourCharNamesSet = null, itemMeta = null) {
   if (itemMeta && isNpcVendorTrashItem(itemMeta)) {
@@ -366,6 +389,9 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   const recentTrades = [];
   const allRecentTrades = [];
   const fallbackBucketPrices = [];
+  const bucket24hPrices = [];
+  const bucket7dPrices = [];
+  let max24hBucketHigh = 0;
   let sales24h = 0;
   let sales7d = 0;
 
@@ -383,11 +409,15 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
       const high = Number(pt.high) || avg;
       if (s > 0 && avg > 0) {
         countFromPoints += s;
-        if (is24h) {
-          // NEVER use pt.high! If high > low * 2.5, an RMT spike polluted pt.avg upward, so use pt.low; otherwise use pt.avg.
-          const safeBucketUnit = Math.round((low > 0 && high > low * 2.5) ? low : avg);
-          if (safeBucketUnit > 0) {
+        // NEVER use pt.high! If high > low * 2.2, an RMT/pump spike polluted pt.avg upward, so use pt.low; otherwise use pt.avg.
+        const safeBucketUnit = Math.round((low > 0 && high > low * 2.2) ? low : avg);
+        if (safeBucketUnit > 0) {
+          if (is24h) {
             fallbackBucketPrices.push(safeBucketUnit);
+            bucket24hPrices.push(safeBucketUnit);
+            if (high > max24hBucketHigh) max24hBucketHigh = high;
+          } else {
+            bucket7dPrices.push(safeBucketUnit);
           }
         }
       }
@@ -465,6 +495,52 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
 
   let cleanRefUnitPrice = cluster20.avg;
 
+  // 7-Day & 24-Hour Baseline Anti-Pump / Anti-Manipulation Protection:
+  // Prevents buying into short-term pumps where a manipulator sweeps the book (e.g. Runic Silk pumped from 8k–12k to 36k–236k,
+  // or Hydra Card pumped from 2M to 5M–6M) and then dumps stacks in 5-minute auctions!
+  const sorted7dBuckets = bucket7dPrices.slice().sort((a, b) => a - b);
+  const sorted24hBuckets = bucket24hPrices.slice().sort((a, b) => a - b);
+  const bucket7dMedian = sorted7dBuckets.length >= 4
+    ? sorted7dBuckets[Math.floor(sorted7dBuckets.length * 0.50)]
+    : 0;
+  const bucket7dLowP30 = sorted7dBuckets.length >= 6
+    ? sorted7dBuckets[Math.floor(sorted7dBuckets.length * 0.30)]
+    : 0;
+  const bucket24hMedian = sorted24hBuckets.length >= 3
+    ? sorted24hBuckets[Math.floor(sorted24hBuckets.length * 0.50)]
+    : 0;
+  const bucket24hLowP25 = sorted24hBuckets.length >= 3
+    ? sorted24hBuckets[Math.floor(sorted24hBuckets.length * 0.25)]
+    : 0;
+
+  if (bucket7dMedian > 0 && sorted7dBuckets.length >= 6) {
+    // If the recent 20 trades are pumped > 45% above the 7-day median bucket price, reject as a short-term pump!
+    if (cleanRefUnitPrice > Math.round(bucket7dMedian * 1.45)) {
+      return { valid: false, reason: 'short_term_pump_spike', totalSales, sales24h, sales7d, bucket7dMedian, pumpedRef: cleanRefUnitPrice };
+    }
+    // Cap reference price at <= 1.15x of 7-day median (or 1.0x of 7-day median if the 7-day history itself has wide volatility)
+    const maxAllowedBy7d = (bucket7dLowP30 > 0 && bucket7dMedian > bucket7dLowP30 * 1.35)
+      ? bucket7dMedian
+      : Math.round(bucket7dMedian * 1.15);
+    if (maxAllowedBy7d > 0 && cleanRefUnitPrice > maxAllowedBy7d) {
+      cleanRefUnitPrice = maxAllowedBy7d;
+    }
+  }
+
+  if (bucket24hLowP25 > 0 && sorted24hBuckets.length >= 3) {
+    // If recent trades jumped > 55% above today's 25th-percentile hourly bucket (e.g. Runic Silk was 8,000 z earlier today), reject!
+    if (cleanRefUnitPrice > Math.round(bucket24hLowP25 * 1.55)) {
+      return { valid: false, reason: 'intraday_pump_spike', totalSales, sales24h, sales7d, bucket24hLowP25, pumpedRef: cleanRefUnitPrice };
+    }
+    // If an extreme pump/RMT spike (> 3.5x 24h median) occurred in the last 24h, anchor conservatively to pre-pump baseline
+    if (bucket24hMedian > 0 && max24hBucketHigh > bucket24hMedian * 3.5) {
+      const prePumpAnchor = Math.max(bucket24hLowP25, bucket7dLowP30 || bucket24hLowP25);
+      if (prePumpAnchor > 0 && cleanRefUnitPrice > prePumpAnchor) {
+        cleanRefUnitPrice = prePumpAnchor;
+      }
+    }
+  }
+
   // RMT / Wash-Trade History Contamination Detector:
   // If an item has multiple extreme RMT Zeny transfer spikes (> 5x cluster average) in its recent 20 trades
   // and does not have massive organic daily volume, reject it as an RMT / wash-trade vehicle.
@@ -475,22 +551,26 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     }
   }
 
-  // Check the latest 10 trades specifically: if the newest 10 trades have a stable cluster
-  // that is lower than the 20-trade cluster (market trending down), use the 10-trade stable cluster!
+  // Check the latest 10 trades specifically: ONLY lower cleanRefUnitPrice if a true majority of the newest 10 trades
+  // dropped AND buyers are no longer paying near the normal Buy-Now price (prevents 3-4 5-minute auction snipes from looking like a crash!)
   if (latest20UnitPrices.length >= 6) {
     const latest10 = latest20UnitPrices.slice(0, 10);
-    const cluster10 = findMostStableClusterAvg(latest10);
-    if (cluster10.clusterCount >= 3 && cluster10.avg > 0 && cluster10.avg < cleanRefUnitPrice) {
-      cleanRefUnitPrice = cluster10.avg;
+    const stillHighIn10 = latest10.filter(u => u >= cleanRefUnitPrice * 0.88).length;
+    if (stillHighIn10 < Math.ceil(latest10.length * 0.40)) {
+      const cluster10 = findMostStableClusterAvg(latest10);
+      if (cluster10.clusterCount >= Math.max(4, Math.ceil(latest10.length * 0.50)) && cluster10.avg > 0 && cluster10.avg < cleanRefUnitPrice) {
+        cleanRefUnitPrice = cluster10.avg;
+      }
     }
   }
 
-  // Latest-5 Crash Guard: if at least 3 of the newest 5 trades sold below 88% of cleanRefUnitPrice
-  // (e.g. Imperial Steel Shard crashing from 3,900 z yesterday to 1,702 z in the last hour), cap immediately!
-  if (latest20UnitPrices.length >= 4) {
+  // Latest-5 Crash Guard: if at least 4 of the newest 5 trades sold below 85% of cleanRefUnitPrice
+  // (with zero normal Buy-Now trades in the newest 5), cap immediately!
+  if (latest20UnitPrices.length >= 5) {
     const latest5 = latest20UnitPrices.slice(0, 5);
-    const lowerRecent = latest5.filter(u => u > 0 && u < cleanRefUnitPrice * 0.88);
-    if (lowerRecent.length >= 3) {
+    const lowerRecent = latest5.filter(u => u > 0 && u < cleanRefUnitPrice * 0.85);
+    const normalRecent = latest5.filter(u => u >= cleanRefUnitPrice * 0.90);
+    if (lowerRecent.length >= 4 && normalRecent.length === 0) {
       const recentLowAvg = Math.round(lowerRecent.reduce((s, v) => s + v, 0) / lowerRecent.length);
       if (recentLowAvg > 0 && recentLowAvg < cleanRefUnitPrice) {
         cleanRefUnitPrice = recentLowAvg;
@@ -545,8 +625,8 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     return { valid: false, reason: 'rmt_history_mismatch', totalSales, sales24h, sales7d };
   }
 
-  // Cap cleanRefUnitPrice by unique sellers' Buy-Now prices so 1 seller posting 3 stacks (e.g. panda1031 x3)
-  // only counts as 1 seller, and we never value an item above existing Buy-Now supply on the market.
+  // Cap cleanRefUnitPrice by unique sellers' Buy-Now prices (NEVER by 5-minute auction starting bids in allActiveUnitPrices!)
+  // so 1 seller posting 3 stacks (e.g. panda1031 x3) only counts as 1 seller, and we never value an item above existing Buy-Now supply.
   if (uniqueSellerBuyNowPrices.length >= 2) {
     const secondUniqueSeller = uniqueSellerBuyNowPrices[1];
     if (secondUniqueSeller > 0 && secondUniqueSeller < cleanRefUnitPrice) {
@@ -554,18 +634,9 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     }
   } else if (uniqueSellerBuyNowPrices.length === 1) {
     const onlyUniqueSeller = uniqueSellerBuyNowPrices[0];
+    // Only let a single seller cap cleanRefUnitPrice down to 85% of the trade cluster (prevents 1 cheap Buy-Now outlier from collapsing ref)
     if (onlyUniqueSeller > 0 && onlyUniqueSeller < cleanRefUnitPrice) {
-      cleanRefUnitPrice = onlyUniqueSeller;
-    }
-  } else if (allActiveUnitPrices.length >= 3) {
-    const thirdCheapest = allActiveUnitPrices[2];
-    if (thirdCheapest > 0 && thirdCheapest < cleanRefUnitPrice) {
-      cleanRefUnitPrice = thirdCheapest;
-    }
-  } else if (allActiveUnitPrices.length >= 2) {
-    const secondCheapest = allActiveUnitPrices[1];
-    if (secondCheapest > 0 && secondCheapest < cleanRefUnitPrice) {
-      cleanRefUnitPrice = secondCheapest;
+      cleanRefUnitPrice = Math.max(Math.round(cleanRefUnitPrice * 0.85), onlyUniqueSeller);
     }
   }
 
@@ -597,6 +668,7 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     totalSales,
     sales24h,
     sales7d,
+    bucket7dMedian,
     recentCount: latest20UnitPrices.length,
     clusterCount: cluster20.clusterCount,
     uniqueBuyNowSellersCount: uniqueSellerBuyNowPrices.length,
@@ -624,7 +696,7 @@ function createMarketSniperService({
   let config = loadConfig();
   const state = loadPersistedState();
 
-  // Baseline Most-Stable Cluster reference prices for items that were previously polluted by cacheVer <= 4 pt.high RMT spikes
+  // Baseline Most-Stable Cluster reference prices for items before live cacheVer === 8 refresh completes
   const VERIFIED_STABLE_REF_BY_NAME = {
     'enchant rune': 15415,
     'armor blueprint': 504167,
@@ -632,7 +704,12 @@ function createMarketSniperService({
     'profound gem shard': 4875000,
     'snowman card': 777220,
     'tidemark seal card': 249997,
-    'magma titan card': 277770
+    'magma titan card': 277770,
+    'hydra card': 1554848,
+    'controlled destruction stone (common)': 27000000,
+    'treant card': 2205926,
+    'wild boar card': 2400000,
+    'runic silk': 12778
   };
 
   function getTrueRefUnitPrice(itemId, refine, itemName, fallbackRef = 0) {
@@ -651,8 +728,25 @@ function createMarketSniperService({
     return Number(fallbackRef) || 0;
   }
 
+  function extractOriginalListedUnitFromNote(note, qty = 1) {
+    const s = String(note || '');
+    if (!s) return 0;
+    const perUnitMatch = s.match(/@\s*([\d,]+)\s*z\/ชิ้น/);
+    if (perUnitMatch && perUnitMatch[1]) {
+      const u = Number(perUnitMatch[1].replace(/,/g, '')) || 0;
+      if (u > 0) return u;
+    }
+    const totalMatch = s.match(/ตั้งขายกลับ\s+([\d,]+)\s*z/);
+    if (totalMatch && totalMatch[1]) {
+      const tot = Number(totalMatch[1].replace(/,/g, '')) || 0;
+      if (tot > 0) return Math.max(1, Math.round(tot / Math.max(1, Number(qty) || 1)));
+    }
+    return 0;
+  }
+
   function sanitizeHistoricalState() {
     let changed = false;
+    const nowTs = Date.now();
     if (state.priceCache && typeof state.priceCache === 'object') {
       for (const [k, entry] of Object.entries(state.priceCache)) {
         if (!entry || entry.cacheVer !== PRICE_CACHE_VER || isNpcVendorTrashItem(entry)) {
@@ -676,6 +770,17 @@ function createMarketSniperService({
       const beforeLen = state.history.length;
       state.history = state.history.filter(h => h && !isNpcVendorTrashItem(h));
       if (state.history.length !== beforeLen) changed = true;
+      for (const h of state.history) {
+        if (!h) continue;
+        if ((h.action === 'bid' || h.action === 'rebid') && h.at && (nowTs - Number(h.at) > 10 * 60 * 1000)) {
+          const activeMatch = (state.activeBids || []).find(b => b && Number(b.listingId) === Number(h.listingId));
+          if (!activeMatch || activeMatch.status === 'outbid_stopped') {
+            h.action = 'outbid_refund';
+            h.note = 'หมดเวลาประมูล 5 นาที -> โดนปาดเกินเพดาน & รับเงินคืนเรียบร้อย';
+            changed = true;
+          }
+        }
+      }
     }
 
     const fixRecordValuation = (rec, isHistory) => {
@@ -685,11 +790,37 @@ function createMarketSniperService({
       const qty = Math.max(1, Number(rec.qty) || 1);
       const buyTotal = Number(isHistory ? rec.buyPriceTotal : rec.currentBid) || 0;
       const buyUnit = Math.round(buyTotal / qty);
+      const minBreakEvenUnit = buyUnit > 0 ? Math.ceil(buyUnit / 0.96) : 0;
       const oldRef = Number(rec.cleanRefUnitPrice) || 0;
-      const listedUnit = Number(isHistory ? rec.relistUnitPrice : rec.flipUnitPrice) || oldRef || trueRef;
 
-      // Preserve the actual price it was listed at (`listedUnitPrice`) so we can flag overpriced stock,
-      // while updating `cleanRefUnitPrice` and `realisticNetProfit` to the true stable 10-20 trade average.
+      if (isHistory) {
+        const origFromNote = extractOriginalListedUnitFromNote(rec.note, qty);
+        if (origFromNote > 0 && rec.initialListedUnitPrice !== origFromNote) {
+          rec.initialListedUnitPrice = origFromNote;
+          changed = true;
+        }
+        // Restore history records whose relistUnitPrice was mistakenly overwritten below cost or on old already-sold lots
+        const curRelistU = Number(rec.relistUnitPrice) || 0;
+        const restoreTarget = origFromNote > 0 ? origFromNote : Math.max(curRelistU, minBreakEvenUnit, trueRef);
+        const isOldLot = rec.at && (nowTs - Number(rec.at) > 12 * 3600 * 1000);
+        if (restoreTarget > 0 && ((minBreakEvenUnit > 0 && curRelistU > 0 && curRelistU < minBreakEvenUnit && restoreTarget >= minBreakEvenUnit) || (isOldLot && origFromNote > 0 && curRelistU !== origFromNote))) {
+          rec.relistUnitPrice = restoreTarget;
+          rec.listedUnitPrice = restoreTarget;
+          rec.relistPriceTotal = restoreTarget * qty;
+          changed = true;
+        }
+      } else {
+        const curFlipU = Number(rec.flipUnitPrice) || 0;
+        const safeFloorU = Math.max(minBreakEvenUnit, trueRef);
+        if (minBreakEvenUnit > 0 && curFlipU > 0 && curFlipU < minBreakEvenUnit) {
+          rec.flipUnitPrice = safeFloorU;
+          rec.listedUnitPrice = safeFloorU;
+          rec.relistedPrice = safeFloorU * qty;
+          changed = true;
+        }
+      }
+
+      const listedUnit = Number(isHistory ? rec.relistUnitPrice : rec.flipUnitPrice) || oldRef || trueRef;
       if (!rec.listedUnitPrice && listedUnit > 0) {
         rec.listedUnitPrice = listedUnit;
       }
@@ -699,7 +830,7 @@ function createMarketSniperService({
       rec.realisticUnitPrice = trueRef;
       rec.realisticNetProfit = realisticProfit;
 
-      if (oldRef > Math.round(trueRef * 1.25)) {
+      if (oldRef > Math.round(trueRef * 1.25) || (oldRef > 0 && oldRef < Math.round(trueRef * 0.75))) {
         rec.cleanRefUnitPrice = trueRef;
         rec.expectedNetProfit = realisticProfit;
         if (!isHistory) {
@@ -845,8 +976,8 @@ function createMarketSniperService({
         if (u >= 1800) return { batchQty: 50, maxConcurrent: 3, isSingle: false };
         return { batchQty: 100, maxConcurrent: 3, isSingle: false };
       };
-      if (window.__pmSniperRuntimeVer !== 2 || typeof window.__pmSniperClaimAndFlip !== 'function') {
-        window.__pmSniperRuntimeVer = 2;
+      if (window.__pmSniperRuntimeVer !== 3 || typeof window.__pmSniperClaimAndFlip !== 'function') {
+        window.__pmSniperRuntimeVer = 3;
         window.__pmSniperClaimAndFlip = async function (targetInfo, paidTotal, waitBeforeCollectMs = 750) {
           const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
           if (!room || !room.connection || !room.connection.isOpen) {
@@ -895,15 +1026,20 @@ function createMarketSniperService({
           }
 
           const paidUnitCost = Math.floor((Number(paidTotal) || 0) / expectedLotQty);
-          let unitPrice = Math.max(1, Number(targetInfo.flipUnitPrice) || Math.round((Number(targetInfo.relistPriceTotal) || 0) / expectedLotQty));
+          const minProfitableUnitPrice = paidUnitCost > 0 ? Math.ceil((paidUnitCost * 1.02) / 0.96) : 1;
+          let unitPrice = Math.max(
+            minProfitableUnitPrice,
+            Number(targetInfo.flipUnitPrice) || Math.round((Number(targetInfo.relistPriceTotal) || 0) / expectedLotQty) || 1
+          );
 
-          if (foundInBag && targetInfo.autoFlip && unitPrice > paidUnitCost) {
+          if (foundInBag && targetInfo.autoFlip && unitPrice >= minProfitableUnitPrice) {
             const totalWantedQty = targetInfo.isRestock ? totalBagQty : Math.min(expectedLotQty, totalBagQty);
             if (!targetInfo.skipSmartPriceFetch && typeof window.fetchItemSmartSellPrice === 'function' && initialCandidates[0]) {
               try {
                 const rawSmart = await window.fetchItemSmartSellPrice(initialCandidates[0]);
                 const liveSmart = Number((rawSmart && typeof rawSmart === 'object') ? rawSmart.unitPrice : rawSmart) || 0;
-                if (liveSmart > paidUnitCost && liveSmart >= Math.round(unitPrice * 0.55) && liveSmart <= Math.round(unitPrice * 1.15)) {
+                const minSmartAllowed = Math.max(minProfitableUnitPrice, Math.round(unitPrice * 0.88));
+                if (liveSmart >= minSmartAllowed && liveSmart <= Math.round(unitPrice * 1.15)) {
                   unitPrice = liveSmart;
                 }
               } catch (_) {}
@@ -941,7 +1077,7 @@ function createMarketSniperService({
             if (listingsToPost === 0 && sameActiveCount >= maxConcurrent) {
               // Already has maxConcurrent batches active on market; remaining units stay protected in bag for drip restock
               relisted = true;
-            } else if (listingsToPost > 0 && totalWantedQty > 0 && unitPrice > paidUnitCost && (curZeny === 0 || curZeny >= totalDepositFee)) {
+            } else if (listingsToPost > 0 && totalWantedQty > 0 && unitPrice >= minProfitableUnitPrice && (curZeny === 0 || curZeny >= totalDepositFee)) {
               const freeSlotsNow = Math.max(0, maxSlots - activeList.length);
               const needEvictCount = Math.max(0, listingsToPost - freeSlotsNow);
 
@@ -955,6 +1091,7 @@ function createMarketSniperService({
                 if (toEvict.length > 0) {
                   if (!window.__pmSniperEvictedItemNames) window.__pmSniperEvictedItemNames = new Set();
                   if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
+                  if (!window.__pmSeenCancelledClosedIds) window.__pmSeenCancelledClosedIds = new Set();
                   const evictedNames = [];
                   let firstEvictPrice = 0;
                   for (const targetEvict of toEvict) {
@@ -965,6 +1102,7 @@ function createMarketSniperService({
                     evictedNames.push(evName);
                     window.__pmSniperEvictedItemNames.add(evNorm);
                     window.__autoSellRuleBackoffUntil[evNorm] = Date.now() + 30 * 60 * 1000;
+                    window.__pmSeenCancelledClosedIds.add(Number(targetEvict.listingId));
                     try { room.send('market', { op: 'cancel', listingId: Number(targetEvict.listingId) }); } catch (_) {}
                     await new Promise(r => setTimeout(r, 320));
                   }
@@ -1071,21 +1209,35 @@ function createMarketSniperService({
         const reserveSlots = sniperAutoFlip ? 2 : 0;
 
         // Build map ONLY of items actually bought/relisted by Sniper (never all scanned items in state.priceCache!)
+        // and enforce break-even floor (buyUnit / 0.96) from the newest lot of each item so background hooks never reprice below cost.
         const sniperFlippedMap = Object.assign({}, VERIFIED_STABLE_REF_BY_NAME);
-        for (const h of (state.history || [])) {
+        const sniperMinFloorMap = {};
+        for (const h of (state.history || []).slice().reverse()) {
           if (!h || !h.itemName) continue;
           if (h.action === 'relisted' || h.action === 'buy' || h.action === 'won') {
             const nm = String(h.itemName).trim().toLowerCase();
+            if (!nm) continue;
+            const q = Math.max(1, Number(h.qty) || 1);
+            const buyU = Math.round((Number(h.buyPriceTotal) || 0) / q);
+            const floorU = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
+            if (floorU > 0) sniperMinFloorMap[nm] = floorU;
             const refP = getTrueRefUnitPrice(h.itemId, h.refine || 0, h.itemName, h.cleanRefUnitPrice);
-            if (nm && refP > 0) sniperFlippedMap[nm] = refP;
+            const safeRef = Math.max(refP, floorU);
+            if (safeRef > 0) sniperFlippedMap[nm] = safeRef;
           }
         }
         for (const b of (state.activeBids || [])) {
           if (!b || !b.itemName) continue;
           if (b.status === 'relisted' || b.status === 'queued_flip' || b.status === 'won' || b.status === 'bought') {
             const nm = String(b.itemName).trim().toLowerCase();
+            if (!nm) continue;
+            const q = Math.max(1, Number(b.qty) || 1);
+            const buyU = Math.round((Number(b.currentBid) || 0) / q);
+            const floorU = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
+            if (floorU > 0) sniperMinFloorMap[nm] = floorU;
             const refP = getTrueRefUnitPrice(b.itemId, b.refine || 0, b.itemName, b.cleanRefUnitPrice);
-            if (nm && refP > 0) sniperFlippedMap[nm] = refP;
+            const safeRef = Math.max(refP, floorU);
+            if (safeRef > 0) sniperFlippedMap[nm] = safeRef;
           }
         }
 
@@ -1125,7 +1277,8 @@ function createMarketSniperService({
                     }).length;
                     const nameCounts = {};
                     const idCounts = {};
-                    for (const a of nonAuction) {
+                    for (const a of msg.active) {
+                      if (!a) continue;
                       const nm = String((a.item && a.item.name) || '').trim().toLowerCase();
                       const iid = Number(a.item && (a.item.itemId ?? a.item.id)) || 0;
                       if (nm) nameCounts[nm] = (nameCounts[nm] || 0) + 1;
@@ -1201,18 +1354,20 @@ function createMarketSniperService({
           const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
           if (!room || !room.connection || !room.connection.isOpen) return { connected: false };
           const verifiedFlipMap = ${JSON.stringify(sniperFlippedMap)};
+          const minFloorMap = ${JSON.stringify(sniperMinFloorMap)};
           window.__pmSniperFlippedItems = verifiedFlipMap;
+          window.__pmSniperMinFloorItems = minFloorMap;
           if (window.__pmKnownMyMarketItems && typeof window.__pmKnownMyMarketItems === 'object') {
             for (const [k, v] of Object.entries(window.__pmKnownMyMarketItems)) {
               const refCap = verifiedFlipMap[k];
               if (refCap && v && Number(v.unitPrice) > Math.round(refCap * 1.30)) {
-                v.unitPrice = refCap;
+                v.unitPrice = Math.max(refCap, Number(minFloorMap[k]) || 0);
               }
             }
           }
           const runtimeInstalled = Boolean(
-            window.__pmMarketGlobalTimerVer === 7 &&
-            window.__pmSniperRuntimeVer === 2 &&
+            window.__pmMarketGlobalTimerVer === 8 &&
+            window.__pmSniperRuntimeVer === 3 &&
             typeof window.__pmSniperClaimAndFlip === 'function' &&
             window.__pmSniperMineHookedRoomV3 === room &&
             window.__pmSniperSendGuardRoomV2 === room
@@ -1334,7 +1489,7 @@ function createMarketSniperService({
               : { batchQty: isCardOrStone ? 1 : (refUnit >= 20000 ? 10 : (refUnit >= 8000 ? 25 : (refUnit >= 1800 ? 50 : 100))), maxConcurrent: isCardOrStone ? 2 : 3 };
             if ((isCardOrStone && q > 1) || (isFlippedItem && q > Math.ceil(bCfg.batchQty * 1.35))) {
               const safeUnitP = (verifiedFlipMap[nmLower] && unitP > Math.round(verifiedFlipMap[nmLower] * 1.25))
-                ? verifiedFlipMap[nmLower]
+                ? Math.max(verifiedFlipMap[nmLower], Number(minFloorMap[nmLower]) || 0)
                 : unitP;
               stackedCards.push({
                 listingId: Number(a.listingId) || 0,
@@ -1351,12 +1506,12 @@ function createMarketSniperService({
           }
           window.__myMarketStackedCards = stackedCards;
 
-          // Collect unlocked bag items that match Sniper-flipped items so remaining split batches are protected & drip-restocked
+          // Collect bag items that match Sniper-flipped items so remaining split batches are protected & drip-restocked
           const bagByNorm = new Map();
           const bagItemsArr = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
           if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
           for (const b of bagItemsArr) {
-            if (!b || b.locked) continue;
+            if (!b) continue;
             const nm = String(b.name || '').trim();
             const nmLower = nm.toLowerCase();
             if (!nmLower || !verifiedFlipMap[nmLower]) continue;
@@ -1370,10 +1525,13 @@ function createMarketSniperService({
                 itemId: bId,
                 refine: bRef,
                 qty: 0,
+                unlockedQty: 0,
                 unitPrice: Number(verifiedFlipMap[nmLower]) || 0
               });
             }
-            bagByNorm.get(nmLower).qty += q;
+            const entry = bagByNorm.get(nmLower);
+            entry.qty += q;
+            if (!b.locked) entry.unlockedQty += q;
             window.__pmSniperProtectedItems.add(nmLower);
           }
           const bagFlippedItems = Array.from(bagByNorm.values());
@@ -1782,18 +1940,35 @@ function createMarketSniperService({
           });
           room.send('market', { op: 'history', itemId: ${itemId}, refine: ${refine}, range });
         });
-        const fetchCheapestActives = () => new Promise(resolve => {
+        const fetchCheapestActives = async () => {
           const qName = ${JSON.stringify(itemName)};
-          if (!qName) return resolve(null);
-          let unsub;
-          const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2500);
-          unsub = room.onMessage('market_results', msg => {
-            clearTimeout(t);
-            if (unsub) unsub();
-            resolve(msg && Array.isArray(msg.listings) ? msg.listings : null);
-          });
-          room.send('market', { op: 'search', filters: { q: qName, sort: 'price_asc', page: 0 } });
-        });
+          if (!qName) return [];
+          const collected = [];
+          for (let pg = 0; pg < 3; pg++) {
+            const pageMsg = await new Promise(resolve => {
+              let unsub;
+              const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2200);
+              unsub = room.onMessage('market_results', msg => {
+                clearTimeout(t);
+                if (unsub) unsub();
+                resolve(msg || null);
+              });
+              room.send('market', { op: 'search', filters: { q: qName, sort: 'price_asc', page: pg } });
+            });
+            const list = (pageMsg && Array.isArray(pageMsg.listings)) ? pageMsg.listings : [];
+            for (const l of list) {
+              if (l && l.item && Number(l.item.itemId ?? l.item.id) === ${itemId} && (Number(l.item.refine) || 0) === ${refine}) {
+                collected.push(l);
+              }
+            }
+            const pageCount = Number(pageMsg && pageMsg.pageCount) || 0;
+            if (collected.length >= 6 || list.length < 20 || (pageCount > 0 && pg + 1 >= pageCount)) {
+              break;
+            }
+            await new Promise(r => setTimeout(r, 90));
+          }
+          return collected;
+        };
         const h24 = await fetchHist('24h');
         await new Promise(r => setTimeout(r, 120));
         const h7d = await fetchHist('7d');
@@ -2782,27 +2957,30 @@ function createMarketSniperService({
       if (config.mode === 'auto_flip') {
         const onlineScreens = await getOnlineScreenStates();
         const flippedByProfile = new Map();
-        const registerProfileFlip = (pid, itemName, itemId, refine, unitPrice) => {
+        const registerProfileFlip = (pid, itemName, itemId, refine, unitPrice, buyTotal = 0, lotQty = 1) => {
           const pKey = String(pid || '');
           const nm = String(itemName || '').trim().toLowerCase();
           if (!pKey || !nm) return;
           if (!flippedByProfile.has(pKey)) flippedByProfile.set(pKey, new Map());
+          const buyU = buyTotal > 0 ? Math.round(Number(buyTotal) / Math.max(1, Number(lotQty) || 1)) : 0;
+          const minFloor = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
           const trueRef = getTrueRefUnitPrice(itemId, refine || 0, itemName, unitPrice);
-          const safeU = (trueRef > 0 && Number(unitPrice) > Math.round(trueRef * 1.25))
+          const rawSafeU = (trueRef > 0 && Number(unitPrice) > Math.round(trueRef * 1.25))
             ? trueRef
             : (Number(unitPrice) || trueRef);
+          const safeU = Math.max(rawSafeU, minFloor);
           if (safeU > 0) {
             flippedByProfile.get(pKey).set(nm, safeU);
           }
         };
-        for (const h of (state.history || [])) {
+        for (const h of (state.history || []).slice().reverse()) {
           if (h && (h.action === 'relisted' || h.action === 'buy' || h.action === 'won')) {
-            registerProfileFlip(h.buyerProfileId, h.itemName, h.itemId, h.refine, h.relistUnitPrice || h.listedUnitPrice || h.cleanRefUnitPrice);
+            registerProfileFlip(h.buyerProfileId, h.itemName, h.itemId, h.refine, h.relistUnitPrice || h.listedUnitPrice || h.cleanRefUnitPrice, h.buyPriceTotal, h.qty);
           }
         }
         for (const b of (state.activeBids || [])) {
           if (b && (b.status === 'relisted' || b.status === 'queued_flip' || b.status === 'won' || b.status === 'bought')) {
-            registerProfileFlip(b.buyerProfileId, b.itemName, b.itemId, b.refine, b.flipUnitPrice || b.listedUnitPrice || b.cleanRefUnitPrice);
+            registerProfileFlip(b.buyerProfileId, b.itemName, b.itemId, b.refine, b.flipUnitPrice || b.listedUnitPrice || b.cleanRefUnitPrice, b.currentBid, b.qty);
           }
         }
 
@@ -2822,6 +3000,7 @@ function createMarketSniperService({
               const maxConcurrent = Math.max(1, Number(st.maxConcurrent) || (batchQty === 1 ? 2 : 3));
               if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
               if (norm) window.__pmSniperProtectedItems.add(norm);
+              if (!window.__pmSeenCancelledClosedIds) window.__pmSeenCancelledClosedIds = new Set();
 
               // Query live active listings so we know how many slots are free and can evict cheap (<= 50k z) filler items if needed
               const mineMsg = await new Promise(resolve => {
@@ -2833,12 +3012,13 @@ function createMarketSniperService({
               const activeList = (mineMsg && Array.isArray(mineMsg.active)) ? mineMsg.active : [];
               const nowTs = Date.now();
               const otherSameActive = activeList.filter(a => a && Number(a.listingId) !== Number(st.listingId) && String((a.item && a.item.name) || '').trim().toLowerCase() === norm).length;
-              const toPostCount = Math.max(1, Math.min(Math.max(1, maxConcurrent - otherSameActive), Math.ceil((Number(st.qty) || 1) / batchQty)));
+              const toPostCount = Math.max(0, Math.min(Math.max(0, maxConcurrent - otherSameActive), Math.ceil((Number(st.qty) || 1) / batchQty)));
               const cheapEvictable = activeList
                 .filter(a => a && Number(a.listingId) !== Number(st.listingId) && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs) && Number(a.price) > 0 && Number(a.price) <= 50000)
                 .sort((a, b) => (Number(a.price) || 0) - (Number(b.price) || 0));
 
               // Cancel the oversized stack listing first
+              window.__pmSeenCancelledClosedIds.add(Number(st.listingId));
               try { room.send('market', { op: 'cancel', listingId: Number(st.listingId) }); } catch (_) {}
               await new Promise(r => setTimeout(r, 380));
 
@@ -2852,6 +3032,7 @@ function createMarketSniperService({
                 evictedNames.push(ceName);
                 window.__pmSniperEvictedItemNames.add(ceNorm);
                 window.__autoSellRuleBackoffUntil[ceNorm] = Date.now() + 30 * 60 * 1000;
+                window.__pmSeenCancelledClosedIds.add(Number(ce.listingId));
                 try { room.send('market', { op: 'cancel', listingId: Number(ce.listingId) }); } catch (_) {}
                 await new Promise(r => setTimeout(r, 320));
               }
@@ -2923,7 +3104,8 @@ function createMarketSniperService({
               if (!flipUnit || flipUnit <= 0) continue;
               const bCfg = getSmartFlipBatchConfig(bagItem.nameLower, flipUnit, isSingleUnitFlipItem(bagItem.name));
               const minRestockQty = bCfg.batchQty === 1 ? 1 : Math.min(10, Math.max(2, Math.floor(bCfg.batchQty * 0.2)));
-              if ((Number(bagItem.qty) || 0) < minRestockQty) continue;
+              const unlockedBagQty = Number(bagItem.unlockedQty !== undefined ? bagItem.unlockedQty : bagItem.qty) || 0;
+              if (unlockedBagQty < minRestockQty) continue;
 
               const curActiveSame = (scr.myActiveListings || []).filter(
                 a => a && String(a.name || '').trim().toLowerCase() === bagItem.nameLower
@@ -2939,12 +3121,12 @@ function createMarketSniperService({
                   itemId: ${Number(bagItem.itemId) || 0},
                   refine: ${Number(bagItem.refine) || 0},
                   itemName: ${JSON.stringify(bagItem.name || '')},
-                  qty: ${Number(bagItem.qty) || 1},
+                  qty: ${unlockedBagQty},
                   singleUnit: ${Boolean(bCfg.isSingle)},
                   batchQty: ${Number(bCfg.batchQty)},
                   maxConcurrent: ${Number(bCfg.maxConcurrent)},
                   flipUnitPrice: ${Number(flipUnit)},
-                  relistPriceTotal: ${Number(flipUnit) * Math.max(1, Number(bagItem.qty) || 1)},
+                  relistPriceTotal: ${Number(flipUnit) * Math.max(1, unlockedBagQty)},
                   relistDurationHours: ${Number(config.relistDurationHours) || 24},
                   autoFlip: true,
                   isRestock: true,
@@ -2983,6 +3165,7 @@ function createMarketSniperService({
 
               if (!window.__pmSniperEvictedItemNames) window.__pmSniperEvictedItemNames = new Set();
               if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
+              if (!window.__pmSeenCancelledClosedIds) window.__pmSeenCancelledClosedIds = new Set();
               const toCancel = cheapEvictable.slice(0, 3);
               const names = [];
               for (const ce of toCancel) {
@@ -2991,6 +3174,7 @@ function createMarketSniperService({
                 names.push(ceName + ' (' + Number(ce.price).toLocaleString() + ' z)');
                 window.__pmSniperEvictedItemNames.add(ceNorm);
                 window.__autoSellRuleBackoffUntil[ceNorm] = Date.now() + 30 * 60 * 1000;
+                window.__pmSeenCancelledClosedIds.add(Number(ce.listingId));
                 try { room.send('market', { op: 'cancel', listingId: Number(ce.listingId) }); } catch (_) {}
                 await new Promise(r => setTimeout(r, 320));
               }
@@ -3032,8 +3216,10 @@ function createMarketSniperService({
   //   2) 📦 ยังค้าง Stock (In Stock — ทุนยังจมอยู่ในตลาด/กระเป๋า + มูลค่าและกำไรตามราคาตลาดคงที่จริง)
   function buildStockAndProfitBreakdown(onlineScreens) {
     const ourCharNamesSet = new Set();
+    const onlineProfileIds = new Set();
     for (const scr of (onlineScreens || [])) {
       if (!scr) continue;
+      if (scr.profileId) onlineProfileIds.add(String(scr.profileId));
       if (scr.charName) ourCharNamesSet.add(String(scr.charName).trim().toLowerCase());
       if (scr.profileName) ourCharNamesSet.add(String(scr.profileName).trim().toLowerCase());
     }
@@ -3130,6 +3316,8 @@ function createMarketSniperService({
           buySumByName[nmLower] = (buySumByName[nmLower] || 0) + buyTot;
           buyQtyByName[nmLower] = (buyQtyByName[nmLower] || 0) + q;
         }
+        const origFromNote = extractOriginalListedUnitFromNote(h.note, q);
+        const listedU = Number(h.listedUnitPrice || h.relistUnitPrice || origFromNote || h.cleanRefUnitPrice) || 0;
         lotsMap.set(lid, {
           listingId: lid,
           itemId: Number(h.itemId) || 0,
@@ -3140,7 +3328,8 @@ function createMarketSniperService({
           icon: h.icon || null,
           buyPriceTotal: buyTot,
           buyUnitPrice: Math.max(1, Math.round(buyTot / q)),
-          listedUnitPrice: Number(h.listedUnitPrice || h.relistUnitPrice || h.cleanRefUnitPrice) || 0,
+          listedUnitPrice: listedU,
+          initialListedUnitPrice: Number(h.initialListedUnitPrice || origFromNote || listedU) || 0,
           buyerProfileId: String(h.buyerProfileId || ''),
           buyerCharName: String(h.buyerCharName || ''),
           status: h.action === 'relisted' ? 'relisted' : 'won',
@@ -3161,6 +3350,7 @@ function createMarketSniperService({
           buySumByName[nmLower] = (buySumByName[nmLower] || 0) + buyTot;
           buyQtyByName[nmLower] = (buyQtyByName[nmLower] || 0) + q;
         }
+        const listedU = Number(b.listedUnitPrice || b.flipUnitPrice || existing.listedUnitPrice || b.cleanRefUnitPrice) || 0;
         lotsMap.set(lid, {
           listingId: lid,
           itemId: Number(b.itemId || existing.itemId) || 0,
@@ -3171,7 +3361,8 @@ function createMarketSniperService({
           icon: b.icon || existing.icon || null,
           buyPriceTotal: buyTot,
           buyUnitPrice: Math.max(1, Math.round(buyTot / q)),
-          listedUnitPrice: Number(b.listedUnitPrice || b.flipUnitPrice || existing.listedUnitPrice || b.cleanRefUnitPrice) || 0,
+          listedUnitPrice: listedU,
+          initialListedUnitPrice: Number(existing.initialListedUnitPrice || listedU) || 0,
           buyerProfileId: String(b.buyerProfileId || existing.buyerProfileId || ''),
           buyerCharName: String(b.buyerCharName || existing.buyerCharName || ''),
           status: b.status,
@@ -3256,14 +3447,13 @@ function createMarketSniperService({
     };
 
     const lotsList = [];
+    const nowMs = Date.now();
 
     for (const lot of lots) {
       const trueRef = getTrueRefUnitPrice(lot.itemId, lot.refine, lot.itemName, lot.listedUnitPrice);
       const listedUnit = lot.listedUnitPrice || trueRef;
       const isOverpriced = trueRef > 0 && listedUnit > Math.round(trueRef * 1.25);
 
-      // Step A: Match against soldPool ONLY when there is a real closed sale on that character around or after the purchase time
-      // (Wait: check activePool first so items still sitting on the market are marked In Stock, EXCEPT if a unique item like Profound Gem Shard sold on that character!)
       let rem = lot.qty;
       let inStockUnits = 0;
       let activeMatchedUnitPrice = listedUnit;
@@ -3271,11 +3461,11 @@ function createMarketSniperService({
       let soldGross = 0;
       const matchedBuyers = [];
 
-      // If the buyer screen has a matching SOLD entry in `m.closed` with exact qty & unitPrice close to listedUnitPrice after lot.at - 10min, match that first!
+      // Step A: If the buyer screen has a matching SOLD entry in `m.closed` after lot.at - 10min, match that first
       for (const s of soldPool) {
         if (rem <= 0) break;
         if (s.remQty <= 0 || s.nameLower !== lot.nameLower) continue;
-        if (s.profileId === lot.buyerProfileId && Math.abs(s.unitPrice - listedUnit) <= Math.max(100, listedUnit * 0.10) && (!lot.at || !s.closedAt || s.closedAt >= lot.at - 600000)) {
+        if (s.profileId === lot.buyerProfileId && Math.abs(s.unitPrice - listedUnit) <= Math.max(100, listedUnit * 0.15) && (!lot.at || !s.closedAt || s.closedAt >= lot.at - 600000)) {
           const take = Math.min(rem, s.remQty);
           s.remQty -= take;
           rem -= take;
@@ -3285,16 +3475,12 @@ function createMarketSniperService({
         }
       }
 
-      // Step B: Match remaining units against activePool on the same buyerProfileId (or any screen with same listed price)
+      // Step B: Match remaining units against activePool on the SAME buyerProfileId first (so one character's lot never steals another character's active stock)
       if (rem > 0 && lot.status !== 'queued_flip') {
-        const candidates = activePool.filter(a => a.remQty > 0 && a.nameLower === lot.nameLower);
-        candidates.sort((a, b) => {
-          const sameProfA = a.profileId === lot.buyerProfileId ? 0 : 1;
-          const sameProfB = b.profileId === lot.buyerProfileId ? 0 : 1;
-          if (sameProfA !== sameProfB) return sameProfA - sameProfB;
-          return Math.abs(a.unitPrice - listedUnit) - Math.abs(b.unitPrice - listedUnit);
-        });
-        for (const a of candidates) {
+        const sameProfCandidates = activePool
+          .filter(a => a.remQty > 0 && a.nameLower === lot.nameLower && a.profileId === lot.buyerProfileId)
+          .sort((a, b) => Math.abs(a.unitPrice - listedUnit) - Math.abs(b.unitPrice - listedUnit));
+        for (const a of sameProfCandidates) {
           if (rem <= 0) break;
           const take = Math.min(rem, a.remQty);
           a.remQty -= take;
@@ -3316,12 +3502,12 @@ function createMarketSniperService({
         }
       }
 
-      // Step C: If still remaining units, check broader soldPool or classify based on whether it was overpriced
+      // Step C: Check broader soldPool on the same buyerProfileId (e.g. if the item was repriced before selling)
       if (rem > 0 && lot.status !== 'queued_flip') {
         for (const s of soldPool) {
           if (rem <= 0) break;
-          if (s.remQty <= 0 || s.nameLower !== lot.nameLower) continue;
-          if (!isOverpriced || Math.abs(s.unitPrice - listedUnit) <= Math.max(500, listedUnit * 0.15)) {
+          if (s.remQty <= 0 || s.nameLower !== lot.nameLower || s.profileId !== lot.buyerProfileId) continue;
+          if (!lot.at || !s.closedAt || s.closedAt >= lot.at - 600000) {
             const take = Math.min(rem, s.remQty);
             s.remQty -= take;
             rem -= take;
@@ -3332,13 +3518,22 @@ function createMarketSniperService({
         }
       }
 
+      // Step D: Remaining units not in activePool, bagPool, or soldPool
       if (rem > 0) {
-        if (lot.status === 'queued_flip' || isOverpriced) {
+        const buyerIsOnline = Boolean(lot.buyerProfileId && onlineProfileIds.has(lot.buyerProfileId));
+        const isOfflineRecentLot = !buyerIsOnline && lot.at && ((nowMs - lot.at) < 36 * 3600 * 1000);
+        if (lot.status === 'queued_flip' || isOverpriced || isOfflineRecentLot) {
           inStockUnits += rem;
           rem = 0;
         } else {
+          // Units that already sold earlier and scrolled off m.closed: value them at their original listed price (never below break-even cost)
+          const historicalSoldUnit = Math.max(
+            Number(lot.initialListedUnitPrice) || 0,
+            Number(listedUnit) || 0,
+            Math.ceil((Number(lot.buyUnitPrice) || 0) / 0.96)
+          );
           soldUnits += rem;
-          soldGross += listedUnit * rem;
+          soldGross += historicalSoldUnit * rem;
           rem = 0;
         }
       }
@@ -3429,10 +3624,11 @@ function createMarketSniperService({
       lotsList.push(lotState);
     }
 
-    // 3. Also include any remaining live active listings on our screens that were listed at Sniper's old inflated prices
-    // (e.g. Enchant Rune @ 66k-70k or Armor Blueprint @ 650k-800k that scrolled off the 200-item history buffer)
+    // 3. Also include any remaining live active listings on our screens ONLY for items actually bought by Sniper (in avgBuyUnitByName)
+    // that scrolled off the 200-item history buffer (never random farmed items like Griffin Cub Card!)
     for (const a of activePool) {
       if (a.remQty <= 0) continue;
+      if (!avgBuyUnitByName[a.nameLower] && a.nameLower !== 'enchant rune' && a.nameLower !== 'armor blueprint') continue;
       const trueRef = getTrueRefUnitPrice(a.itemId, a.refine, a.name, 0);
       if (trueRef <= 0) continue;
       const isOverpricedActive = a.unitPrice > Math.round(trueRef * 1.25);
@@ -3545,6 +3741,7 @@ function createMarketSniperService({
     let repricedUnitsCount = 0;
     let affectedScreensCount = 0;
     const details = [];
+    const repricedProfileItemKeys = new Set();
 
     for (const scr of (onlineScreens || [])) {
       if (!scr || !Array.isArray(scr.myActiveListings) || !scr.myActiveListings.length) continue;
@@ -3557,6 +3754,7 @@ function createMarketSniperService({
         if (trueRef <= 0) continue;
         if (a.unitPrice > Math.round(trueRef * 1.25)) {
           const newUnitPrice = Math.max(1, trueRef - undercut);
+          const bCfg = getSmartFlipBatchConfig(nmLower, newUnitPrice, isSingleUnitFlipItem(a.name));
           targetsOnScreen.push({
             listingId: Number(a.listingId),
             itemId: Number(a.itemId) || 0,
@@ -3566,7 +3764,9 @@ function createMarketSniperService({
             qty: Math.max(1, Number(a.qty) || 1),
             oldUnitPrice: a.unitPrice,
             newUnitPrice,
-            singleUnit: isSingleUnitFlipItem(a.name)
+            singleUnit: bCfg.isSingle,
+            batchQty: bCfg.batchQty,
+            maxConcurrent: bCfg.maxConcurrent
           });
         }
       }
@@ -3577,9 +3777,11 @@ function createMarketSniperService({
         if (!room || !room.connection || !room.connection.isOpen) return { ok: false };
         const targets = ${JSON.stringify(targetsOnScreen)};
         const hours = ${hours};
+        if (!window.__pmSeenCancelledClosedIds) window.__pmSeenCancelledClosedIds = new Set();
         let cancelled = 0;
         for (const t of targets) {
           try {
+            window.__pmSeenCancelledClosedIds.add(Number(t.listingId));
             room.send('market', { op: 'cancel', listingId: Number(t.listingId) });
             cancelled += 1;
           } catch (_) {}
@@ -3592,14 +3794,26 @@ function createMarketSniperService({
         }
         await new Promise(r => setTimeout(r, 350));
 
-        // Group wanted relist quantities by item name
+        // Group wanted relist quantities by item name and cap slots at maxConcurrent (remaining units stay in bag for drip-restock)
         const wantedByNorm = {};
         for (const t of targets) {
           if (!wantedByNorm[t.nameLower]) {
-            wantedByNorm[t.nameLower] = { name: t.name, nameLower: t.nameLower, newUnitPrice: t.newUnitPrice, singleUnit: t.singleUnit, totalQty: 0, listingsLimit: 0 };
+            wantedByNorm[t.nameLower] = {
+              name: t.name,
+              nameLower: t.nameLower,
+              newUnitPrice: t.newUnitPrice,
+              singleUnit: t.singleUnit,
+              batchQty: Math.max(1, Number(t.batchQty) || 1),
+              maxConcurrent: Math.max(1, Number(t.maxConcurrent) || (t.singleUnit ? 2 : 3)),
+              totalQty: 0,
+              listingsLimit: 0
+            };
           }
           wantedByNorm[t.nameLower].totalQty += t.qty;
-          wantedByNorm[t.nameLower].listingsLimit += 1;
+          wantedByNorm[t.nameLower].listingsLimit = Math.min(
+            wantedByNorm[t.nameLower].maxConcurrent,
+            wantedByNorm[t.nameLower].listingsLimit + 1
+          );
         }
 
         let relistedCount = 0;
@@ -3612,7 +3826,7 @@ function createMarketSniperService({
             const slotObj = bag.find(b => b && !b.locked && String(b.name || '').trim().toLowerCase() === grp.nameLower && (Number(b.qty) || 0) > 0);
             if (!slotObj) break;
             const slotQty = Number(slotObj.qty) || 1;
-            const postQty = grp.singleUnit ? 1 : Math.min(remQty, slotQty);
+            const postQty = grp.singleUnit ? 1 : Math.min(grp.batchQty, remQty, slotQty);
             const postPrice = grp.newUnitPrice * postQty;
             window.__pmExplicitHoursOnce = true;
             try {
@@ -3642,6 +3856,9 @@ function createMarketSniperService({
         affectedScreensCount += 1;
         repricedListingsCount += Number(r.result.relistedCount || r.result.cancelled) || 0;
         repricedUnitsCount += Number(r.result.relistedUnits) || 0;
+        for (const t of targetsOnScreen) {
+          repricedProfileItemKeys.add(`${String(scr.profileId || '')}::${t.nameLower}`);
+        }
         details.push({
           charName: scr.charName || scr.profileName,
           cancelled: r.result.cancelled,
@@ -3651,11 +3868,12 @@ function createMarketSniperService({
       }
     }
 
-    // Update listedUnitPrice / relistUnitPrice in state.activeBids and state.history
+    // Update listedUnitPrice / relistUnitPrice ONLY on active lots whose screen + item were actually repriced in this call
+    const nowRepriceTs = Date.now();
     for (const b of (state.activeBids || [])) {
       if (!b || !b.itemName) continue;
       const nm = String(b.itemName).trim().toLowerCase();
-      if (targetFilterNorm && nm !== targetFilterNorm) continue;
+      if (!repricedProfileItemKeys.has(`${String(b.buyerProfileId || '')}::${nm}`)) continue;
       const trueRef = getTrueRefUnitPrice(b.itemId, b.refine, b.itemName, 0);
       if (trueRef > 0 && Number(b.flipUnitPrice) > Math.round(trueRef * 1.25)) {
         const newU = Math.max(1, trueRef - undercut);
@@ -3667,16 +3885,22 @@ function createMarketSniperService({
     for (const h of (state.history || [])) {
       if (!h || !h.itemName) continue;
       const nm = String(h.itemName).trim().toLowerCase();
-      if (targetFilterNorm && nm !== targetFilterNorm) continue;
+      if (!repricedProfileItemKeys.has(`${String(h.buyerProfileId || '')}::${nm}`)) continue;
+      if (h.at && (nowRepriceTs - Number(h.at) > 12 * 3600 * 1000)) continue; // Never overwrite old already-sold lots
       const trueRef = getTrueRefUnitPrice(h.itemId, h.refine, h.itemName, 0);
       if (trueRef > 0 && Number(h.relistUnitPrice) > Math.round(trueRef * 1.25)) {
+        const q = Math.max(1, Number(h.qty) || 1);
+        if (!h.initialListedUnitPrice) {
+          h.initialListedUnitPrice = extractOriginalListedUnitFromNote(h.note, q) || Number(h.relistUnitPrice) || 0;
+        }
         const newU = Math.max(1, trueRef - undercut);
         h.relistUnitPrice = newU;
         h.listedUnitPrice = newU;
-        h.relistPriceTotal = newU * Math.max(1, Number(h.qty) || 1);
+        h.relistPriceTotal = newU * q;
       }
     }
     sanitizeHistoricalState();
+    savePersistedState(state);
     cachedOnlineScreensAt = 0; // Force fresh screen state on next status poll
 
     return {

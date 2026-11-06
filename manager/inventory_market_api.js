@@ -1425,8 +1425,13 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         let unitPrice = Math.max(1, Math.round(totalPrice / qty));
         const rawFlip = window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[normName];
         const flipRef = (rawFlip && typeof rawFlip === 'object') ? (Number(rawFlip.unitPrice || rawFlip.price) || 0) : (Number(rawFlip) || 0);
+        const sniperFloor = Number(window.__pmSniperMinFloorItems && window.__pmSniperMinFloorItems[normName]) ||
+          ((rawFlip && typeof rawFlip === 'object') ? (Number(rawFlip.minFloorUnitPrice) || 0) : 0);
         if (flipRef > 0 && unitPrice > flipRef * 1.15) {
-          unitPrice = flipRef;
+          unitPrice = Math.max(flipRef, sniperFloor);
+        }
+        if (sniperFloor > 0 && unitPrice < sniperFloor) {
+          unitPrice = sniperFloor;
         }
         const itemId = Number((itemObj && (itemObj.itemId ?? itemObj.id)) ?? entry.itemId) || 0;
         const refine = Number((itemObj && itemObj.refine) ?? entry.refine) || 0;
@@ -1522,8 +1527,13 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
         let prevUnitPrice = totalPrice > 0 ? Math.max(1, Math.round(totalPrice / qty)) : 0;
         const rawFlip = window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[normName];
         const flipRef = (rawFlip && typeof rawFlip === 'object') ? (Number(rawFlip.unitPrice || rawFlip.price) || 0) : (Number(rawFlip) || 0);
+        const sniperFloor = Number(window.__pmSniperMinFloorItems && window.__pmSniperMinFloorItems[normName]) ||
+          ((rawFlip && typeof rawFlip === 'object') ? (Number(rawFlip.minFloorUnitPrice) || 0) : 0);
         if (flipRef > 0 && prevUnitPrice > flipRef * 1.15) {
-          prevUnitPrice = flipRef;
+          prevUnitPrice = Math.max(flipRef, sniperFloor);
+        }
+        if (sniperFloor > 0 && prevUnitPrice > 0 && prevUnitPrice < sniperFloor) {
+          prevUnitPrice = sniperFloor;
         }
 
         if (window.__pmSniperBlockCheapAutoSell && totalPrice > 0 && totalPrice <= 50000) continue;
@@ -1683,13 +1693,18 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
           }
           const rawSniperRef = window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[entry.normName];
           const sniperRef = typeof rawSniperRef === 'object' && rawSniperRef ? (Number(rawSniperRef.unitPrice || rawSniperRef.price) || 0) : (Number(rawSniperRef) || 0);
+          const sniperFloor = Number(window.__pmSniperMinFloorItems && window.__pmSniperMinFloorItems[entry.normName]) ||
+            ((typeof rawSniperRef === 'object' && rawSniperRef) ? (Number(rawSniperRef.minFloorUnitPrice) || 0) : 0);
           const knownRef = (window.__pmKnownMyMarketItems && window.__pmKnownMyMarketItems[entry.normName] && Number(window.__pmKnownMyMarketItems[entry.normName].unitPrice)) || 0;
           if (sniperRef > 0 && unitPrice > sniperRef * 1.15) {
-            unitPrice = sniperRef;
+            unitPrice = Math.max(sniperRef, sniperFloor);
           }
-          const fallbackUnit = sniperRef > 0 ? sniperRef : Math.max(Number(entry.prevUnitPrice) || 0, knownRef);
+          const fallbackUnit = sniperRef > 0 ? Math.max(sniperRef, sniperFloor) : Math.max(Number(entry.prevUnitPrice) || 0, knownRef, sniperFloor);
           if (!(unitPrice > 0) && fallbackUnit > 0) {
             unitPrice = fallbackUnit;
+          }
+          if (sniperFloor > 0 && unitPrice > 0 && unitPrice < sniperFloor) {
+            unitPrice = sniperFloor;
           }
 
           if (!(unitPrice > 0)) {
@@ -1705,16 +1720,26 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
             a => a && String((a.item && a.item.name) || '').trim().toLowerCase() === entry.normName
           ).length;
 
-          const postsWanted = isSingle
-            ? Math.min(Math.max(0, 2 - activeSameCount), sellableTotal)
-            : 1;
-
-          if (isSingle && postsWanted <= 0) {
-            // Already has 2 active single-unit listings on market; Auto-Sell rule will list remaining as they sell
+          const maxConcurrent = isSingle ? 2 : 3;
+          // If Sniper already manages this flipped item and at least 1 active batch is up, or if activeSameCount >= maxConcurrent,
+          // do NOT post duplicate batches from the cancelled-relist queue (Sniper's 3b drip-restock handles remaining stock).
+          if (activeSameCount >= maxConcurrent || (!isSingle && sniperRef > 0 && activeSameCount >= 1)) {
             continue;
           }
 
-          const firstSlotQty = Math.min(Number(sampleItem.qty) || 1, sellableTotal);
+          const smartBatchCap = isSingle
+            ? 1
+            : (unitPrice >= 20000 ? 10 : (unitPrice >= 8000 ? 25 : (unitPrice >= 1800 ? 50 : 100)));
+
+          const postsWanted = isSingle
+            ? Math.min(Math.max(0, maxConcurrent - activeSameCount), sellableTotal)
+            : 1;
+
+          if (postsWanted <= 0) {
+            continue;
+          }
+
+          const firstSlotQty = Math.min(Number(sampleItem.qty) || 1, sellableTotal, smartBatchCap);
           const estTotalValue = unitPrice * (isSingle ? 1 : firstSlotQty);
           if (estTotalValue <= 50000 && (window.__pmSniperBlockCheapAutoSell || !entry.listingId)) {
             if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
@@ -1751,6 +1776,7 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
           }
 
           let postedAnyForEntry = false;
+          let postedCountForEntry = 0;
           for (let pIdx = 0; pIdx < postsWanted; pIdx++) {
             if (activeList.length >= activeLimit) break;
             const freshBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
@@ -1764,7 +1790,7 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
             });
             if (!freshSlot) break;
             const beforeQty = Number(freshSlot.qty) || 1;
-            const qtyThisPost = isSingle ? 1 : Math.min(beforeQty, sellableTotal);
+            const qtyThisPost = isSingle ? 1 : Math.min(beforeQty, sellableTotal, smartBatchCap);
             if (qtyThisPost <= 0) break;
             const priceThisPost = unitPrice * qtyThisPost;
 
@@ -1790,6 +1816,7 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
               if (leftQty <= beforeQty - qtyThisPost) {
                 postedOne = true;
                 postedAnyForEntry = true;
+                postedCountForEntry += 1;
                 relistedCount += 1;
                 activeList.push({
                   listingId: -Date.now(),
@@ -1817,8 +1844,8 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
             window.__pmAutoRelistCooldownUntil[entry.normName] = Date.now() + 60000;
             remainingQueue.push(entry);
           } else {
-            // Check if there are still remaining non-single stacks in bag to list
-            if (!isSingle) {
+            // Only keep non-single entry in relist queue if it is NOT a Sniper-managed item AND has fewer than maxConcurrent active batches
+            if (!isSingle && !(sniperRef > 0) && (activeSameCount + postedCountForEntry) < maxConcurrent) {
               const afterBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
               const leftTotal = afterBag
                 .filter(b => b && !b.locked && !b.equipped && String(b.name || '').trim().toLowerCase() === entry.normName && Number(b.refine || (b.raw && b.raw.refine) || 0) === Number(entry.refine || 0))
@@ -1853,9 +1880,9 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       return { relistedCount };
     };
 
-    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 7) {
+    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 8) {
       if (window.__pmMarketGlobalTimer) { try { clearInterval(window.__pmMarketGlobalTimer); } catch (_) {} }
-      window.__pmMarketGlobalTimerVer = 7;
+      window.__pmMarketGlobalTimerVer = 8;
       setTimeout(() => {
         try {
           const rmInit = ${ROOM_JS};

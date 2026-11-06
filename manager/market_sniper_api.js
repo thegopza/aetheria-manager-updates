@@ -3543,7 +3543,7 @@ function createMarketSniperService({
       if (rem > 0) {
         const buyerIsOnline = Boolean(lot.buyerProfileId && onlineProfileIds.has(lot.buyerProfileId));
         const isOfflineRecentLot = !buyerIsOnline && lot.at && ((nowMs - lot.at) < 36 * 3600 * 1000);
-        if (lot.status === 'queued_flip' || isOverpriced || isOfflineRecentLot) {
+        if (lot.status === 'queued_flip' || isOfflineRecentLot) {
           inStockUnits += rem;
           rem = 0;
         } else {

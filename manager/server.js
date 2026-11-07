@@ -1446,9 +1446,9 @@ const LIVE_STATE_EVAL = `(() => {
 
       const rawMetaStr = (metaEl ? (metaEl.innerText || '').trim() : '');
       const fallbackHcStr = (typeof hc.innerText === 'string' ? hc.innerText : (typeof hc.textContent === 'string' ? hc.textContent : '')) || '';
-      const resolvedMetaStr = /ตอบผิดได้อีก\s*\d+/.test(rawMetaStr)
+      const resolvedMetaStr = /ตอบผิดได้อีก\\s*\\d+/.test(rawMetaStr)
         ? rawMetaStr
-        : ((fallbackHcStr.match(/[^\n]*ตอบผิดได้อีก\s*\d+[^\n]*/)?.[0] || '').trim() || rawMetaStr);
+        : ((fallbackHcStr.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMetaStr);
 
       s.humanCheck = {
         active: true,
@@ -1476,8 +1476,8 @@ const LIVE_STATE_EVAL = `(() => {
       const elapsedS = Date.now() - (sLast.timestamp || 0);
       const rawMetaS = (hc.querySelector('.human-check-meta')?.innerText || '').trim();
       const fallbackS = (typeof hc.innerText === 'string' ? hc.innerText : '') || '';
-      const curMetaS = /ตอบผิดได้อีก\s*\d+/.test(rawMetaS) ? rawMetaS : ((fallbackS.match(/[^\n]*ตอบผิดได้อีก\s*\d+[^\n]*/)?.[0] || '').trim() || rawMetaS);
-      const curTriesMatchS = curMetaS.match(/ตอบผิดได้อีก\s*(\d+)/);
+      const curMetaS = /ตอบผิดได้อีก\\s*\\d+/.test(rawMetaS) ? rawMetaS : ((fallbackS.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMetaS);
+      const curTriesMatchS = curMetaS.match(/ตอบผิดได้อีก\\s*(\\d+)/);
       const curTriesS = curTriesMatchS ? Number(curTriesMatchS[1]) : null;
       const triesBeforeS = sLast.triesLeftBefore != null ? sLast.triesLeftBefore : ((curTriesS != null && curTriesS <= 2) ? 3 : 1);
       if (curTriesS != null && curTriesS >= triesBeforeS && elapsedS < 5800) {
@@ -1508,8 +1508,8 @@ const LIVE_STATE_EVAL = `(() => {
       const stillPending = [];
       const rawMetaQ = hc ? ((hc.querySelector('.human-check-meta')?.innerText || '').trim()) : '';
       const fallbackQ = hc ? ((typeof hc.innerText === 'string' ? hc.innerText : '') || '') : '';
-      const curMeta = /ตอบผิดได้อีก\s*\d+/.test(rawMetaQ) ? rawMetaQ : ((fallbackQ.match(/[^\n]*ตอบผิดได้อีก\s*\d+[^\n]*/)?.[0] || '').trim() || rawMetaQ);
-      const curTriesMatch = curMeta.match(/ตอบผิดได้อีก\s*(\d+)/);
+      const curMeta = /ตอบผิดได้อีก\\s*\\d+/.test(rawMetaQ) ? rawMetaQ : ((fallbackQ.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMetaQ);
+      const curTriesMatch = curMeta.match(/ตอบผิดได้อีก\\s*(\\d+)/);
       const curTriesLeft = curTriesMatch ? Number(curTriesMatch[1]) : null;
       for (const att of window.__pmWrongHumanCheckQueue) {
         if (!att) continue;

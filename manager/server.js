@@ -1260,41 +1260,58 @@ const LIVE_STATE_EVAL = `(() => {
       }
       const promptEl = hc.querySelector('.human-check-prompt');
       const metaEl = hc.querySelector('.human-check-meta');
+      const promptStr = (promptEl ? (promptEl.innerText || '').trim() : '') || (window.__latestHumanCheck?.prompt || '');
+      const isCountChallenge = /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(promptStr);
       const btns = Array.from(hc.querySelectorAll('.human-check-pick'));
+      const numBtns = isCountChallenge
+        ? Array.from(hc.querySelectorAll('button')).filter(b => /^[1-6]$/.test((b.textContent || b.innerText || '').trim()))
+        : [];
+      const countValues = isCountChallenge
+        ? (numBtns.length > 0 ? numBtns.map((b, idx) => Number((b.textContent || b.innerText || '').trim()) || (idx + 1)) : [1, 2, 3, 4, 5, 6])
+        : null;
       const boardEl = hc.querySelector('.human-check-board') || hc.querySelector('.human-check-dial');
       const boardImg = boardEl ? boardEl.querySelector('img') : null;
       const isBoard = Boolean(boardEl || boardImg || (window.__latestHumanCheck && window.__latestHumanCheck.image));
       const isUpdatedFormat = Boolean(window.__humanCheckFormatUpdated || (!isBoard && (!Array.isArray(window.__latestHumanCheck?.items) || !window.__latestHumanCheck.items.length)));
 
-      const options = btns.length > 0
-        ? btns.map((b, i) => {
-            const img = b.querySelector('img');
-            let icon = img ? (img.getAttribute('src') || img.src || '') : '';
-            let itemId = (window.__latestHumanCheck && window.__latestHumanCheck.items) ? window.__latestHumanCheck.items[i] : null;
-            if (itemId == null) {
-              try {
-                const fk = Object.keys(b).find(k => k.startsWith('__reactFiber'));
-                if (fk && b[fk]) {
-                  const cp = b[fk].child?.memoizedProps;
-                  if (cp && cp.itemId != null) itemId = Number(cp.itemId);
-                }
-              } catch (e) {}
-            }
-            return {
-              index: i,
-              label: b.getAttribute('aria-label') || ('ตัวเลือกที่ ' + (i + 1)),
-              icon,
-              itemId: itemId != null ? itemId : null
-            };
-          })
-        : (isBoard
-          ? [0, 1, 2, 3].map(i => ({
-              index: i,
-              label: 'ตัวเลือกที่ ' + (i + 1),
-              icon: '',
-              itemId: null
-            }))
-          : []);
+      const options = isCountChallenge
+        ? countValues.map((cnt, i) => ({
+            index: i,
+            count: cnt,
+            label: 'คำตอบ ' + (i + 1) + ' (' + cnt + ' อัน)',
+            itemName: 'คำตอบ ' + (i + 1) + ' (' + cnt + ' อัน)',
+            icon: '',
+            itemId: null
+          }))
+        : (btns.length > 0
+          ? btns.map((b, i) => {
+              const img = b.querySelector('img');
+              let icon = img ? (img.getAttribute('src') || img.src || '') : '';
+              let itemId = (window.__latestHumanCheck && window.__latestHumanCheck.items) ? window.__latestHumanCheck.items[i] : null;
+              if (itemId == null) {
+                try {
+                  const fk = Object.keys(b).find(k => k.startsWith('__reactFiber'));
+                  if (fk && b[fk]) {
+                    const cp = b[fk].child?.memoizedProps;
+                    if (cp && cp.itemId != null) itemId = Number(cp.itemId);
+                  }
+                } catch (e) {}
+              }
+              return {
+                index: i,
+                label: b.getAttribute('aria-label') || ('ตัวเลือกที่ ' + (i + 1)),
+                icon,
+                itemId: itemId != null ? itemId : null
+              };
+            })
+          : (isBoard
+            ? [0, 1, 2, 3].map(i => ({
+                index: i,
+                label: 'ตัวเลือกที่ ' + (i + 1),
+                icon: '',
+                itemId: null
+              }))
+            : []));
 
       let imageDataUrl = null;
       try {
@@ -1381,22 +1398,45 @@ const LIVE_STATE_EVAL = `(() => {
               bCtx.fillStyle = '#0f172a';
               bCtx.fillRect(0, 0, bw, bh + stripH);
               bCtx.drawImage(boardImg, 0, 0, bw, bh);
-              const colCenters = [68, 181, 300, 416];
-              for (let i = 0; i < 4; i++) {
-                const cx = colCenters[i];
-                const bx = cx - 44;
-                const by = bh + 5;
-                bCtx.fillStyle = '#1e293b';
-                bCtx.strokeStyle = '#38bdf8';
-                bCtx.lineWidth = 1.5;
-                bCtx.beginPath();
-                if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
-                bCtx.fill();
-                bCtx.stroke();
-                bCtx.fillStyle = '#f8fafc';
-                bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
-                bCtx.textAlign = 'center';
-                bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+              if (isCountChallenge && Array.isArray(countValues)) {
+                const nOpts = countValues.length >= 6 ? 6 : 4;
+                const boxW = nOpts === 6 ? 74 : 110;
+                const gap = (bw - nOpts * boxW) / (nOpts + 1);
+                for (let i = 0; i < nOpts; i++) {
+                  const cntVal = countValues[i] || (i + 1);
+                  const bx = Math.round(gap + i * (boxW + gap));
+                  const by = bh + 5;
+                  const cx = Math.round(bx + boxW / 2);
+                  bCtx.fillStyle = '#1e293b';
+                  bCtx.strokeStyle = '#38bdf8';
+                  bCtx.lineWidth = 1.5;
+                  bCtx.beginPath();
+                  if (bCtx.roundRect) bCtx.roundRect(bx, by, boxW, 28, 6); else bCtx.rect(bx, by, boxW, 28);
+                  bCtx.fill();
+                  bCtx.stroke();
+                  bCtx.fillStyle = '#f8fafc';
+                  bCtx.font = nOpts === 6 ? 'bold 10.5px "Segoe UI", Tahoma, sans-serif' : 'bold 12px "Segoe UI", Tahoma, sans-serif';
+                  bCtx.textAlign = 'center';
+                  bCtx.fillText('คำตอบ ' + (i + 1) + ' (' + cntVal + ' อัน)', cx, by + 19, boxW - 4);
+                }
+              } else {
+                const colCenters = [68, 181, 300, 416];
+                for (let i = 0; i < 4; i++) {
+                  const cx = colCenters[i];
+                  const bx = cx - 44;
+                  const by = bh + 5;
+                  bCtx.fillStyle = '#1e293b';
+                  bCtx.strokeStyle = '#38bdf8';
+                  bCtx.lineWidth = 1.5;
+                  bCtx.beginPath();
+                  if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
+                  bCtx.fill();
+                  bCtx.stroke();
+                  bCtx.fillStyle = '#f8fafc';
+                  bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
+                  bCtx.textAlign = 'center';
+                  bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+                }
               }
               imageDataUrl = bCanvas.toDataURL('image/png');
             }
@@ -1404,12 +1444,18 @@ const LIVE_STATE_EVAL = `(() => {
         } catch (err) {}
       }
 
+      const rawMetaStr = (metaEl ? (metaEl.innerText || '').trim() : '');
+      const fallbackHcStr = (typeof hc.innerText === 'string' ? hc.innerText : (typeof hc.textContent === 'string' ? hc.textContent : '')) || '';
+      const resolvedMetaStr = /ตอบผิดได้อีก\s*\d+/.test(rawMetaStr)
+        ? rawMetaStr
+        : ((fallbackHcStr.match(/[^\n]*ตอบผิดได้อีก\s*\d+[^\n]*/)?.[0] || '').trim() || rawMetaStr);
+
       s.humanCheck = {
         active: true,
         id: window.__latestHumanCheck?.id ?? null,
-        prompt: (promptEl ? (promptEl.innerText || '').trim() : '') || (window.__latestHumanCheck?.prompt || ''),
-        meta: metaEl ? (metaEl.innerText || '').trim() : '',
-        autoSolved: !!window.__lastHumanCheckSolved && (Date.now() - window.__lastHumanCheckSolved.timestamp < 15000),
+        prompt: promptStr,
+        meta: resolvedMetaStr,
+        autoSolved: !!window.__lastHumanCheckSolved && window.__lastHumanCheckSolved.verified !== 'wrong' && (Date.now() - window.__lastHumanCheckSolved.timestamp < 15000),
         lastSolved: window.__lastHumanCheckSolved || null,
         items: (window.__latestHumanCheck && Array.isArray(window.__latestHumanCheck.items)) ? window.__latestHumanCheck.items : null,
         image: (boardImg && (boardImg.getAttribute('src') || boardImg.src)) || window.__latestHumanCheck?.image || null,
@@ -1420,7 +1466,7 @@ const LIVE_STATE_EVAL = `(() => {
       };
     } else {
       s.humanCheck = null;
-      if (window.__lastHumanCheckSolved && Date.now() - (window.__lastHumanCheckSolved.timestamp || 0) < 30000) {
+      if (window.__lastHumanCheckSolved && window.__lastHumanCheckSolved.verified !== 'wrong' && Date.now() - (window.__lastHumanCheckSolved.timestamp || 0) < 30000) {
         window.__lastHumanCheckSolved.verified = 'correct';
         window.__lastHumanCheckSolved.isCorrect = true;
       }
@@ -1428,10 +1474,12 @@ const LIVE_STATE_EVAL = `(() => {
     if (hc && window.__lastHumanCheckSolved) {
       const sLast = window.__lastHumanCheckSolved;
       const elapsedS = Date.now() - (sLast.timestamp || 0);
-      const curMetaS = (hc.querySelector('.human-check-meta')?.innerText || '').trim();
+      const rawMetaS = (hc.querySelector('.human-check-meta')?.innerText || '').trim();
+      const fallbackS = (typeof hc.innerText === 'string' ? hc.innerText : '') || '';
+      const curMetaS = /ตอบผิดได้อีก\s*\d+/.test(rawMetaS) ? rawMetaS : ((fallbackS.match(/[^\n]*ตอบผิดได้อีก\s*\d+[^\n]*/)?.[0] || '').trim() || rawMetaS);
       const curTriesMatchS = curMetaS.match(/ตอบผิดได้อีก\s*(\d+)/);
       const curTriesS = curTriesMatchS ? Number(curTriesMatchS[1]) : null;
-      const triesBeforeS = sLast.triesLeftBefore ?? 1;
+      const triesBeforeS = sLast.triesLeftBefore != null ? sLast.triesLeftBefore : ((curTriesS != null && curTriesS <= 2) ? 3 : 1);
       if (curTriesS != null && curTriesS >= triesBeforeS && elapsedS < 5800) {
         if (sLast.verified === 'wrong') {
           sLast.verified = null;
@@ -1458,25 +1506,32 @@ const LIVE_STATE_EVAL = `(() => {
     if (Array.isArray(window.__pmWrongHumanCheckQueue) && window.__pmWrongHumanCheckQueue.length) {
       const confirmedWrong = [];
       const stillPending = [];
-      const curMeta = hc ? ((hc.querySelector('.human-check-meta')?.innerText || '').trim()) : '';
+      const rawMetaQ = hc ? ((hc.querySelector('.human-check-meta')?.innerText || '').trim()) : '';
+      const fallbackQ = hc ? ((typeof hc.innerText === 'string' ? hc.innerText : '') || '') : '';
+      const curMeta = /ตอบผิดได้อีก\s*\d+/.test(rawMetaQ) ? rawMetaQ : ((fallbackQ.match(/[^\n]*ตอบผิดได้อีก\s*\d+[^\n]*/)?.[0] || '').trim() || rawMetaQ);
       const curTriesMatch = curMeta.match(/ตอบผิดได้อีก\s*(\d+)/);
       const curTriesLeft = curTriesMatch ? Number(curTriesMatch[1]) : null;
       for (const att of window.__pmWrongHumanCheckQueue) {
         if (!att) continue;
+        const triesBefore = att.triesLeftBefore != null
+          ? att.triesLeftBefore
+          : (((att.triesLeftAfter ?? curTriesLeft) != null && (att.triesLeftAfter ?? curTriesLeft) <= 2) ? 3 : 1);
+        const alreadyDroppedAtQueueTime = (att.triesLeftAfter != null && triesBefore != null && att.triesLeftAfter < triesBefore);
         if (!hc) {
-          if (window.__lastHumanCheckSolved && window.__lastHumanCheckSolved.timestamp === att.timestamp) {
+          if (alreadyDroppedAtQueueTime) {
+            confirmedWrong.push(att);
+          } else if (window.__lastHumanCheckSolved && window.__lastHumanCheckSolved.timestamp === att.timestamp && window.__lastHumanCheckSolved.verified !== 'wrong') {
             window.__lastHumanCheckSolved.verified = 'correct';
             window.__lastHumanCheckSolved.isCorrect = true;
           }
           continue;
         }
         const elapsed = Date.now() - (att.timestamp || 0);
-        const triesBefore = att.triesLeftBefore ?? 1;
         const triesNow = curTriesLeft ?? att.triesLeftAfter ?? null;
         const triesDropped = (triesNow != null && triesBefore != null && triesNow < triesBefore);
-        if (triesDropped && elapsed >= 1200) {
+        if (triesDropped && (elapsed >= 850 || alreadyDroppedAtQueueTime)) {
           att.triesLeftAfter = triesNow;
-          if (curMeta) att.metaText = curMeta;
+          if (curMeta && !att.metaText) att.metaText = curMeta;
           confirmedWrong.push(att);
         } else if (elapsed < 5800) {
           stillPending.push(att);

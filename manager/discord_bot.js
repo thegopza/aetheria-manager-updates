@@ -39,12 +39,13 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     currentDeviceNickname = typeof name === 'string' ? name.trim() : '';
   }
 
+  const REVOKED_TOKEN_PREFIX = 'MTU1ODkwODIzMTQ3OTMzMjg4NA.GaPmG7.';
   const DEFAULT_DISCORD_SETTINGS = {
     enabled: true,
     webhookUrl: Buffer.from('aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTU1ODg5NDY4MDg3NDQyNjM2OC9TcmlIVk1FTFpqQlZhU2YtYlpQS1NiQWpCaFByS3pabk42UWdrMUFwSW43RzkzcDZ0Wk9XRERWbXU4a2VGY1kzbjI4aQ==', 'base64').toString('utf8'),
     topupWebhookUrl: Buffer.from('aHR0cHM6Ly9kaXNjb3JkLmNvbS9hcGkvd2ViaG9va3MvMTU1OTk3MjE4MzYwNDg1NDk3Ny9YUGVjYjFJZEZlR1NhdmpsU3h2c0FJZ25IaHkweFU5ZWNkNDhIc24yUFF0Qnc0aXFULUlISmcwZEVCcm5ERzdjRGF4bQ==', 'base64').toString('utf8'),
     townWebhookUrl: '',
-    botToken: Buffer.from('TVRVMU9Ea3dPREl6TVRRM09UTXpNamc0TkEuR2FQbUc3LldDR0ZkUTN1NzN4QnlGX0cyeTdYbGhndUxqcnp5QVJ2dF9BTXM0', 'base64').toString('utf8'),
+    botToken: Buffer.from('TVRVMU9Ea3dPREl6TVRRM09UTXpNamc0TkEuRzhMV2JiLm01NFZ6NUpSU1pCWlRld0lOMzV3cFFya0haUjdnWENvdzJfcmlJ', 'base64').toString('utf8'),
     channelId: '1558894629728817222',
     wrongChannelId: '1559706567560007730',
     autoBringToFront: true,
@@ -58,12 +59,22 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     try {
       if (fs.existsSync(SETTINGS_FILE)) {
         const s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
+        const rawToken = (typeof s.botToken === 'string' && s.botToken.trim()) ? s.botToken.trim() : '';
+        const migratedToken = (!rawToken || rawToken.startsWith(REVOKED_TOKEN_PREFIX))
+          ? DEFAULT_DISCORD_SETTINGS.botToken
+          : rawToken;
+        if (rawToken && rawToken.startsWith(REVOKED_TOKEN_PREFIX)) {
+          try {
+            s.botToken = migratedToken;
+            fs.writeFileSync(SETTINGS_FILE, JSON.stringify(s, null, 2), 'utf8');
+          } catch (_) {}
+        }
         return {
           enabled: s.enabled !== undefined ? !!s.enabled : DEFAULT_DISCORD_SETTINGS.enabled,
           webhookUrl: (typeof s.webhookUrl === 'string' && s.webhookUrl.trim()) ? s.webhookUrl.trim() : DEFAULT_DISCORD_SETTINGS.webhookUrl,
           topupWebhookUrl: (typeof s.topupWebhookUrl === 'string' && s.topupWebhookUrl.trim()) ? s.topupWebhookUrl.trim() : DEFAULT_DISCORD_SETTINGS.topupWebhookUrl,
           townWebhookUrl: (typeof s.townWebhookUrl === 'string' && s.townWebhookUrl.trim()) ? s.townWebhookUrl.trim() : (DEFAULT_DISCORD_SETTINGS.townWebhookUrl || ''),
-          botToken: (typeof s.botToken === 'string' && s.botToken.trim()) ? s.botToken.trim() : DEFAULT_DISCORD_SETTINGS.botToken,
+          botToken: migratedToken,
           channelId: (typeof s.channelId === 'string' && s.channelId.trim()) ? s.channelId.trim() : DEFAULT_DISCORD_SETTINGS.channelId,
           wrongChannelId: (typeof s.wrongChannelId === 'string' && s.wrongChannelId.trim()) ? s.wrongChannelId.trim() : DEFAULT_DISCORD_SETTINGS.wrongChannelId,
           autoBringToFront: s.autoBringToFront !== false,
@@ -134,6 +145,11 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
   let heartbeatTimer = null;
   let reconnectTimer = null;
   let lastSequence = null;
+  let gatewaySessionId = null;
+  let resumeGatewayUrl = null;
+  let reconnectAttempts = 0;
+  let activeGatewayToken = '';
+  let invalidTokenBlocked = '';
   let isConnecting = false;
 
   // HTTP helper for Discord REST API (supports JSON and multipart/form-data with file attachments)
@@ -240,16 +256,31 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           }
         }
         const btns = Array.from(hc.querySelectorAll('.human-check-pick'));
-        if (btns.length > 0) {
-          const targetBtn = btns[${Number(pickIndex)}];
+        const promptTextNow = (hc.querySelector('.human-check-prompt')?.innerText || '').trim();
+        const isCountNow = /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(promptTextNow);
+        const numBtnsNow = isCountNow
+          ? Array.from(hc.querySelectorAll('button')).filter(b => /^[1-6]$/.test((b.textContent || b.innerText || '').trim()))
+          : [];
+        if (btns.length > 0 || numBtnsNow.length > 0) {
+          const activeBtnList = btns.length > 0 ? btns : numBtnsNow;
+          const targetBtn = activeBtnList[${Number(pickIndex)}];
           if (!targetBtn) return { success: false, error: 'ไม่พบปุ่มตัวเลือกที่ ${pickIndex + 1}' };
           if (targetBtn.disabled) return { success: false, error: 'ปุ่มนี้ถูกกดไปแล้วหรือถูกปิดใช้งาน' };
           clickAttempted = true;
+          const cntVal = isCountNow ? (Number((targetBtn.textContent || targetBtn.innerText || '').trim()) || (${Number(pickIndex)} + 1)) : null;
           targetBtn.click();
+          const rawMetaNow = (hc.querySelector('.human-check-meta')?.innerText || '').trim();
+          const fbMetaNow = (typeof hc.innerText === 'string' ? hc.innerText : '') || '';
+          const metaStrNow = /ตอบผิดได้อีก\\s*\\d+/.test(rawMetaNow) ? rawMetaNow : ((fbMetaNow.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMetaNow);
+          const triesMatchNow = metaStrNow.match(/ตอบผิดได้อีก\\s*(\\d+)/);
+          const triesLeftBeforeNow = triesMatchNow ? Number(triesMatchNow[1]) : null;
           window.__lastHumanCheckSolved = {
+            type: isCountNow ? 'count' : undefined,
+            count: cntVal != null ? cntVal : undefined,
             pickIndex: ${Number(pickIndex)},
             slot: ${Number(pickIndex) + 1},
-            matchedName: ${JSON.stringify(cleanName)},
+            triesLeftBefore: triesLeftBeforeNow,
+            matchedName: ${JSON.stringify(cleanName)} || (isCountNow ? ('นับจำนวน (' + cntVal + ' อัน)') : ('ตัวเลือกที่ ' + (${Number(pickIndex)} + 1))),
             manual: ${JSON.stringify(isManual)},
             answeredBy: ${JSON.stringify(answeredBy)},
             source: ${JSON.stringify(isManual ? 'discord-manual' : 'manager-auto')},
@@ -257,9 +288,9 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           };
           if (window.showHudToast) {
             const toastPrefix = ${JSON.stringify(isManual ? `👤 ตอบผ่าน Discord${answeredBy ? ' (' + answeredBy + ')' : ''}: ` : '🤖 ตอบเช็คผู้เล่น: ')};
-            window.showHudToast(toastPrefix + ${JSON.stringify(cleanName || ('ข้อ ' + (pickIndex + 1)))}, 'success', 5000);
+            window.showHudToast(toastPrefix + (${JSON.stringify(cleanName)} || (isCountNow ? (cntVal + ' อัน') : ('ข้อ ' + (${pickIndex + 1})))), 'success', 5000);
           }
-          return { success: true, picked: ${pickIndex} };
+          return { success: true, picked: ${pickIndex}, slot: ${Number(pickIndex) + 1}, count: cntVal };
         }
 
         const boardEl = hc.querySelector('.human-check-board');
@@ -462,6 +493,22 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       return;
     }
 
+    if (activeGatewayToken && activeGatewayToken !== cfg.botToken) {
+      gatewaySessionId = null;
+      resumeGatewayUrl = null;
+      lastSequence = null;
+      reconnectAttempts = 0;
+      invalidTokenBlocked = '';
+      if (gatewayWs) {
+        try { gatewayWs.close(); } catch (e) {}
+        gatewayWs = null;
+      }
+    }
+
+    if (invalidTokenBlocked && invalidTokenBlocked === cfg.botToken) {
+      return;
+    }
+
     if (gatewayWs && (gatewayWs.readyState === WebSocket.OPEN || gatewayWs.readyState === WebSocket.CONNECTING)) {
       return; // Already connected or connecting — keep heartbeat alive
     }
@@ -470,6 +517,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
     }
+    activeGatewayToken = cfg.botToken;
     connectGateway(cfg.botToken);
   }
 
@@ -478,8 +526,10 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     isConnecting = true;
 
     try {
-      console.log('[Discord Bot] Connecting to Discord Gateway...');
-      const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
+      const baseGatewayUrl = (gatewaySessionId && resumeGatewayUrl) ? resumeGatewayUrl : 'wss://gateway.discord.gg';
+      const wsUrl = baseGatewayUrl.includes('?') ? baseGatewayUrl : `${baseGatewayUrl.replace(/\/$/, '')}/?v=10&encoding=json`;
+      console.log(`[Discord Bot] Connecting to Discord Gateway (${gatewaySessionId ? 'RESUME' : 'IDENTIFY'})...`);
+      const ws = new WebSocket(wsUrl);
       gatewayWs = ws;
 
       ws.onopen = () => {
@@ -491,45 +541,75 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         try {
           const payload = JSON.parse(event.data);
           const { op, d, s, t } = payload;
-          if (s !== null) lastSequence = s;
+          if (s !== null && s !== undefined) lastSequence = s;
 
-          // OP 10: Hello -> start heartbeat & identify
+          // OP 10: Hello -> start heartbeat & resume/identify
           if (op === 10) {
             const interval = d.heartbeat_interval;
+            if (heartbeatTimer) clearInterval(heartbeatTimer);
             heartbeatTimer = setInterval(() => {
               if (ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ op: 1, d: lastSequence }));
               }
             }, interval);
 
-            // Send Identify
-            ws.send(JSON.stringify({
-              op: 2,
-              d: {
-                token: token,
-                intents: 33280, // Guilds + Guild Messages + Message Content
-                properties: {
-                  os: 'windows',
-                  browser: 'PmheeAetherManager',
-                  device: 'PmheeAetherManager'
+            if (gatewaySessionId && lastSequence !== null) {
+              ws.send(JSON.stringify({
+                op: 6,
+                d: {
+                  token: token,
+                  session_id: gatewaySessionId,
+                  seq: lastSequence
                 }
-              }
-            }));
+              }));
+            } else {
+              ws.send(JSON.stringify({
+                op: 2,
+                d: {
+                  token: token,
+                  intents: 33280, // Guilds + Guild Messages + Message Content
+                  properties: {
+                    os: 'windows',
+                    browser: 'PmheeAetherManager',
+                    device: 'PmheeAetherManager'
+                  }
+                }
+              }));
+            }
+          }
+
+          // OP 7: Reconnect requested by Discord
+          if (op === 7) {
+            try { ws.close(4000, 'Discord requested reconnect'); } catch (_) {}
+            return;
+          }
+
+          // OP 9: Invalid Session -> clear session & reconnect with IDENTIFY after delay
+          if (op === 9) {
+            if (!d) {
+              gatewaySessionId = null;
+              resumeGatewayUrl = null;
+              lastSequence = null;
+            }
+            try { ws.close(4000, 'Invalid session'); } catch (_) {}
+            return;
           }
 
           // OP 0: Dispatch Events
           if (op === 0) {
-            // READY
             if (t === 'READY') {
+              reconnectAttempts = 0;
+              if (d && d.session_id) gatewaySessionId = d.session_id;
+              if (d && d.resume_gateway_url) resumeGatewayUrl = d.resume_gateway_url;
               console.log(`[Discord Bot] Logged in as ${d.user.username}#${d.user.discriminator} (${d.user.id})`);
             }
-
-            // INTERACTION_CREATE (User clicked a button)
+            if (t === 'RESUMED') {
+              reconnectAttempts = 0;
+              console.log('[Discord Bot] Gateway session resumed');
+            }
             if (t === 'INTERACTION_CREATE') {
               handleInteraction(d, token);
             }
-
-            // MESSAGE_CREATE (User typed a number or reply in channel)
             if (t === 'MESSAGE_CREATE') {
               handleMessage(d, token);
             }
@@ -541,9 +621,28 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
 
       ws.onclose = (event) => {
         isConnecting = false;
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        console.log(`[Discord Bot] Gateway closed (${event.code}). Reconnecting in 10s...`);
-        reconnectTimer = setTimeout(syncGatewayConnection, 10000);
+        if (heartbeatTimer) {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = null;
+        }
+        const code = event?.code;
+        if (code === 4004 || code === 4013 || code === 4014) {
+          console.error(`[Discord Bot] Fatal Gateway close code (${code}). Stopping reconnect until token/intents are updated.`);
+          invalidTokenBlocked = token;
+          gatewaySessionId = null;
+          resumeGatewayUrl = null;
+          lastSequence = null;
+          return;
+        }
+        if (code === 4007 || code === 4009) {
+          gatewaySessionId = null;
+          resumeGatewayUrl = null;
+          lastSequence = null;
+        }
+        reconnectAttempts = Math.min(6, reconnectAttempts + 1);
+        const backoffMs = Math.min(120000, 15000 * Math.pow(2, Math.max(0, reconnectAttempts - 1)));
+        console.log(`[Discord Bot] Gateway closed (${code}). Reconnecting in ${Math.round(backoffMs / 1000)}s...`);
+        reconnectTimer = setTimeout(syncGatewayConnection, backoffMs);
       };
 
       ws.onerror = (err) => {
@@ -553,7 +652,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     } catch (e) {
       isConnecting = false;
       console.error('[Discord Bot] Failed to init gateway:', e);
-      reconnectTimer = setTimeout(syncGatewayConnection, 15000);
+      reconnectTimer = setTimeout(syncGatewayConnection, 20000);
     }
   }
 
@@ -587,7 +686,11 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           const hc = document.querySelector('.human-check');
           if (!hc) return { stillOpen: false, solved: window.__lastHumanCheckSolved || null };
           const metaEl = hc.querySelector('.human-check-meta');
-          const metaText = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
+          const rawMetaText = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
+          const fallbackHcText = (typeof hc.innerText === 'string' ? hc.innerText : (typeof hc.textContent === 'string' ? hc.textContent : '')) || '';
+          const metaText = /ตอบผิดได้อีก\\s*\\d+/.test(rawMetaText)
+            ? rawMetaText
+            : ((fallbackHcText.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMetaText);
           const triesMatch = metaText.match(/ตอบผิดได้อีก\\s*(\\d+)/);
           const triesLeft = triesMatch ? Number(triesMatch[1]) : null;
           let imageDataUrl = null;
@@ -603,22 +706,53 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 bCtx.fillStyle = '#0f172a';
                 bCtx.fillRect(0, 0, bw, bh + stripH);
                 bCtx.drawImage(boardImg, 0, 0, bw, bh);
-                const colCenters = [68, 181, 300, 416];
-                const lastSlot = window.__lastHumanCheckSolved?.slot || null;
-                for (let i = 0; i < 4; i++) {
-                  const cx = colCenters[i];
-                  const bx = cx - 44, by = bh + 5;
-                  bCtx.fillStyle = (lastSlot === i + 1) ? '#991b1b' : '#1e293b';
-                  bCtx.strokeStyle = (lastSlot === i + 1) ? '#ef4444' : '#38bdf8';
-                  bCtx.lineWidth = 1.5;
-                  bCtx.beginPath();
-                  if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
-                  bCtx.fill();
-                  bCtx.stroke();
-                  bCtx.fillStyle = '#f8fafc';
-                  bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
-                  bCtx.textAlign = 'center';
-                  bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+                const sObj = window.__lastHumanCheckSolved || {};
+                const promptNow = (hc.querySelector('.human-check-prompt')?.innerText || '').trim();
+                const isCountCheck = sObj.type === 'count' || /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(promptNow);
+                const lastSlot = sObj.slot || null;
+                if (isCountCheck) {
+                  const numBtns = Array.from(hc.querySelectorAll('button')).filter(b => /^[1-6]$/.test((b.textContent || b.innerText || '').trim()));
+                  const optCounts = Array.isArray(sObj.optionCounts) && sObj.optionCounts.length > 0
+                    ? sObj.optionCounts
+                    : (numBtns.length > 0 ? numBtns.map((b, idx) => Number((b.textContent || b.innerText || '').trim()) || (idx + 1)) : [1, 2, 3, 4, 5, 6]);
+                  const nOpts = optCounts.length >= 6 ? 6 : 4;
+                  const boxW = nOpts === 6 ? 74 : 110;
+                  const gap = (bw - nOpts * boxW) / (nOpts + 1);
+                  for (let i = 0; i < nOpts; i++) {
+                    const cntVal = optCounts[i] || (i + 1);
+                    const bx = Math.round(gap + i * (boxW + gap));
+                    const by = bh + 5;
+                    const cx = Math.round(bx + boxW / 2);
+                    const isPicked = (lastSlot === i + 1 || sObj.count === cntVal);
+                    bCtx.fillStyle = isPicked ? '#991b1b' : '#1e293b';
+                    bCtx.strokeStyle = isPicked ? '#ef4444' : '#38bdf8';
+                    bCtx.lineWidth = 1.5;
+                    bCtx.beginPath();
+                    if (bCtx.roundRect) bCtx.roundRect(bx, by, boxW, 28, 6); else bCtx.rect(bx, by, boxW, 28);
+                    bCtx.fill();
+                    bCtx.stroke();
+                    bCtx.fillStyle = '#f8fafc';
+                    bCtx.font = nOpts === 6 ? 'bold 10.5px "Segoe UI", Tahoma, sans-serif' : 'bold 12px "Segoe UI", Tahoma, sans-serif';
+                    bCtx.textAlign = 'center';
+                    bCtx.fillText((isPicked ? '✗ ' : '') + 'คำตอบ ' + (i + 1) + ' (' + cntVal + ' อัน)', cx, by + 19, boxW - 4);
+                  }
+                } else {
+                  const colCenters = [68, 181, 300, 416];
+                  for (let i = 0; i < 4; i++) {
+                    const cx = colCenters[i];
+                    const bx = cx - 44, by = bh + 5;
+                    bCtx.fillStyle = (lastSlot === i + 1) ? '#991b1b' : '#1e293b';
+                    bCtx.strokeStyle = (lastSlot === i + 1) ? '#ef4444' : '#38bdf8';
+                    bCtx.lineWidth = 1.5;
+                    bCtx.beginPath();
+                    if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
+                    bCtx.fill();
+                    bCtx.stroke();
+                    bCtx.fillStyle = '#f8fafc';
+                    bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
+                    bCtx.textAlign = 'center';
+                    bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+                  }
                 }
                 imageDataUrl = bCanvas.toDataURL('image/png');
               }
@@ -638,10 +772,11 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       }
 
       const elapsed = Date.now() - startTime;
-      const triesBefore = expectedTriesBefore ?? lastResult.solved?.triesLeftBefore ?? 1;
+      const rawTriesBefore = expectedTriesBefore ?? lastResult.solved?.triesLeftBefore;
+      const triesBefore = rawTriesBefore != null ? rawTriesBefore : ((lastResult.triesLeft != null && lastResult.triesLeft <= 2) ? 3 : 1);
       const triesDropped = (lastResult.triesLeft != null && triesBefore != null && lastResult.triesLeft < triesBefore);
 
-      // 2. triesLeft explicitly decreased (e.g. "ตอบผิดได้อีก 1 ครั้ง" -> "ตอบผิดได้อีก 0 ครั้ง") -> Confirmed WRONG!
+      // 2. triesLeft explicitly decreased (e.g. "ตอบผิดได้อีก 3 ครั้ง" -> "ตอบผิดได้อีก 2 ครั้ง") -> Confirmed WRONG!
       if (triesDropped && elapsed >= 1200) {
         lastResult.confirmedWrong = true;
         return lastResult;
@@ -687,16 +822,15 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
   async function notifyHumanCheckWrongAttempt({ profile, attempt }) {
     if (!profile || !attempt) return;
     const cfg = loadSettings();
-    if (!cfg.enabled || !cfg.botToken) return;
+    if (!cfg.enabled || (!cfg.botToken && !cfg.webhookUrl)) return;
     const wrongChannelId = cfg.wrongChannelId || DEFAULT_DISCORD_SETTINGS.wrongChannelId || '1559706567560007730';
-    if (!wrongChannelId) return;
+    if (!wrongChannelId && !cfg.webhookUrl) return;
 
-    // Guard against premature "wrong answer" reports caused by game/server lag:
-    // When a Human Check opens, triesLeftBefore is 1 ("ตอบผิดได้อีก 1 ครั้ง").
-    // If triesLeftAfter is still >= triesLeftBefore (did NOT drop to 0), the server hasn't rejected the answer yet!
     const isTest = !!(process.env.NODE_TEST_CONTEXT || process.env.NODE_ENV === 'test');
-    const triesBefore = attempt.triesLeftBefore ?? 1;
     const triesAfterInitial = attempt.triesLeftAfter ?? attempt.triesLeft ?? null;
+    const triesBefore = attempt.triesLeftBefore != null
+      ? attempt.triesLeftBefore
+      : ((triesAfterInitial != null && triesAfterInitial <= 2) ? 3 : 1);
     const alreadyConfirmedWrong = (triesAfterInitial != null && triesBefore != null && triesAfterInitial < triesBefore);
 
     if (!isTest && !alreadyConfirmedWrong && profile.debugPort && typeof evalProfilePort === 'function') {
@@ -710,7 +844,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         console.log(`[Discord Bot] ⏳ ยกเลิกแจ้งเตือนตอบผิดของจอ [${profile.name}] เพราะหน้าต่างเช็คผู้เล่นปิดลงแล้วหลังรอลดแลค (ตอบถูก!)`);
         return;
       }
-      // If triesLeft STILL hasn't decreased (still "ตอบผิดได้อีก 1 ครั้ง"), the server hasn't rejected this choice as wrong.
+      // If triesLeft STILL hasn't decreased, the server hasn't rejected this choice as wrong.
       if (verify.lagUnconfirmed && verify.triesLeft != null && verify.triesLeft >= triesBefore) {
         console.log(`[Discord Bot] ⏳ ข้ามการยืนยันว่าตอบผิดของจอ [${profile.name}] เพราะจำนวนครั้งที่ตอบผิดได้ยังไม่ลดลง (${verify.metaText || verify.triesLeft})`);
         return;
@@ -736,6 +870,10 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     const nick = resolveDeviceNickname();
     const charName = profile.liveState?.charName || profile.lastCharName || profile.name;
     const promptText = attempt.prompt || '(กดรูปด้านล่างที่เหมือนกับรูปในกรอบ)';
+    const isCountWrong = attempt.type === 'count' || /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(promptText);
+    const chosenLabel = isCountWrong
+      ? `ตัวเลือกที่ ${slotNum} (${attempt.count || slotNum} อัน)`
+      : `ตัวเลือกที่ ${slotNum}`;
     const byWho = attempt.manual && attempt.answeredBy
       ? `👤 ผู้เล่นกดตอบผ่าน Discord (**${attempt.answeredBy}**)`
       : `🤖 บอทตอบอัตโนมัติ (Auto-Solver)`;
@@ -768,24 +906,47 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         requestId: null,
         prompt: promptText,
         notifiedAt: now,
-        options: [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }]
+        options: isCountWrong
+          ? [0, 1, 2, 3, 4, 5].map(i => ({ index: i, count: i + 1, label: `ตัวเลือกที่ ${i + 1} (${i + 1} อัน)`, itemName: `ตัวเลือกที่ ${i + 1} (${i + 1} อัน)` }))
+          : [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }]
       };
       activeChecks.set(profile.id, tracked);
       recentNonces.set(nonce, tracked);
     }
 
+    const wrongOptCounts = Array.isArray(attempt.optionCounts) && attempt.optionCounts.length > 0
+      ? attempt.optionCounts.map((oc, idx) => (typeof oc === 'object' && oc !== null ? (oc.count || idx + 1) : (Number(oc) || idx + 1)))
+      : (isCountWrong ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4]);
+    const wrongBtnCount = isCountWrong ? wrongOptCounts.length : 4;
+    const wrongOptionsFieldList = [];
+    for (let i = 0; i < wrongBtnCount; i++) {
+      const cntVal = wrongOptCounts[i] || (i + 1);
+      const optDesc = isCountWrong ? `คำตอบ ${i + 1} (${cntVal} อัน)` : `ตัวเลือกที่ ${i + 1}`;
+      if (i + 1 === slotNum) {
+        wrongOptionsFieldList.push(`❌ **ข้อ ${i + 1}: ${optDesc}** 👈 *(เลือกข้อนี้แล้วผิด)*`);
+      } else {
+        wrongOptionsFieldList.push(`⚪ ข้อ ${i + 1}: ${optDesc}`);
+      }
+    }
+
     const embed = {
-      title: `❌ [ยืนยันผล: ตอบผิด!] เลือกตัวเลือกที่ ${slotNum} ไม่ถูกต้อง`,
+      title: `❌ [ยืนยันผล: ตอบผิด!] เลือก${chosenLabel} ไม่ถูกต้อง`,
       description:
         `💻 **เครื่อง:** \`${nick}\`\n` +
         `🎮 **จอเกม:** **${charName}** (\`${profile.name}\`)\n` +
         `🙋 **ผู้ตอบ:** ${byWho}\n\n` +
         `### ❓ โจทย์คำถาม:\n> **${promptText}**\n\n` +
-        `❌ **ผลการตรวจสอบ (Confirm):** เลือก **ตัวเลือกที่ ${slotNum}** ${attempt.x != null ? `(พิกัด ${attempt.x}, ${attempt.y})` : ''} แล้ว **ตอบผิด!**\n` +
+        `❌ **ผลการตรวจสอบ (Confirm):** เลือก **${chosenLabel}** ${attempt.x != null ? `(พิกัด ${attempt.x}, ${attempt.y})` : ''} แล้ว **ตอบผิด!**\n` +
         `⏱️ **สถานะคงเหลือ:** **${triesText}**\n\n` +
         `👉 **ช่วยกดตอบใหม่ได้ทันที:** กดปุ่มตัวเลือกที่ถูกต้องด้านล่าง`,
       color: 0xEF4444,
-      fields: [],
+      fields: [
+        {
+          name: `📋 ตัวเลือกรูปภาพ (${wrongBtnCount} ตัวเลือก):`,
+          value: wrongOptionsFieldList.join('\n'),
+          inline: false
+        }
+      ],
       footer: { text: `Aetheria Online · เครื่อง: ${nick} · จอ ${charName} (${profile.name})` },
       timestamp: new Date().toISOString()
     };
@@ -794,44 +955,69 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       embed.image = { url: 'attachment://human_check.png' };
     }
 
+    const btnCount = wrongBtnCount;
     const buttons = [];
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < btnCount; i++) {
+      const cntVal = wrongOptCounts[i] || (i + 1);
+      const optLabel = isCountWrong ? `ตัวเลือกที่ ${i + 1} (${cntVal} อัน)` : `ตัวเลือกที่ ${i + 1}`;
       buttons.push({
         type: 2,
         style: (i + 1 === slotNum) ? 4 : 1,
-        label: (i + 1 === slotNum) ? `ตัวเลือกที่ ${i + 1} (ผิด)` : `ตัวเลือกที่ ${i + 1}`,
+        label: (i + 1 === slotNum) ? `${optLabel} (ผิด)` : optLabel,
         custom_id: `hc:${profile.id}:${i}:${tracked.nonce}`
       });
     }
-    const components = [
-      { type: 1, components: buttons },
-      {
-        type: 1,
-        components: [
-          {
-            type: 2,
-            style: 2,
-            label: '🖥️ ดึงจอเกมขึ้นหน้าสุด',
-            custom_id: `hc:${profile.id}:focus:${tracked.nonce}`
-          }
-        ]
-      }
-    ];
+    const components = [];
+    for (let r = 0; r < buttons.length; r += 5) {
+      components.push({ type: 1, components: buttons.slice(r, r + 5) });
+    }
+    components.push({
+      type: 1,
+      components: [
+        {
+          type: 2,
+          style: 2,
+          label: '🖥️ ดึงจอเกมขึ้นหน้าสุด',
+          custom_id: `hc:${profile.id}:focus:${tracked.nonce}`
+        }
+      ]
+    });
 
-    const res = await discordRequest(
-      `/channels/${wrongChannelId}/messages`,
-      'POST',
-      {
-        content: `❌ **[ยืนยันผล: ตอบผิด! · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) — ${attempt.manual && attempt.answeredBy ? `ผู้ตอบ **${attempt.answeredBy}**` : 'บอท'} เลือก **ตัวเลือกที่ ${slotNum}** แล้ว **ตอบผิด!** (${triesText})`,
-        embeds: [embed],
-        components
-      },
-      cfg.botToken,
-      fileAttachment
-    );
-    if (res && res.success && res.data?.id && tracked) {
-      tracked.wrongMessageId = res.data.id;
-      if (!tracked.messageId) tracked.messageId = res.data.id;
+    const contentMsg = `❌ **[ยืนยันผล: ตอบผิด! · เครื่อง: ${nick}]** จอ **${charName}** (${profile.name}) — ${attempt.manual && attempt.answeredBy ? `ผู้ตอบ **${attempt.answeredBy}**` : 'บอท'} เลือก **${chosenLabel}** แล้ว **ตอบผิด!** (${triesText})`;
+    let sent = false;
+    if (cfg.botToken && wrongChannelId) {
+      const res = await discordRequest(
+        `/channels/${wrongChannelId}/messages`,
+        'POST',
+        {
+          content: contentMsg,
+          embeds: [embed],
+          components
+        },
+        cfg.botToken,
+        fileAttachment
+      );
+      if (res && res.success) {
+        sent = true;
+        if (res.data?.id && tracked) {
+          tracked.wrongMessageId = res.data.id;
+          if (!tracked.messageId) tracked.messageId = res.data.id;
+        }
+      }
+    }
+    if (!sent && cfg.webhookUrl) {
+      await discordRequest(
+        cfg.webhookUrl,
+        'POST',
+        {
+          username: `PmheeAether (${nick})`,
+          avatar_url: 'https://raw.githubusercontent.com/thegopza/aetheria-manager-updates/main/manager/public/icon.png',
+          content: contentMsg,
+          embeds: [embed]
+        },
+        null,
+        fileAttachment
+      );
     }
   }
 
@@ -1193,7 +1379,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
               y: result.y ?? null,
               manual: true,
               answeredBy: helperName,
-              triesLeftBefore: verify.solved?.triesLeftBefore ?? 1,
+              triesLeftBefore: verify.solved?.triesLeftBefore ?? ((verify.triesLeft != null && verify.triesLeft <= 2) ? 3 : 1),
               triesLeftAfter: verify.triesLeft,
               metaText: verify.metaText,
               imageDataUrl: verify.imageDataUrl
@@ -1258,15 +1444,33 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       }
     }
 
-    // Manual alerts use only option positions; board checks default to 4 options (left-to-right 1..4)
+    const isCountPrompt = /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(check.prompt || '');
+    const defaultOptions = isCountPrompt
+      ? [1, 2, 3, 4, 5, 6].map((cnt, i) => ({ index: i, count: cnt, label: `คำตอบ ${i + 1} (${cnt} อัน)`, itemName: `คำตอบ ${i + 1} (${cnt} อัน)` }))
+      : [0, 1, 2, 3].map(i => ({ index: i, label: `ตัวเลือกที่ ${i + 1}`, itemName: `ตัวเลือกที่ ${i + 1}` }));
     const rawOptions = (Array.isArray(check.options) && check.options.length > 0)
-      ? check.options
-      : [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }];
-    const resolvedOptions = rawOptions.map((o, i) => ({
-      index: o.index != null ? o.index : i,
-      label: `ตัวเลือกที่ ${i + 1}`,
-      itemName: `ตัวเลือกที่ ${i + 1}`
-    }));
+      ? (isCountPrompt && check.options.length === 4 && check.options.every(o => !o || (!o.count && !/\(\d+\s*อัน\)/.test(o.label || o.itemName || '')))
+        ? defaultOptions
+        : check.options)
+      : defaultOptions;
+    let resolvedOptions = rawOptions.map((o, i) => {
+      const cnt = Number.isInteger(o && o.count) ? o.count : (isCountPrompt ? i + 1 : null);
+      const fallbackLabel = isCountPrompt && cnt != null
+        ? `คำตอบ ${i + 1} (${cnt} อัน)`
+        : `ตัวเลือกที่ ${i + 1}`;
+      const lbl = (o && typeof o.label === 'string' && o.label.trim())
+        ? (isCountPrompt && /^ตัวเลือกที่\s*\d+$/.test(o.label.trim()) && cnt != null ? `คำตอบ ${i + 1} (${cnt} อัน)` : o.label.trim())
+        : fallbackLabel;
+      const itm = (o && typeof o.itemName === 'string' && o.itemName.trim())
+        ? (isCountPrompt && /^ตัวเลือกที่\s*\d+$/.test(o.itemName.trim()) && cnt != null ? `คำตอบ ${i + 1} (${cnt} อัน)` : o.itemName.trim())
+        : lbl;
+      return {
+        index: o && o.index != null ? o.index : i,
+        count: cnt,
+        label: lbl,
+        itemName: itm
+      };
+    });
 
     const nonce = crypto.randomBytes(12).toString('hex');
     const trackedRecord = {
@@ -1279,6 +1483,22 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       notifiedAt: now,
       options: resolvedOptions
     };
+    const applySolvedOptionCounts = (solvedObj) => {
+      if (Array.isArray(solvedObj?.optionCounts) && solvedObj.optionCounts.length > 0) {
+        resolvedOptions = solvedObj.optionCounts.map((oc, i) => {
+          const slotNum = (typeof oc === 'object' && oc !== null && oc.slot) ? oc.slot : (i + 1);
+          const cnt = (typeof oc === 'object' && oc !== null && oc.count != null) ? oc.count : (Number(oc) || slotNum);
+          const lbl = (typeof oc === 'object' && oc !== null && oc.label) ? oc.label : `คำตอบ ${slotNum} (${cnt} อัน)`;
+          return {
+            index: slotNum - 1,
+            count: cnt,
+            label: lbl,
+            itemName: lbl
+          };
+        });
+        trackedRecord.options = resolvedOptions;
+      }
+    };
     activeChecks.set(profileId, trackedRecord);
     recentNonces.set(nonce, trackedRecord);
     for (const [k, v] of recentNonces.entries()) {
@@ -1289,13 +1509,19 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     const charName = profile.liveState?.charName || profile.lastCharName || profile.name;
     const promptText = check.prompt || '(ไม่มีข้อความโจทย์)';
     let metaText = check.meta || '';
-    const optionsCount = resolvedOptions.length || 4;
     const nick = resolveDeviceNickname();
 
     let pointMessage = '';
     let manualReason = '';
     let lastAttemptedSolved = null;
     let lastWrongAttempt = null;
+    const isConfirmedWrongSolved = (s) => Boolean(
+      s && (
+        s.verified === 'wrong' ||
+        s.isCorrect === false ||
+        (lastWrongAttempt && s.timestamp && lastWrongAttempt.timestamp === s.timestamp && s.pickIndex === lastWrongAttempt.pickIndex)
+      )
+    );
 
     const autoAnswerEnabled = (hcSettings.autoAnswer && cfg.autoAnswer !== false);
     if (!autoAnswerEnabled) {
@@ -1336,8 +1562,9 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 const probe = await evalProfilePort(profile.debugPort, `(() => ({ stillOpen: !!document.querySelector('.human-check'), solved: window.__lastHumanCheckSolved || null }))()`);
                 const st = probe && probe.result ? probe.result : null;
                 if (st?.solved?.manual || trackedCheck.solvedManually) return;
-                if (st && !st.stillOpen && isSolvedForCurrentCheck(st.solved)) {
+                if (st && !st.stillOpen && isSolvedForCurrentCheck(st.solved) && !isConfirmedWrongSolved(st.solved)) {
                   const s = st.solved;
+                  applySolvedOptionCounts(s);
                   lastAttemptedSolved = s;
                   const pickIdx = Number.isInteger(s.pickIndex) && s.pickIndex >= 0 ? s.pickIndex : (Number.isInteger(s.slot) && s.slot >= 1 ? s.slot - 1 : 0);
                   solution = {
@@ -1363,18 +1590,32 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
               const probe = await evalProfilePort(profile.debugPort, `(() => {
                 const hc = document.querySelector('.human-check');
                 const metaEl = hc ? hc.querySelector('.human-check-meta') : null;
-                const metaText = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
+                const rawMeta = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
+                const fbText = hc ? ((typeof hc.innerText === 'string' ? hc.innerText : (typeof hc.textContent === 'string' ? hc.textContent : '')) || '') : '';
+                const metaText = /ตอบผิดได้อีก\\s*\\d+/.test(rawMeta)
+                  ? rawMeta
+                  : ((fbText.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMeta);
                 return { stillOpen: !!hc, metaText, solved: window.__lastHumanCheckSolved || null };
               })()`);
               const st = probe && probe.result ? probe.result : null;
               if (st?.solved?.manual || trackedCheck.solvedManually) return;
               const validSolved = isSolvedForCurrentCheck(st?.solved) ? st.solved : null;
               if (validSolved) {
-                lastAttemptedSolved = validSolved;
+                applySolvedOptionCounts(validSolved);
+                if (!isConfirmedWrongSolved(validSolved)) {
+                  lastAttemptedSolved = validSolved;
+                }
                 if (st.metaText) metaText = st.metaText;
               }
               if (st && !st.stillOpen) {
-                const s = validSolved || lastAttemptedSolved || {};
+                const s = (validSolved && !isConfirmedWrongSolved(validSolved))
+                  ? validSolved
+                  : ((lastAttemptedSolved && !isConfirmedWrongSolved(lastAttemptedSolved)) ? lastAttemptedSolved : null);
+                if (!s) {
+                  // The only recorded attempt was confirmed wrong before the modal closed; do not emit a false "ตอบถูก!" alert
+                  return;
+                }
+                applySolvedOptionCounts(s);
                 lastAttemptedSolved = s;
                 const pickIdx = Number.isInteger(s.pickIndex) && s.pickIndex >= 0 ? s.pickIndex : (Number.isInteger(s.slot) && s.slot >= 1 ? s.slot - 1 : 0);
                 solution = {
@@ -1454,11 +1695,13 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 if (mText) metaText = mText;
                 const triesMatch = mText.match(/ตอบผิดได้อีก\s*(\d+)/);
                 const triesLeftAfter = triesMatch ? Number(triesMatch[1]) : null;
-                const triesBefore = st.solved.triesLeftBefore ?? 1;
-                const triesDropped = (triesLeftAfter != null && triesBefore != null && triesLeftAfter < triesBefore);
+                const triesBefore = st.solved.triesLeftBefore != null
+                  ? st.solved.triesLeftBefore
+                  : ((triesLeftAfter != null && triesLeftAfter <= 2) ? 3 : 1);
+                const triesDropped = (triesLeftAfter != null && triesBefore != null && triesLeftAfter < triesBefore) || st.solved.verified === 'wrong';
 
-                // Only report a wrong attempt if triesLeft actually dropped (e.g. 1 -> 0) OR in unit tests / final poll without tries counter
-                if ((triesDropped && elapsedSinceSolve >= 1200) || (isTest && elapsedSinceSolve >= 850) || (pollIdx === maxPolls - 1 && triesLeftAfter == null && elapsedSinceSolve >= 4500)) {
+                // Only report a wrong attempt if triesLeft actually dropped (e.g. 3 -> 2 or 1 -> 0) OR in unit tests / final poll without tries counter
+                if ((triesDropped && (elapsedSinceSolve >= 1200 || st.solved.verified === 'wrong')) || (isTest && elapsedSinceSolve >= 850) || (pollIdx === maxPolls - 1 && triesLeftAfter == null && elapsedSinceSolve >= 4500)) {
                   lastWrongAttempt = {
                     ...st.solved,
                     checkId: check.id ?? st.solved.checkId ?? null,
@@ -1468,9 +1711,12 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                     metaText: mText,
                     imageDataUrl: st.solved.annotatedImageDataUrl || check.imageDataUrl || null
                   };
+                  if (lastAttemptedSolved && lastAttemptedSolved.timestamp === st.solved.timestamp && lastAttemptedSolved.pickIndex === st.solved.pickIndex) {
+                    lastAttemptedSolved = null;
+                  }
                   await notifyHumanCheckWrongAttempt({ profile, attempt: lastWrongAttempt });
                 } else if (!triesDropped && !retriedAutoLag && elapsedSinceSolve >= 2200) {
-                  // Game is lagging and triesLeft is still 1 -> re-send the answer packet once so lag doesn't drop the click
+                  // Game is lagging and triesLeft has not dropped -> re-send the answer packet once so lag doesn't drop the click
                   retriedAutoLag = true;
                   try {
                     await evalProfilePort(profile.debugPort, `(() => {
@@ -1516,7 +1762,8 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
             trackedCheck.requestId = durableRequestId(profileId, check);
             solution = await solver.solveHumanCheck(check.prompt, check.options, check.items, trackedCheck.requestId);
             // The service bills for analysis. Game transport errors never refund that analysis.
-            const authorized = solution?.success === true && [0, 1].includes(solution.charged) && solution.requestId === trackedCheck.requestId && Number.isInteger(solution.pickIndex) && solution.pickIndex >= 0 && solution.pickIndex < optionsCount;
+            const optionsCountNow = resolvedOptions.length || 4;
+            const authorized = solution?.success === true && [0, 1].includes(solution.charged) && solution.requestId === trackedCheck.requestId && Number.isInteger(solution.pickIndex) && solution.pickIndex >= 0 && solution.pickIndex < optionsCountNow;
             if (activeChecks.get(profileId) !== trackedCheck) return;
             const stillEnabled = solver.loadSettings()?.autoAnswer && loadSettings().autoAnswer !== false;
             if (authorized && stillEnabled) {
@@ -1584,7 +1831,8 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         const optionsList = resolvedOptions.map((opt, i) => {
           const isChosen = (opt.index === solution.pickIndex);
           const icon = isChosen ? '✅' : '⚪';
-          const highlight = isChosen ? `**ข้อ ${i + 1}: ${opt.itemName}** 👈 *(ระบบเลือกข้อนี้${coordSuffix})*` : `ข้อ ${i + 1}: ${opt.itemName}`;
+          const optTitle = opt.itemName || opt.label || `ตัวเลือกที่ ${i + 1}`;
+          const highlight = isChosen ? `**ข้อ ${i + 1}: ${optTitle}** 👈 *(ระบบเลือกข้อนี้${coordSuffix})*` : `ข้อ ${i + 1}: ${optTitle}`;
           return `${icon} ${highlight}`;
         }).join('\n');
 
@@ -1592,6 +1840,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           ? `\n🪙 **ส่วนบุญคงเหลือ:** **${solution.remaining}**`
           : '\n🪙 **ไม่มีค่าต่อคำตอบ:** ไม่หักส่วนบุญ สำหรับ Humancheck';
 
+        const optionsCount = resolvedOptions.length || 4;
         const embed = {
           title: `🤖 [Auto Human Check] ตรวจพบและตอบเช็คผู้เล่นสำเร็จ! (✅ ยืนยันผล: ตอบถูก!)`,
           description: `💻 **เครื่อง:** \`${nick}\`\n🎮 **จอเกม:** \`${profile.name}\` (ตัวละคร: **${charName}**)\n\n### ❓ โจทย์คำถาม:\n> **${promptText}**\n\n🎯 **ระบบจับคู่อัตโนมัติ (ผู้ตอบ: บอท Auto-Solver):**\n✅ เลือกตัวเลือกที่ **${solution.pickIndex + 1}**: **${solution.matchedName}**${coordSuffix} (${solution.source === 'local-catalog' ? 'แคตตาล็อกในเครื่อง' : 'บริการส่วนกลาง'})\n🎉 **ยืนยันผล (Confirm):** **ตอบถูก!** (หน้าต่างเช็คผู้เล่นปิดลงเรียบร้อยแล้ว)\n⏱️ หน่วงเวลาตอบ: **${delayMs} ms** (เลียนแบบผู้เล่น)${pointDeductText}`,
@@ -1647,6 +1896,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     const attemptedInfo = (typeof lastWrongAttempt !== 'undefined' && lastWrongAttempt)
       || (typeof lastAttemptedSolved !== 'undefined' && lastAttemptedSolved)
       || null;
+    if (attemptedInfo) applySolvedOptionCounts(attemptedInfo);
     const attemptedSlotNum = attemptedInfo
       ? (Number.isInteger(attemptedInfo.slot) && attemptedInfo.slot >= 1 ? attemptedInfo.slot : (Number.isInteger(attemptedInfo.pickIndex) ? attemptedInfo.pickIndex + 1 : null))
       : null;
@@ -1680,14 +1930,16 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       embed.image = { url: 'attachment://human_check.png' };
     }
 
+    const optionsCount = resolvedOptions.length || 4;
     const optionDescriptions = resolvedOptions.map((opt, i) => {
       const slotNum = i + 1;
+      const optTitle = opt.itemName || opt.label || `ตัวเลือกที่ ${slotNum}`;
       if (attemptedSlotNum === slotNum) {
         return attemptedIsWrong
-          ? `❌ **${slotNum}️⃣ ตัวเลือกที่ ${slotNum}** 👈 *(ระบบเลือกข้อนี้ — ตอบผิด)*`
-          : `🤖 **${slotNum}️⃣ ตัวเลือกที่ ${slotNum}** 👈 *(ระบบเลือกข้อนี้ไปแล้ว)*`;
+          ? `❌ **${slotNum}️⃣ ${optTitle}** 👈 *(ระบบเลือกข้อนี้ — ตอบผิด)*`
+          : `🤖 **${slotNum}️⃣ ${optTitle}** 👈 *(ระบบเลือกข้อนี้ไปแล้ว)*`;
       }
-      return `**${slotNum}️⃣** ตัวเลือกที่ ${slotNum}`;
+      return `**${slotNum}️⃣** ${optTitle}`;
     }).join('\n');
 
     if (optionDescriptions) {
@@ -1706,9 +1958,12 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         const opt = resolvedOptions[i] || {};
         const slotNum = i + 1;
         const isAttempted = (attemptedSlotNum === slotNum);
-        const labelText = isAttempted
-          ? (attemptedIsWrong ? `ตัวเลือกที่ ${slotNum} (บอทเลือก-ผิด)` : `ตัวเลือกที่ ${slotNum} (บอทเลือกข้อนี้)`)
+        const baseBtnLabel = (isCountPrompt && opt.count != null)
+          ? `ตัวเลือกที่ ${slotNum} (${opt.count} อัน)`
           : `ตัวเลือกที่ ${slotNum}`;
+        const labelText = isAttempted
+          ? (attemptedIsWrong ? `${baseBtnLabel} (บอทเลือก-ผิด)` : `${baseBtnLabel} (บอทเลือกข้อนี้)`)
+          : baseBtnLabel;
         buttons.push({
           type: 2, // Button
           style: isAttempted && attemptedIsWrong ? 4 : 1,
@@ -1717,10 +1972,12 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         });
       }
 
-      components.push({
-        type: 1, // Action Row
-        components: buttons
-      });
+      for (let r = 0; r < buttons.length; r += 5) {
+        components.push({
+          type: 1, // Action Row (max 5 buttons per row)
+          components: buttons.slice(r, r + 5)
+        });
+      }
 
       components.push({
         type: 1,

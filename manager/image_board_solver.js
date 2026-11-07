@@ -884,10 +884,61 @@
     const bw = boardData.width || 480;
     const rawBh = boardData.height || 330;
     const bh = (bw === 480 && rawBh === 368) ? 330 : rawBh;
-    const bp = boardData.data;
+    let bp = boardData.data;
+
+    // Inpaint green annotation ring if evaluating an already-annotated Discord screenshot
+    const isRing = new Uint8Array(bw * bh);
+    let ringCount = 0;
+    for (let y = 80; y < bh; y++) {
+      for (let x = 0; x < bw; x++) {
+        const p = y * bw + x;
+        const i = p * 4;
+        if (bp[i] < 45 && bp[i + 1] > 140 && bp[i + 2] > 90 && bp[i + 2] < 170) {
+          isRing[p] = 1;
+          ringCount++;
+        }
+      }
+    }
+    if (ringCount >= 40) {
+      bp = new Uint8ClampedArray(boardData.data);
+      for (let pass = 0; pass < 3; pass++) {
+        const cData = new Uint8ClampedArray(bp);
+        for (let y = 81; y < bh - 1; y++) {
+          for (let x = 1; x < bw - 1; x++) {
+            const p = y * bw + x;
+            if (!isRing[p]) continue;
+            let sr = 0, sg = 0, sb = 0, cnt = 0;
+            for (let dy = -2; dy <= 2; dy++) {
+              for (let dx = -2; dx <= 2; dx++) {
+                const np = (y + dy) * bw + (x + dx);
+                if (!isRing[np]) {
+                  sr += cData[np * 4]; sg += cData[np * 4 + 1]; sb += cData[np * 4 + 2]; cnt++;
+                }
+              }
+            }
+            if (cnt > 0) {
+              bp[p * 4] = Math.round(sr / cnt);
+              bp[p * 4 + 1] = Math.round(sg / cnt);
+              bp[p * 4 + 2] = Math.round(sb / cnt);
+              isRing[p] = 0;
+            }
+          }
+        }
+      }
+    }
 
     const topObj = extractBoxObject({ width: bw, height: bh, data: bp }, 204, 11, 276, 68);
     if (!topObj || topObj.area < 40) return { count: 1, confidence: 30, items: [], scores: [] };
+
+    const topGray = topObj.colorHist[0] + topObj.colorHist[1];
+    const topWood = topObj.colorHist[4] + topObj.colorHist[5] + topObj.colorHist[6];
+    const topR45 = topObj.colorHist[4] + topObj.colorHist[5];
+    const isTopClub = topWood >= 0.65 && topGray <= 0.18 && topObj.elongation >= 4.5 && topObj.rmsRadius >= 17.5;
+    const isTopHammer = topGray >= 0.48 && topWood >= 0.15 && topObj.meanSat <= 30 && topObj.meanLum <= 92 && topR45 <= 0.08;
+    const isTopAxe = !isTopHammer && topGray >= 0.30 && topGray <= 0.50 && topWood >= 0.48 && topR45 >= 0.18 && topObj.elongation >= 3.0;
+    const isTopWhip = topGray <= 0.16 && topWood >= 0.70 && topR45 <= 0.12 && topObj.meanLum <= 60 && topObj.elongation <= 2.3;
+    const isTopBoots = topWood >= 0.85 && topGray <= 0.12 && topR45 <= 0.16 && topObj.elongation >= 1.30 && topObj.elongation <= 1.65 && topObj.meanLum >= 68;
+    const isTopBook = topObj.area >= 1320 && topObj.elongation <= 1.48 && topGray <= 0.22 && topWood <= 0.35;
 
     const bW = Math.max(54, Math.min(68, Math.round(topObj.rmsRadius * 3.2))), bH = bW;
     const step = 7;
@@ -911,24 +962,35 @@
           const rmsRatio = obj.rmsRadius / topObj.rmsRadius;
           const rmsPenalty = Math.abs(Math.log(Math.max(0.4, Math.min(2.5, rmsRatio)))) * 0.9;
 
-          // Wooden spiked club discrimination vs Axe/blade/boots/hammer
           const slotGray = obj.colorHist[0] + obj.colorHist[1];
           const slotWood = obj.colorHist[4] + obj.colorHist[5] + obj.colorHist[6];
-          const topGray = topObj.colorHist[0] + topObj.colorHist[1];
-          const topWood = topObj.colorHist[4] + topObj.colorHist[5] + topObj.colorHist[6];
-          const isTopClub = topWood >= 0.65 && topGray <= 0.18 && topObj.elongation >= 4.5 && topObj.rmsRadius >= 17.5;
-          let clubPenalty = 0;
-          if (!isTopClub && slotWood >= 0.65 && slotGray <= 0.12 && (topGray >= 0.10 || topWood <= 0.60)) {
-            clubPenalty = 1.30;
-          } else if (isTopClub && topGray >= 0.10) {
-            if (obj.elongation < 2.4 || slotGray >= 0.35) clubPenalty = 1.30;
-            else if (slotWood >= 0.60 && slotGray <= 0.20 && obj.elongation >= 2.7 && obj.rmsRadius < topObj.rmsRadius * 0.78) clubPenalty = -0.75;
+          const slotR45 = obj.colorHist[4] + obj.colorHist[5];
+
+          let itemPenalty = 0;
+          if (!isTopClub && !isTopWhip && slotWood >= 0.65 && slotGray <= 0.12 && obj.elongation >= 2.2 && (topGray >= 0.10 || topWood <= 0.60)) {
+            itemPenalty = 1.30;
+          } else if (isTopClub && topGray >= 0.09) {
+            if (obj.elongation < 2.4 || slotGray >= 0.35) itemPenalty = 1.30;
+            else if (slotWood >= 0.58 && slotGray <= 0.26 && obj.elongation >= 2.7 && obj.rmsRadius < topObj.rmsRadius * 0.85) itemPenalty = -0.75;
+          } else if (isTopHammer) {
+            if (obj.meanSat >= 35 || slotGray <= 0.32 || obj.elongation >= 5.0 || obj.meanLum >= 108) itemPenalty = 1.10;
+            else if (slotGray >= 0.45 && slotWood >= 0.16 && obj.meanSat >= 15 && obj.meanSat <= 32 && obj.meanLum <= 105 && obj.elongation <= 4.4) itemPenalty = -0.65;
+          } else if (isTopAxe) {
+            if (slotGray >= 0.50 && obj.meanSat <= 30 && slotR45 <= 0.12) itemPenalty = 0.85;
+            else if (slotWood >= 0.70 && slotGray <= 0.12) itemPenalty = 1.10;
+          } else if (isTopWhip) {
+            if (slotGray >= 0.35 || obj.elongation >= 2.6 || obj.meanLum >= 78) itemPenalty = 1.00;
+          } else if (isTopBoots) {
+            if (obj.elongation >= 2.4 || (slotGray >= 0.45 && obj.meanSat <= 28)) itemPenalty = 0.90;
+            else if (slotWood >= 0.50 && slotGray <= 0.35 && slotR45 <= 0.18 && obj.elongation <= 1.85 && obj.meanLum >= 50 && obj.meanLum <= 90 && obj.rmsRadius >= 14.8) itemPenalty = -0.45;
+          } else if (isTopBook) {
+            if (slotGray >= 0.28 || slotWood >= 0.65) itemPenalty = 0.90;
           }
 
           const cmp = compareObjects(topObj, obj);
           if (!isNaN(cmp.totalScore)) {
             const shapeScore = cmp.bestPolarDist * 1.3 + cmp.elongDiff * 1.0 + cmp.fillDiff * 0.8 + areaPenalty + rmsPenalty;
-            const combined = shapeScore + cmp.totalScore * 0.25 + clubPenalty;
+            const combined = shapeScore + cmp.totalScore * 0.25 + itemPenalty;
             candidates.push({ x: obj.cx, y: obj.cy, score: combined, obj });
           }
         }
@@ -938,40 +1000,43 @@
     candidates.sort((a, b) => a.score - b.score);
     const unique = [];
     for (const c of candidates) {
-      if (!unique.some(u => Math.hypot(u.x - c.x, u.y - c.y) < 23)) unique.push(c);
+      if (!unique.some(u => Math.hypot(u.x - c.x, u.y - c.y) < 25)) unique.push(c);
     }
 
     const scores = unique.map(u => +u.score.toFixed(2));
     const maxK = Math.min(6, scores.length);
 
     let count = 1;
-    let ruleHit = false;
-
+    let rule1Hit = false;
     for (let k = 1; k < maxK; k++) {
       const cur = scores[k - 1];
       const next = scores[k];
-      // Condition A: Low cluster leap (e.g. 1.66 -> 2.87, 1.59 -> 2.65, 1.40 -> 2.85)
-      if (cur <= 1.70 && (next - cur) >= 1.00 && next >= 2.60) {
+      if (cur <= 1.65 && (next - cur) >= 0.95 && next >= 2.45) {
         count = k;
-        ruleHit = true;
-        break;
-      }
-      // Condition B: High-score distractor boundary (e.g. 2.20 -> 3.16, 3.03 -> 3.53, 2.36 -> 3.37, 2.70 -> 3.47)
-      if (cur <= 3.10 && next >= 3.15 && (next - cur) >= 0.45) {
-        count = k;
-        ruleHit = true;
+        rule1Hit = true;
         break;
       }
     }
 
-    if (!ruleHit) {
-      // Baseline count of all items <= 3.35
-      let valid = 0;
-      for (let i = 0; i < maxK; i++) {
-        if (scores[i] <= 3.35) valid++;
-        else break;
+    if (!rule1Hit) {
+      let rule2Hit = false;
+      for (let k = 1; k <= maxK; k++) {
+        const cur = scores[k - 1];
+        const next = k < scores.length ? scores[k] : 99;
+        if (cur <= 3.32 && next >= 3.36 && (next - cur) >= 0.25) {
+          count = k;
+          rule2Hit = true;
+          break;
+        }
       }
-      count = Math.max(1, Math.min(6, valid));
+      if (!rule2Hit) {
+        let valid = 0;
+        for (let i = 0; i < maxK; i++) {
+          if (scores[i] <= 3.32) valid++;
+          else break;
+        }
+        count = Math.max(1, Math.min(6, valid));
+      }
     }
 
     const matched = unique.slice(0, count);

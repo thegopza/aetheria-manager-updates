@@ -192,6 +192,54 @@ body {
   font-weight: 400;
 }
 
+.device-hwid-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  border-radius: 999px;
+  padding: 2px 9px 2px 8px;
+  font-size: 11px;
+  color: #e9d5ff;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(4px);
+}
+
+.device-hwid-badge:hover {
+  border-color: rgba(168, 85, 247, 0.75);
+  background: rgba(30, 20, 56, 0.92);
+  box-shadow: 0 0 12px rgba(168, 85, 247, 0.28);
+}
+
+.device-hwid-badge .hwid-icon {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.device-hwid-badge .hwid-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #c084fc;
+  letter-spacing: 0.4px;
+}
+
+.device-hwid-badge .hwid-code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: #f8fafc;
+  letter-spacing: 0.4px;
+}
+
+.device-hwid-badge .hwid-copy-icon {
+  font-size: 10.5px;
+  color: #a855f7;
+  margin-left: 2px;
+}
+
 .header-actions {
   display: flex;
   align-items: center;

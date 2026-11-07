@@ -1039,6 +1039,25 @@
       }
     }
 
+    const excludeRaw = options && options.excludeCounts;
+    const excludeSet = excludeRaw instanceof Set
+      ? excludeRaw
+      : new Set(Array.isArray(excludeRaw) ? excludeRaw.map(Number) : []);
+    if (excludeSet.size > 0 && excludeSet.has(count)) {
+      const nextCandScore = count < scores.length ? scores[count] : 99;
+      const prevCandScore = count >= 2 ? scores[count - 2] : 0;
+      const preferPlusOne = (3.45 - nextCandScore) >= (prevCandScore - 3.15);
+      const order = preferPlusOne
+        ? [count + 1, count - 1, count + 2, count - 2, 1, 2, 3, 4, 5, 6]
+        : [count - 1, count + 1, count - 2, count + 2, 1, 2, 3, 4, 5, 6];
+      for (const cand of order) {
+        if (cand >= 1 && cand <= 6 && !excludeSet.has(cand)) {
+          count = cand;
+          break;
+        }
+      }
+    }
+
     const matched = unique.slice(0, count);
     const confidence = Math.max(50, Math.min(99, Math.round(100 - (scores[0] || 2) * 12)));
 
@@ -1106,8 +1125,13 @@
     });
 
     scores.sort((a, b) => b.minOther - a.minOther);
-    const winner = scores[0];
-    const runnerUp = scores[1] || { minOther: 0 };
+    const excludeRaw = options && options.excludeSlots;
+    const excludeSet = excludeRaw instanceof Set
+      ? excludeRaw
+      : new Set(Array.isArray(excludeRaw) ? excludeRaw.map(Number) : []);
+    const available = excludeSet.size > 0 ? scores.filter(s => !excludeSet.has(s.slot)) : scores;
+    const winner = available[0] || scores[0];
+    const runnerUp = available[1] || scores.find(s => s !== winner) || { minOther: 0 };
     const margin = Math.max(0, winner.minOther - runnerUp.minOther);
     const confidence = Math.max(50, Math.min(99, Math.round(60 + margin * 15)));
 
@@ -1292,44 +1316,59 @@
     if (catalog.length > 0) {
       const NR = 5, NA = 24;
       const dPolars = [53, 56, 59].map(rad => extractDialCenteredPolar(dialImg, dialImg.width / 2, dialImg.height / 2, rad));
-      let bestScore = -Infinity, bestShift = 0;
+      const shiftScores = new Float32Array(NA).fill(-Infinity);
       for (let c = 0; c < catalog.length; c++) {
         const ip = catalog[c];
         for (let d = 0; d < dPolars.length; d++) {
           const dp = dPolars[d];
-          for (let shift = 0; shift < NA; shift++) {
-            let corr = 0;
-            for (let r = 0; r < NR; r++) {
-              const row = r * NA;
-              for (let a = 0; a < NA; a++) {
-                const iIdx = row + a;
-                const dIdx = row + ((a + shift) % NA);
-                corr += ip.lum[iIdx] * dp.lum[dIdx] * 1.15
-                      + ip.grad[iIdx] * dp.grad[dIdx] * 1.45;
+          for (let mirror = 0; mirror < 2; mirror++) {
+            for (let shift = 0; shift < NA; shift++) {
+              let corr = 0;
+              for (let r = 0; r < NR; r++) {
+                const row = r * NA;
+                for (let a = 0; a < NA; a++) {
+                  const ia = mirror === 1 ? ((12 - a + NA) % NA) : a;
+                  const iIdx = row + ia;
+                  const dIdx = row + ((a + shift) % NA);
+                  corr += ip.lum[iIdx] * dp.lum[dIdx] * 1.15
+                        + ip.grad[iIdx] * dp.grad[dIdx] * 1.45;
+                }
               }
-            }
-            corr /= (NR * NA);
-            if (corr > bestScore) {
-              bestScore = corr;
-              bestShift = shift;
+              corr /= (NR * NA);
+              if (corr > shiftScores[shift]) {
+                shiftScores[shift] = corr;
+              }
             }
           }
         }
       }
-      if (bestScore >= 1.10) {
-        const angleCW = bestShift * 15;
+      const ranked = [];
+      for (let shift = 0; shift < NA; shift++) {
+        const angleCW = shift * 15;
         let turn = angleCW === 0 ? 0 : -angleCW;
         if (turn <= -180) turn += 360;
+        ranked.push({ shift, angleCW, turn, score: +shiftScores[shift].toFixed(3) });
+      }
+      ranked.sort((a, b) => b.score - a.score);
+      const excludeRaw = options && options.excludeTurns;
+      const excludeSet = excludeRaw instanceof Set
+        ? excludeRaw
+        : new Set(Array.isArray(excludeRaw) ? excludeRaw.map(Number) : []);
+      const chosen = (excludeSet.size > 0 ? ranked.find(r => !excludeSet.has(r.turn)) : ranked[0]) || ranked[0];
+      if (chosen && chosen.score >= 1.05) {
+        const angleCW = chosen.angleCW;
+        const turn = chosen.turn;
         const direction = turn < 0 ? 'ccw' : 'cw';
         const clicks = Math.round(Math.abs(turn) / 15);
-        const confidence = Math.max(75, Math.min(99, Math.round(60 + bestScore * 18)));
+        const confidence = Math.max(75, Math.min(99, Math.round(60 + chosen.score * 18)));
         return {
           angle: angleCW,
           turn,
           direction,
           clicks,
           confidence,
-          score: +bestScore.toFixed(3),
+          score: chosen.score,
+          ranked: ranked.slice(0, 6),
           dialX: dialCx,
           dialY: dialCy
         };

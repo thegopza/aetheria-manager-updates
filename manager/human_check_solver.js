@@ -19,7 +19,8 @@ function getMachineFingerprint() {
 function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl: testServiceUrl, localCatalogSeed = true } = {}) {
   const settingsFile = path.join(dataDir, 'human_check_settings.json');
   const accountFile = path.join(dataDir, 'aetheria_service_account.json');
-  const walletSnapshotFile=path.join(dataDir,'wallet_snapshot_v1.json');
+  const walletSnapshotFile = path.join(dataDir, 'wallet_snapshot_v1.json');
+  const accessStateFile = path.join(dataDir, 'machine_access_state.json');
   fs.mkdirSync(dataDir, { recursive: true });
   const localMatcher = createLocalHumanCheck({ dataDir, seed: localCatalogSeed });
   const base = new URL(testServiceUrl || process.env.PMHEE_AETHERIA_API_URL || 'https://api.noggunsshop.xyz');
@@ -27,6 +28,8 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     throw new Error('CAPTCHA service requires an HTTPS origin');
   }
   const machineHwid = getMachineFingerprint();
+  const machineHwidHash = crypto.createHash('sha256').update(machineHwid.toUpperCase()).digest('hex').toUpperCase();
+  const machineHwidShort = `${machineHwidHash.slice(0, 4)}-${machineHwidHash.slice(4, 8)}-${machineHwidHash.slice(8, 12)}`;
   const machineName = os.hostname();
   const managerSessionId = crypto.randomUUID();
   let points = 0;
@@ -39,14 +42,87 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   let offlineWallet = null;
   let onAccountChanged = null;
   let lastCatalogAttempt = 0;
+  let accessStatus = 'approved';
+  let customRateUnits = null;
+  let effectiveRateUnits = null;
+  let accessRequestedAt = null;
+  let accessNote = '';
   try {
     const saved = JSON.parse(fs.readFileSync(accountFile, 'utf8'));
     if (saved.origin === base.origin && /^[a-f0-9]{64}$/.test(saved.token || '') && typeof saved.accountId === 'string' && (!saved.machineHwid || saved.machineHwid === machineHwid)) account = saved;
+  } catch (_) {}
+  try {
+    const savedAccess = JSON.parse(fs.readFileSync(accessStateFile, 'utf8'));
+    if (savedAccess && savedAccess.origin === base.origin && savedAccess.machineHwid === machineHwid) {
+      if (['approved', 'pending', 'revoked'].includes(savedAccess.accessStatus)) accessStatus = savedAccess.accessStatus;
+      if (savedAccess.customRateUnits === null || Number.isSafeInteger(savedAccess.customRateUnits)) customRateUnits = savedAccess.customRateUnits;
+      if (savedAccess.effectiveRateUnits === null || Number.isSafeInteger(savedAccess.effectiveRateUnits)) effectiveRateUnits = savedAccess.effectiveRateUnits;
+      if (savedAccess.accessRequestedAt === null || Number.isSafeInteger(savedAccess.accessRequestedAt)) accessRequestedAt = savedAccess.accessRequestedAt;
+      if (typeof savedAccess.accessNote === 'string') accessNote = savedAccess.accessNote;
+    }
   } catch (_) {}
   try{const saved=JSON.parse(fs.readFileSync(walletSnapshotFile,'utf8'));if(saved.origin===base.origin&&saved.accountId===account?.accountId&&Number.isSafeInteger(saved.balanceUnits)){balanceUnits=saved.balanceUnits;points=balanceUnits/100;if(Array.isArray(saved.topupHistory))topupHistory=saved.topupHistory;}}catch(_){}
   function atomicWrite(file, data) {
     fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(file + '.tmp', file);
+  }
+  function applyAccessMeta(result) {
+    if (!result || typeof result !== 'object') return;
+    let changed = false;
+    if (['approved', 'pending', 'revoked'].includes(result.accessStatus) && result.accessStatus !== accessStatus) {
+      accessStatus = result.accessStatus;
+      changed = true;
+    }
+    if (result.customRateUnits !== undefined) {
+      const nextCustom = (result.customRateUnits === null) ? null : (Number.isSafeInteger(Number(result.customRateUnits)) ? Number(result.customRateUnits) : customRateUnits);
+      if (nextCustom !== customRateUnits) {
+        customRateUnits = nextCustom;
+        changed = true;
+      }
+    }
+    if (result.effectiveRateUnits !== undefined || result.rateUnits !== undefined) {
+      const rawEff = result.effectiveRateUnits !== undefined ? result.effectiveRateUnits : result.rateUnits;
+      const nextEff = (rawEff === null) ? null : (Number.isSafeInteger(Number(rawEff)) ? Number(rawEff) : effectiveRateUnits);
+      if (nextEff !== effectiveRateUnits) {
+        effectiveRateUnits = nextEff;
+        changed = true;
+      }
+    }
+    if (result.accessRequestedAt !== undefined && result.accessRequestedAt !== accessRequestedAt) {
+      accessRequestedAt = result.accessRequestedAt || null;
+      changed = true;
+    }
+    if (typeof result.accessNote === 'string' && result.accessNote !== accessNote) {
+      accessNote = result.accessNote;
+      changed = true;
+    }
+    if (changed) {
+      try {
+        atomicWrite(accessStateFile, {
+          origin: base.origin,
+          machineHwid,
+          machineHwidShort,
+          accessStatus,
+          customRateUnits,
+          effectiveRateUnits,
+          accessRequestedAt,
+          accessNote,
+          updatedAt: Date.now()
+        });
+      } catch (_) {}
+    }
+  }
+  function getAccessState() {
+    return {
+      accessStatus,
+      machineHwid,
+      machineHwidShort,
+      customRateUnits,
+      effectiveRateUnits,
+      accessRequestedAt,
+      accessNote,
+      accountId: account?.accountId || null
+    };
   }
   function loadSettings() {
     let s = {};
@@ -55,7 +131,8 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       autoAnswer: s.autoAnswer !== false,
       answerDelayMs: Math.max(800, Math.min(10000, parseInt(s.answerDelayMs, 10) || 1800)),
       pointSystemEnabled: true, points: offlineWallet ? offlineWallet.balance()/100 : points, balanceUnits: offlineWallet ? offlineWallet.balance() : balanceUnits, unitScale: 100, pointsPerSolve: localMatcher.ready() ? 0 : pointsPerSolve, localCatalogReady: localMatcher.ready(), pointsPerBaht: 1,
-      machineHwid, topupHistory, serviceAvailable, serviceOrigin: base.origin,
+      machineHwid, machineHwidShort, accessStatus, customRateUnits, effectiveRateUnits, accessRequestedAt, accessNote,
+      topupHistory, serviceAvailable, serviceOrigin: base.origin,
       accountId: account?.accountId || null
     };
   }
@@ -103,14 +180,19 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     req.on('timeout', () => req.destroy(new Error('CAPTCHA service timeout')));
     req.end(data || undefined);
   }));
-  async function ensureAccount() {
+  async function ensureAccount(preferredDeviceName) {
     if (account) return account;
     if (!enrollment) enrollment = (async () => {
-      const result = await requestJSON('/v1/aetheria/enroll', { machineHwid, machineName }, null);
+      const payload = { machineHwid, machineName };
+      if (typeof preferredDeviceName === 'string' && preferredDeviceName.trim()) {
+        payload.deviceName = preferredDeviceName.trim().slice(0, 64);
+      }
+      const result = await requestJSON('/v1/aetheria/enroll', payload, null);
       if (!result?.success || typeof result.accountId !== 'string' || !/^[a-f0-9]{64}$/.test(result.token || '')) throw new Error('Invalid account enrollment');
       const saved = { origin: base.origin, accountId: result.accountId, token: result.token, machineHwid };
       atomicWrite(accountFile, saved);
       account = saved;
+      applyAccessMeta(result);
       if (result.schemaVersion === 2 && result.unitScale === 100 && Number.isSafeInteger(result.balanceUnits)) {
         updateBalance(result);
       }
@@ -123,8 +205,14 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     try {
       const result = await requestJSON(route, payload, credential.token);
       serviceAvailable = true;
+      if (result && typeof result === 'object') applyAccessMeta(result);
       return result;
     } catch (e) {
+      if (e && e.status === 403 && (e.code === 'ACCESS_PENDING' || e.code === 'ACCESS_REVOKED')) {
+        serviceAvailable = true;
+        applyAccessMeta({ accessStatus: e.code === 'ACCESS_REVOKED' ? 'revoked' : 'pending' });
+        throw e;
+      }
       if (e && e.status === 401 && (e.code === 'ACCOUNT_HWID_MISMATCH' || e.code === 'UNAUTHORIZED')) {
         const prevAccountId = account?.accountId || null;
         account = null;
@@ -137,9 +225,15 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
           }
           const retried = await requestJSON(route, payload, fresh.token);
           serviceAvailable = true;
+          if (retried && typeof retried === 'object') applyAccessMeta(retried);
           return retried;
         } catch (retryErr) {
-          serviceAvailable = false;
+          if (retryErr && retryErr.status === 403 && (retryErr.code === 'ACCESS_PENDING' || retryErr.code === 'ACCESS_REVOKED')) {
+            serviceAvailable = true;
+            applyAccessMeta({ accessStatus: retryErr.code === 'ACCESS_REVOKED' ? 'revoked' : 'pending' });
+          } else {
+            serviceAvailable = false;
+          }
           throw retryErr;
         }
       }
@@ -148,6 +242,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
      }
   }
   function updateBalance(result) {
+    applyAccessMeta(result);
     if (result.schemaVersion === 2 && result.unitScale === 100 && Number.isSafeInteger(result.balanceUnits ?? result.remainingUnits)) {
       balanceUnits = result.balanceUnits ?? result.remainingUnits; points = balanceUnits / 100;
       if (offlineWallet && typeof offlineWallet.confirmBalance === 'function' && Number.isSafeInteger(result.walletRevision)) {
@@ -169,6 +264,41 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       updateBalance(result);
     } catch (_) { serviceAvailable = false; }
     return loadSettings();
+  }
+  async function syncAccessStatus(preferredDeviceName) {
+    try {
+      const payload = (typeof preferredDeviceName === 'string' && preferredDeviceName.trim())
+        ? { machineName: preferredDeviceName.trim().slice(0, 64), deviceName: preferredDeviceName.trim().slice(0, 64) }
+        : {};
+      const res = await call('/v1/aetheria/machine/access-status', payload);
+      if (res && typeof res === 'object') applyAccessMeta(res);
+      return getAccessState();
+    } catch (_) {
+      return getAccessState();
+    }
+  }
+  async function requestMachineAccess({ deviceName, note } = {}) {
+    const cleanName = typeof deviceName === 'string' && deviceName.trim() ? deviceName.trim().slice(0, 64) : machineName;
+    const cleanNote = typeof note === 'string' ? note.trim().slice(0, 240) : '';
+    const credential = await ensureAccount(cleanName).catch(() => account);
+    const res = await requestJSON('/v1/aetheria/machine/access-request', {
+      machineHwid,
+      machineName: cleanName,
+      deviceName: cleanName,
+      note: cleanNote
+    }, credential?.token || null);
+    if (res && typeof res === 'object') {
+      if (!account && typeof res.accountId === 'string' && /^[a-f0-9]{64}$/.test(res.token || '')) {
+        account = { origin: base.origin, accountId: res.accountId, token: res.token, machineHwid };
+        try { atomicWrite(accountFile, account); } catch (_) {}
+      }
+      applyAccessMeta(res);
+    }
+    return {
+      success: Boolean(res?.success),
+      ...getAccessState(),
+      deviceName: res?.deviceName || cleanName
+    };
   }
   async function solveHumanCheck(prompt, options = [], items = null, requestId = crypto.randomUUID()) {
     if (account && Date.now() - lastCatalogAttempt > 3600000) {
@@ -227,9 +357,18 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     isRemoteService: true, loadSettings, saveSettings,
     publicSettings: (s = loadSettings()) => Object.fromEntries([
       'autoAnswer', 'answerDelayMs', 'pointSystemEnabled', 'points', 'pointsPerSolve',
-      'pointsPerBaht', 'machineHwid', 'topupHistory', 'serviceAvailable', 'serviceOrigin', 'accountId', 'balanceUnits', 'unitScale', 'localCatalogReady'
+      'pointsPerBaht', 'machineHwid', 'machineHwidShort', 'accessStatus', 'customRateUnits', 'effectiveRateUnits', 'accessRequestedAt', 'accessNote',
+      'topupHistory', 'serviceAvailable', 'serviceOrigin', 'accountId', 'balanceUnits', 'unitScale', 'localCatalogReady'
     ].map(key => [key, s[key]])),
     refreshBalance, solveHumanCheck, redeemTrueMoneyVoucher, getMachineFingerprint, reportSecurityEvent, recoverOfflineCredit,
+    getMachineHwid: () => machineHwid,
+    getMachineHwidShort: () => machineHwidShort,
+    getAccessStatus: () => accessStatus,
+    getAccessState,
+    updateAccessStateFromServer: (meta) => { if (meta && typeof meta === 'object') applyAccessMeta(meta); return accessStatus; },
+    ensureAccount: (preferredDeviceName) => ensureAccount(preferredDeviceName),
+    syncAccessStatus,
+    requestMachineAccess,
     serviceRequest: (route, payload) => {
       if (route !== '/v1/aetheria/health' && !/^\/v1\/aetheria\/(?:script|usage|billing|proxy|offline|machine)\/[a-z-]+(?:\/[a-z-]+)?$/.test(route)) throw new Error('Unsupported coordinator route');
       return call(route, payload);

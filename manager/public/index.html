@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4.53.7">
+  <link rel="stylesheet" href="style.css?v=4.53.23">
   <link rel="stylesheet" href="inventory_market.css?v=4.44.23">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=4.45.0">
@@ -30,11 +30,17 @@
         <div class="brand-text">
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
             <h1 style="margin: 0;">Aetheria Online Manager</h1>
-            <div class="device-nickname-badge" title="ชื่อเครื่องที่แสดงในการแจ้งเตือน Discord (คลิกเพื่อแก้ไข)">
+            <div class="device-nickname-badge" title="ชื่อเครื่องที่แสดงในการแจ้งเตือน Discord และระบบหลังบ้าน (คลิกเพื่อแก้ไข)">
               <span class="device-icon">💻</span>
               <span class="device-label">เครื่อง:</span>
               <input type="text" id="device-nickname-input" class="device-nickname-field" placeholder="ชื่อเครื่อง..." maxlength="25" spellcheck="false" title="ตั้งชื่อเล่นประจำเครื่องนี้ เพื่อให้รู้ว่าแจ้งเตือน Discord มาจากเครื่องไหน">
               <span id="device-nickname-saved" style="display: none; font-size: 11px; color: #34d399; font-weight: bold;" title="บันทึกแล้ว">✓</span>
+            </div>
+            <div id="device-hwid-badge" class="device-hwid-badge" role="button" tabindex="0" title="คลิกเพื่อคัดลอก ชื่อเครื่อง + รหัส HWID สำหรับส่งให้แอดมินอนุมัติสิทธิ์">
+              <span class="hwid-icon">🔑</span>
+              <span class="hwid-label">HWID:</span>
+              <span id="device-hwid-short" class="hwid-code">----</span>
+              <span id="device-hwid-copy-hint" class="hwid-copy-icon">📋</span>
             </div>
           </div>
           <span class="subtext">Multi-Client Isolated Sessions & Bot Control <span class="ver-pill">v4.3.0</span></span>
@@ -1219,8 +1225,8 @@
     </div>
   </div>
 
-  <script src="image_board_solver.js?v=4.53.22"></script>
-  <script src="app.js?v=4.53.20"></script>
+  <script src="image_board_solver.js?v=4.53.24"></script>
+  <script src="app.js?v=4.53.23"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.53.0"></script>
@@ -1235,7 +1241,7 @@
   <script src="guild_manager.js?v=4.49.0"></script>
   <script src="jail_manager.js?v=4.51.9"></script>
   <script src="device_manager.js?v=4.53.6"></script>
-  <script src="update_log.js?v=4.53.22"></script>
+  <script src="update_log.js?v=4.53.24"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

@@ -3929,11 +3929,11 @@ function initTopupCaptchaModal() {
           el.style.display = isDev ? "" : "none";
         });
 
-        if (s.machineHwid) {
-          cachedFullHwid = s.machineHwid;
+        if (s.machineHwidShort || s.machineHwid) {
+          cachedFullHwid = s.machineHwidShort || s.machineHwid;
           if (hwidShort) {
-            hwidShort.innerText = `${s.machineHwid.slice(0, 8)}...${s.machineHwid.slice(-6)}`;
-            hwidShort.title = `Full HWID: ${s.machineHwid}`;
+            hwidShort.innerText = s.machineHwidShort || `${s.machineHwid.slice(0, 8)}...${s.machineHwid.slice(-6)}`;
+            hwidShort.title = `HWID: ${s.machineHwidShort || s.machineHwid}`;
           }
         }
         const accountEl = document.getElementById("topup-service-account");
@@ -4295,24 +4295,280 @@ function initTopupCaptchaModal() {
 function initDeviceNickname() {
   const input = document.getElementById("device-nickname-input");
   const savedBadge = document.getElementById("device-nickname-saved");
+  const hwidBadge = document.getElementById("device-hwid-badge");
+  const hwidShortEl = document.getElementById("device-hwid-short");
+  const hwidCopyHint = document.getElementById("device-hwid-copy-hint");
   if (!input) return;
 
   let currentSavedValue = "";
+  let currentDefaultNick = "";
+  let currentHwidShort = "";
+  let currentHwidFull = "";
+  let currentAccessStatus = "approved";
+  let currentAccessRequestedAt = null;
+  let currentAccessNote = "";
   let hideSavedTimer = null;
+
+  function ensureAccessLockOverlay() {
+    let overlay = document.getElementById("access-lock-overlay");
+    if (overlay) return overlay;
+    overlay = document.createElement("div");
+    overlay.id = "access-lock-overlay";
+    overlay.style.cssText = "display:none;position:fixed;inset:0;z-index:9999999;background:radial-gradient(circle at top,#1e1b4b 0%,#090d16 55%,#020617 100%);align-items:center;justify-content:center;padding:20px;font-family:'IBM Plex Sans Thai','Plus Jakarta Sans',sans-serif;color:#f8fafc;";
+    overlay.innerHTML = `
+      <div style="width:100%;max-width:540px;background:linear-gradient(155deg,rgba(15,23,42,0.96),rgba(30,27,75,0.92));border:1.5px solid rgba(168,85,247,0.45);border-radius:18px;padding:26px 28px;box-shadow:0 30px 80px rgba(0,0,0,0.88),0 0 40px rgba(168,85,247,0.22);display:flex;flex-direction:column;gap:16px;">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <div id="access-lock-icon" style="width:52px;height:52px;border-radius:14px;background:rgba(168,85,247,0.18);border:1px solid rgba(168,85,247,0.45);display:flex;align-items:center;justify-content:center;font-size:26px;flex-shrink:0;">🔒</div>
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <h2 id="access-lock-title" style="margin:0;font-size:18px;font-weight:800;color:#f8fafc;">รอการอนุมัติสิทธิ์เข้าใช้งาน</h2>
+              <span id="access-lock-pill" style="background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.5);color:#fde68a;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;">⏳ รออนุมัติ (Pending)</span>
+            </div>
+            <p id="access-lock-desc" style="margin:4px 0 0 0;font-size:12.5px;color:#cbd5e1;line-height:1.45;">
+              เครื่องนี้ยังไม่ได้รับอนุญาตให้เข้าใช้งานระบบ PmheeAether Manager กรุณาตั้งชื่อเครื่องและส่งรหัส <b>HWID</b> ให้ผู้ดูแลระบบอนุมัติ
+            </p>
+          </div>
+        </div>
+
+        <div style="background:rgba(2,6,23,0.68);border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:700;color:#93c5fd;margin-bottom:5px;">💻 ชื่อเครื่องของคุณ (แสดงในระบบแอดมิน):</label>
+            <div style="display:flex;gap:8px;">
+              <input type="text" id="access-lock-nickname" maxlength="32" placeholder="ตั้งชื่อเครื่อง เช่น PC-เพื่อนกอล์ฟ..." style="flex:1;background:#0f172a;border:1px solid rgba(56,189,248,0.4);border-radius:8px;color:#f8fafc;font-size:13px;font-weight:600;padding:8px 12px;outline:none;">
+              <button type="button" id="btn-access-save-nick" style="background:rgba(14,165,233,0.2);border:1px solid rgba(56,189,248,0.45);color:#bae6fd;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">💾 บันทึกชื่อ</button>
+            </div>
+          </div>
+
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:700;color:#d8b4fe;margin-bottom:5px;">🔑 รหัสประจำเครื่อง (HWID สำหรับขอสิทธิ์):</label>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:rgba(88,28,135,0.25);border:1px solid rgba(168,85,247,0.45);border-radius:9px;padding:10px 14px;">
+              <div>
+                <div id="access-lock-hwid-short" style="font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:800;color:#f8fafc;letter-spacing:1.2px;">----</div>
+                <div id="access-lock-hwid-full" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#94a3b8;word-break:break-all;margin-top:2px;">-</div>
+              </div>
+              <button type="button" id="btn-access-copy-info" style="background:#7c3aed;border:1px solid #a855f7;color:#fff;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;box-shadow:0 4px 14px rgba(124,58,237,0.4);">
+                📋 คัดลอกชื่อเครื่อง + HWID
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#94a3b8;margin-bottom:5px;">📝 ข้อความแจ้งแอดมิน (ไม่บังคับ):</label>
+            <input type="text" id="access-lock-note" maxlength="160" placeholder="เช่น เพื่อนกอล์ฟ ขอเปิดใช้งานเครื่องใหม่ครับ..." style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid rgba(148,163,184,0.25);border-radius:8px;color:#e2e8f0;font-size:12px;padding:8px 12px;outline:none;">
+          </div>
+        </div>
+
+        <div id="access-lock-status-msg" style="display:none;padding:9px 12px;border-radius:8px;font-size:12px;font-weight:600;background:rgba(16,185,129,0.16);border:1px solid rgba(52,211,153,0.4);color:#6ee7b7;text-align:center;"></div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button type="button" id="btn-access-request-send" style="flex:2;min-width:210px;background:linear-gradient(135deg,#10b981,#059669);border:1px solid #34d399;color:#fff;border-radius:10px;padding:11px 16px;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 6px 20px rgba(16,185,129,0.35);">
+            📨 ส่งคำขออนุญาตเข้าใช้งาน (Request Access)
+          </button>
+          <button type="button" id="btn-access-check-now" style="flex:1;min-width:140px;background:rgba(30,41,59,0.9);border:1px solid rgba(148,163,184,0.35);color:#e2e8f0;border-radius:10px;padding:11px 14px;font-size:12.5px;font-weight:700;cursor:pointer;">
+            🔄 เช็กสถานะอนุมัติ
+          </button>
+        </div>
+
+        <div style="text-align:center;font-size:11px;color:#64748b;">
+          ระบบจะตรวจสอบสถานะการอนุมัติอัตโนมัติทุก 5 วินาที — เมื่อแอดมินกดอนุมัติแล้ว หน้าจอนี้จะปลดล็อกเองทันที
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const nickEl = overlay.querySelector("#access-lock-nickname");
+    const noteEl = overlay.querySelector("#access-lock-note");
+    const statusMsg = overlay.querySelector("#access-lock-status-msg");
+    const showLockMsg = (msg, isErr = false) => {
+      if (!statusMsg) return;
+      statusMsg.style.display = "block";
+      statusMsg.style.background = isErr ? "rgba(239,68,68,0.16)" : "rgba(16,185,129,0.16)";
+      statusMsg.style.borderColor = isErr ? "rgba(248,113,113,0.45)" : "rgba(52,211,153,0.4)";
+      statusMsg.style.color = isErr ? "#fca5a5" : "#6ee7b7";
+      statusMsg.textContent = msg;
+    };
+
+    overlay.querySelector("#btn-access-save-nick").onclick = async () => {
+      const val = (nickEl.value || "").trim();
+      if (!val) return showLockMsg("⚠️ กรุณากรอกชื่อเครื่องก่อนบันทึก", true);
+      input.value = val;
+      await saveNickname();
+      showLockMsg(`✅ บันทึกชื่อเครื่องเป็น "${currentSavedValue}" เรียบร้อยแล้ว`);
+    };
+
+    overlay.querySelector("#btn-access-copy-info").onclick = () => {
+      const nick = (nickEl.value || currentSavedValue || currentDefaultNick || "ไม่ระบุ").trim();
+      copyMachineIdentityText(nick);
+      showLockMsg(`📋 คัดลอก "เครื่อง: ${nick} | HWID: ${currentHwidShort}" ลง Clipboard แล้ว ส่งให้แอดมินได้เลย!`);
+    };
+
+    overlay.querySelector("#btn-access-request-send").onclick = async () => {
+      const btn = overlay.querySelector("#btn-access-request-send");
+      const nick = (nickEl.value || currentSavedValue || currentDefaultNick || "").trim();
+      const note = (noteEl.value || "").trim();
+      btn.disabled = true;
+      btn.textContent = "⏳ กำลังส่งคำขอไปยังระบบแอดมิน...";
+      try {
+        const res = await fetch(`${API_BASE}/api/access/request`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ nickname: nick, note })
+        }).then(r => r.json());
+        if (res && res.success) {
+          applyAccessDataToUi(res);
+          showLockMsg("✅ ส่งคำขออนุญาตเข้าใช้งานไปยัง Admin Console เรียบร้อยแล้ว! กรุณารอแอดมินกดอนุมัติ");
+        } else {
+          showLockMsg("⚠️ " + (res?.error || "ส่งคำขอไม่สำเร็จ กรุณากดคัดลอกชื่อเครื่อง + HWID ส่งให้แอดมินโดยตรง"), true);
+        }
+      } catch (e) {
+        showLockMsg("⚠️ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณากดคัดลอกชื่อเครื่อง + HWID ส่งให้แอดมิน", true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "📨 ส่งคำขออนุญาตเข้าใช้งาน (Request Access)";
+      }
+    };
+
+    overlay.querySelector("#btn-access-check-now").onclick = async () => {
+      showLockMsg("🔄 กำลังตรวจสอบสถานะสิทธิ์กับเซิร์ฟเวอร์...");
+      const unlocked = await pollAccessStatusFromServer(true);
+      if (!unlocked) {
+        showLockMsg(currentAccessStatus === "revoked"
+          ? "🚫 เครื่องนี้ยังถูกระงับสิทธิ์อยู่ กรุณาติดต่อแอดมิน"
+          : "⏳ ยังอยู่ระหว่างรอแอดมินกดอนุมัติสิทธิ์...");
+      }
+    };
+
+    return overlay;
+  }
+
+  function renderAccessLockOverlay() {
+    const isLocked = currentAccessStatus === "pending" || currentAccessStatus === "revoked";
+    const existing = document.getElementById("access-lock-overlay");
+    if (!isLocked && !existing) return;
+    const overlay = ensureAccessLockOverlay();
+    if (!isLocked) {
+      overlay.style.display = "none";
+      return;
+    }
+    overlay.style.display = "flex";
+    const isRevoked = currentAccessStatus === "revoked";
+    const iconEl = overlay.querySelector("#access-lock-icon");
+    const titleEl = overlay.querySelector("#access-lock-title");
+    const pillEl = overlay.querySelector("#access-lock-pill");
+    const descEl = overlay.querySelector("#access-lock-desc");
+    const nickEl = overlay.querySelector("#access-lock-nickname");
+    const noteEl = overlay.querySelector("#access-lock-note");
+    const shortEl = overlay.querySelector("#access-lock-hwid-short");
+    const fullEl = overlay.querySelector("#access-lock-hwid-full");
+
+    if (iconEl) iconEl.textContent = isRevoked ? "🚫" : "🔒";
+    if (titleEl) titleEl.textContent = isRevoked ? "สิทธิ์การใช้งานของเครื่องนี้ถูกระงับ" : "รอการอนุมัติสิทธิ์เข้าใช้งาน (HWID Access)";
+    if (pillEl) {
+      pillEl.textContent = isRevoked ? "🚫 ระงับสิทธิ์ (Revoked)" : "⏳ รออนุมัติ (Pending)";
+      pillEl.style.background = isRevoked ? "rgba(239,68,68,0.2)" : "rgba(245,158,11,0.2)";
+      pillEl.style.borderColor = isRevoked ? "rgba(248,113,113,0.5)" : "rgba(245,158,11,0.5)";
+      pillEl.style.color = isRevoked ? "#fca5a5" : "#fde68a";
+    }
+    if (descEl) {
+      descEl.innerHTML = isRevoked
+        ? "ผู้ดูแลระบบได้ระงับสิทธิ์การใช้งานของเครื่องนี้ชั่วคราว หากต้องการขอเปิดสิทธิ์อีกครั้ง กรุณาส่งคำขอหรือแจ้งรหัส <b>HWID</b> ให้แอดมิน"
+        : "เครื่องนี้ยังไม่ได้รับอนุญาตให้ใช้งานโปรแกรม กรุณาตั้งชื่อเครื่องและส่งรหัส <b>HWID</b> ด้านล่างให้แอดมินเพื่อกดอนุมัติสิทธิ์";
+    }
+    if (nickEl && document.activeElement !== nickEl) {
+      nickEl.value = currentSavedValue || currentDefaultNick || "";
+    }
+    if (noteEl && document.activeElement !== noteEl && currentAccessNote && !noteEl.value) {
+      noteEl.value = currentAccessNote;
+    }
+    if (shortEl) shortEl.textContent = currentHwidShort || "----";
+    if (fullEl) fullEl.textContent = `เครื่อง: ${currentSavedValue || currentDefaultNick || "-"} • HWID: ${currentHwidShort || "-"}`;
+  }
+
+  function applyAccessDataToUi(res) {
+    if (!res || typeof res !== "object") return;
+    if (typeof res.nickname === "string") {
+      currentSavedValue = res.nickname;
+      if (document.activeElement !== input) input.value = currentSavedValue;
+    }
+    if (typeof res.defaultNickname === "string") {
+      currentDefaultNick = res.defaultNickname;
+      input.placeholder = res.defaultNickname;
+    }
+    if (typeof res.machineHwidShort === "string" && res.machineHwidShort) {
+      currentHwidShort = res.machineHwidShort;
+      if (hwidShortEl) hwidShortEl.textContent = currentHwidShort;
+    }
+    if (typeof res.machineHwid === "string" && res.machineHwid) {
+      currentHwidFull = res.machineHwid;
+    }
+    if (hwidBadge && currentHwidShort) {
+      const nick = currentSavedValue || currentDefaultNick || "ไม่ระบุ";
+      hwidBadge.title = `เครื่อง: ${nick} | HWID: ${currentHwidShort} (คลิกเพื่อคัดลอกส่งแอดมิน)`;
+    }
+    const prevStatus = currentAccessStatus;
+    if (["approved", "pending", "revoked"].includes(res.accessStatus)) {
+      currentAccessStatus = res.accessStatus;
+    }
+    if (res.accessRequestedAt !== undefined) currentAccessRequestedAt = res.accessRequestedAt;
+    if (typeof res.accessNote === "string") currentAccessNote = res.accessNote;
+
+    renderAccessLockOverlay();
+    if ((prevStatus === "pending" || prevStatus === "revoked") && currentAccessStatus === "approved") {
+      if (typeof showToast === "function") {
+        showToast("✅ แอดมินอนุมัติสิทธิ์เครื่องนี้เรียบร้อยแล้ว! พร้อมใช้งานทันที", "success");
+      }
+    }
+  }
+
+  function copyMachineIdentityText(overrideNick) {
+    const nick = overrideNick || currentSavedValue || currentDefaultNick || "ไม่ระบุ";
+    const textToCopy = `เครื่อง: ${nick} | HWID: ${currentHwidShort || "-"}`;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(textToCopy).catch(() => {});
+    }
+    if (hwidCopyHint) {
+      hwidCopyHint.textContent = "✓";
+      hwidCopyHint.style.color = "#34d399";
+      setTimeout(() => {
+        hwidCopyHint.textContent = "📋";
+        hwidCopyHint.style.color = "";
+      }, 2000);
+    }
+    if (typeof showToast === "function") {
+      showToast(`📋 คัดลอกข้อมูลเครื่อง (${nick} • HWID: ${currentHwidShort}) แล้ว`, "info");
+    }
+  }
+
+  if (hwidBadge) {
+    hwidBadge.addEventListener("click", () => copyMachineIdentityText());
+    hwidBadge.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        copyMachineIdentityText();
+      }
+    });
+  }
 
   async function loadNickname() {
     try {
       const res = await fetch(`${API_BASE}/api/device-nickname`).then(r => r.json());
       if (res && res.success) {
-        currentSavedValue = res.nickname || "";
-        input.value = currentSavedValue;
-        if (res.defaultNickname) {
-          input.placeholder = res.defaultNickname;
-        }
+        applyAccessDataToUi(res);
       }
     } catch (err) {
       console.warn("Failed to load device nickname:", err);
     }
+  }
+
+  async function pollAccessStatusFromServer(forceSync = false) {
+    try {
+      const res = await fetch(`${API_BASE}/api/access/status${forceSync ? "?sync=1" : ""}`).then(r => r.json());
+      if (res && res.success) {
+        applyAccessDataToUi(res);
+        return res.accessStatus === "approved";
+      }
+    } catch (_) {}
+    return currentAccessStatus === "approved";
   }
 
   async function saveNickname() {
@@ -4326,8 +4582,7 @@ function initDeviceNickname() {
       }).then(r => r.json());
 
       if (res && res.success) {
-        currentSavedValue = res.nickname || "";
-        input.value = currentSavedValue;
+        applyAccessDataToUi(res);
         if (savedBadge) {
           savedBadge.style.display = "inline";
           if (hideSavedTimer) clearTimeout(hideSavedTimer);
@@ -4350,7 +4605,16 @@ function initDeviceNickname() {
     }
   });
 
+  window.setAccessLockOverlayState = (mockState) => {
+    applyAccessDataToUi(mockState);
+  };
+
   loadNickname();
+  setTimeout(() => pollAccessStatusFromServer(true), 1500);
+  setInterval(() => {
+    const needSync = currentAccessStatus === "pending" || currentAccessStatus === "revoked";
+    pollAccessStatusFromServer(needSync);
+  }, 5000);
 }
 
 (async () => {

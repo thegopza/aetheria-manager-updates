@@ -1262,6 +1262,7 @@ const LIVE_STATE_EVAL = `(() => {
       const metaEl = hc.querySelector('.human-check-meta');
       const promptStr = (promptEl ? (promptEl.innerText || '').trim() : '') || (window.__latestHumanCheck?.prompt || '');
       const isCountChallenge = /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(promptStr);
+      const isRotateChallenge = Boolean(hc.querySelector('.human-check-dial') || /หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(promptStr));
       const btns = Array.from(hc.querySelectorAll('.human-check-pick'));
       const numBtns = isCountChallenge
         ? Array.from(hc.querySelectorAll('button')).filter(b => /^[1-6]$/.test((b.textContent || b.innerText || '').trim()))
@@ -1387,58 +1388,75 @@ const LIVE_STATE_EVAL = `(() => {
         imageDataUrl = boardImg.src;
         try {
           if (boardImg.complete && boardImg.naturalWidth > 0) {
-            const bw = 480;
-            const bh = 330;
-            const stripH = 38;
-            const bCanvas = document.createElement('canvas');
-            bCanvas.width = bw;
-            bCanvas.height = bh + stripH;
-            const bCtx = bCanvas.getContext('2d');
-            if (bCtx) {
-              bCtx.fillStyle = '#0f172a';
-              bCtx.fillRect(0, 0, bw, bh + stripH);
-              bCtx.drawImage(boardImg, 0, 0, bw, bh);
-              if (isCountChallenge && Array.isArray(countValues)) {
-                const nOpts = countValues.length >= 6 ? 6 : 4;
-                const boxW = nOpts === 6 ? 74 : 110;
-                const gap = (bw - nOpts * boxW) / (nOpts + 1);
-                for (let i = 0; i < nOpts; i++) {
-                  const cntVal = countValues[i] || (i + 1);
-                  const bx = Math.round(gap + i * (boxW + gap));
-                  const by = bh + 5;
-                  const cx = Math.round(bx + boxW / 2);
-                  bCtx.fillStyle = '#1e293b';
-                  bCtx.strokeStyle = '#38bdf8';
-                  bCtx.lineWidth = 1.5;
-                  bCtx.beginPath();
-                  if (bCtx.roundRect) bCtx.roundRect(bx, by, boxW, 28, 6); else bCtx.rect(bx, by, boxW, 28);
-                  bCtx.fill();
-                  bCtx.stroke();
-                  bCtx.fillStyle = '#f8fafc';
-                  bCtx.font = nOpts === 6 ? 'bold 10.5px "Segoe UI", Tahoma, sans-serif' : 'bold 12px "Segoe UI", Tahoma, sans-serif';
-                  bCtx.textAlign = 'center';
-                  bCtx.fillText('คำตอบ ' + (i + 1) + ' (' + cntVal + ' อัน)', cx, by + 19, boxW - 4);
-                }
-              } else {
-                const colCenters = [68, 181, 300, 416];
-                for (let i = 0; i < 4; i++) {
-                  const cx = colCenters[i];
-                  const bx = cx - 44;
-                  const by = bh + 5;
-                  bCtx.fillStyle = '#1e293b';
-                  bCtx.strokeStyle = '#38bdf8';
-                  bCtx.lineWidth = 1.5;
-                  bCtx.beginPath();
-                  if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
-                  bCtx.fill();
-                  bCtx.stroke();
-                  bCtx.fillStyle = '#f8fafc';
-                  bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
-                  bCtx.textAlign = 'center';
-                  bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
-                }
+            if (isRotateChallenge) {
+              const rCanvas = document.createElement('canvas');
+              rCanvas.width = 256;
+              rCanvas.height = 256;
+              const rCtx = rCanvas.getContext('2d');
+              if (rCtx) {
+                rCtx.fillStyle = '#0f172a';
+                rCtx.fillRect(0, 0, 256, 256);
+                rCtx.drawImage(boardImg, 18, 10, 220, 220);
+                rCtx.fillStyle = '#38bdf8';
+                rCtx.font = 'bold 12px "Segoe UI", Tahoma, sans-serif';
+                rCtx.textAlign = 'center';
+                rCtx.fillText('หมุนรูปให้ตั้งตรง แล้วกดยืนยัน', 128, 245);
+                imageDataUrl = rCanvas.toDataURL('image/png');
               }
-              imageDataUrl = bCanvas.toDataURL('image/png');
+            } else {
+              const bw = boardImg.naturalWidth || 480;
+              const bh = isCountChallenge ? (boardImg.naturalHeight || 360) : (boardImg.naturalHeight || 330);
+              const stripH = 38;
+              const bCanvas = document.createElement('canvas');
+              bCanvas.width = bw;
+              bCanvas.height = bh + stripH;
+              const bCtx = bCanvas.getContext('2d');
+              if (bCtx) {
+                bCtx.fillStyle = '#0f172a';
+                bCtx.fillRect(0, 0, bw, bh + stripH);
+                bCtx.drawImage(boardImg, 0, 0, bw, bh);
+                if (isCountChallenge && Array.isArray(countValues)) {
+                  const nOpts = countValues.length >= 6 ? 6 : 4;
+                  const boxW = nOpts === 6 ? 74 : 110;
+                  const gap = (bw - nOpts * boxW) / (nOpts + 1);
+                  for (let i = 0; i < nOpts; i++) {
+                    const cntVal = countValues[i] || (i + 1);
+                    const bx = Math.round(gap + i * (boxW + gap));
+                    const by = bh + 5;
+                    const cx = Math.round(bx + boxW / 2);
+                    bCtx.fillStyle = '#1e293b';
+                    bCtx.strokeStyle = '#38bdf8';
+                    bCtx.lineWidth = 1.5;
+                    bCtx.beginPath();
+                    if (bCtx.roundRect) bCtx.roundRect(bx, by, boxW, 28, 6); else bCtx.rect(bx, by, boxW, 28);
+                    bCtx.fill();
+                    bCtx.stroke();
+                    bCtx.fillStyle = '#f8fafc';
+                    bCtx.font = nOpts === 6 ? 'bold 10.5px "Segoe UI", Tahoma, sans-serif' : 'bold 12px "Segoe UI", Tahoma, sans-serif';
+                    bCtx.textAlign = 'center';
+                    bCtx.fillText('คำตอบ ' + (i + 1) + ' (' + cntVal + ' อัน)', cx, by + 19, boxW - 4);
+                  }
+                } else {
+                  const colCenters = [68, 181, 300, 416];
+                  for (let i = 0; i < 4; i++) {
+                    const cx = colCenters[i];
+                    const bx = cx - 44;
+                    const by = bh + 5;
+                    bCtx.fillStyle = '#1e293b';
+                    bCtx.strokeStyle = '#38bdf8';
+                    bCtx.lineWidth = 1.5;
+                    bCtx.beginPath();
+                    if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
+                    bCtx.fill();
+                    bCtx.stroke();
+                    bCtx.fillStyle = '#f8fafc';
+                    bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
+                    bCtx.textAlign = 'center';
+                    bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+                  }
+                }
+                imageDataUrl = bCanvas.toDataURL('image/png');
+              }
             }
           }
         } catch (err) {}
@@ -1466,9 +1484,44 @@ const LIVE_STATE_EVAL = `(() => {
       };
     } else {
       s.humanCheck = null;
+      const inJailNow = /คุก|jail|prison/i.test(String(s.map || ''));
       if (window.__lastHumanCheckSolved && window.__lastHumanCheckSolved.verified !== 'wrong' && Date.now() - (window.__lastHumanCheckSolved.timestamp || 0) < 30000) {
-        window.__lastHumanCheckSolved.verified = 'correct';
-        window.__lastHumanCheckSolved.isCorrect = true;
+        if (inJailNow) {
+          const lastS = window.__lastHumanCheckSolved;
+          lastS.verified = 'wrong';
+          lastS.isCorrect = false;
+          if (!lastS._jailWrongQueued) {
+            lastS._jailWrongQueued = true;
+            if (!Array.isArray(window.__pmWrongHumanCheckQueue)) window.__pmWrongHumanCheckQueue = [];
+            window.__pmWrongHumanCheckQueue.push({
+              timestamp: lastS.timestamp,
+              checkId: lastS.checkId || null,
+              prompt: lastS.prompt || '',
+              type: lastS.type || null,
+              count: lastS.count ?? null,
+              turn: lastS.turn ?? null,
+              clicks: lastS.clicks ?? null,
+              direction: lastS.direction || null,
+              optionCounts: lastS.optionCounts || null,
+              pickIndex: lastS.pickIndex ?? 0,
+              slot: lastS.slot || (Number.isInteger(lastS.pickIndex) && lastS.pickIndex >= 0 ? lastS.pickIndex + 1 : 1),
+              x: lastS.x ?? null,
+              y: lastS.y ?? null,
+              confidence: lastS.confidence ?? null,
+              matchedName: lastS.matchedName || '',
+              source: lastS.source || 'embedded-local-catalog',
+              manual: Boolean(lastS.manual),
+              answeredBy: lastS.answeredBy || null,
+              triesLeftBefore: lastS.triesLeftBefore ?? 1,
+              triesLeftAfter: 0,
+              metaText: 'ตอบผิดครบ 3 ครั้ง (ถูกส่งเข้าคุก)',
+              imageDataUrl: lastS.annotatedImageDataUrl || lastS.rawSrc || null
+            });
+          }
+        } else if (window.__lastHumanCheckSolved.triesLeftBefore !== 1 || Date.now() - (window.__lastHumanCheckSolved.timestamp || 0) >= 1350) {
+          window.__lastHumanCheckSolved.verified = 'correct';
+          window.__lastHumanCheckSolved.isCorrect = true;
+        }
       }
     }
     if (hc && window.__lastHumanCheckSolved) {
@@ -1511,6 +1564,7 @@ const LIVE_STATE_EVAL = `(() => {
       const curMeta = /ตอบผิดได้อีก\\s*\\d+/.test(rawMetaQ) ? rawMetaQ : ((fallbackQ.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMetaQ);
       const curTriesMatch = curMeta.match(/ตอบผิดได้อีก\\s*(\\d+)/);
       const curTriesLeft = curTriesMatch ? Number(curTriesMatch[1]) : null;
+      const inJailNowQ = /คุก|jail|prison/i.test(String(s.map || ''));
       for (const att of window.__pmWrongHumanCheckQueue) {
         if (!att) continue;
         const triesBefore = att.triesLeftBefore != null
@@ -1518,7 +1572,11 @@ const LIVE_STATE_EVAL = `(() => {
           : (((att.triesLeftAfter ?? curTriesLeft) != null && (att.triesLeftAfter ?? curTriesLeft) <= 2) ? 3 : 1);
         const alreadyDroppedAtQueueTime = (att.triesLeftAfter != null && triesBefore != null && att.triesLeftAfter < triesBefore);
         if (!hc) {
-          if (alreadyDroppedAtQueueTime) {
+          if (alreadyDroppedAtQueueTime || inJailNowQ) {
+            if (inJailNowQ) {
+              att.triesLeftAfter = 0;
+              if (!att.metaText) att.metaText = 'ตอบผิดครบ 3 ครั้ง (ถูกส่งเข้าคุก)';
+            }
             confirmedWrong.push(att);
           } else if (window.__lastHumanCheckSolved && window.__lastHumanCheckSolved.timestamp === att.timestamp && window.__lastHumanCheckSolved.verified !== 'wrong') {
             window.__lastHumanCheckSolved.verified = 'correct';
@@ -5462,8 +5520,13 @@ function saveAdminPeers(peers) {
 
 async function stopSingleProfile(id) {
   await screenProxy.releaseProfile(id, 'stopped').catch(() => {});
-  if (browserMode.isOpen(id)) {
-    try { await browserMode.stop(id); } catch (_) {}
+  const wasBrowserOpen = browserMode.isOpen(id);
+  const stoppedBrowser = await browserMode.stop(id).catch(() => false);
+  const profile = loadProfiles().find(p => p.id === id);
+  if (profile && profile.debugPort) {
+    await evalProfilePort(profile.debugPort, 'try { window.close(); } catch (_) {}', 1200).catch(() => {});
+  }
+  if (wasBrowserOpen || stoppedBrowser) {
     return { success: true };
   }
   const proc = runningProcesses[id];
@@ -5476,9 +5539,19 @@ async function stopSingleProfile(id) {
 
 async function stopAllProfiles() {
   await screenProxy.releaseAll().catch(() => {});
-  for (const p of loadProfiles()) {
-    if (browserMode.isOpen(p.id)) browserMode.stop(p.id).catch(() => {});
+  if (typeof browserMode.stopAll === 'function') {
+    await browserMode.stopAll().catch(() => {});
+  } else {
+    for (const p of loadProfiles()) {
+      await browserMode.stop(p.id).catch(() => {});
+    }
   }
+  const allProfiles = loadProfiles();
+  await Promise.allSettled(
+    allProfiles
+      .filter(p => p && p.debugPort)
+      .map(p => evalProfilePort(p.debugPort, 'try { window.close(); } catch (_) {}', 1200))
+  );
   for (const id in runningProcesses) {
     const proc = runningProcesses[id];
     if (proc && proc.pid) {
@@ -5486,6 +5559,7 @@ async function stopAllProfiles() {
     }
     delete runningProcesses[id];
   }
+  try { exec('taskkill /im "Aetheria Online.exe" /f /t'); } catch (_) {}
   return { success: true };
 }
 
@@ -6584,12 +6658,28 @@ async function pollCentralCommands() {
   if (centralCommandPollInFlight) return;
   centralCommandPollInFlight = true;
   try {
-    const accountSettings = humanCheckSolver.loadSettings();
+    let accountSettings = humanCheckSolver.loadSettings();
+    const deviceNickname = getEffectiveDeviceNickname();
+    if ((!accountSettings || !accountSettings.accountId) && !TEST_INSTANCE) {
+      await humanCheckSolver.ensureAccount?.(deviceNickname).catch(() => {});
+      accountSettings = humanCheckSolver.loadSettings();
+    }
     if (!accountSettings || !accountSettings.accountId) return;
-    const deviceId = getEffectiveDeviceNickname();
+    const offlineStatus = typeof offlineCoordinator?.getStatus === 'function' ? offlineCoordinator.getStatus() : null;
+    const primaryMachineId = (offlineStatus && offlineStatus.machineId) || deviceNickname;
+    const prevAccessStatus = humanCheckSolver.getAccessStatus?.() || 'approved';
     const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/commands', {
-      machineId: deviceId
+      machineId: primaryMachineId,
+      altMachineId: deviceNickname,
+      deviceName: deviceNickname
     });
+    if (res && res.success) {
+      const nextAccessStatus = humanCheckSolver.updateAccessStateFromServer?.(res) || prevAccessStatus;
+      if (nextAccessStatus !== 'approved' && prevAccessStatus === 'approved') {
+        console.warn(`[Central Admin] Machine access changed to ${nextAccessStatus} — stopping all profiles immediately`);
+        await stopAllProfiles().catch(() => {});
+      }
+    }
     if (res && res.success && Array.isArray(res.commands) && res.commands.length > 0) {
       const ackIds = [];
       for (const cmd of res.commands) {
@@ -6611,7 +6701,7 @@ async function pollCentralCommands() {
       if (ackIds.length > 0) {
         await humanCheckSolver.serviceRequest('/v1/aetheria/machine/commands/ack', {
           commandIds: ackIds,
-          machineId: deviceId
+          machineId: primaryMachineId
         }).catch(() => {});
       }
     }
@@ -6700,6 +6790,101 @@ const server = http.createServer(async (req, res) => {
       if (!statement.activationDay || input.termsVersion !== statement.termsVersion) return sendJSON({success:false,error:'ยังไม่ประกาศวันเริ่ม หรือเงื่อนไขเปลี่ยนแล้ว กรุณาอ่านใบสรุปใหม่'},409);
       return sendJSON(await humanCheckSolver.serviceRequest('/v1/aetheria/billing/accept', {termsVersion:input.termsVersion}));
     } catch (_) { return sendJSON({success:false,error:'ยังบันทึกความยินยอมบนเซิร์ฟเวอร์ไม่ได้'},503); }
+  }
+
+  // HWID & Machine Access Control Endpoints (/api/access/status, /api/access/request)
+  if (pathname === '/api/access/status' && (req.method === 'GET' || req.method === 'POST')) {
+    const forceSync = parsedUrl.searchParams.get('sync') === '1' || req.method === 'POST';
+    const currentNick = getEffectiveDeviceNickname();
+    if (forceSync && !TEST_INSTANCE && typeof humanCheckSolver.syncAccessStatus === 'function') {
+      const prevStatus = humanCheckSolver.getAccessStatus?.() || 'approved';
+      await humanCheckSolver.syncAccessStatus(currentNick).catch(() => {});
+      const afterStatus = humanCheckSolver.getAccessStatus?.() || 'approved';
+      if (afterStatus === 'revoked' && prevStatus !== 'revoked') {
+        await stopAllProfiles().catch(() => {});
+      }
+    }
+    const state = typeof humanCheckSolver.getAccessState === 'function' ? humanCheckSolver.getAccessState() : {};
+    return sendJSON({
+      success: true,
+      nickname: currentNick,
+      defaultNickname: getDefaultDeviceNickname(),
+      ...state
+    });
+  }
+
+  if (pathname === '/api/access/request' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => {
+      body += c;
+      if (Buffer.byteLength(body, 'utf8') > 8192) req.destroy();
+    });
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const st = installer.loadSettings() || {};
+        const rawNick = typeof data.nickname === 'string' && data.nickname.trim()
+          ? data.nickname.trim().slice(0, 32)
+          : (typeof data.deviceName === 'string' && data.deviceName.trim() ? data.deviceName.trim().slice(0, 32) : '');
+        if (rawNick) {
+          st.deviceNickname = rawNick;
+          installer.saveSettings(st);
+          if (discordService && typeof discordService.setDeviceNickname === 'function') {
+            discordService.setDeviceNickname(rawNick);
+          }
+        }
+        const effectiveNick = getEffectiveDeviceNickname();
+        const note = typeof data.note === 'string' ? data.note.trim().slice(0, 240) : '';
+        if (TEST_INSTANCE && !data.allowRemoteInTest) {
+          return sendJSON({
+            success: true,
+            nickname: effectiveNick,
+            defaultNickname: getDefaultDeviceNickname(),
+            ...(typeof humanCheckSolver.getAccessState === 'function' ? humanCheckSolver.getAccessState() : {}),
+            accessRequestedAt: Date.now(),
+            accessNote: note
+          });
+        }
+        const result = await humanCheckSolver.requestMachineAccess({
+          deviceName: effectiveNick,
+          note
+        });
+        return sendJSON({
+          success: true,
+          nickname: effectiveNick,
+          defaultNickname: getDefaultDeviceNickname(),
+          ...result
+        });
+      } catch (e) {
+        return sendJSON({
+          success: false,
+          error: e?.message || 'ไม่สามารถส่งคำขออนุมัติไปยังเซิร์ฟเวอร์ได้ กรุณาคัดลอกชื่อเครื่องและ HWID ส่งให้แอดมินโดยตรง'
+        }, 502);
+      }
+    });
+    return;
+  }
+
+  // Gatekeeper: Block game launch & bot control routes if machine access is pending or revoked
+  const currentMachineAccessStatus = typeof humanCheckSolver.getAccessStatus === 'function' ? humanCheckSolver.getAccessStatus() : 'approved';
+  if (currentMachineAccessStatus !== 'approved') {
+    const isBlockedActionRoute = (
+      (req.method === 'POST' && pathname === '/api/launch-all') ||
+      (req.method === 'POST' && /^\/api\/profiles\/[^/]+\/launch$/.test(pathname)) ||
+      (req.method === 'POST' && pathname === '/api/bot-control/start-all') ||
+      (req.method === 'POST' && pathname === '/api/consolidation/start')
+    );
+    if (isBlockedActionRoute) {
+      return sendJSON({
+        success: false,
+        code: currentMachineAccessStatus === 'revoked' ? 'ACCESS_REVOKED' : 'ACCESS_PENDING',
+        accessStatus: currentMachineAccessStatus,
+        machineHwidShort: humanCheckSolver.getMachineHwidShort?.() || '',
+        error: currentMachineAccessStatus === 'revoked'
+          ? 'สิทธิ์การใช้งานของเครื่องนี้ถูกระงับโดยผู้ดูแลระบบ กรุณาติดต่อแอดมิน'
+          : 'เครื่องนี้ยังไม่ได้รับอนุมัติสิทธิ์เข้าใช้งาน กรุณากดส่งคำขออนุมัติหรือแจ้งชื่อเครื่อง + HWID ให้แอดมิน'
+      }, 403);
+    }
   }
 
   // Plan Script live status / on-off switch per client — see plan_sync.js
@@ -8568,22 +8753,8 @@ const server = http.createServer(async (req, res) => {
   // 6. POST /api/profiles/:id/stop
   if (req.method === "POST" && pathname.match(/^\/api\/profiles\/[^/]+\/stop$/)) {
     const id = pathname.split("/")[3];
-    screenProxy.releaseProfile(id, "stopped").catch(() => {});
-    if (browserMode.isOpen(id)) {
-      browserMode.stop(id).then(() => sendJSON({ success: true })).catch(e => sendJSON({ success: false, error: e.message }, 500));
-      return;
-    }
-    const proc = runningProcesses[id];
-    if (proc && proc.pid) {
-      exec(`taskkill /pid ${proc.pid} /f /t`, (err) => {
-        delete runningProcesses[id];
-        return sendJSON({ success: true });
-      });
-    } else {
-      delete runningProcesses[id];
-      return sendJSON({ success: true, message: "Not running" });
-    }
-    return;
+    await stopSingleProfile(id).catch(() => {});
+    return sendJSON({ success: true });
   }
 
   // 7. POST /api/launch-all
@@ -8662,15 +8833,7 @@ const server = http.createServer(async (req, res) => {
 
   // 8. POST /api/stop-all
   if (req.method === "POST" && pathname === "/api/stop-all") {
-    screenProxy.releaseAll().catch(() => {});
-    for (const p of loadProfiles()) if (browserMode.isOpen(p.id)) browserMode.stop(p.id).catch(() => {});
-    for (const id in runningProcesses) {
-      const proc = runningProcesses[id];
-      if (proc && proc.pid) {
-        try { exec(`taskkill /pid ${proc.pid} /f /t`); } catch (e) {}
-      }
-      delete runningProcesses[id];
-    }
+    await stopAllProfiles().catch(() => {});
     return sendJSON({ success: true });
   }
 
@@ -9552,7 +9715,13 @@ public class PmFocus {
     if (req.method === "GET") {
       const defaultNick = getDefaultDeviceNickname();
       const currentNick = getEffectiveDeviceNickname();
-      return sendJSON({ success: true, nickname: currentNick, defaultNickname: defaultNick });
+      const accessMeta = typeof humanCheckSolver.getAccessState === "function" ? humanCheckSolver.getAccessState() : {};
+      return sendJSON({
+        success: true,
+        nickname: currentNick,
+        defaultNickname: defaultNick,
+        ...accessMeta
+      });
     }
     if (req.method === "POST") {
       let body = "";
@@ -9564,10 +9733,20 @@ public class PmFocus {
           const cleaned = typeof data.nickname === 'string' ? data.nickname.trim().slice(0, 32) : '';
           st.deviceNickname = cleaned;
           installer.saveSettings(st);
+          const nextNick = st.deviceNickname || getDefaultDeviceNickname();
           if (discordService && typeof discordService.setDeviceNickname === 'function') {
-            discordService.setDeviceNickname(st.deviceNickname || getDefaultDeviceNickname());
+            discordService.setDeviceNickname(nextNick);
           }
-          sendJSON({ success: true, nickname: st.deviceNickname || getDefaultDeviceNickname(), defaultNickname: getDefaultDeviceNickname() });
+          if (!TEST_INSTANCE && typeof humanCheckSolver.syncAccessStatus === 'function') {
+            humanCheckSolver.syncAccessStatus(nextNick).catch(() => {});
+          }
+          const accessMeta = typeof humanCheckSolver.getAccessState === "function" ? humanCheckSolver.getAccessState() : {};
+          sendJSON({
+            success: true,
+            nickname: nextNick,
+            defaultNickname: getDefaultDeviceNickname(),
+            ...accessMeta
+          });
         } catch (e) {
           sendJSON({ success: false, error: e.message }, 400);
         }

@@ -2939,6 +2939,28 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }).catch(() => {});
     return true;
   }
+  async function stopAll() {
+    const allPids = new Set([
+      ...clients.keys(),
+      ...knownTargets.keys(),
+      ...((typeof loadProfiles === 'function' ? (loadProfiles() || []) : []).map(p => p && p.id).filter(Boolean))
+    ]);
+    for (const pid of allPids) {
+      await stop(pid).catch(() => {});
+    }
+    knownTargets.clear();
+    saveKnownTargets();
+    await connect().then(async () => {
+      const res = await send('Target.getTargets').catch(() => null);
+      const infos = Array.isArray(res?.targetInfos) ? res.targetInfos : [];
+      for (const t of infos) {
+        if (t && t.type === 'page' && t.targetId && (/aetheria-online\.in\.th/i.test(t.url || '') || t.url === 'about:blank')) {
+          await send('Target.closeTarget', { targetId: t.targetId }).catch(() => {});
+        }
+      }
+    }).catch(() => {});
+    return true;
+  }
   const isOpen = profileId => clients.has(profileId);
 
   async function applyProxyModeToOpenWindows({ onlyProfileIds } = {}) {
@@ -3161,7 +3183,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if(ws){const socket=ws;ws=null;socket.close();}
     for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(Error('BROWSER_MODE_DISPOSED'));}pending.clear();
   }
-  return { launch, stop, isOpen, start, dispose, findBrowser, rebalanceDeviceGroups, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
+  return { launch, stop, stopAll, isOpen, start, dispose, findBrowser, rebalanceDeviceGroups, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
 }
 
 module.exports = { createBrowserMode, findBrowser, HEALTH_JS, MAX_SCREENS_PER_DEVICE, extractPelicanStorageFromLevelDb, mergeAuthConfigString, mergeSellConfigString };

@@ -684,7 +684,11 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       try {
         const probe = await evalProfilePort(profile.debugPort, `(() => {
           const hc = document.querySelector('.human-check');
-          if (!hc) return { stillOpen: false, solved: window.__lastHumanCheckSolved || null };
+          const mapNow = (typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '')
+            || (typeof window.getLiveCharacterData === 'function' ? (window.getLiveCharacterData()?.map || '') : '')
+            || (window.__latestCharacterData?.map || '');
+          const inJail = /คุก|jail|prison/i.test(String(mapNow || ''));
+          if (!hc) return { stillOpen: false, inJail, solved: window.__lastHumanCheckSolved || null };
           const metaEl = hc.querySelector('.human-check-meta');
           const rawMetaText = (metaEl && typeof metaEl.innerText === 'string') ? metaEl.innerText.trim() : '';
           const fallbackHcText = (typeof hc.innerText === 'string' ? hc.innerText : (typeof hc.textContent === 'string' ? hc.textContent : '')) || '';
@@ -839,19 +843,25 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         maxWaitMs: 5800,
         expectedTriesBefore: triesBefore
       });
-      // If the Human Check closed while waiting for lag, the answer was actually CORRECT! Cancel false wrong alert.
+      // If the Human Check closed while waiting for lag, check whether the player was sent to jail!
       if (!verify || !verify.stillOpen) {
-        console.log(`[Discord Bot] ⏳ ยกเลิกแจ้งเตือนตอบผิดของจอ [${profile.name}] เพราะหน้าต่างเช็คผู้เล่นปิดลงแล้วหลังรอลดแลค (ตอบถูก!)`);
-        return;
+        if (verify && (verify.inJail || verify.solved?.verified === 'wrong' || verify.solved?.isCorrect === false)) {
+          attempt.triesLeftAfter = 0;
+          attempt.metaText = 'ตอบผิดครบ 3 ครั้ง (ถูกส่งเข้าคุก)';
+        } else {
+          console.log(`[Discord Bot] ⏳ ยกเลิกแจ้งเตือนตอบผิดของจอ [${profile.name}] เพราะหน้าต่างเช็คผู้เล่นปิดลงแล้วหลังรอลดแลค (ตอบถูก!)`);
+          return;
+        }
+      } else {
+        // If triesLeft STILL hasn't decreased, the server hasn't rejected this choice as wrong.
+        if (verify.lagUnconfirmed && verify.triesLeft != null && verify.triesLeft >= triesBefore) {
+          console.log(`[Discord Bot] ⏳ ข้ามการยืนยันว่าตอบผิดของจอ [${profile.name}] เพราะจำนวนครั้งที่ตอบผิดได้ยังไม่ลดลง (${verify.metaText || verify.triesLeft})`);
+          return;
+        }
+        if (verify.triesLeft != null) attempt.triesLeftAfter = verify.triesLeft;
+        if (verify.metaText) attempt.metaText = verify.metaText;
+        if (verify.imageDataUrl) attempt.imageDataUrl = verify.imageDataUrl;
       }
-      // If triesLeft STILL hasn't decreased, the server hasn't rejected this choice as wrong.
-      if (verify.lagUnconfirmed && verify.triesLeft != null && verify.triesLeft >= triesBefore) {
-        console.log(`[Discord Bot] ⏳ ข้ามการยืนยันว่าตอบผิดของจอ [${profile.name}] เพราะจำนวนครั้งที่ตอบผิดได้ยังไม่ลดลง (${verify.metaText || verify.triesLeft})`);
-        return;
-      }
-      if (verify.triesLeft != null) attempt.triesLeftAfter = verify.triesLeft;
-      if (verify.metaText) attempt.metaText = verify.metaText;
-      if (verify.imageDataUrl) attempt.imageDataUrl = verify.imageDataUrl;
     }
 
     const now = Date.now();
@@ -863,22 +873,28 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       : (Number.isInteger(attempt.pickedSlot) && attempt.pickedSlot >= 1
         ? attempt.pickedSlot
         : (Number.isInteger(attempt.pickIndex) && attempt.pickIndex >= 0 ? attempt.pickIndex + 1 : 1));
-    const dedupKey = `${profile.id}:${attempt.checkId || ''}:${slotNum}:${attempt.triesLeftAfter ?? attempt.triesLeft ?? ''}`;
+    const promptText = attempt.prompt || '(กดรูปด้านล่างที่เหมือนกับรูปในกรอบ)';
+    const isCountWrong = attempt.type === 'count' || /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(promptText);
+    const isRotateWrong = attempt.type === 'rotate' || /หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(promptText);
+    const turnVal = Number(attempt.turn) || 0;
+    const turnDesc = turnVal === 0 ? '0°' : (turnVal > 0 ? `+${turnVal}° ตามเข็ม` : `${turnVal}° ทวนเข็ม`);
+    const dedupChoiceKey = isRotateWrong ? `rot:${turnVal}` : (isCountWrong ? `cnt:${attempt.count || slotNum}` : `slot:${slotNum}`);
+    const dedupKey = `${profile.id}:${attempt.checkId || ''}:${dedupChoiceKey}:${attempt.triesLeftAfter ?? attempt.triesLeft ?? ''}`;
     if (reportedWrongAttempts.has(dedupKey)) return;
     reportedWrongAttempts.set(dedupKey, now);
 
     const nick = resolveDeviceNickname();
     const charName = profile.liveState?.charName || profile.lastCharName || profile.name;
-    const promptText = attempt.prompt || '(กดรูปด้านล่างที่เหมือนกับรูปในกรอบ)';
-    const isCountWrong = attempt.type === 'count' || /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(promptText);
-    const chosenLabel = isCountWrong
-      ? `ตัวเลือกที่ ${slotNum} (${attempt.count || slotNum} อัน)`
-      : `ตัวเลือกที่ ${slotNum}`;
+    const chosenLabel = isRotateWrong
+      ? `หมุนรูป (${attempt.clicks || 0} ครั้ง · ${turnDesc})`
+      : (isCountWrong
+        ? `ตัวเลือกที่ ${slotNum} (${attempt.count || slotNum} อัน)`
+        : `ตัวเลือกที่ ${slotNum}`);
     const byWho = attempt.manual && attempt.answeredBy
       ? `👤 ผู้เล่นกดตอบผ่าน Discord (**${attempt.answeredBy}**)`
       : `🤖 บอทตอบอัตโนมัติ (Auto-Solver)`;
     const triesText = attempt.metaText
-      || (attempt.triesLeftAfter != null ? `ตอบผิดได้อีก ${attempt.triesLeftAfter} ครั้ง` : 'หน้าต่างเช็คผู้เล่นยังไม่ปิด (กำลังลองตัวเลือกถัดไป)');
+      || (attempt.triesLeftAfter != null ? (attempt.triesLeftAfter <= 0 ? 'ตอบผิดครบ 3 ครั้ง (ถูกส่งเข้าคุก)' : `ตอบผิดได้อีก ${attempt.triesLeftAfter} ครั้ง`) : 'หน้าต่างเช็คผู้เล่นยังไม่ปิด (กำลังลองตัวเลือกถัดไป)');
 
     let fileAttachment = null;
     if (attempt.imageDataUrl && typeof attempt.imageDataUrl === 'string' && attempt.imageDataUrl.startsWith('data:image/')) {
@@ -919,13 +935,17 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       : (isCountWrong ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4]);
     const wrongBtnCount = isCountWrong ? wrongOptCounts.length : 4;
     const wrongOptionsFieldList = [];
-    for (let i = 0; i < wrongBtnCount; i++) {
-      const cntVal = wrongOptCounts[i] || (i + 1);
-      const optDesc = isCountWrong ? `คำตอบ ${i + 1} (${cntVal} อัน)` : `ตัวเลือกที่ ${i + 1}`;
-      if (i + 1 === slotNum) {
-        wrongOptionsFieldList.push(`❌ **ข้อ ${i + 1}: ${optDesc}** 👈 *(เลือกข้อนี้แล้วผิด)*`);
-      } else {
-        wrongOptionsFieldList.push(`⚪ ข้อ ${i + 1}: ${optDesc}`);
+    if (isRotateWrong) {
+      wrongOptionsFieldList.push(`❌ **${chosenLabel}** 👈 *(หมุนมุมนี้แล้วผิด)*`);
+    } else {
+      for (let i = 0; i < wrongBtnCount; i++) {
+        const cntVal = wrongOptCounts[i] || (i + 1);
+        const optDesc = isCountWrong ? `คำตอบ ${i + 1} (${cntVal} อัน)` : `ตัวเลือกที่ ${i + 1}`;
+        if (i + 1 === slotNum) {
+          wrongOptionsFieldList.push(`❌ **ข้อ ${i + 1}: ${optDesc}** 👈 *(เลือกข้อนี้แล้วผิด)*`);
+        } else {
+          wrongOptionsFieldList.push(`⚪ ข้อ ${i + 1}: ${optDesc}`);
+        }
       }
     }
 
@@ -1559,9 +1579,37 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
             // If server.js live-state polling already cleared activeChecks because .human-check closed, try reading __lastHumanCheckSolved once to send the green alert
             if (profile.debugPort && typeof evalProfilePort === 'function') {
               try {
-                const probe = await evalProfilePort(profile.debugPort, `(() => ({ stillOpen: !!document.querySelector('.human-check'), solved: window.__lastHumanCheckSolved || null }))()`);
+                const probe = await evalProfilePort(profile.debugPort, `(() => {
+                  const mapNow = (typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '')
+                    || (typeof window.getLiveCharacterData === 'function' ? (window.getLiveCharacterData()?.map || '') : '')
+                    || (window.__latestCharacterData?.map || '');
+                  return {
+                    stillOpen: !!document.querySelector('.human-check'),
+                    inJail: /คุก|jail|prison/i.test(String(mapNow || '')),
+                    solved: window.__lastHumanCheckSolved || null
+                  };
+                })()`);
                 const st = probe && probe.result ? probe.result : null;
                 if (st?.solved?.manual || trackedCheck.solvedManually) return;
+                const jailedNow = Boolean(st?.inJail || /คุก|jail|prison/i.test(String(profile.liveState?.map || '')));
+                if (st && !st.stillOpen && jailedNow) {
+                  const failedSolved = isSolvedForCurrentCheck(st.solved) ? st.solved : lastAttemptedSolved;
+                  if (failedSolved) {
+                    await notifyHumanCheckWrongAttempt({
+                      profile,
+                      attempt: {
+                        ...failedSolved,
+                        checkId: check.id ?? failedSolved.checkId ?? null,
+                        prompt: check.prompt || failedSolved.prompt || '',
+                        triesLeftBefore: failedSolved.triesLeftBefore ?? 1,
+                        triesLeftAfter: 0,
+                        metaText: 'ตอบผิดครบ 3 ครั้ง (ถูกส่งเข้าคุก)',
+                        imageDataUrl: failedSolved.annotatedImageDataUrl || check.imageDataUrl || null
+                      }
+                    });
+                  }
+                  return;
+                }
                 if (st && !st.stillOpen && isSolvedForCurrentCheck(st.solved) && !isConfirmedWrongSolved(st.solved)) {
                   const s = st.solved;
                   applySolvedOptionCounts(s);
@@ -1595,7 +1643,15 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 const metaText = /ตอบผิดได้อีก\\s*\\d+/.test(rawMeta)
                   ? rawMeta
                   : ((fbText.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMeta);
-                return { stillOpen: !!hc, metaText, solved: window.__lastHumanCheckSolved || null };
+                const mapNow = (typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '')
+                  || (typeof window.getLiveCharacterData === 'function' ? (window.getLiveCharacterData()?.map || '') : '')
+                  || (window.__latestCharacterData?.map || '');
+                return {
+                  stillOpen: !!hc,
+                  inJail: /คุก|jail|prison/i.test(String(mapNow || '')),
+                  metaText,
+                  solved: window.__lastHumanCheckSolved || null
+                };
               })()`);
               const st = probe && probe.result ? probe.result : null;
               if (st?.solved?.manual || trackedCheck.solvedManually) return;
@@ -1608,6 +1664,25 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 if (st.metaText) metaText = st.metaText;
               }
               if (st && !st.stillOpen) {
+                const jailedNow = Boolean(st.inJail || /คุก|jail|prison/i.test(String(profile.liveState?.map || '')));
+                if (jailedNow) {
+                  const failedSolved = validSolved || lastAttemptedSolved;
+                  if (failedSolved) {
+                    await notifyHumanCheckWrongAttempt({
+                      profile,
+                      attempt: {
+                        ...failedSolved,
+                        checkId: check.id ?? failedSolved.checkId ?? null,
+                        prompt: check.prompt || failedSolved.prompt || '',
+                        triesLeftBefore: failedSolved.triesLeftBefore ?? 1,
+                        triesLeftAfter: 0,
+                        metaText: 'ตอบผิดครบ 3 ครั้ง (ถูกส่งเข้าคุก)',
+                        imageDataUrl: failedSolved.annotatedImageDataUrl || check.imageDataUrl || null
+                      }
+                    });
+                  }
+                  return;
+                }
                 const s = (validSolved && !isConfirmedWrongSolved(validSolved))
                   ? validSolved
                   : ((lastAttemptedSolved && !isConfirmedWrongSolved(lastAttemptedSolved)) ? lastAttemptedSolved : null);
@@ -1828,26 +1903,32 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           : '';
 
         // Send Success Notification to Discord
-        const optionsList = resolvedOptions.map((opt, i) => {
-          const isChosen = (opt.index === solution.pickIndex);
-          const icon = isChosen ? '✅' : '⚪';
-          const optTitle = opt.itemName || opt.label || `ตัวเลือกที่ ${i + 1}`;
-          const highlight = isChosen ? `**ข้อ ${i + 1}: ${optTitle}** 👈 *(ระบบเลือกข้อนี้${coordSuffix})*` : `ข้อ ${i + 1}: ${optTitle}`;
-          return `${icon} ${highlight}`;
-        }).join('\n');
+        const isRotateSolved = lastAttemptedSolved?.type === 'rotate' || /หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(promptText || '');
+        const optionsList = isRotateSolved
+          ? `✅ **${solution.matchedName}** 👈 *(หมุนรูปตั้งตรงเรียบร้อย)*`
+          : resolvedOptions.map((opt, i) => {
+              const isChosen = (opt.index === solution.pickIndex);
+              const icon = isChosen ? '✅' : '⚪';
+              const optTitle = opt.itemName || opt.label || `ตัวเลือกที่ ${i + 1}`;
+              const highlight = isChosen ? `**ข้อ ${i + 1}: ${optTitle}** 👈 *(ระบบเลือกข้อนี้${coordSuffix})*` : `ข้อ ${i + 1}: ${optTitle}`;
+              return `${icon} ${highlight}`;
+            }).join('\n');
 
         const pointDeductText = (solution.charged === 1)
           ? `\n🪙 **ส่วนบุญคงเหลือ:** **${solution.remaining}**`
           : '\n🪙 **ไม่มีค่าต่อคำตอบ:** ไม่หักส่วนบุญ สำหรับ Humancheck';
 
         const optionsCount = resolvedOptions.length || 4;
+        const choiceHeadline = isRotateSolved
+          ? `✅ ดำเนินการ: **${solution.matchedName}** (${solution.source === 'local-catalog' ? 'แคตตาล็อกในเครื่อง' : 'บริการส่วนกลาง'})`
+          : `✅ เลือกตัวเลือกที่ **${solution.pickIndex + 1}**: **${solution.matchedName}**${coordSuffix} (${solution.source === 'local-catalog' ? 'แคตตาล็อกในเครื่อง' : 'บริการส่วนกลาง'})`;
         const embed = {
           title: `🤖 [Auto Human Check] ตรวจพบและตอบเช็คผู้เล่นสำเร็จ! (✅ ยืนยันผล: ตอบถูก!)`,
-          description: `💻 **เครื่อง:** \`${nick}\`\n🎮 **จอเกม:** \`${profile.name}\` (ตัวละคร: **${charName}**)\n\n### ❓ โจทย์คำถาม:\n> **${promptText}**\n\n🎯 **ระบบจับคู่อัตโนมัติ (ผู้ตอบ: บอท Auto-Solver):**\n✅ เลือกตัวเลือกที่ **${solution.pickIndex + 1}**: **${solution.matchedName}**${coordSuffix} (${solution.source === 'local-catalog' ? 'แคตตาล็อกในเครื่อง' : 'บริการส่วนกลาง'})\n🎉 **ยืนยันผล (Confirm):** **ตอบถูก!** (หน้าต่างเช็คผู้เล่นปิดลงเรียบร้อยแล้ว)\n⏱️ หน่วงเวลาตอบ: **${delayMs} ms** (เลียนแบบผู้เล่น)${pointDeductText}`,
+          description: `💻 **เครื่อง:** \`${nick}\`\n🎮 **จอเกม:** \`${profile.name}\` (ตัวละคร: **${charName}**)\n\n### ❓ โจทย์คำถาม:\n> **${promptText}**\n\n🎯 **ระบบจับคู่อัตโนมัติ (ผู้ตอบ: บอท Auto-Solver):**\n${choiceHeadline}\n🎉 **ยืนยันผล (Confirm):** **ตอบถูก!** (หน้าต่างเช็คผู้เล่นปิดลงเรียบร้อยแล้ว)\n⏱️ หน่วงเวลาตอบ: **${delayMs} ms** (เลียนแบบผู้เล่น)${pointDeductText}`,
           color: 0x10B981, // Emerald Green
           fields: [
             {
-              name: `📋 ตัวเลือกรูปภาพ (${optionsCount} ตัวเลือก):`,
+              name: isRotateSolved ? `🔄 การหมุนภาพ (Rotate Dial):` : `📋 ตัวเลือกรูปภาพ (${optionsCount} ตัวเลือก):`,
               value: optionsList || '(ไม่มีข้อมูล)',
               inline: false
             }

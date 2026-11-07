@@ -293,6 +293,40 @@
                 </button>
               </div>
             </div>
+            <!-- Same-IP Only Filter Toggle -->
+            <div style="margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+              <label for="cb-consolidate-same-ip-only" style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: #e2e8f0; font-weight: 600;">
+                <input type="checkbox" id="cb-consolidate-same-ip-only" style="accent-color: #a855f7; width: 15px; height: 15px; cursor: pointer;">
+                <span>🛡️ บังคับโอนเฉพาะในวง IP เดียวกับตัวรับเท่านั้น (ห้ามโอนข้าม IP)</span>
+                <span id="zeny-receiver-ip-badge" style="font-size: 11px; padding: 2px 8px; border-radius: 99px; background: rgba(168, 85, 247, 0.18); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.4); font-family: monospace;">IP: -</span>
+              </label>
+              <span style="font-size: 11px; color: #94a3b8;">💡 เมื่อติ๊กไว้ ระบบจะติ๊กเลือกเฉพาะจอที่อยู่ในวง IP เดียวกับตัวรับให้อัตโนมัติ</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- IP-GROUP CONSOLIDATION PANEL (รวมเงินแบบในวง IP) -->
+        <div class="zeny-stash-trade-card" id="zeny-ip-groups-card" style="margin-bottom: 14px; border-color: rgba(168, 85, 247, 0.35); background: linear-gradient(145deg, rgba(15, 23, 42, 0.92), rgba(30, 20, 56, 0.65));">
+          <div class="zst-header-row" style="flex-wrap: wrap; gap: 10px;">
+            <div class="zst-title-wrap">
+              <span class="zst-badge-icon" style="background: rgba(168, 85, 247, 0.2); border-color: rgba(168, 85, 247, 0.45);">🌐</span>
+              <div>
+                <div class="zst-title" style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                  <span>ระบบรวมเงินแยกตามวง IP (IP-Group Consolidation)</span>
+                  <span id="zeny-ip-groups-summary-badge" style="font-size: 11px; padding: 2px 9px; border-radius: 99px; background: rgba(168, 85, 247, 0.22); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.45); font-weight: 700;">0 วง IP</span>
+                </div>
+                <div class="zst-subtitle">แยกโอนเงินและไอเทมเฉพาะภายในวง Proxy IP เดียวกันเท่านั้น (ปลอดภัยสูงสุด ไม่มีการเทรดข้าม IP) — เลือกรวมเฉพาะวง หรือสั่งรันครบทุกวง IP อัตโนมัติทีละวง</div>
+              </div>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <button type="button" id="btn-start-ip-groups-consolidation" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #7c3aed, #6d28d9); border-color: #a855f7; font-weight: 700; padding: 6px 14px; font-size: 12px;" title="สั่งรวมเงินแยกตามวง IP ทุกกลุ่มอัตโนมัติ (รันทีละวง IP จนครบทุกวง)">
+                🌐 รวมเงินทุกวง IP อัตโนมัติ
+              </button>
+            </div>
+          </div>
+
+          <div id="zeny-ip-groups-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(285px, 1fr)); gap: 10px; margin-top: 10px;">
+            <!-- Populated dynamically by app.js -->
           </div>
         </div>
 
@@ -1185,9 +1219,9 @@
     </div>
   </div>
 
-  <script src="image_board_solver.js?v=4381"></script>
-  <script src="app.js?v=4.53.8"></script>
-  <script src="patcher_module.js?v=41744"></script>
+  <script src="image_board_solver.js?v=4.53.17"></script>
+  <script src="app.js?v=4.53.20"></script>
+  <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.53.0"></script>
   <script src="inventory_market.js?v=4.50.5"></script>
@@ -1201,7 +1235,7 @@
   <script src="guild_manager.js?v=4.49.0"></script>
   <script src="jail_manager.js?v=4.51.9"></script>
   <script src="device_manager.js?v=4.53.6"></script>
-  <script src="update_log.js?v=4.53.14"></script>
+  <script src="update_log.js?v=4.53.21"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

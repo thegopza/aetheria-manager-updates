@@ -261,7 +261,7 @@ const ACTIONS = {
     if (cur === ${Number(ch)} && window.__isBotRunning && !window.__isShopping && !window.__isNavigating) {
       setTimeout(() => { try { if (window.__isBotRunning && typeof window.activateInGameAuto === 'function') window.activateInGameAuto(); } catch (_) {} }, 600);
     }
-    return { success: cur === ${Number(ch)}, channel: cur, error: cur === ${Number(ch)} ? null : ((r && r.error) || 'ย้าย CH ไม่สำเร็จ') };
+    return { success: cur === ${Number(ch)}, channel: cur, blockedShut: Boolean(r && r.blockedShut), error: cur === ${Number(ch)} ? null : ((r && r.error) || 'ย้าย CH ไม่สำเร็จ') };
   })()`,
   leastChannel: (avoidChannels) => `(async () => {
     if (typeof window.findLeastPopulatedChannel !== 'function') return { success: false, error: 'no-helper' };
@@ -1114,8 +1114,12 @@ function createPartyService(opts) {
       leaderMap || (anchorSnap && anchorSnap.mapName)
     );
     const ownPartyCountByCh = {};
+    let maxMemberLevel = 0;
     for (const mid of [party.leaderId].concat(party.memberIds)) {
       const ms = states.get(mid);
+      if (ms && typeof ms.level === 'number' && ms.level > maxMemberLevel) {
+        maxMemberLevel = ms.level;
+      }
       if (!ms || !ms.ok || !ms.mapId || isCityMapName(ms.mapName) || ms.pkChannel) continue;
       if (anchorSnap && ms.mapId === anchorSnap.mapId && typeof ms.channel === 'number') {
         ownPartyCountByCh[ms.channel] = (ownPartyCountByCh[ms.channel] || 0) + 1;
@@ -1142,6 +1146,7 @@ function createPartyService(opts) {
         settledChannel: (rt.settledMapId && (!anchorSnap || rt.settledMapId === anchorSnap.mapId) && typeof rt.settledChannel === 'number') ? rt.settledChannel : null,
         lastPartyChannelSwitchAt: rt.lastPostSellFollowAt || rt.settledChannelAt || 0,
         ownPartyCountByCh,
+        maxMemberLevel,
         avoidChannels: syncAvoidInfo.avoidChannels,
         otherPartyChannelsByMap: syncAvoidInfo.otherPartyChannelsByMap,
         partyNames: allPartyNames,
@@ -1182,7 +1187,7 @@ function createPartyService(opts) {
         if (S && S.channel === ch) continue;
         rt.gatherNote = nm + ' กำลังย้ายไป CH ' + ch + ' (รอคูลดาวน์/ที่ว่างให้เอง)';
         const r = await act(profiles.get(id), ACTIONS.moveChannelWait(ch, T.memberMoveWaitMs), 'move-ch', T.memberMoveWaitMs + 10000);
-        if (!(r.ok && r.result && r.result.success)) return { ok: false, who: nm, error: (r.result && r.result.error) || r.error };
+        if (!(r.ok && r.result && r.result.success)) return { ok: false, who: nm, whoId: id, blockedShut: Boolean(r.result && r.result.blockedShut), error: (r.result && r.result.error) || r.error };
       }
       return { ok: true };
     };
@@ -1252,7 +1257,9 @@ function createPartyService(opts) {
       }
       rt.fallbackAt = now();
       rt.gatherNote = first.who + ' เข้า CH ' + targetCh + ' ไม่ได้ — ' + anchorLabel + ' กำลังหา CH ที่คนน้อยสุด';
-      const least = await act(anchorP, ACTIONS.leastChannel(avoidList), 'least-ch', 15000);
+      const fallbackAvoid = (first.blockedShut && !avoidList.includes(targetCh)) ? avoidList.concat([targetCh]) : avoidList;
+      const probeP = (first.blockedShut && first.whoId && profiles.get(first.whoId)) ? profiles.get(first.whoId) : anchorP;
+      const least = await act(probeP, ACTIONS.leastChannel(fallbackAvoid), 'least-ch', 15000);
       const ch = least.ok && least.result ? least.result.channel : null;
       if (typeof ch !== 'number' || ch === targetCh) {
         rt.channelNote = first.who + ' เข้า CH ' + targetCh + ' ไม่ได้ และหา CH ที่ว่างกว่าไม่ได้';

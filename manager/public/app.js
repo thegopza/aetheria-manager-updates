@@ -4432,6 +4432,101 @@ let unselectedSenderIds = new Set();
 let consolidationPollTimer = null;
 let isConsolidationRunning = false;
 let lastConsolidationState = null;
+let ipGroupReceiverMap = (() => {
+  try {
+    return JSON.parse(localStorage.getItem("pm_consolidation_ip_receivers") || "{}") || {};
+  } catch (e) {
+    return {};
+  }
+})();
+
+function saveIpGroupReceiverMap() {
+  try {
+    localStorage.setItem("pm_consolidation_ip_receivers", JSON.stringify(ipGroupReceiverMap || {}));
+  } catch (e) {}
+}
+
+function getProfileIpGroupKey(p) {
+  if (p && p.screenProxy && p.screenProxy.active && (p.screenProxy.ip || p.screenProxy.proxyHost)) {
+    return String(p.screenProxy.ip || p.screenProxy.proxyHost).trim();
+  }
+  return "LOCAL";
+}
+
+function isConsolidateSameIpOnly() {
+  const cb = document.getElementById("cb-consolidate-same-ip-only");
+  if (cb) return Boolean(cb.checked);
+  try {
+    return localStorage.getItem("pm_consolidate_same_ip_only") === "true";
+  } catch (e) {
+    return false;
+  }
+}
+
+function setConsolidateSameIpOnly(val) {
+  const b = Boolean(val);
+  const cb = document.getElementById("cb-consolidate-same-ip-only");
+  if (cb) cb.checked = b;
+  try {
+    localStorage.setItem("pm_consolidate_same_ip_only", b ? "true" : "false");
+  } catch (e) {}
+}
+
+function buildIpConsolidationGroups() {
+  const keepZeny = getConsolidationKeepZeny();
+  const map = new Map();
+  for (const p of currentProfiles) {
+    const ip = getProfileIpGroupKey(p);
+    if (!map.has(ip)) {
+      map.set(ip, {
+        ip,
+        profiles: [],
+        onlineProfiles: [],
+        onlinePremiumProfiles: [],
+        premiumProfiles: []
+      });
+    }
+    const g = map.get(ip);
+    g.profiles.push(p);
+    if (p.isRunning) g.onlineProfiles.push(p);
+    if (isProfilePremium(p)) {
+      g.premiumProfiles.push(p);
+      if (p.isRunning) g.onlinePremiumProfiles.push(p);
+    }
+  }
+
+  const groups = [];
+  for (const g of map.values()) {
+    const savedRecId = ipGroupReceiverMap[g.ip];
+    let receiver = g.onlinePremiumProfiles.find(p => p.id === savedRecId)
+      || g.onlinePremiumProfiles.find(p => p.isMain)
+      || g.onlinePremiumProfiles.slice().sort((a, b) => ((b.liveState?.zeny || 0) - (a.liveState?.zeny || 0)))[0]
+      || g.premiumProfiles.find(p => p.id === savedRecId)
+      || g.premiumProfiles.find(p => p.isMain)
+      || g.premiumProfiles[0]
+      || null;
+    if (receiver && ipGroupReceiverMap[g.ip] !== receiver.id) {
+      ipGroupReceiverMap[g.ip] = receiver.id;
+    }
+    const senders = receiver
+      ? g.onlinePremiumProfiles.filter(p => p.id !== receiver.id)
+      : [];
+    const totalZeny = g.onlineProfiles.reduce((sum, p) => sum + (Number(p.liveState?.zeny) || 0), 0);
+    const transferableZeny = senders.reduce((sum, p) => {
+      const z = Number(p.liveState?.zeny) || 0;
+      return sum + Math.max(0, z - keepZeny);
+    }, 0);
+    groups.push({
+      ...g,
+      receiver,
+      senders,
+      totalZeny,
+      transferableZeny,
+      canConsolidate: Boolean(receiver && receiver.isRunning && senders.length > 0)
+    });
+  }
+  return groups;
+}
 
 // "เหลือเงินติดตัวจอที่โอน": each sender keeps this much zeny (server: keepZeny). Remembered in this browser.
 function getConsolidationKeepZeny() {
@@ -4455,6 +4550,9 @@ function updateZenyConsolidationView() {
   const onlineProfiles = currentProfiles.filter(p => p.isRunning);
   const premiumProfiles = currentProfiles.filter(p => isProfilePremium(p));
   const onlinePremiumProfiles = onlineProfiles.filter(p => isProfilePremium(p));
+  const sameIpOnly = isConsolidateSameIpOnly();
+  const sameIpCb = document.getElementById("cb-consolidate-same-ip-only");
+  if (sameIpCb && sameIpCb.checked !== sameIpOnly) sameIpCb.checked = sameIpOnly;
   
   // 1. Update Top Metrics in Zeny Pane
   const totalOnlineZeny = onlineProfiles.reduce((sum, p) => {
@@ -4485,7 +4583,8 @@ function updateZenyConsolidationView() {
       receiverSelect.innerHTML = `<option value="" disabled selected>⚠️ ไม่มีตัวละครที่มีสถานะ 👑 Premium (การเทรดต้องมี Premium)</option>` +
         currentProfiles.map(p => {
           const charName = p.liveState?.charName || p.lastCharName || p.name;
-          return `<option value="${p.id}" disabled>🔒 [ไม่มี Premium] ${escapeHTML(p.name)} [${escapeHTML(charName)}]</option>`;
+          const ipKey = getProfileIpGroupKey(p);
+          return `<option value="${p.id}" disabled>🔒 [ไม่มี Premium] ${escapeHTML(p.name)} [${escapeHTML(charName)}] — IP: ${escapeHTML(ipKey)}</option>`;
         }).join("");
     } else {
       receiverSelect.innerHTML = currentProfiles.map(p => {
@@ -4495,7 +4594,94 @@ function updateZenyConsolidationView() {
         const zeny = p.liveState && typeof p.liveState.zeny === 'number' ? `${p.liveState.zeny.toLocaleString()} z` : '--';
         const mainStar = p.isMain ? "⭐ " : "";
         const premPrefix = hasPrem ? "👑 " : "🔒 [ไม่มี Premium] ";
-        return `<option value="${p.id}" ${p.id === currentVal && hasPrem ? "selected" : ""} ${!hasPrem ? "disabled" : ""}>${premPrefix}${mainStar}${escapeHTML(p.name)} [${escapeHTML(charName)}] — ${zeny} (${isOnline})</option>`;
+        const ipKey = getProfileIpGroupKey(p);
+        return `<option value="${p.id}" ${p.id === currentVal && hasPrem ? "selected" : ""} ${!hasPrem ? "disabled" : ""}>${premPrefix}${mainStar}${escapeHTML(p.name)} [${escapeHTML(charName)}] — ${zeny} · 🛡️ IP: ${escapeHTML(ipKey)} (${isOnline})</option>`;
+      }).join("");
+    }
+  }
+
+  const activeReceiverProfile = currentProfiles.find(p => p.id === selectedReceiverProfileId) || null;
+  const activeReceiverIp = activeReceiverProfile ? getProfileIpGroupKey(activeReceiverProfile) : null;
+  const receiverIpBadge = document.getElementById("zeny-receiver-ip-badge");
+  if (receiverIpBadge) {
+    receiverIpBadge.textContent = activeReceiverIp ? `🛡️ IP ตัวรับ: ${activeReceiverIp}` : "IP: -";
+  }
+
+  // 2.5 Render IP-Group Consolidation Cards (#zeny-ip-groups-list)
+  const ipGroupsListEl = document.getElementById("zeny-ip-groups-list");
+  const ipGroupsBadgeEl = document.getElementById("zeny-ip-groups-summary-badge");
+  const btnStartAllIpGroups = document.getElementById("btn-start-ip-groups-consolidation");
+  const ipGroups = buildIpConsolidationGroups();
+  const readyIpGroups = ipGroups.filter(g => g.canConsolidate);
+  if (ipGroupsBadgeEl) {
+    ipGroupsBadgeEl.textContent = `${ipGroups.length} วง IP (พร้อมรวม ${readyIpGroups.length} วง)`;
+  }
+  if (btnStartAllIpGroups) {
+    btnStartAllIpGroups.disabled = isConsolidationRunning || readyIpGroups.length === 0;
+    const totalIpTransferZeny = readyIpGroups.reduce((sum, g) => sum + g.transferableZeny, 0);
+    btnStartAllIpGroups.innerHTML = readyIpGroups.length > 0
+      ? `🌐 รวมเงินทุกวง IP อัตโนมัติ (${readyIpGroups.length} วง · ${totalIpTransferZeny.toLocaleString()} z)`
+      : `🌐 รวมเงินทุกวง IP อัตโนมัติ (0 วง)`;
+  }
+  if (ipGroupsListEl) {
+    if (ipGroups.length === 0) {
+      ipGroupsListEl.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #94a3b8; font-size: 12px; padding: 14px;">ยังไม่มีโปรไฟล์ในระบบ</div>`;
+    } else {
+      const runningIp = (lastConsolidationState && lastConsolidationState.running) ? lastConsolidationState.currentIpGroup : null;
+      ipGroupsListEl.innerHTML = ipGroups.map((g, idx) => {
+        const isCurrentRunningIp = runningIp && runningIp === g.ip;
+        const isSelectedIp = sameIpOnly && activeReceiverIp === g.ip;
+        const borderCol = isCurrentRunningIp
+          ? "rgba(52, 211, 153, 0.75)"
+          : (isSelectedIp ? "rgba(168, 85, 247, 0.75)" : "rgba(255, 255, 255, 0.1)");
+        const bgCol = isCurrentRunningIp
+          ? "rgba(6, 78, 59, 0.35)"
+          : (isSelectedIp ? "rgba(88, 28, 135, 0.28)" : "rgba(9, 13, 22, 0.65)");
+        const recOptionsHtml = g.premiumProfiles.length > 0
+          ? g.premiumProfiles.map(p => {
+              const cName = p.liveState?.charName || p.lastCharName || p.name;
+              const zVal = typeof p.liveState?.zeny === "number" ? `${p.liveState.zeny.toLocaleString()} z` : "--";
+              const onTag = p.isRunning ? "🟢" : "⚪";
+              return `<option value="${p.id}" ${g.receiver && g.receiver.id === p.id ? "selected" : ""}>${onTag} 👑 ${escapeHTML(p.name)} [${escapeHTML(cName)}] (${zVal})</option>`;
+            }).join("")
+          : `<option value="">🔒 ไม่มีตัวละครที่มี Premium ในวงนี้</option>`;
+
+        return `
+          <div style="background: ${bgCol}; border: 1.5px solid ${borderCol}; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 6px; background: rgba(168, 85, 247, 0.22); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.45); font-family: monospace;">
+                  🛡️ ${g.ip === 'LOCAL' ? 'LOCAL (เน็ตบ้าน)' : escapeHTML(g.ip)}
+                </span>
+                ${isCurrentRunningIp ? `<span style="font-size: 10px; padding: 1px 6px; border-radius: 99px; background: rgba(16, 185, 129, 0.22); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.45); font-weight: 700;">🔄 กำลังรวมวงนี้</span>` : ''}
+              </div>
+              <span style="font-size: 11px; color: #cbd5e1;">
+                🟢 <b>${g.onlineProfiles.length}</b>/${g.profiles.length} จอ · 👑 <b>${g.onlinePremiumProfiles.length}</b> VIP
+              </span>
+            </div>
+
+            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; background: rgba(15, 23, 42, 0.6); padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+              <span style="color: #94a3b8;">ยอดโอนในวงนี้ (${g.senders.length} จอส่ง):</span>
+              <b style="color: ${g.transferableZeny > 0 ? '#facc15' : '#94a3b8'}; font-family: var(--font-mono);">${g.transferableZeny.toLocaleString()} z</b>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 3px;">
+              <label style="font-size: 10.5px; color: #94a3b8;">👑 ตัวรับเงินประจำวง IP นี้:</label>
+              <select class="zeny-select ip-group-receiver-select" data-ip="${escapeHTML(g.ip)}" style="font-size: 11.5px; padding: 4px 8px; height: 30px;" ${g.premiumProfiles.length === 0 || isConsolidationRunning ? "disabled" : ""}>
+                ${recOptionsHtml}
+              </select>
+            </div>
+
+            <div style="display: flex; gap: 6px; margin-top: 2px;">
+              <button type="button" class="btn btn-secondary btn-sm btn-select-ip-group" data-ip="${escapeHTML(g.ip)}" style="flex: 1; font-size: 11px; padding: 4px 8px;" ${!g.receiver || isConsolidationRunning ? "disabled" : ""} title="เลือกตัวรับและติ๊กเฉพาะจอในวง IP นี้ในตารางด้านล่าง">
+                🎯 เลือกวงนี้ (${g.senders.length} จอ)
+              </button>
+              <button type="button" class="btn btn-primary btn-sm btn-start-single-ip-group" data-ip="${escapeHTML(g.ip)}" style="flex: 1; font-size: 11px; padding: 4px 8px; background: #7c3aed; border-color: #a855f7; font-weight: 700;" ${!g.canConsolidate || isConsolidationRunning ? "disabled" : ""} title="เริ่มรวมเงินเฉพาะในวง IP นี้ทันที">
+                🚀 รวมวงนี้ทันที
+              </button>
+            </div>
+          </div>
+        `;
       }).join("");
     }
   }
@@ -4518,7 +4704,9 @@ function updateZenyConsolidationView() {
       const isReceiver = Boolean(selectedReceiverProfileId && p.id === selectedReceiverProfileId);
       const isOnline = !!p.isRunning;
       const hasPrem = isProfilePremium(p);
-      const canSelectSender = isOnline && hasPrem && !isReceiver;
+      const profileIp = getProfileIpGroupKey(p);
+      const isSameIpAsReceiver = Boolean(activeReceiverIp && profileIp === activeReceiverIp);
+      const canSelectSender = isOnline && hasPrem && !isReceiver && (!sameIpOnly || isSameIpAsReceiver);
       const state = p.liveState || {};
       const charName = state.charName || p.lastCharName || p.name;
       const charClass = state.charClass || p.lastCharClass || p.charClass || 'Novice';
@@ -4550,6 +4738,8 @@ function updateZenyConsolidationView() {
         statusBadge = `<span class="zeny-badge-status offline" style="color: #fca5a5; border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.12);" title="ต้องมีสถานะ Premium จึงจะเทรดแลกเปลี่ยนเงินกับผู้เล่นอื่นได้">🔒 ไม่มี Premium (เทรดไม่ได้)</span>`;
       } else if (!isOnline) {
         statusBadge = `<span class="zeny-badge-status offline">⚪ ออฟไลน์</span>`;
+      } else if (sameIpOnly && !isSameIpAsReceiver) {
+        statusBadge = `<span class="zeny-badge-status offline" style="color: #c4b5fd; border-color: rgba(168, 85, 247, 0.35); background: rgba(168, 85, 247, 0.12);" title="อยู่คนละวง IP กับตัวรับเงิน (ข้ามเพื่อความปลอดภัย)">🛡️ คนละวง IP (${escapeHTML(profileIp)})</span>`;
       } else if (isConsolidationRunning) {
         if (completedSet.has(p.id)) {
           statusBadge = `<span class="zeny-badge-status done">✅ โอนสำเร็จแล้ว</span>`;
@@ -4564,19 +4754,24 @@ function updateZenyConsolidationView() {
         statusBadge = `<span class="zeny-badge-status ready">🟢 พร้อมโอนเงิน (👑 Premium)</span>`;
       }
 
+      const ipChipHtml = `<span style="display: inline-flex; align-items: center; gap: 3px; font-size: 10px; padding: 1px 6px; border-radius: 5px; font-family: monospace; background: ${isSameIpAsReceiver ? 'rgba(16, 185, 129, 0.16)' : 'rgba(148, 163, 184, 0.12)'}; color: ${isSameIpAsReceiver ? '#6ee7b7' : '#94a3b8'}; border: 1px solid ${isSameIpAsReceiver ? 'rgba(16, 185, 129, 0.4)' : 'rgba(148, 163, 184, 0.25)'};" title="${isSameIpAsReceiver ? 'อยู่ในวง IP เดียวกับตัวรับเงิน' : 'คนละวง IP กับตัวรับเงิน'}">🛡️ ${escapeHTML(profileIp)}</span>`;
+
       const checkboxHtml = isReceiver ? 
         `<span style="color: #facc15; font-size: 14px;" title="ตัวรับเงิน (ยกเว้นจากการส่งเงิน)">👑</span>` :
-        `<input type="checkbox" class="zeny-sender-cb" data-profile-id="${p.id}" ${isChecked ? 'checked' : ''} ${!canSelectSender ? 'disabled' : ''} title="${!hasPrem ? 'เลือกไม่ได้: ตัวละครนี้ไม่มีสถานะ Premium' : (!isOnline ? 'เลือกไม่ได้: จอนี้ยังไม่ออนไลน์' : 'เลือกเพื่อโอนเงิน')}" style="accent-color: #0ea5e9; cursor: ${canSelectSender ? 'pointer' : 'not-allowed'};">`;
+        `<input type="checkbox" class="zeny-sender-cb" data-profile-id="${p.id}" ${isChecked ? 'checked' : ''} ${!canSelectSender ? 'disabled' : ''} title="${!hasPrem ? 'เลือกไม่ได้: ตัวละครนี้ไม่มีสถานะ Premium' : (!isOnline ? 'เลือกไม่ได้: จอนี้ยังไม่ออนไลน์' : (sameIpOnly && !isSameIpAsReceiver ? 'เลือกไม่ได้: อยู่คนละวง IP กับตัวรับ' : 'เลือกเพื่อโอนเงิน'))}" style="accent-color: #0ea5e9; cursor: ${canSelectSender ? 'pointer' : 'not-allowed'};">`;
 
       return `
-        <tr class="${isReceiver ? 'receiver-row' : ''}" style="${!hasPrem ? 'opacity: 0.65;' : ''}">
+        <tr class="${isReceiver ? 'receiver-row' : ''}" style="${(!hasPrem || (sameIpOnly && !isSameIpAsReceiver && !isReceiver)) ? 'opacity: 0.6;' : ''}">
           <td style="text-align: center;">${checkboxHtml}</td>
           <td>
             <div style="font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 5px; flex-wrap: wrap;">
               <span>${p.isMain ? '⭐ ' : ''}${escapeHTML(p.name)}</span>
               ${hasPrem ? '<span class="premium-card-badge" style="font-size: 9px; padding: 1px 5px;">👑 PREMIUM</span>' : ''}
             </div>
-            <div style="font-size: 10.5px; color: #64748b;">Port: ${p.debugPort || '--'}</div>
+            <div style="font-size: 10.5px; color: #64748b; display: flex; align-items: center; gap: 6px; margin-top: 2px; flex-wrap: wrap;">
+              <span>Port: ${p.debugPort || '--'}</span>
+              ${ipChipHtml}
+            </div>
           </td>
           <td>
             <div style="font-weight: 600; color: #e2e8f0;">${escapeHTML(charName)}</div>
@@ -4634,6 +4829,21 @@ function switchMainTab(tabName) {
   if (saved && document.querySelector(`.tab-pane[data-pane="${saved}"]`)) switchMainTab(saved);
 })();
 
+function selectSendersForReceiverIp(receiverProfileId) {
+  const rec = currentProfiles.find(p => p.id === receiverProfileId);
+  const recIp = rec ? getProfileIpGroupKey(rec) : null;
+  selectedSenderIds.clear();
+  unselectedSenderIds.clear();
+  for (const p of currentProfiles) {
+    if (p.id === receiverProfileId || !p.isRunning || !isProfilePremium(p)) continue;
+    if (!recIp || getProfileIpGroupKey(p) === recIp) {
+      selectedSenderIds.add(p.id);
+    } else {
+      unselectedSenderIds.add(p.id);
+    }
+  }
+}
+
 function initZenyConsolidationEvents() {
   // Main Tab Navigation Listeners
   document.querySelectorAll(".tab-btn").forEach(btn => {
@@ -4642,6 +4852,31 @@ function initZenyConsolidationEvents() {
       if (tabName) switchMainTab(tabName);
     };
   });
+
+  const sameIpCb = document.getElementById("cb-consolidate-same-ip-only");
+  if (sameIpCb) {
+    try {
+      sameIpCb.checked = localStorage.getItem("pm_consolidate_same_ip_only") === "true";
+    } catch (e) {}
+    sameIpCb.onchange = (e) => {
+      const enabled = Boolean(e.target.checked);
+      setConsolidateSameIpOnly(enabled);
+      if (enabled && selectedReceiverProfileId) {
+        selectSendersForReceiverIp(selectedReceiverProfileId);
+        const rec = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+        const ip = rec ? getProfileIpGroupKey(rec) : "-";
+        showToast(`🛡️ กรองเฉพาะจอในวง IP เดียวกับตัวรับ (${ip}) แล้ว`, "info");
+      } else {
+        unselectedSenderIds.clear();
+        currentProfiles.forEach(p => {
+          if (p.id !== selectedReceiverProfileId && p.isRunning && isProfilePremium(p)) {
+            selectedSenderIds.add(p.id);
+          }
+        });
+      }
+      updateZenyConsolidationView();
+    };
+  }
 
   const recSelect = document.getElementById("zeny-receiver-select");
   if (recSelect) {
@@ -4654,17 +4889,23 @@ function initZenyConsolidationEvents() {
       }
       selectedReceiverProfileId = e.target.value;
       selectedSenderIds.delete(selectedReceiverProfileId);
+      if (isConsolidateSameIpOnly()) {
+        selectSendersForReceiverIp(selectedReceiverProfileId);
+      }
       updateZenyConsolidationView();
     };
   }
-
 
   const selectAllCb = document.getElementById("zeny-select-all-checkbox");
   if (selectAllCb) {
     selectAllCb.onchange = (e) => {
       const checked = e.target.checked;
+      const sameIpOnly = isConsolidateSameIpOnly();
+      const rec = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+      const recIp = rec ? getProfileIpGroupKey(rec) : null;
       currentProfiles.forEach(p => {
-        if (p.id !== selectedReceiverProfileId && p.isRunning && isProfilePremium(p)) {
+        const sameIpOk = !sameIpOnly || !recIp || getProfileIpGroupKey(p) === recIp;
+        if (p.id !== selectedReceiverProfileId && p.isRunning && isProfilePremium(p) && sameIpOk) {
           if (checked) {
             selectedSenderIds.add(p.id);
             unselectedSenderIds.delete(p.id);
@@ -4736,9 +4977,168 @@ function initZenyConsolidationEvents() {
 
   const btnStartConsolidation = document.getElementById("btn-start-consolidation");
   const btnStopConsolidation = document.getElementById("btn-stop-consolidation");
+  const btnStartIpGroups = document.getElementById("btn-start-ip-groups-consolidation");
+  const ipGroupsListEl = document.getElementById("zeny-ip-groups-list");
   const progressSection = document.getElementById("zeny-progress-section");
 
   initConsolidationItemTradeUI();
+
+  // Helper to trigger consolidation API
+  const triggerConsolidationApi = async (payload, startMsg) => {
+    try {
+      if (btnStartConsolidation) {
+        btnStartConsolidation.disabled = true;
+        btnStartConsolidation.innerHTML = `<span class="icon">⏳</span> กำลังเริ่มรวมเงิน...`;
+      }
+      if (btnStartIpGroups) btnStartIpGroups.disabled = true;
+      if (progressSection) {
+        progressSection.style.display = "block";
+        try { progressSection.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) {}
+      }
+      const logsBox = document.getElementById("zeny-logs-box");
+      if (logsBox) {
+        logsBox.innerHTML = `<div class="zeny-log-entry info"><span class="log-time">${new Date().toLocaleTimeString('th-TH')}</span> ⏳ ${escapeHTML(startMsg)}</div>`;
+      }
+      const res = await fetch(`${API_BASE}/api/consolidation/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch (pe) {
+        throw new Error(`เซิร์ฟเวอร์ยังไม่ได้รีสตาร์ทหรือตอบกลับไม่ถูกต้อง (${res.status}): กรุณารีเฟรชหน้าเว็บ (Ctrl + F5)`);
+      }
+      if (data.success) {
+        isConsolidationRunning = true;
+        if (progressSection) progressSection.style.display = "block";
+        if (btnStartConsolidation) btnStartConsolidation.style.display = "none";
+        if (btnStopConsolidation) btnStopConsolidation.style.display = "inline-flex";
+        showToast(data.message || "🚀 เริ่มต้นระบบรวมเงินเรียบร้อยแล้ว", "info");
+        startConsolidationPolling();
+        updateZenyConsolidationView();
+      } else {
+        alert(data.error || "ไม่สามารถเริ่มการรวมเงินได้");
+      }
+    } catch (err) {
+      alert("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์: " + err.message);
+    } finally {
+      if (btnStartConsolidation) {
+        btnStartConsolidation.disabled = false;
+        btnStartConsolidation.innerHTML = `<span class="icon">🚀</span> เริ่มต้นรวมเงิน`;
+      }
+      updateZenyConsolidationView();
+    }
+  };
+
+  if (ipGroupsListEl) {
+    ipGroupsListEl.onchange = (e) => {
+      const sel = e.target.closest(".ip-group-receiver-select");
+      if (!sel) return;
+      const ip = sel.dataset.ip;
+      const chosenId = sel.value;
+      if (ip && chosenId) {
+        ipGroupReceiverMap[ip] = chosenId;
+        saveIpGroupReceiverMap();
+        if (isConsolidateSameIpOnly()) {
+          const curRec = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+          if (curRec && getProfileIpGroupKey(curRec) === ip) {
+            selectedReceiverProfileId = chosenId;
+            selectSendersForReceiverIp(chosenId);
+          }
+        }
+        updateZenyConsolidationView();
+      }
+    };
+
+    ipGroupsListEl.onclick = async (e) => {
+      const btnSelect = e.target.closest(".btn-select-ip-group");
+      if (btnSelect) {
+        const ip = btnSelect.dataset.ip;
+        const groups = buildIpConsolidationGroups();
+        const grp = groups.find(g => g.ip === ip);
+        if (!grp || !grp.receiver) {
+          showToast("⚠️ ไม่มีตัวรับเงินที่มี Premium ในวง IP นี้", "warning");
+          return;
+        }
+        selectedReceiverProfileId = grp.receiver.id;
+        setConsolidateSameIpOnly(true);
+        selectSendersForReceiverIp(grp.receiver.id);
+        updateZenyConsolidationView();
+        showToast(`🎯 เลือกวง IP [${ip}] (ตัวรับ: ${grp.receiver.name} · ผู้โอน ${grp.senders.length} จอ)`, "success");
+        return;
+      }
+
+      const btnRunSingle = e.target.closest(".btn-start-single-ip-group");
+      if (btnRunSingle) {
+        const ip = btnRunSingle.dataset.ip;
+        const groups = buildIpConsolidationGroups();
+        const grp = groups.find(g => g.ip === ip);
+        if (!grp || !grp.canConsolidate || !grp.receiver) {
+          alert(`วง IP [${ip}] ยังไม่มีตัวรับหรือผู้โอนที่ออนไลน์และมี 👑 Premium พร้อมโอน`);
+          return;
+        }
+        const recName = grp.receiver.liveState?.charName || grp.receiver.name;
+        const keepZeny = getConsolidationKeepZeny();
+        const tradeItemsOn = Boolean(consolidationItemSettings.tradeOnConsolidate);
+        const tradeItemsNames = Array.isArray(consolidationItemSettings.items) && consolidationItemSettings.items.length > 0
+          ? consolidationItemSettings.items
+          : ["Enchant Rune"];
+        if (!confirm(`คุณต้องการเริ่มรวมเงินเฉพาะในวง IP [${ip}]\nจาก ${grp.senders.length} จอ -> เข้าตัวรับ [${recName}] (ยอดโอน ~${grp.transferableZeny.toLocaleString()} z) ใช่หรือไม่?\n\n🛡️ ปลอดภัยสูงสุด: โอนเฉพาะจอที่ใช้ IP ${ip} เดียวกันเท่านั้น (จอวง IP อื่นฟาร์มต่อไม่หยุด)`)) {
+          return;
+        }
+        selectedReceiverProfileId = grp.receiver.id;
+        setConsolidateSameIpOnly(true);
+        selectSendersForReceiverIp(grp.receiver.id);
+        await triggerConsolidationApi({
+          receiverProfileId: grp.receiver.id,
+          senderProfileIds: grp.senders.map(s => s.id),
+          keepZeny,
+          sameIpOnly: true,
+          storeOnlyEnabled: Boolean(consolidationItemSettings.storeOnlyEnabled),
+          tradeOnConsolidate: tradeItemsOn,
+          items: tradeItemsNames
+        }, `กำลังเริ่มรวมเงินเฉพาะในวง IP [${ip}] (${grp.senders.length} จอ -> ${recName})...`);
+      }
+    };
+  }
+
+  if (btnStartIpGroups) {
+    btnStartIpGroups.onclick = async () => {
+      const groups = buildIpConsolidationGroups().filter(g => g.canConsolidate);
+      if (groups.length === 0) {
+        alert("ไม่พบวง IP ที่มีทั้งตัวรับและผู้โอนสถานะ 👑 Premium ออนไลน์พร้อมกัน");
+        return;
+      }
+      const keepZeny = getConsolidationKeepZeny();
+      const tradeItemsOn = Boolean(consolidationItemSettings.tradeOnConsolidate);
+      const tradeItemsNames = Array.isArray(consolidationItemSettings.items) && consolidationItemSettings.items.length > 0
+        ? consolidationItemSettings.items
+        : ["Enchant Rune"];
+      const summaryLines = groups.map((g, i) => {
+        const rName = g.receiver.liveState?.charName || g.receiver.name;
+        return `${i + 1}. วง IP [${g.ip}]: ${g.senders.length} จอ -> ตัวรับ [${rName}] (~${g.transferableZeny.toLocaleString()} z)`;
+      }).join("\n");
+      const totalZenyAllGroups = groups.reduce((s, g) => s + g.transferableZeny, 0);
+      if (!confirm(`🌐 ยืนยันการรวมเงินแยกตามวง IP อัตโนมัติ (ทั้งหมด ${groups.length} วง IP · ยอดโอนรวม ~${totalZenyAllGroups.toLocaleString()} z)\n\n${summaryLines}\n\n🛡️ ระบบจะรันทีละวง IP จนครบทุกวง (ไม่โอนข้าม IP และวงอื่นที่ยังไม่ถึงคิวจะฟาร์มต่อตามปกติ)`)) {
+        return;
+      }
+      await triggerConsolidationApi({
+        keepZeny,
+        sameIpOnly: true,
+        ipGroups: groups.map(g => ({
+          ip: g.ip,
+          receiverProfileId: g.receiver.id,
+          senderProfileIds: g.senders.map(s => s.id)
+        })),
+        storeOnlyEnabled: Boolean(consolidationItemSettings.storeOnlyEnabled),
+        tradeOnConsolidate: tradeItemsOn,
+        items: tradeItemsNames
+      }, `กำลังเริ่มต้นรวมเงินแยกตามวง IP อัตโนมัติ (${groups.length} วง IP)...`);
+    };
+  }
 
   if (btnStartConsolidation) {
     btnStartConsolidation.onclick = async () => {
@@ -4747,13 +5147,19 @@ function initZenyConsolidationEvents() {
         alert("กรุณาเลือกตัวรับเงิน (Receiver) ที่มีสถานะ 👑 Premium ก่อน (การเทรดโอนเงินใช้ได้เฉพาะตัวที่มี Premium เท่านั้น)");
         return;
       }
+      const sameIpOnly = isConsolidateSameIpOnly();
+      const recIp = getProfileIpGroupKey(recProfile);
       const senderList = Array.from(selectedSenderIds).filter(id => {
         if (id === selectedReceiverProfileId) return false;
         const sp = currentProfiles.find(p => p.id === id);
-        return sp && sp.isRunning && isProfilePremium(sp);
+        if (!sp || !sp.isRunning || !isProfilePremium(sp)) return false;
+        if (sameIpOnly && getProfileIpGroupKey(sp) !== recIp) return false;
+        return true;
       });
       if (senderList.length === 0) {
-        alert("กรุณาเลือกจอผู้โอนที่มีสถานะ 👑 Premium อย่างน้อย 1 จอ");
+        alert(sameIpOnly
+          ? `ไม่มีจอผู้โอนที่อยู่ในวง IP เดียวกับตัวรับ (${recIp}) และมีสถานะ 👑 Premium`
+          : "กรุณาเลือกจอผู้โอนที่มีสถานะ 👑 Premium อย่างน้อย 1 จอ");
         return;
       }
 
@@ -4763,60 +5169,25 @@ function initZenyConsolidationEvents() {
       const tradeItemsNames = Array.isArray(consolidationItemSettings.items) && consolidationItemSettings.items.length > 0
         ? consolidationItemSettings.items
         : ["Enchant Rune"];
+      const sameIpNote = sameIpOnly
+        ? `🛡️ โหมดจำกัดเฉพาะในวง IP เดียวกัน: [${recIp}]\n`
+        : "";
       const itemConfirmNote = tradeItemsOn
         ? `📦 เบิกไอเทมจากคลังมาเทรดรวมด้วย: ${tradeItemsNames.join(", ")}\n   (ทุกจอจะแวะขายขยะเคลียร์น้ำหนัก → เบิกหินจากคลัง → เทรดพร้อมเงิน และตัวรับจะฝากเข้าคลังอัตโนมัติ)\n`
         : "";
-      if (!confirm(`คุณต้องการเริ่มต้นรวมเงินจาก ${senderList.length} จอ เข้าตัวหลัก [${recName}] ใช่หรือไม่?\n\n${keepZeny > 0 ? `💰 แต่ละจอจะเหลือเงินติดตัวไว้ ${keepZeny.toLocaleString()} z\n` : '💰 โอนเงินทั้งหมดของแต่ละจอ\n'}${itemConfirmNote}(ทุกจอจะหยุดบอท วาร์ปกลับเมืองหลวง และเรียงคิวเทรด)`)) {
+      if (!confirm(`คุณต้องการเริ่มต้นรวมเงินจาก ${senderList.length} จอ เข้าตัวหลัก [${recName}] ใช่หรือไม่?\n\n${sameIpNote}${keepZeny > 0 ? `💰 แต่ละจอจะเหลือเงินติดตัวไว้ ${keepZeny.toLocaleString()} z\n` : '💰 โอนเงินทั้งหมดของแต่ละจอ\n'}${itemConfirmNote}(ทุกจอที่เลือกจะหยุดบอท วาร์ปกลับเมืองหลวง และเรียงคิวเทรด)`)) {
         return;
       }
 
-      try {
-        btnStartConsolidation.disabled = true;
-        btnStartConsolidation.innerHTML = `<span class="icon">⏳</span> กำลังเริ่มรวมเงิน...`;
-        if (progressSection) {
-          progressSection.style.display = "block";
-          try { progressSection.scrollIntoView({ behavior: "smooth", block: "nearest" }); } catch (e) {}
-        }
-        const logsBox = document.getElementById("zeny-logs-box");
-        if (logsBox) {
-          logsBox.innerHTML = `<div class="zeny-log-entry info"><span class="log-time">${new Date().toLocaleTimeString('th-TH')}</span> ⏳ กำลังตรวจสอบสถานะ Premium และเริ่มระบบรวมเงิน (${senderList.length} จอ)...</div>`;
-        }
-        const res = await fetch(`${API_BASE}/api/consolidation/start`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            receiverProfileId: selectedReceiverProfileId,
-            senderProfileIds: senderList,
-            keepZeny,
-            storeOnlyEnabled: Boolean(consolidationItemSettings.storeOnlyEnabled),
-            tradeOnConsolidate: tradeItemsOn,
-            items: tradeItemsNames
-          })
-        });
-        const text = await res.text();
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch(pe) {
-          throw new Error(`เซิร์ฟเวอร์ยังไม่ได้รีสตาร์ทหรือตอบกลับไม่ถูกต้อง (${res.status}): กรุณารีเฟรชหน้าเว็บ (Ctrl + F5)`);
-        }
-        if (data.success) {
-          isConsolidationRunning = true;
-          if (progressSection) progressSection.style.display = "block";
-          btnStartConsolidation.style.display = "none";
-          if (btnStopConsolidation) btnStopConsolidation.style.display = "inline-flex";
-          showToast(`🚀 เริ่มรวมเงิน${tradeItemsOn ? ' + ไอเทม' : ''}จาก ${senderList.length} จอ เข้า [${recName}] แล้ว`, "info");
-          startConsolidationPolling();
-          updateZenyConsolidationView();
-        } else {
-          alert(data.error || "ไม่สามารถเริ่มการรวมเงินได้");
-        }
-      } catch(err) {
-        alert("เกิดข้อผิดพลาดในการเชื่อมต่อเซิร์ฟเวอร์: " + err.message);
-      } finally {
-        btnStartConsolidation.disabled = false;
-        btnStartConsolidation.innerHTML = `<span class="icon">🚀</span> เริ่มต้นรวมเงิน`;
-      }
+      await triggerConsolidationApi({
+        receiverProfileId: selectedReceiverProfileId,
+        senderProfileIds: senderList,
+        keepZeny,
+        sameIpOnly,
+        storeOnlyEnabled: Boolean(consolidationItemSettings.storeOnlyEnabled),
+        tradeOnConsolidate: tradeItemsOn,
+        items: tradeItemsNames
+      }, `กำลังตรวจสอบสถานะ Premium และเริ่มระบบรวมเงิน (${senderList.length} จอ)...`);
     };
   }
 
@@ -5302,14 +5673,23 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                                 <option value="โบสถ์อเวจี">โบสถ์อเวจี (Lv. 80-95)</option>
                                 <option value="บึงรากเน่า">บึงรากเน่า (Lv. 90-105)</option>
                                 <option value="เนินทรายแผดเผา">เนินทรายแผดเผา (Lv. 100-115)</option>
+                                <option value="บัลลังก์ราชาลิช">บัลลังก์ราชาลิช (Lv. 105-120)</option>
                                 <option value="พีระมิดจมทราย">พีระมิดจมทราย (Lv. 115-130)</option>
+                                <option value="สุสานฟาโรห์">สุสานฟาโรห์ (Lv. 130-145)</option>
                                 <option value="แกนลาวา">แกนลาวา (Lv. 135-150)</option>
                             </optgroup>
-                            <optgroup label="❄️ ดินแดนรูน - โลกที่ 2 (Lv. 150-190)">
+                            <optgroup label="❄️ ดินแดนรูน - โลกที่ 2 (Lv. 150-200)">
                                 <option value="ดินแดนน้ำแข็ง">ดินแดนน้ำแข็ง (Lv. 150-160)</option>
+                                <option value="ทะเลสาบกระจกรูน">ทะเลสาบกระจกรูน (Lv. 150-160 ⭐)</option>
+                                <option value="ป่ารูนใต้">ป่ารูนใต้ (Lv. 152-157 ⭐)</option>
                                 <option value="ที่ราบศิลา">ที่ราบศิลา (Lv. 155-165)</option>
+                                <option value="ผาลอยรูนฟ้า">ผาลอยรูนฟ้า (Lv. 160-170 ⭐)</option>
                                 <option value="สุสานรูนโบราณ">สุสานรูนโบราณ (Lv. 165-175)</option>
                                 <option value="คุกใต้ดินรูน">คุกใต้ดินรูน (Lv. 170-190)</option>
+                                <option value="พฤกษารูนโลก">พฤกษารูนโลก (Lv. 170-180 ⭐)</option>
+                                <option value="ป่ารูนเรืองแสง">ป่ารูนเรืองแสง (Lv. 175-185 ⭐)</option>
+                                <option value="หุบสุสานมังกรรูน">หุบสุสานมังกรรูน (Lv. 180-190 ⭐)</option>
+                                <option value="รากรูนโลก">รากรูนโลก (Lv. 190-200 ⭐)</option>
                             </optgroup>
                         </select>
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 5px;">
@@ -7751,15 +8131,27 @@ const PLAN_MAP_OPTIONS = [
     ]
   },
   {
-    "group": "❄️ ดินแดนรูน - โลกที่ 2 (Lv. 150-190)",
+    "group": "❄️ ดินแดนรูน - โลกที่ 2 (Lv. 150-200)",
     "maps": [
       {
         "value": "ดินแดนน้ำแข็ง",
         "label": "ดินแดนน้ำแข็ง (Lv. 150-160)"
       },
       {
+        "value": "ทะเลสาบกระจกรูน",
+        "label": "ทะเลสาบกระจกรูน (Lv. 150-160 ⭐)"
+      },
+      {
+        "value": "ป่ารูนใต้",
+        "label": "ป่ารูนใต้ (Lv. 152-157 ⭐)"
+      },
+      {
         "value": "ที่ราบศิลา",
         "label": "ที่ราบศิลา (Lv. 155-165)"
+      },
+      {
+        "value": "ผาลอยรูนฟ้า",
+        "label": "ผาลอยรูนฟ้า (Lv. 160-170 ⭐)"
       },
       {
         "value": "สุสานรูนโบราณ",
@@ -7768,6 +8160,22 @@ const PLAN_MAP_OPTIONS = [
       {
         "value": "คุกใต้ดินรูน",
         "label": "คุกใต้ดินรูน (Lv. 170-190)"
+      },
+      {
+        "value": "พฤกษารูนโลก",
+        "label": "พฤกษารูนโลก (Lv. 170-180 ⭐)"
+      },
+      {
+        "value": "ป่ารูนเรืองแสง",
+        "label": "ป่ารูนเรืองแสง (Lv. 175-185 ⭐)"
+      },
+      {
+        "value": "หุบสุสานมังกรรูน",
+        "label": "หุบสุสานมังกรรูน (Lv. 180-190 ⭐)"
+      },
+      {
+        "value": "รากรูนโลก",
+        "label": "รากรูนโลก (Lv. 190-200 ⭐)"
       }
     ]
   }

@@ -1319,6 +1319,13 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         const maxPolls = isTest ? 3 : 6;
         let retriedAutoLag = false;
         let triedManagerBoardSolve = false;
+        const isSolvedForCurrentCheck = (s) => Boolean(
+          s &&
+          (Date.now() - (s.timestamp || 0) < 30000) &&
+          (!trackedCheck.notifiedAt || !s.timestamp || s.timestamp >= trackedCheck.notifiedAt - 5000) &&
+          (!trackedCheck.checkId || !s.checkId || String(s.checkId).startsWith('dom-') || String(trackedCheck.checkId).startsWith('dom-') || String(s.checkId) === String(trackedCheck.checkId))
+        );
+        const isNonFramePrompt = /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ|ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก|หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(promptText || '');
         for (let pollIdx = 0; pollIdx < maxPolls; pollIdx++) {
           await new Promise(r => setTimeout(r, pollIdx === 0 ? (isTest ? 700 : 1100) : (isTest ? 2100 : 1200)));
           if (trackedCheck.solvedManually) return;
@@ -1329,7 +1336,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 const probe = await evalProfilePort(profile.debugPort, `(() => ({ stillOpen: !!document.querySelector('.human-check'), solved: window.__lastHumanCheckSolved || null }))()`);
                 const st = probe && probe.result ? probe.result : null;
                 if (st?.solved?.manual || trackedCheck.solvedManually) return;
-                if (st && !st.stillOpen && st.solved && (Date.now() - (st.solved.timestamp || 0) < 30000)) {
+                if (st && !st.stillOpen && isSolvedForCurrentCheck(st.solved)) {
                   const s = st.solved;
                   lastAttemptedSolved = s;
                   const pickIdx = Number.isInteger(s.pickIndex) && s.pickIndex >= 0 ? s.pickIndex : (Number.isInteger(s.slot) && s.slot >= 1 ? s.slot - 1 : 0);
@@ -1361,12 +1368,13 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
               })()`);
               const st = probe && probe.result ? probe.result : null;
               if (st?.solved?.manual || trackedCheck.solvedManually) return;
-              if (st?.solved && (Date.now() - (st.solved.timestamp || 0) < 30000)) {
-                lastAttemptedSolved = st.solved;
+              const validSolved = isSolvedForCurrentCheck(st?.solved) ? st.solved : null;
+              if (validSolved) {
+                lastAttemptedSolved = validSolved;
                 if (st.metaText) metaText = st.metaText;
               }
               if (st && !st.stillOpen) {
-                const s = st.solved || lastAttemptedSolved || {};
+                const s = validSolved || lastAttemptedSolved || {};
                 lastAttemptedSolved = s;
                 const pickIdx = Number.isInteger(s.pickIndex) && s.pickIndex >= 0 ? s.pickIndex : (Number.isInteger(s.slot) && s.slot >= 1 ? s.slot - 1 : 0);
                 solution = {
@@ -1382,7 +1390,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 };
                 ansRes = { success: true, picked: pickIdx };
                 break;
-              } else if (st && st.stillOpen && (!st.solved || (Date.now() - (st.solved.timestamp || 0) >= 20000)) && !triedManagerBoardSolve && pollIdx <= 1) {
+              } else if (st && st.stillOpen && !validSolved && !triedManagerBoardSolve && pollIdx <= 1) {
                 // In-game solver hasn't fired yet (e.g. older bot.js or missing packet listener): trigger in-game solver or Manager-side board solver fallback
                 triedManagerBoardSolve = true;
                 try {
@@ -1395,9 +1403,12 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                     })()`, 2500);
                   }
                   const fallbackProbe = await evalProfilePort(profile.debugPort, `(() => {
-                    try { if (typeof window.__pmSolveEmbeddedHumanCheck === 'function') window.__pmSolveEmbeddedHumanCheck(); } catch (_) {}
+                    try {
+                      if (typeof window.__pmSolveEmbeddedHumanCheck === 'function') window.__pmSolveEmbeddedHumanCheck();
+                      else if (typeof window.triggerHumanCheckTickNow === 'function') window.triggerHumanCheckTickNow();
+                    } catch (_) {}
                     const hc = document.querySelector('.human-check');
-                    if (!hc) return { solved: window.__lastHumanCheckSolved || null };
+                    if (!hc || ${isNonFramePrompt ? 'true' : 'false'} || hc.querySelector('.human-check-dial')) return { solved: window.__lastHumanCheckSolved || null };
                     const boardImg = hc.querySelector('.human-check-board img');
                     if (!boardImg || !(boardImg.naturalWidth > 0 || boardImg.width > 0)) return { solved: window.__lastHumanCheckSolved || null };
                     if (window.PmheeImageBoardSolver && typeof window.PmheeImageBoardSolver.solveFrameChallenge === 'function') {
@@ -1416,7 +1427,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                     return { solved: window.__lastHumanCheckSolved || null };
                   })()`, 2500);
                   const fbRes = fallbackProbe?.result || null;
-                  if (fbRes?.frameSol && Number.isInteger(fbRes.frameSol.pickIndex)) {
+                  if (!isNonFramePrompt && fbRes?.frameSol && Number.isInteger(fbRes.frameSol.pickIndex)) {
                     const fsObj = fbRes.frameSol;
                     const itemMatch = promptText.replace(/^(กรุณา)?(คลิกที่รูปภาพของ|คลิกที่ภาพ|กดที่รูปภาพของ|กดที่ภาพ|กดรูป|เลือกรูปภาพของ|เลือกรูป|เลือก)\s*/i, '').replace(/\s*(ภายในเวลา.*)?$/i, '').trim();
                     const matchedLabel = itemMatch
@@ -1437,7 +1448,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                     }
                   }
                 } catch (_) {}
-              } else if (st && st.stillOpen && st.solved && !st.solved.manual) {
+              } else if (st && st.stillOpen && validSolved && !validSolved.manual) {
                 const elapsedSinceSolve = Date.now() - (st.solved.timestamp || 0);
                 const mText = st.metaText || check.meta || '';
                 if (mText) metaText = mText;

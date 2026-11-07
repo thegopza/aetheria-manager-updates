@@ -143,8 +143,33 @@
     // Launch mode (Electron app / browser windows)
     async function loadLaunchMode() {
       try {
-        const r = await fetch('/api/launch-mode').then(x => x.json());
-        if (!r.success) return;
+        let r = await fetch('/api/launch-mode').then(x => x.json());
+        if (!r || !r.success) return;
+        let cachedKind = null;
+        let cachedMode = null;
+        try {
+          cachedKind = localStorage.getItem('pelican_mgr_browser_kind');
+          cachedMode = localStorage.getItem('pelican_mgr_launch_mode');
+        } catch (_) {}
+        if (r.browserKindConfigured === false && (cachedKind === 'edge' || cachedKind === 'chrome')) {
+          const restorePayload = { browserKind: cachedKind };
+          if (cachedMode === 'browser' || cachedMode === 'electron') restorePayload.launchMode = cachedMode;
+          const restored = await fetch('/api/launch-mode', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(restorePayload)
+          }).then(x => x.json()).catch(() => null);
+          if (restored && restored.success) {
+            r = { ...r, ...restored };
+          }
+        } else if (r.browserKindConfigured && (r.browserKind === 'edge' || r.browserKind === 'chrome')) {
+          try {
+            localStorage.setItem('pelican_mgr_browser_kind', r.browserKind);
+            if (r.launchMode === 'browser' || r.launchMode === 'electron') {
+              localStorage.setItem('pelican_mgr_launch_mode', r.launchMode);
+            }
+          } catch (_) {}
+        }
         document.querySelectorAll('input[name="launch-mode"]').forEach(el => { el.checked = el.value === r.launchMode; });
         const kind = document.getElementById('lm-browser-kind');
         if (kind) kind.value = r.browserKind;
@@ -155,13 +180,22 @@
       } catch (e) {}
     }
     async function saveLaunchMode(patch) {
+      try {
+        if (patch && (patch.browserKind === 'edge' || patch.browserKind === 'chrome')) {
+          localStorage.setItem('pelican_mgr_browser_kind', patch.browserKind);
+        }
+        if (patch && (patch.launchMode === 'browser' || patch.launchMode === 'electron')) {
+          localStorage.setItem('pelican_mgr_launch_mode', patch.launchMode);
+        }
+      } catch (_) {}
       await fetch('/api/launch-mode', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) }).catch(() => {});
       loadLaunchMode();
-      showMsg(patch.launchMode === 'browser' ? 'ตั้งเป็นโหมดเบราว์เซอร์แล้ว — ปิดจอเดิมแล้วกดเปิดใหม่' : patch.launchMode === 'electron' ? 'ตั้งเป็นโหมดแอปเกม (Electron) แล้ว' : 'บันทึกแล้ว');
+      showMsg(patch.launchMode === 'browser' ? 'ตั้งเป็นโหมดเบราว์เซอร์แล้ว — ปิดจอเดิมแล้วกดเปิดใหม่' : patch.launchMode === 'electron' ? 'ตั้งเป็นโหมดแอปเกม (Electron) แล้ว' : patch.browserKind === 'edge' ? 'ตั้งเป็น Microsoft Edge แล้ว — ปิดจอเดิมทั้งหมดแล้วกดเปิดใหม่เพื่อใช้ Edge' : patch.browserKind === 'chrome' ? 'ตั้งเป็น Google Chrome แล้ว — ปิดจอเดิมทั้งหมดแล้วกดเปิดใหม่เพื่อใช้ Chrome' : 'บันทึกแล้ว');
     }
     document.querySelectorAll('input[name="launch-mode"]').forEach(el => el.addEventListener('change', () => { if (el.checked) saveLaunchMode({ launchMode: el.value }); }));
     const lmKind = document.getElementById('lm-browser-kind');
     if (lmKind) lmKind.addEventListener('change', () => saveLaunchMode({ browserKind: lmKind.value }));
+    loadLaunchMode();
 
     // Event Listeners
     btnOpen.addEventListener('click', () => {

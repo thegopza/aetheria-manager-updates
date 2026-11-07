@@ -16,6 +16,7 @@ const LOADER_PACKAGE = {
 };
 
 const SETTINGS_FILE = path.join(__dirname, 'settings.json');
+const SETTINGS_BACKUP_FILE = path.join(__dirname, 'data', 'settings_backup.json');
 const ROOT_DIR = path.resolve(__dirname, '..');
 const BOT_SRC = path.join(ROOT_DIR, 'bot.js');
 // manager/game_loader/main.js is a copy of the root main.js that the Manager self-update keeps current
@@ -24,25 +25,59 @@ const LOADER_SRC = fs.existsSync(path.join(__dirname, 'game_loader', 'main.js'))
     ? path.join(__dirname, 'game_loader', 'main.js')
     : path.join(ROOT_DIR, 'main.js');
 
-function loadSettings() {
-    let s = {};
+function readSettingsJson(filePath) {
     try {
-        if (fs.existsSync(SETTINGS_FILE)) {
-            s = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) || {};
+        if (fs.existsSync(filePath)) {
+            const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
         }
     } catch (e) {
-        console.warn('[Installer] Failed to read settings.json:', e.message);
+        console.warn('[Installer] Failed to read ' + path.basename(filePath) + ':', e.message);
     }
+    return {};
+}
+
+function loadRawSettings() {
+    const backup = readSettingsJson(SETTINGS_BACKUP_FILE);
+    const primary = readSettingsJson(SETTINGS_FILE);
+    return { ...backup, ...primary };
+}
+
+function loadSettings() {
+    const s = loadRawSettings();
     return {
         ...s,
-        launchMode: s.launchMode || 'browser',
-        browserKind: s.browserKind || 'chrome'
+        launchMode: ['electron', 'browser'].includes(s.launchMode) ? s.launchMode : 'browser',
+        browserKind: ['chrome', 'edge'].includes(s.browserKind) ? s.browserKind : 'chrome'
     };
 }
 
 function saveSettings(settings) {
     try {
-        fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf8');
+        const current = loadRawSettings();
+        const patch = (settings && typeof settings === 'object' && !Array.isArray(settings)) ? settings : {};
+        const merged = {
+            ...current,
+            ...patch
+        };
+        if (!['electron', 'browser'].includes(merged.launchMode)) {
+            merged.launchMode = ['electron', 'browser'].includes(current.launchMode) ? current.launchMode : 'browser';
+        }
+        if (!['chrome', 'edge'].includes(merged.browserKind)) {
+            merged.browserKind = ['chrome', 'edge'].includes(current.browserKind) ? current.browserKind : 'chrome';
+        }
+        const json = JSON.stringify(merged, null, 2);
+        const tmpFile = SETTINGS_FILE + '.tmp';
+        try {
+            fs.writeFileSync(tmpFile, json, 'utf8');
+            fs.renameSync(tmpFile, SETTINGS_FILE);
+        } catch (_) {
+            fs.writeFileSync(SETTINGS_FILE, json, 'utf8');
+        }
+        try {
+            fs.mkdirSync(path.dirname(SETTINGS_BACKUP_FILE), { recursive: true });
+            fs.writeFileSync(SETTINGS_BACKUP_FILE, json, 'utf8');
+        } catch (_) {}
         return true;
     } catch (e) {
         console.error('[Installer] Failed to save settings.json:', e.message);
@@ -394,5 +429,6 @@ module.exports = {
     browseFolder,
     saveSettings,
     loadSettings,
+    loadRawSettings,
     checkManagerOnlineUpdate
 };

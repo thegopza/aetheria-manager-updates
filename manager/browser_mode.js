@@ -49,7 +49,7 @@ function findBrowser(kind) {
   const pf86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
   const local = process.env.LOCALAPPDATA || '';
   const chrome = [path.join(pf, 'Google\\Chrome\\Application\\chrome.exe'), path.join(pf86, 'Google\\Chrome\\Application\\chrome.exe'), path.join(local, 'Google\\Chrome\\Application\\chrome.exe')];
-  const edge = [path.join(pf86, 'Microsoft\\Edge\\Application\\msedge.exe'), path.join(pf, 'Microsoft\\Edge\\Application\\msedge.exe')];
+  const edge = [path.join(pf86, 'Microsoft\\Edge\\Application\\msedge.exe'), path.join(pf, 'Microsoft\\Edge\\Application\\msedge.exe'), path.join(local, 'Microsoft\\Edge\\Application\\msedge.exe')];
   const list = kind === 'edge' ? edge.concat(chrome) : chrome.concat(edge);
   return list.find(p => { try { return fs.existsSync(p); } catch (e) { return false; } }) || null;
 }
@@ -1176,12 +1176,34 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     return ensureBrowserPromise;
   }
 
+  async function detectRunningBrowserKind() {
+    try {
+      const info = JSON.parse(await getText(`http://127.0.0.1:${CDP_PORT}/json/version`, 3000));
+      const str = `${info?.Browser || ''} ${info?.['User-Agent'] || ''}`;
+      if (/\bEdg\b|\bEdg\//i.test(str)) return 'edge';
+      if (/\bChrome\//i.test(str)) return 'chrome';
+    } catch (_) {}
+    return null;
+  }
+
   async function ensureBrowserOnce(forceClean = false) {
+    const settings = getSettings() || {};
+    const desiredKind = settings.browserKind === 'edge' ? 'edge' : 'chrome';
     if (!forceClean && await browserAlive()) {
       try {
         await connect();
-        await send('Target.getTargets', {}, undefined, 4000);
-        return;
+        const tRes = await send('Target.getTargets', {}, undefined, 4000);
+        if (isRealSession && clients.size === 0) {
+          const hasGamePage = (tRes?.targetInfos || []).some(t => t.type === 'page' && typeof t.url === 'string' && t.url.includes('aetheria-online.in.th'));
+          if (!hasGamePage) {
+            const runningKind = await detectRunningBrowserKind();
+            if (runningKind && runningKind !== desiredKind && findBrowser(desiredKind)) {
+              if (ws) { try { ws.close(); } catch (_) {} ws = null; }
+              forceClean = true;
+            }
+          }
+        }
+        if (!forceClean) return;
       } catch (e) {
         if (ws) { try { ws.close(); } catch (_) {} ws = null; }
         if (clients.size > 0) throw e;
@@ -1191,8 +1213,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if (forceClean && clients.size === 0) {
       await killStuckBrowserProcesses();
     }
-    const settings = getSettings() || {};
-    const exe = findBrowser(settings.browserKind);
+    const exe = findBrowser(desiredKind);
     if (!exe) throw new Error('ไม่พบ Google Chrome หรือ Microsoft Edge ในเครื่อง');
     fs.mkdirSync(userDataDir, { recursive: true });
     const args = [

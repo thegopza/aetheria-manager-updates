@@ -94,7 +94,16 @@ function createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfilePort })
     try {
       localStorage.setItem('pelican_plan_script_enabled', '${en}');
       localStorage.setItem('pelican_plan_user_disabled', '${!en}');
+      if (!${en}) {
+        localStorage.removeItem('pelican_gear_trip');
+        if (window.__targetFarmMap && !/เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน/.test(window.__targetFarmMap)) {
+          localStorage.removeItem('pelican_job_return_map');
+        }
+      }
     } catch (e) {}
+    if (!${en} && typeof window.cleanupPlanTransientState === 'function') {
+      try { window.cleanupPlanTransientState('ปิด Plan Script'); } catch (e) {}
+    }
     const cb = document.getElementById('p-plan-script-enabled');
     if (cb) cb.checked = ${en};
     return { success: true, enabled: !!window.__planScriptEnabled };

@@ -524,8 +524,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
   function isTransientStorageKey(k) {
     if (!k || typeof k !== 'string') return false;
-    if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k === 'pelican_embedded_human_check_cfg' || k.startsWith('webgame.chat.')) return true;
-    return k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.endsWith('__embedded_human_check_cfg');
+    if (k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k === 'pelican_embedded_human_check_cfg' || k === 'pelican_job_return_map' || k === 'pelican_gohome_keep_farm' || k === 'pelican_gear_trip' || k === 'pelican_town_needs' || k === 'pelican_override_farm_map' || k === 'pelican_weight_topup' || k.startsWith('webgame.chat.')) return true;
+    return k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.endsWith('__embedded_human_check_cfg') || k.endsWith('__job_return_map') || k.endsWith('__gohome_keep_farm') || k.endsWith('__gear_trip') || k.endsWith('__town_needs') || k.endsWith('__override_farm_map') || k.endsWith('__weight_topup') || (k.indexOf('__gear_bought_') !== -1 && k.endsWith('_pending'));
   }
   function extractSessionJwtUserId(jwtStr) {
     if (!jwtStr || typeof jwtStr !== 'string') return '';
@@ -575,12 +575,17 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     } catch (_) {}
     return false;
   }
-  function saveProfileStorage(profileId, entries) {
+  function isProtectedProfileStorageKey(k) {
+    if (!k || typeof k !== 'string') return false;
+    return k.endsWith('__auth_cfg') || k.endsWith('__sell_cfg') || k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine') || k === '__ss:aetheria.session';
+  }
+  function saveProfileStorage(profileId, entries, opts = {}) {
     if (!storageDir || !profileId || !entries || typeof entries !== 'object') return;
     try {
       fs.mkdirSync(storageDir, { recursive: true });
       const f = path.join(storageDir, `${profileId}.json`);
       const pfx = `pelican_${profileId}__`;
+      const isFullHarvest = Boolean(opts && opts.fullHarvest);
       const rawExisting = loadProfileStorage(profileId);
       const merged = {};
       for (const [k, v] of Object.entries(rawExisting || {})) {
@@ -589,10 +594,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         if (k.startsWith('pelican_')) {
           if (k.startsWith(pfx)) {
             if (k.endsWith('__auth_cfg') && isForeignAuthCfgString(profileId, v)) continue;
+            if (isFullHarvest && entries[k] === undefined && !isProtectedProfileStorageKey(k)) continue;
             merged[k] = v;
           } else if (!k.includes('__') && k !== 'pelican_auth_cfg' && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
             const mapped = pfx + k.slice(8);
             if (isTransientStorageKey(mapped)) continue;
+            if (isFullHarvest && entries[mapped] === undefined && !isProtectedProfileStorageKey(mapped)) continue;
             if (rawExisting[mapped] === undefined && merged[mapped] === undefined) merged[mapped] = v;
           }
         } else {
@@ -1283,7 +1290,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         if (k.startsWith(pfx)) {
           if (k.endsWith('__auth_cfg') && isForeignAuthCfgString(profileId, v)) continue;
           saved[k] = v;
-        } else if (!k.includes('__') && k !== 'pelican_auth_cfg' && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog') {
+        } else if (!k.includes('__') && k !== 'pelican_auth_cfg' && k !== 'pelican_icon_manifest' && k !== 'pelican_item_catalog' && k !== 'pelican_script_plan' && k !== 'pelican_plan_script_enabled') {
           const mappedKey = pfx + k.slice(8);
           if (isTransientStorageKey(mappedKey)) continue;
           if (rawSaved[mappedKey] === undefined && saved[mappedKey] === undefined) saved[mappedKey] = v;
@@ -1700,7 +1707,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           const extraKeys = new Set(['ui.windows', 'partyFrameFolded', 'skip-anim:refine', 'hudMenuOpen', 'webgame.camera']);
           for (let i = 0; i < window.localStorage.length; i++) {
             const k = window.localStorage.key(i);
-            if (!k || k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k === 'pelican_embedded_human_check_cfg' || k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.endsWith('__embedded_human_check_cfg') || k.startsWith('webgame.chat.')) continue;
+            if (!k || k === 'aetheria.device' || k === 'aetheria.machine' || k === 'pelican_icon_manifest' || k === 'pelican_item_catalog' || k === 'pelican_latest_inventory' || k === 'pelican_packet_logs' || k === 'pelican_last_weight' || k === 'pelican_embedded_human_check_cfg' || k === 'pelican_job_return_map' || k === 'pelican_gohome_keep_farm' || k === 'pelican_gear_trip' || k === 'pelican_town_needs' || k === 'pelican_override_farm_map' || k === 'pelican_weight_topup' || k.endsWith('__icon_manifest') || k.endsWith('__item_catalog') || k.endsWith('__latest_inventory') || k.endsWith('__packet_logs') || k.endsWith('__last_weight') || k.endsWith('__embedded_human_check_cfg') || k.endsWith('__job_return_map') || k.endsWith('__gohome_keep_farm') || k.endsWith('__gear_trip') || k.endsWith('__town_needs') || k.endsWith('__override_farm_map') || k.endsWith('__weight_topup') || k.startsWith('webgame.chat.')) continue;
             const isOwn = k.startsWith(pfx) || extraKeys.has(k);
             const isOther = doHarvest && !isOwn && k.startsWith('pelican_profile_');
             if (!isOwn && !isOther) continue;
@@ -1728,7 +1735,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if (!res || res.restored === false || res.unchanged) return;
       const entries = res && res.out ? res.out : res;
       if (entries && typeof entries === 'object' && Object.keys(entries).length > 0) {
-        saveProfileStorage(c.profileId, entries);
+        saveProfileStorage(c.profileId, entries, { fullHarvest: Object.keys(entries).some(k => k.startsWith(prefix)) });
         if (res && res.dirtyAt && res.dirtyAt !== c.lastSyncedDirtyAt) {
           c.lastSyncedDirtyAt = res.dirtyAt;
           if (forceHarvest && (!isRealSession || !c.initScriptId || Date.now() - (c.lastSessionHooksAt || 0) > 180000)) {
@@ -1743,7 +1750,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           if (!map || typeof map !== 'object' || Object.keys(map).length === 0) continue;
           const existing = loadProfileStorage(otherId);
           if (!existing || Object.keys(existing).length === 0) harvestedNew = true;
-          saveProfileStorage(otherId, map);
+          saveProfileStorage(otherId, map, { fullHarvest: true });
         }
         if (harvestedNew && typeof loadProfiles === 'function') {
           try { loadProfiles(); } catch (_) {}

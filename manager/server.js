@@ -2109,7 +2109,11 @@ function buildClientActionEvalCode(payload) {
       const map = ${JSON.stringify(payload.map)};
       if (typeof window.clearSafeMap === 'function') window.clearSafeMap('เลือกแมพจาก Manager');
       window.__overrideFarmMap = '';
-      try { localStorage.removeItem('pelican_override_farm_map'); } catch(e){}
+      try {
+        localStorage.removeItem('pelican_override_farm_map');
+        localStorage.removeItem('pelican_job_return_map');
+        localStorage.removeItem('pelican_gohome_keep_farm');
+      } catch(e){}
       window.__targetFarmMap = map;
       try { localStorage.setItem('pelican_farm_map', map); } catch(e){}
       const mapSelect = document.getElementById('p-target-map-select');
@@ -2135,12 +2139,23 @@ function buildClientActionEvalCode(payload) {
     return `(() => {
       const en = ${Boolean(payload.enabled)};
       window.__planScriptEnabled = en;
-      try { localStorage.setItem('pelican_plan_script_enabled', String(en)); } catch(e){}
+      try {
+        localStorage.setItem('pelican_plan_script_enabled', String(en));
+        localStorage.setItem('pelican_plan_user_disabled', String(!en));
+      } catch(e){}
       const planCb = document.getElementById('p-plan-script-enabled');
       if (planCb) planCb.checked = en;
       if (en) {
         if (typeof window.applyPelicanSettings === 'function') window.applyPelicanSettings();
         if (typeof window.autoConfigureCombat === 'function') window.autoConfigureCombat();
+      } else {
+        try {
+          localStorage.removeItem('pelican_gear_trip');
+          if (window.__targetFarmMap && !/เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน/.test(window.__targetFarmMap)) {
+            localStorage.removeItem('pelican_job_return_map');
+          }
+        } catch(e){}
+        if (typeof window.cleanupPlanTransientState === 'function') window.cleanupPlanTransientState('ปิด Plan Script จาก Manager');
       }
       if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
       return { success: true, planScriptEnabled: en };

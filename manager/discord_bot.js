@@ -835,7 +835,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     const triesBefore = attempt.triesLeftBefore != null
       ? attempt.triesLeftBefore
       : ((triesAfterInitial != null && triesAfterInitial <= 2) ? 3 : 1);
-    const alreadyConfirmedWrong = (triesAfterInitial != null && triesBefore != null && triesAfterInitial < triesBefore);
+    const alreadyConfirmedWrong = Boolean(attempt.confirmedWrong) || (triesAfterInitial != null && triesBefore != null && triesAfterInitial < triesBefore);
 
     if (!isTest && !alreadyConfirmedWrong && profile.debugPort && typeof evalProfilePort === 'function') {
       const verify = await verifyHumanCheckAnswerInGame(profile.id, {
@@ -1440,9 +1440,11 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     const profileId = profile.id;
     const now = Date.now();
 
-    // Avoid duplicate alerts for the exact same check prompt within 90 seconds
+    // Avoid duplicate alerts for the exact same check prompt within 90 seconds (or 10 minutes if timer already hit 0:00)
     const existing = activeChecks.get(profileId);
-    if (existing && existing.fingerprint === questionFingerprint(check) && (now - existing.notifiedAt < 90000)) {
+    const isExpiredCheck = /เหลือเวลา\s*0:00/.test(String(check.meta || ''));
+    const dedupeWindowMs = isExpiredCheck ? 600000 : 90000;
+    if (existing && existing.fingerprint === questionFingerprint(check) && (now - existing.notifiedAt < dedupeWindowMs)) {
       return;
     }
 
@@ -1724,31 +1726,112 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                       else if (typeof window.triggerHumanCheckTickNow === 'function') window.triggerHumanCheckTickNow();
                     } catch (_) {}
                     const hc = document.querySelector('.human-check');
-                    if (!hc || ${isNonFramePrompt ? 'true' : 'false'} || hc.querySelector('.human-check-dial')) return { solved: window.__lastHumanCheckSolved || null };
-                    const boardImg = hc.querySelector('.human-check-board img');
+                    if (!hc) return { solved: window.__lastHumanCheckSolved || null };
+                    if (window.__lastHumanCheckSolved && (Date.now() - (window.__lastHumanCheckSolved.timestamp || 0) < 12000)) {
+                      return { solved: window.__lastHumanCheckSolved };
+                    }
+                    const dialEl = hc.querySelector('.human-check-dial');
+                    const boardEl = dialEl || hc.querySelector('.human-check-board');
+                    const boardImg = boardEl ? boardEl.querySelector('img') : null;
                     if (!boardImg || !(boardImg.naturalWidth > 0 || boardImg.width > 0)) return { solved: window.__lastHumanCheckSolved || null };
-                    if (window.PmheeImageBoardSolver && typeof window.PmheeImageBoardSolver.solveFrameChallenge === 'function') {
-                      const bw = boardImg.naturalWidth || boardImg.width || 480;
-                      const bh = boardImg.naturalHeight || boardImg.height || 330;
+                    const pText = (hc.querySelector('.human-check-prompt')?.innerText || '').trim();
+                    const isRot = Boolean(dialEl || /หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(pText));
+                    const isCnt = !isRot && /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(pText);
+                    const isOdd = !isRot && !isCnt && /คลิกรูปที่ไม่เหมือนรูปอื่น|ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก/i.test(pText);
+                    if (window.PmheeImageBoardSolver) {
+                      const bw = boardImg.naturalWidth || boardImg.width || (isRot ? 220 : 480);
+                      const bh = boardImg.naturalHeight || boardImg.height || (isRot ? 220 : (isCnt ? 360 : 330));
                       const c = document.createElement('canvas');
                       c.width = bw; c.height = bh;
                       const ctx = c.getContext('2d');
                       ctx.drawImage(boardImg, 0, 0, bw, bh);
                       const imgData = ctx.getImageData(0, 0, bw, bh);
-                      const sol = window.PmheeImageBoardSolver.solveFrameChallenge({ width: bw, height: bh, data: imgData.data });
-                      if (sol && sol.slot >= 1 && sol.slot <= 4) {
-                        return { frameSol: { pickIndex: sol.slot - 1, slot: sol.slot, x: sol.x, y: sol.y, confidence: sol.confidence } };
+                      const bd = { width: bw, height: bh, data: imgData.data };
+                      if (isRot && typeof window.PmheeImageBoardSolver.solveRotateChallenge === 'function') {
+                        const rSol = window.PmheeImageBoardSolver.solveRotateChallenge(bd);
+                        if (rSol && typeof rSol.turn === 'number') {
+                          const allBtns = Array.from(hc.querySelectorAll('button'));
+                          const ccwBtn = allBtns.find(b => /หมุนทวนเข็ม|ทวนเข็ม|ซ้าย|⟲|↺|↶|◀|←/.test((b.getAttribute?.('aria-label') || '') + ' ' + (b.textContent || b.innerText || '')));
+                          const cwBtn = allBtns.find(b => /หมุนตามเข็ม|ตามเข็ม|ขวา|⟳|↻|↷|▶|→/.test((b.getAttribute?.('aria-label') || '') + ' ' + (b.textContent || b.innerText || '')));
+                          const confirmBtn = hc.querySelector('.human-check-confirm, button.confirm, .btn-confirm, button.primary') || allBtns.find(b => /ยืนยัน|ตกลง|confirm|ok/i.test(b.textContent || b.innerText || ''));
+                          let curTurn = 0;
+                          const mRot = String(boardImg.style?.transform || boardImg.getAttribute?.('style') || '').match(/rotate\\(\\s*(-?\\d+(?:\\.\\d+)?)\\s*deg\\s*\\)/i);
+                          if (mRot) curTurn = Number(mRot[1]) || 0;
+                          let delta = ((rSol.turn - curTurn) % 360 + 540) % 360 - 180;
+                          if (delta <= -180) delta += 360;
+                          const btn = delta < 0 ? ccwBtn : cwBtn;
+                          const clicks = Math.round(Math.abs(delta) / 15);
+                          if (btn && clicks > 0) {
+                            for (let k = 0; k < clicks; k++) { try { btn.click(); } catch (_) {} }
+                          }
+                          window.__expectedRotateTurn = rSol.turn;
+                          if (confirmBtn) { try { confirmBtn.click(); } catch (_) {} }
+                          const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null) || window.__colyseusRoom || window.__gameRoom || null;
+                          const pkt = window.__latestHumanCheck;
+                          if (room && typeof room.send === 'function' && pkt && pkt.id != null && !String(pkt.id).startsWith('dom-')) {
+                            try { room.send('human_check_answer', { id: pkt.id, turn: rSol.turn, trail: [] }); } catch (_) {}
+                          }
+                          window.__expectedRotateTurn = null;
+                          const sObj = {
+                            type: 'rotate',
+                            clicks: rSol.clicks,
+                            direction: rSol.direction,
+                            angle: rSol.angle,
+                            turn: rSol.turn,
+                            pickIndex: 0,
+                            slot: 1,
+                            confidence: rSol.confidence,
+                            matchedName: 'หมุนรูป (' + rSol.clicks + ' ครั้ง)',
+                            timestamp: Date.now(),
+                            source: 'manager-board-fallback'
+                          };
+                          window.__lastHumanCheckSolved = sObj;
+                          return { solved: sObj };
+                        }
+                      } else if (isCnt && typeof window.PmheeImageBoardSolver.solveCountChallenge === 'function') {
+                        const cSol = window.PmheeImageBoardSolver.solveCountChallenge(bd);
+                        if (cSol && Number.isInteger(cSol.count)) {
+                          const numBtns = Array.from(hc.querySelectorAll('button')).filter(b => /^[1-6]$/.test((b.textContent || b.innerText || '').trim()));
+                          const targetBtn = numBtns.find(b => Number((b.textContent || b.innerText || '').trim()) === cSol.count) || numBtns[Math.max(0, Math.min(numBtns.length - 1, cSol.count - 1))];
+                          if (targetBtn) { try { targetBtn.click(); } catch (_) {} }
+                          const sObj = {
+                            type: 'count',
+                            count: cSol.count,
+                            pickIndex: Math.max(0, cSol.count - 1),
+                            slot: cSol.count,
+                            confidence: cSol.confidence,
+                            matchedName: 'นับจำนวน (' + cSol.count + ' อัน)',
+                            timestamp: Date.now(),
+                            source: 'manager-board-fallback'
+                          };
+                          window.__lastHumanCheckSolved = sObj;
+                          return { solved: sObj };
+                        }
+                      } else if (isOdd && typeof window.PmheeImageBoardSolver.solveOddChallenge === 'function') {
+                        const oSol = window.PmheeImageBoardSolver.solveOddChallenge(bd);
+                        if (oSol && oSol.slot >= 1 && oSol.slot <= 4) {
+                          return { frameSol: { pickIndex: oSol.slot - 1, slot: oSol.slot, x: oSol.x, y: oSol.y, confidence: oSol.confidence, isOdd: true } };
+                        }
+                      } else if (!${isNonFramePrompt ? 'true' : 'false'} && typeof window.PmheeImageBoardSolver.solveFrameChallenge === 'function') {
+                        const sol = window.PmheeImageBoardSolver.solveFrameChallenge(bd);
+                        if (sol && sol.slot >= 1 && sol.slot <= 4) {
+                          return { frameSol: { pickIndex: sol.slot - 1, slot: sol.slot, x: sol.x, y: sol.y, confidence: sol.confidence } };
+                        }
                       }
                     }
                     return { solved: window.__lastHumanCheckSolved || null };
                   })()`, 2500);
                   const fbRes = fallbackProbe?.result || null;
-                  if (!isNonFramePrompt && fbRes?.frameSol && Number.isInteger(fbRes.frameSol.pickIndex)) {
+                  if (fbRes?.solved && !lastAttemptedSolved) {
+                    lastAttemptedSolved = fbRes.solved;
+                  } else if (fbRes?.frameSol && Number.isInteger(fbRes.frameSol.pickIndex)) {
                     const fsObj = fbRes.frameSol;
                     const itemMatch = promptText.replace(/^(กรุณา)?(คลิกที่รูปภาพของ|คลิกที่ภาพ|กดที่รูปภาพของ|กดที่ภาพ|กดรูป|เลือกรูปภาพของ|เลือกรูป|เลือก)\s*/i, '').replace(/\s*(ภายในเวลา.*)?$/i, '').trim();
-                    const matchedLabel = itemMatch
-                      ? `${itemMatch} (ตัวเลือกที่ ${fsObj.slot}${fsObj.confidence ? ` · ความแม่นยำ ${fsObj.confidence}%` : ''})`
-                      : `ตัวเลือกที่ ${fsObj.slot}`;
+                    const matchedLabel = fsObj.isOdd
+                      ? `แยกผิดประเภท (ช่องที่ ${fsObj.slot})`
+                      : (itemMatch
+                        ? `${itemMatch} (ตัวเลือกที่ ${fsObj.slot}${fsObj.confidence ? ` · ความแม่นยำ ${fsObj.confidence}%` : ''})`
+                        : `ตัวเลือกที่ ${fsObj.slot}`);
                     const clickRes = await answerCheckInGame(profileId, fsObj.pickIndex, matchedLabel, { id: trackedCheck.checkId, prompt: trackedCheck.prompt });
                     if (clickRes && clickRes.success) {
                       lastAttemptedSolved = {
@@ -1802,9 +1885,19 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                       const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
                         || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
                         || window.__colyseusRoom || window.__gameRoom || null;
-                      if (room && typeof room.send === 'function' && packet && packet.id != null && typeof s.x === 'number' && typeof s.y === 'number') {
-                        room.send('human_check_answer', { id: packet.id, x: s.x, y: s.y });
-                        return true;
+                      if (room && typeof room.send === 'function' && packet && packet.id != null) {
+                        if (typeof s.x === 'number' && typeof s.y === 'number') {
+                          room.send('human_check_answer', { id: packet.id, x: s.x, y: s.y });
+                          return true;
+                        }
+                        if (s.type === 'rotate' && typeof s.turn === 'number') {
+                          room.send('human_check_answer', { id: packet.id, turn: s.turn });
+                          return true;
+                        }
+                        if (s.type === 'count' && typeof s.count === 'number') {
+                          room.send('human_check_answer', { id: packet.id, value: s.count, count: s.count });
+                          return true;
+                        }
                       }
                       return false;
                     })()`, 2000);

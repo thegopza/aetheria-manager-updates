@@ -1015,7 +1015,7 @@
     const isTopWhip = topGray <= 0.16 && topWood >= 0.70 && topR45 <= 0.12 && topObj.meanLum <= 60 && topObj.elongation <= 2.3;
     const isTopBoots = topWood >= 0.78 && topGray <= 0.18 && topR45 <= 0.16 && topObj.elongation >= 1.30 && topObj.elongation <= 1.65 && topObj.meanLum >= 68;
     const isTopBook = topObj.area >= 1320 && topObj.elongation <= 1.48 && topGray <= 0.22 && topWood <= 0.35;
-    const isTopKatar = topObj.colorHist[0] >= 0.22 && topObj.colorHist[5] >= 0.18 && topObj.meanLum >= 105 && topObj.elongation >= 2.0 && topObj.elongation <= 3.2;
+    const isTopKatar = topObj.colorHist[0] >= 0.22 && topObj.colorHist[5] >= 0.18 && topObj.meanLum >= 95 && topObj.elongation >= 2.0 && topObj.elongation <= 3.2;
 
     const bW = Math.max(54, Math.min(68, Math.round(topObj.rmsRadius * 3.2))), bH = bW;
     const step = 7;
@@ -1066,7 +1066,7 @@
           } else if (isTopBook) {
             if (slotGray >= 0.28 || slotWood >= 0.65) itemPenalty = 0.90;
           } else if (isTopKatar) {
-            if (slotGray < 0.22 || slotGray > 0.57 || slotWood < 0.36 || slotWood > 0.80 || obj.meanSat < 30 || obj.meanSat > 58 || obj.fillRatio < 2.75) itemPenalty = 1.00;
+            if (slotGray < 0.22 || slotGray > 0.57 || slotWood < 0.36 || slotWood > 0.80 || obj.meanSat < 30 || obj.meanSat > 58 || obj.fillRatio < 2.75 || obj.fillRatio > 3.90 || obj.elongation < 1.55 || obj.colorHist[0] < 0.12 || obj.meanLum < 88) itemPenalty = 1.00;
           }
 
           const cmp = compareObjects(topObj, obj);

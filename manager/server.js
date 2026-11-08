@@ -1088,7 +1088,7 @@ const LIVE_STATE_EVAL = `(() => {
         screenPhase = 'reconnecting';
         baseLabel = '🔄 กำลังเชื่อมต่อเซิร์ฟเวอร์ใหม่...';
         detail = '🔄 กำลังเชื่อมต่อใหม่: เกมจะพากลับเข้าไปเองเมื่อพร้อม';
-        autoReloadAfterMs = 90000;
+        autoReloadAfterMs = (Date.now() - (window.__lastWorldEnter409At || 0) < 25000) ? 10000 : 18000;
       }
     } else if (charPanel) {
       try {
@@ -1548,8 +1548,14 @@ const LIVE_STATE_EVAL = `(() => {
               const room = (typeof window.getColyseusRoom === 'function' ? window.getColyseusRoom() : null)
                 || (typeof window.getGameRoom === 'function' ? window.getGameRoom() : null)
                 || window.__colyseusRoom || window.__gameRoom || null;
-              if (room && typeof room.send === 'function' && pkt && pkt.id != null && typeof sLast.x === 'number' && typeof sLast.y === 'number') {
-                room.send('human_check_answer', { id: pkt.id, x: sLast.x, y: sLast.y });
+              if (room && typeof room.send === 'function' && pkt && pkt.id != null) {
+                if (typeof sLast.x === 'number' && typeof sLast.y === 'number') {
+                  room.send('human_check_answer', { id: pkt.id, x: sLast.x, y: sLast.y });
+                } else if (sLast.type === 'rotate' && typeof sLast.turn === 'number') {
+                  room.send('human_check_answer', { id: pkt.id, turn: sLast.turn });
+                } else if (sLast.type === 'count' && typeof sLast.count === 'number') {
+                  room.send('human_check_answer', { id: pkt.id, value: sLast.count, count: sLast.count });
+                }
               }
             }
           } catch (e) {}
@@ -1570,7 +1576,7 @@ const LIVE_STATE_EVAL = `(() => {
         const triesBefore = att.triesLeftBefore != null
           ? att.triesLeftBefore
           : (((att.triesLeftAfter ?? curTriesLeft) != null && (att.triesLeftAfter ?? curTriesLeft) <= 2) ? 3 : 1);
-        const alreadyDroppedAtQueueTime = (att.triesLeftAfter != null && triesBefore != null && att.triesLeftAfter < triesBefore);
+        const alreadyDroppedAtQueueTime = Boolean(att.confirmedWrong) || (att.triesLeftAfter != null && triesBefore != null && att.triesLeftAfter < triesBefore);
         if (!hc) {
           if (alreadyDroppedAtQueueTime || inJailNowQ) {
             if (inJailNowQ) {
@@ -1768,6 +1774,7 @@ const LIVE_STATE_EVAL = `(() => {
 const clientStateCacheByPort = new Map();
 const clientStateInFlightByPort = new Map();
 const clientStateLastFailureByPort = new Map();
+const pendingWrongAttemptsByPort = new Map();
 
 async function mapWithConcurrency(items, limit, fn) {
   const arr = Array.isArray(items) ? items : [];
@@ -1857,6 +1864,17 @@ function queryClientState(port) {
       const m = String(state.map || '').trim();
       if (/^(?:\d+|[-—–]+)\s*ms$/i.test(m) || /\b\d+\s*ms\b/i.test(m) || /^CH\b/i.test(m) || /▾/.test(m)) {
         state.map = state.targetMap || 'ไม่ทราบแมพ';
+      }
+      if (Array.isArray(state.humanCheckWrongAttempts) && state.humanCheckWrongAttempts.length > 0) {
+        const list = pendingWrongAttemptsByPort.get(port) || [];
+        for (const att of state.humanCheckWrongAttempts) {
+          if (!att) continue;
+          const sig = `${att.timestamp || 0}:${att.pickIndex ?? ''}:${att.turn ?? ''}:${att.count ?? ''}:${att.triesLeftAfter ?? ''}`;
+          if (!list.some(x => x._sig === sig)) {
+            list.push({ ...att, _sig: sig });
+          }
+        }
+        pendingWrongAttemptsByPort.set(port, list.slice(-20));
       }
       clientStateCacheByPort.set(port, { ts: Date.now(), state });
     }
@@ -5940,10 +5958,16 @@ setInterval(async () => {
             lastEmbeddedBridgePollAt.set(p.id, nowPoll);
             await embeddedHumanCheckBridge.collect(p, state);
           }
-          if (state && Array.isArray(state.humanCheckWrongAttempts) && state.humanCheckWrongAttempts.length > 0) {
+          const bufferedWrong = pendingWrongAttemptsByPort.get(p.debugPort);
+          const wrongList = (Array.isArray(bufferedWrong) && bufferedWrong.length > 0)
+            ? bufferedWrong
+            : ((state && Array.isArray(state.humanCheckWrongAttempts)) ? state.humanCheckWrongAttempts : []);
+          if (wrongList.length > 0) {
+            pendingWrongAttemptsByPort.delete(p.debugPort);
+            if (state) state.humanCheckWrongAttempts = null;
             shouldBeepUrgent = true;
             if (typeof discordService.notifyHumanCheckWrongAttempt === 'function') {
-              for (const attempt of state.humanCheckWrongAttempts) {
+              for (const attempt of wrongList) {
                 discordService.notifyHumanCheckWrongAttempt({ profile: p, attempt });
               }
             }

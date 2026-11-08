@@ -3280,7 +3280,7 @@ async function ensureClientConsolidationItemHelpers(port, cfg = null) {
         try {
           if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
           else room.send('auto_set', { enabled: false });
-          room.send('select_target', { sessionId: null });
+          room.send('target', { targetId: null });
           const me0 = room.state && room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
           if (me0 && Number.isFinite(me0.x) && Number.isFinite(me0.y)) {
             room.send('move_to', { x: Math.round(me0.x), y: Math.round(me0.y) });
@@ -3354,7 +3354,7 @@ async function ensureClientConsolidationItemHelpers(port, cfg = null) {
         try {
           if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
           else room.send('auto_set', { enabled: false });
-          room.send('select_target', { sessionId: null });
+          room.send('target', { targetId: null });
           const me0 = room.state && room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
           if (me0 && Number.isFinite(me0.x) && Number.isFinite(me0.y)) {
             room.send('move_to', { x: Math.round(me0.x), y: Math.round(me0.y) });
@@ -3403,7 +3403,7 @@ async function ensureClientConsolidationItemHelpers(port, cfg = null) {
             if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
             else if (r && typeof r.send === 'function') r.send('auto_set', { enabled: false });
             if (r && typeof r.send === 'function') {
-              r.send('select_target', { sessionId: null });
+              r.send('target', { targetId: null });
               if (me && Number.isFinite(me.x) && Number.isFinite(me.y)) {
                 r.send('move_to', { x: Math.round(me.x), y: Math.round(me.y) });
               }
@@ -3959,7 +3959,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
           if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
           else if (room && typeof room.send === 'function') room.send('auto_set', { enabled: false });
           if (room && typeof room.send === 'function') {
-            room.send('select_target', { sessionId: null });
+            room.send('target', { targetId: null });
             const me = room.state && room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
             if (me && Number.isFinite(me.x) && Number.isFinite(me.y)) {
               room.send('move_to', { x: Math.round(me.x), y: Math.round(me.y) });
@@ -4001,7 +4001,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
         else if (room && typeof room.send === 'function') room.send('auto_set', { enabled: false });
         if (room && typeof room.send === 'function') {
-          room.send('select_target', { sessionId: null });
+          room.send('target', { targetId: null });
           const me = room.state && room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
           if (me && Number.isFinite(me.x) && Number.isFinite(me.y)) {
             room.send('move_to', { x: Math.round(me.x), y: Math.round(me.y) });

@@ -3116,6 +3116,20 @@ async function ensureClientConsolidationItemHelpers(port, cfg = null) {
             if (!done) { done = true; clearTimeout(t); resolve(); }
           }
         });
+        try {
+          const cfg = window.__archerConfig || {};
+          if (cfg.useBwing !== false && typeof window.sendShopBuy === 'function') {
+            const bwingId = parseInt(cfg.bwingItemId) || 90311;
+            const targetBwing = Math.max(1, parseInt(cfg.bwingBuyQty) || 5);
+            const curBwing = typeof window.getBagItemCount === 'function' ? window.getBagItemCount(bwingId) : 0;
+            const liveMid = (typeof window.getLiveCharacterData === 'function' && window.getLiveCharacterData()) || {};
+            const zenyMid = Number(liveMid.zeny) || 0;
+            if (curBwing < targetBwing && zenyMid >= 1500) {
+              window.sendShopBuy(bwingId, targetBwing - curBwing);
+              await sleep(450);
+            }
+          }
+        } catch (e) {}
         window.__isManualSelling = false;
         closeStorageAndDialogs();
         await sleep(250);
@@ -3228,60 +3242,149 @@ async function ensureClientConsolidationItemHelpers(port, cfg = null) {
       }
     };
 
-    window.executeBwingHome = function() {
-      const room = tradeRoom();
-      if (!room) return;
+    const hasButterflyWingInBag = () => {
       try {
-        if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
-        else room.send('auto_set', { enabled: false });
-        room.send('select_target', { sessionId: null });
-      } catch (e) {}
-      closeStorageAndDialogs();
-      if (typeof window.isInCapital === 'function' && window.isInCapital()) return;
-      if (typeof window.useButterflyWing === 'function' && window.useButterflyWing()) {
-        let retryCount = 0;
-        const bwingRetryTimer = setInterval(() => {
-          retryCount++;
-          if (retryCount > 4 || (typeof window.isInCapital === 'function' && window.isInCapital())) {
-            clearInterval(bwingRetryTimer);
-            return;
-          }
-          const inv = (typeof window.__readAuthoritativeBagInventory === 'function' ? window.__readAuthoritativeBagInventory() : window.__latestInventory) || {};
-          const items = Array.isArray(inv.items) ? inv.items : [];
-          const hasBwing = items.some(it => it && Number(it.qty) > 0 && (it.id === 'butterfly_wing' || String(it.name || '').toLowerCase().includes('butterfly wing')));
-          if (hasBwing && typeof window.useButterflyWing === 'function') {
-            closeStorageAndDialogs();
-            window.useButterflyWing();
-          } else {
-            clearInterval(bwingRetryTimer);
-            if (!window.__isNavigating && typeof window.goToCapital === 'function') window.goToCapital();
-          }
-        }, 3500);
-        return;
+        if (typeof window.getBagItemCount === 'function' && window.getBagItemCount(90311) > 0) return true;
+        const inv = (typeof window.__readAuthoritativeBagInventory === 'function' ? window.__readAuthoritativeBagInventory() : window.__latestInventory) || {};
+        const items = Array.isArray(inv.items) ? inv.items : [];
+        return items.some(it => it && Number(it.qty ?? 1) > 0 && (
+          Number(it.itemId || it.id || it.item_id) === 90311 ||
+          it.id === 'butterfly_wing' ||
+          String(it.name || it.itemName || '').toLowerCase().includes('butterfly wing')
+        ));
+      } catch (e) {
+        return false;
       }
-      if (typeof window.goToCapital === 'function') window.goToCapital();
     };
 
-    window.ensureInCapital = async function(timeoutMs = 180000) {
-      if (typeof window.isInCapital === 'function' && window.isInCapital()) return { success: true };
+    const isScreenReconnectingNow = () => {
+      try {
+        const el = document.querySelector('.login-reconnecting, .panel.reconnecting');
+        if (el && (el.offsetWidth > 0 || el.offsetHeight > 0)) return true;
+        const bodyTxt = document.body ? (document.body.innerText || '') : '';
+        if (bodyTxt.includes('กำลังเชื่อมต่อใหม่')) return true;
+      } catch (e) {}
+      return false;
+    };
+
+    window.executeBwingHome = async function(timeoutMs = 12000) {
+      window.__consolidationAborted = false;
+      window.__isConsolidating = true;
+      window.__isBotRunning = false;
+      window.__autoLoopEnabled = false;
       const room = tradeRoom();
       if (room) {
         try {
           if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
           else room.send('auto_set', { enabled: false });
           room.send('select_target', { sessionId: null });
+          const me0 = room.state && room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
+          if (me0 && Number.isFinite(me0.x) && Number.isFinite(me0.y)) {
+            room.send('move_to', { x: Math.round(me0.x), y: Math.round(me0.y) });
+          }
         } catch (e) {}
       }
       closeStorageAndDialogs();
-      if (typeof window.useButterflyWing === 'function') window.useButterflyWing();
+      if (typeof window.keepFarmMapForTrip === 'function') window.keepFarmMapForTrip();
+      if (typeof window.isInCapital === 'function' && window.isInCapital()) {
+        return { success: true, alreadyHome: true };
+      }
+      if (window.__bwingConsolidationRetryTimer) {
+        clearInterval(window.__bwingConsolidationRetryTimer);
+        window.__bwingConsolidationRetryTimer = null;
+      }
+      if (hasButterflyWingInBag() && typeof window.useButterflyWing === 'function') {
+        window.__goHomeWingAt = Date.now();
+        window.useButterflyWing();
+        let retryCount = 0;
+        window.__bwingConsolidationRetryTimer = setInterval(() => {
+          retryCount++;
+          if (
+            retryCount > 3 ||
+            window.__consolidationAborted ||
+            !window.__isConsolidating ||
+            (typeof window.isInCapital === 'function' && window.isInCapital())
+          ) {
+            clearInterval(window.__bwingConsolidationRetryTimer);
+            window.__bwingConsolidationRetryTimer = null;
+            return;
+          }
+          if (isScreenReconnectingNow()) return;
+          if (hasButterflyWingInBag() && typeof window.useButterflyWing === 'function') {
+            closeStorageAndDialogs();
+            window.useButterflyWing();
+          } else {
+            clearInterval(window.__bwingConsolidationRetryTimer);
+            window.__bwingConsolidationRetryTimer = null;
+            if (!window.__isNavigating && typeof window.goToCapital === 'function') {
+              window.goToCapital('รวมเงิน', { allowDuringConsolidation: true, noWing: true });
+            }
+          }
+        }, 4500);
+        return { success: true, usedWing: true };
+      }
+      if (typeof window.goToCapital === 'function') {
+        window.goToCapital('รวมเงิน', { allowDuringConsolidation: true, noWing: true });
+      }
+      return { success: false, walking: true };
+    };
+
+    window.ensureInCapital = async function(timeoutMs = 180000) {
+      if (typeof window.isInCapital === 'function' && window.isInCapital()) return { success: true, already: true };
+      if (isScreenReconnectingNow()) {
+        let initReconnTicks = 0;
+        while (initReconnTicks < 6 && isScreenReconnectingNow()) {
+          await sleep(1000);
+          initReconnTicks++;
+        }
+        if (isScreenReconnectingNow()) {
+          return { success: false, reconnecting: true, error: 'จอค้างหน้า "กำลังเชื่อมต่อใหม่..."' };
+        }
+      }
+      window.__consolidationAborted = false;
+      window.__isConsolidating = true;
+      window.__isBotRunning = false;
+      window.__autoLoopEnabled = false;
+      if (typeof window.keepFarmMapForTrip === 'function') window.keepFarmMapForTrip();
+      const room = tradeRoom();
+      if (room) {
+        try {
+          if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
+          else room.send('auto_set', { enabled: false });
+          room.send('select_target', { sessionId: null });
+          const me0 = room.state && room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
+          if (me0 && Number.isFinite(me0.x) && Number.isFinite(me0.y)) {
+            room.send('move_to', { x: Math.round(me0.x), y: Math.round(me0.y) });
+          }
+        } catch (e) {}
+      }
+      closeStorageAndDialogs();
       const start = Date.now();
-      let walkStarted = false;
-      let lastWalkTriggerAt = 0;
+      let wingRetries = 0;
+      let kickAt = Date.now();
       let lastPosKey = '';
       let lastMovedAt = Date.now();
+      let reconnTicks = 0;
+      if (hasButterflyWingInBag() && typeof window.useButterflyWing === 'function') {
+        window.__goHomeWingAt = Date.now();
+        window.useButterflyWing();
+      } else if (typeof window.goToCapital === 'function') {
+        window.goToCapital('รวมเงิน', { allowDuringConsolidation: true, noWing: true });
+      }
       while (Date.now() - start < timeoutMs) {
         await sleep(1000);
         if (typeof window.isInCapital === 'function' && window.isInCapital()) return { success: true };
+        if (window.__consolidationAborted || !window.__isConsolidating) {
+          return { success: false, aborted: true, error: 'ยกเลิกการรวมเงินแล้ว' };
+        }
+        if (isScreenReconnectingNow()) {
+          reconnTicks++;
+          if (reconnTicks >= 8) {
+            return { success: false, reconnecting: true, error: 'จอค้างหน้า "กำลังเชื่อมต่อใหม่..."' };
+          }
+          continue;
+        }
+        reconnTicks = 0;
         const r = tradeRoom();
         const me = r && r.state && r.state.players && r.state.players.get ? r.state.players.get(r.sessionId) : null;
         const curMap = typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '';
@@ -3290,27 +3393,35 @@ async function ensureClientConsolidationItemHelpers(port, cfg = null) {
           lastPosKey = posKey;
           lastMovedAt = Date.now();
         }
-        if (Date.now() - start >= 3500) {
-          const inv = (typeof window.__readAuthoritativeBagInventory === 'function' ? window.__readAuthoritativeBagInventory() : window.__latestInventory) || {};
-          const items = Array.isArray(inv.items) ? inv.items : [];
-          const hasBwing = items.some(it => it && Number(it.qty) > 0 && (it.id === 'butterfly_wing' || String(it.name || '').toLowerCase().includes('butterfly wing')));
-          if (hasBwing && typeof window.useButterflyWing === 'function' && ((Date.now() - start) % 4000 < 1200)) {
-            closeStorageAndDialogs();
-            window.useButterflyWing();
-            continue;
-          }
-          const navStalled = window.__isNavigating && (Date.now() - lastMovedAt > 10000);
-          if ((!walkStarted || (!window.__isNavigating && Date.now() - lastWalkTriggerAt > 8000) || navStalled) && typeof window.goToCapital === 'function') {
-            if (navStalled) {
-              window.__isNavigating = false;
-              window.__isWalkingToMap = false;
-              if (typeof window.stopArrivalWatcher === 'function') window.stopArrivalWatcher();
+        const hasBwing = hasButterflyWingInBag();
+        if (hasBwing && Date.now() - kickAt >= 4500 && wingRetries < 3 && typeof window.useButterflyWing === 'function') {
+          wingRetries++;
+          try {
+            if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
+            else if (r && typeof r.send === 'function') r.send('auto_set', { enabled: false });
+            if (r && typeof r.send === 'function') {
+              r.send('select_target', { sessionId: null });
+              if (me && Number.isFinite(me.x) && Number.isFinite(me.y)) {
+                r.send('move_to', { x: Math.round(me.x), y: Math.round(me.y) });
+              }
             }
-            walkStarted = true;
-            lastWalkTriggerAt = Date.now();
-            lastMovedAt = Date.now();
-            window.goToCapital();
+          } catch (e) {}
+          closeStorageAndDialogs();
+          window.__goHomeWingAt = Date.now();
+          window.useButterflyWing();
+          kickAt = Date.now();
+          continue;
+        }
+        const navStalled = window.__isNavigating && (Date.now() - lastMovedAt > 12000);
+        if ((!hasBwing || wingRetries >= 3) && ((!window.__isNavigating && Date.now() - kickAt >= 6000) || navStalled) && typeof window.goToCapital === 'function') {
+          if (navStalled) {
+            window.__isNavigating = false;
+            window.__isWalkingToMap = false;
+            if (typeof window.stopArrivalWatcher === 'function') window.stopArrivalWatcher();
           }
+          kickAt = Date.now();
+          lastMovedAt = Date.now();
+          window.goToCapital('รวมเงิน', { allowDuringConsolidation: true, noWing: true });
         }
       }
       return { success: typeof window.isInCapital === 'function' ? window.isInCapital() : false, error: 'กลับเมืองหลวงไม่สำเร็จภายในเวลาที่กำหนด' };
@@ -3724,6 +3835,13 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       }
       const hard = [];
       const soft = [];
+      const reconnEl = document.querySelector('.login-reconnecting, .panel.reconnecting');
+      const bodyTxt = document.body ? (document.body.innerText || '') : '';
+      const reconnecting = Boolean(
+        (reconnEl && (reconnEl.offsetWidth > 0 || reconnEl.offsetHeight > 0)) ||
+        bodyTxt.includes('กำลังเชื่อมต่อใหม่')
+      );
+      if (reconnecting) hard.push('ค้างหน้ากำลังเชื่อมต่อใหม่ (Reconnecting)');
       const hc = document.querySelector('.human-check');
       if (hc && hc.offsetParent !== null) hard.push('เช็คผู้เล่น (Human Check)');
       if (inTown && window.__isGearRefining) hard.push('ตีบวก (เซ็ตอุปกรณ์)');
@@ -3733,13 +3851,17 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       if (inTown && window.__isStoring) soft.push('ฝากของเข้าคลัง');
       if (window.__isWeightScrollBusy) soft.push('ซื้อ/ใช้ Weight Limit Scroll');
       if (window.__isManualSelling) soft.push('ลงขายของ');
-      return { hard, soft };
+      return { hard, soft, reconnecting };
     })()`;
     const busyOf = async p => {
       const r = await evalProfilePort(p.debugPort, BUSY_JS, 4500);
       return (r && r.success && r.result && typeof r.result === 'object')
-        ? { hard: Array.isArray(r.result.hard) ? r.result.hard : [], soft: Array.isArray(r.result.soft) ? r.result.soft : [] }
-        : { hard: [], soft: [] };
+        ? {
+            hard: Array.isArray(r.result.hard) ? r.result.hard : [],
+            soft: Array.isArray(r.result.soft) ? r.result.soft : [],
+            reconnecting: Boolean(r.result.reconnecting)
+          }
+        : { hard: ['จอไม่ตอบสนอง / ออฟไลน์'], soft: [], reconnecting: true };
     };
     const stillBusy = new Map();
     await Promise.all([receiverProfile, ...senderProfiles].map(async p => {
@@ -3751,6 +3873,10 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       for (let i = 0; i < 20 && (b.hard.length || b.soft.length) && !consolidationAborted; i++) {
         await new Promise(r => setTimeout(r, 1500));
         b = await busyOf(p);
+        // Fast-skip screens stuck at "กำลังเชื่อมต่อใหม่..." after ~6s (4 polls) instead of holding up consolidation
+        if (i >= 3 && b.reconnecting) {
+          break;
+        }
         // After ~15s (i >= 9), if only soft tasks (NPC shop / storage / manual sell) remain, force-close & clear them so the character is never skipped!
         if (i >= 9 && b.soft.length > 0 && b.hard.length === 0) {
           await evalProfilePort(p.debugPort, `(() => {
@@ -3783,9 +3909,20 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     }
     for (const s of senderProfiles.filter(x => stillBusy.has(x.id))) {
       addConsolidationLog(`⏭️ ${s.name}: ติดสถานะสำคัญ "${stillBusy.get(s.id).join(', ')}" -> ข้ามจอนี้ในรอบนี้`, 'warning');
+      consolidationState.completedSenders.push(s.id);
       await clearPending(s);
     }
     for (let i = senderProfiles.length - 1; i >= 0; i--) if (stillBusy.has(senderProfiles[i].id)) senderProfiles.splice(i, 1);
+    if (senderProfiles.length === 0) {
+      await clearPending(receiverProfile);
+      addConsolidationLog(`⚠️ ไม่มีจอผู้โอนที่พร้อมทำงานในรอบนี้สำหรับตัวรับ ${receiverProfile.name}`, 'warning');
+      if (!(batchCtx && batchCtx.isSubBatch)) {
+        consolidationState.running = false;
+        consolidationState.status = 'completed';
+        consolidationState.endTime = Date.now();
+      }
+      return { ok: true, groupTransferredZeny: 0, groupTransferredItems: 0 };
+    }
 
     // -------------------------------------------------------------
     // STEP 1: สั่ง Stop Bot และหยุดโจมตีทุกจอที่เกี่ยวข้องพร้อมกัน
@@ -3906,6 +4043,18 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     }));
     await new Promise(r => setTimeout(r, 1500));
 
+    // Kick off ensureInCapital in the background for all senders right at Step 2 so senders with 0 Butterfly Wings start walking via World Map immediately in parallel!
+    const senderHomePromises = new Map();
+    for (const s of senderProfiles) {
+      senderHomePromises.set(s.id, evalProfilePort(s.debugPort, `(() => {
+        window.__consolidationAborted = false;
+        window.__isConsolidating = true;
+        window.__isBotRunning = false;
+        window.__autoLoopEnabled = false;
+        return window.ensureInCapital ? window.ensureInCapital(180000) : { success: true };
+      })()`, 190000).catch(() => null));
+    }
+
     // The receiver must be in the capital before it changes channel (no Butterfly Wing: it walks home first)
     const recvInCapCheck = await evalProfilePort(receiverProfile.debugPort, `window.isInCapital ? window.isInCapital() : true`, 5000);
     if (recvInCapCheck && recvInCapCheck.result === false) {
@@ -3917,7 +4066,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       window.__isConsolidating = true;
       return window.ensureInCapital ? window.ensureInCapital(240000) : { success: true };
     })()`, 250000);
-    if (!(recvHome && recvHome.result && recvHome.result.success) && !consolidationAborted) {
+    if (!(recvHome && recvHome.result && recvHome.result.success) && !(recvHome && recvHome.result && recvHome.result.reconnecting) && !consolidationAborted) {
       await triggerBwingOnProfile(receiverProfile);
       await new Promise(r => setTimeout(r, 1500));
       recvHome = await evalProfilePort(receiverProfile.debugPort, `window.ensureInCapital ? window.ensureInCapital(180000) : { success: true }`, 190000);
@@ -4035,18 +4184,33 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
 
     const prepareSender = async (s) => {
       if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel: null, earlyStop: true };
-      const sInCap = await evalProfilePort(s.debugPort, `window.isInCapital ? window.isInCapital() : true`, 5000);
-      if (sInCap && sInCap.result === false) {
+      const sStatus = await evalProfilePort(s.debugPort, `(() => {
+        const reconnEl = document.querySelector('.login-reconnecting, .panel.reconnecting');
+        const bodyTxt = document.body ? (document.body.innerText || '') : '';
+        const reconnecting = Boolean(
+          (reconnEl && (reconnEl.offsetWidth > 0 || reconnEl.offsetHeight > 0)) ||
+          bodyTxt.includes('กำลังเชื่อมต่อใหม่')
+        );
+        const inCap = typeof window.isInCapital === 'function' ? window.isInCapital() : true;
+        return { reconnecting, inCap };
+      })()`, 5000);
+      if (!sStatus || !sStatus.success || (sStatus.result && sStatus.result.reconnecting)) {
+        return { ok: false, homeChannel: null, error: 'จอค้างหน้า "กำลังเชื่อมต่อใหม่..." หรือไม่ตอบสนอง' };
+      }
+      if (sStatus.result && sStatus.result.inCap === false) {
         addConsolidationLog(`🗺️ จอ ${s.name} ยังไม่ถึงเมืองหลวง (กำลังเดินทางกลับเมืองหลวง)...`, 'info');
       }
-      let home = await evalProfilePort(s.debugPort, `(() => {
-        window.__consolidationAborted = false;
-        window.__isConsolidating = true;
-        window.__isBotRunning = false;
-        window.__autoLoopEnabled = false;
-        return window.ensureInCapital ? window.ensureInCapital(180000) : { success: true };
-      })()`, 190000);
-      if (!(home && home.result && home.result.success) && !consolidationAborted && !consolidationEarlyStop) {
+      let home = senderHomePromises.has(s.id) ? await senderHomePromises.get(s.id) : null;
+      if (!(home && home.result && home.result.success) && !(home && home.result && home.result.reconnecting) && !consolidationAborted && !consolidationEarlyStop) {
+        home = await evalProfilePort(s.debugPort, `(() => {
+          window.__consolidationAborted = false;
+          window.__isConsolidating = true;
+          window.__isBotRunning = false;
+          window.__autoLoopEnabled = false;
+          return window.ensureInCapital ? window.ensureInCapital(180000) : { success: true };
+        })()`, 190000);
+      }
+      if (!(home && home.result && home.result.success) && !(home && home.result && home.result.reconnecting) && !consolidationAborted && !consolidationEarlyStop) {
         await triggerBwingOnProfile(s);
         await new Promise(r => setTimeout(r, 1500));
         home = await evalProfilePort(s.debugPort, `window.ensureInCapital ? window.ensureInCapital(120000) : { success: true }`, 130000);

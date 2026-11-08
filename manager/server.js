@@ -2554,6 +2554,9 @@ function buildClientActionEvalCode(payload) {
       const authRes = document.getElementById('p-auth-resume');
       if (authRes && patch.autoResumeBot !== undefined) authRes.checked = !!window.__authConfig.autoResumeBot;
       if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();
+      if (patch.charName !== undefined && typeof window.ensureConfiguredCharacterActive === 'function') {
+        window.ensureConfiguredCharacterActive(true);
+      }
       return { success: true };
     })()`;
   } else if (payload.type === 'update-autosell') {

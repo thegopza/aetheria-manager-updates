@@ -1601,12 +1601,15 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     if (!settings.enabled) return [];
 
     const reqProfiles = ids.map(profileId => ({ profileId }));
+    const allKnownProfiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+    const validProfileIds = allKnownProfiles.map(p => p && p.id).filter(Boolean);
 
     if (settings.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
       try {
         const res = await solver.serviceRequest('/v1/aetheria/proxy/screen-lease', {
           machineId: getMachineId(),
-          profiles: reqProfiles
+          profiles: reqProfiles,
+          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined
         });
         if (res?.success && Array.isArray(res.leases)) {
           const validLeases = res.leases.filter(l => !l.assigned || !isProxyBlocked(l));
@@ -1615,8 +1618,12 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           if (hasAnyAssigned || (!allEmpty && loadPool().proxies.length === 0)) {
             for (const l of validLeases) {
               if (l.assigned) {
-                activeLeases.set(l.profileId, { ...l, source: 'owner-queue', renewedAt: now() });
+                const prev = activeLeases.get(l.profileId);
+                activeLeases.set(l.profileId, { ...prev, ...l, source: 'owner-queue', renewedAt: now() });
                 stickyHistory.set(l.profileId, l.proxyId);
+                if (prev && prev.proxyId && prev.proxyId !== l.proxyId) {
+                  resetProfileSockets(l.profileId);
+                }
               }
             }
             saveStickyHistory();
@@ -2106,6 +2113,23 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const { rawText, proxies } = loadPool();
     const enabledPool = proxies.filter(p => p.enabled !== false && !isProxyBlocked(p));
     const maxPerIp = pub.maxScreensPerIp || DEFAULT_MAX_SCREENS_PER_IP;
+    const allProfiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+    const validProfileIds = allProfiles.map(p => p && p.id).filter(Boolean);
+    if (validProfileIds.length > 0) {
+      const validSet = new Set(validProfileIds);
+      let pruned = false;
+      for (const pid of Array.from(activeLeases.keys())) {
+        if (!validSet.has(pid)) {
+          activeLeases.delete(pid);
+          stickyHistory.delete(pid);
+          pruned = true;
+        }
+      }
+      if (pruned) {
+        saveStickyHistory();
+        syncDaemonState().catch(() => {});
+      }
+    }
 
     if (pub.enabled && Array.isArray(openProfileIds) && openProfileIds.length > 0) {
       const nowMs = now();
@@ -2123,8 +2147,46 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     let remoteSummary = null;
     if (pub.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
       try {
-        const r = await solver.serviceRequest('/v1/aetheria/proxy/screen-status', { machineId: getMachineId() });
-        if (r?.success && r.totalIps > 0) remoteSummary = r;
+        const r = await solver.serviceRequest('/v1/aetheria/proxy/screen-status', {
+          machineId: getMachineId(),
+          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined
+        });
+        if (r?.success && r.totalIps > 0) {
+          remoteSummary = r;
+          if (Array.isArray(r.myLeases)) {
+            let syncedChanged = false;
+            for (const rl of r.myLeases) {
+              if (!rl || !rl.profileId || isProxyBlocked(rl)) continue;
+              const prev = activeLeases.get(rl.profileId);
+              if (rl.proxyHost && rl.proxyPort) {
+                const proxyChanged = Boolean(prev && prev.proxyId && prev.proxyId !== rl.proxyId);
+                const metaChanged = Boolean(!prev || proxyChanged || prev.slotNo !== rl.slotNo || prev.activeOnIp !== rl.activeOnIp);
+                if (metaChanged) {
+                  activeLeases.set(rl.profileId, {
+                    ...prev,
+                    ...rl,
+                    assigned: true,
+                    source: 'owner-queue',
+                    renewedAt: prev?.renewedAt || now()
+                  });
+                  stickyHistory.set(rl.profileId, rl.proxyId);
+                  syncedChanged = true;
+                  if (proxyChanged) {
+                    resetProfileSockets(rl.profileId);
+                  }
+                }
+              } else if (prev) {
+                prev.slotNo = rl.slotNo || prev.slotNo;
+                prev.activeOnIp = rl.activeOnIp || prev.activeOnIp;
+                prev.maxScreens = rl.maxScreens || maxPerIp;
+              }
+            }
+            if (syncedChanged) {
+              saveStickyHistory();
+              syncDaemonState().catch(() => {});
+            }
+          }
+        }
       } catch (_) {}
     }
 
@@ -2132,7 +2194,6 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const totalCapacity = totalIps * maxPerIp;
     const activeCount = remoteSummary ? remoteSummary.activeLeases : activeLeases.size;
 
-    const allProfiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
     const openSet = new Set(Array.isArray(openProfileIds) ? openProfileIds : []);
     const billing = getBillingStatus();
 

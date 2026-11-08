@@ -2027,10 +2027,10 @@ async function fetchGameItems() {
   }
 }
 
-function evalProfilePort(port, code, timeoutMs = 8000) {
+function evalProfilePortOnce(port, code, timeoutMs = 8000) {
   return new Promise((resolve) => {
     if (!port) return resolve({ success: false, error: 'No debug port' });
-    const payload = JSON.stringify({ code });
+    const payload = JSON.stringify({ code, timeoutMs });
     const req = http.request({
       hostname: '127.0.0.1',
       port: port,
@@ -2057,6 +2057,18 @@ function evalProfilePort(port, code, timeoutMs = 8000) {
     req.write(payload);
     req.end();
   });
+}
+
+async function evalProfilePort(port, code, timeoutMs = 8000) {
+  const first = await evalProfilePortOnce(port, code, timeoutMs);
+  if (first && first.success !== false) return first;
+  const errMsg = String((first && first.error) || '');
+  const isProbe = typeof code === 'string' && code.includes('__getClientLiveState') && code.includes('grossZenyGained');
+  if (!isProbe && /timeout cooldown|queue timeout|queue busy|ECONNRESET|socket hang up/i.test(errMsg)) {
+    await new Promise(r => setTimeout(r, 1200));
+    return evalProfilePortOnce(port, code, timeoutMs);
+  }
+  return first;
 }
 
 const profileClientActionQueues = new Map();
@@ -3753,6 +3765,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     await Promise.all(involvedProfiles.map(async (p) => {
       if (consolidationAborted) return;
       await evalProfilePort(p.debugPort, `(() => {
+        window.__consolidationAborted = false;
         window.__isConsolidating = true;
         window.__consolidationPending = true;
         window.__isBotRunning = false;
@@ -3772,7 +3785,13 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
           const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
           if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
           else if (room && typeof room.send === 'function') room.send('auto_set', { enabled: false });
-          if (room && typeof room.send === 'function') room.send('select_target', { sessionId: null });
+          if (room && typeof room.send === 'function') {
+            room.send('select_target', { sessionId: null });
+            const me = room.state && room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
+            if (me && Number.isFinite(me.x) && Number.isFinite(me.y)) {
+              room.send('move_to', { x: Math.round(me.x), y: Math.round(me.y) });
+            }
+          }
         } catch (e) {}
         if (typeof window.closeShopUI === 'function') window.closeShopUI();
         if (typeof window.sendNpcClose === 'function') window.sendNpcClose();
@@ -3782,10 +3801,10 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         if (loopCheckbox) loopCheckbox.checked = false;
         if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
         return { success: true };
-      })()`, 5000);
+      })()`, 6000);
     }));
     addConsolidationLog(`🛑 สั่งหยุดบอทครบ ${involvedProfiles.length} จอเรียบร้อย`, 'info');
-    await new Promise(r => setTimeout(r, 600));
+    await new Promise(r => setTimeout(r, 450));
 
     // -------------------------------------------------------------
     // STEP 2: ทยอยกด Butterfly Wing กลับบ้าน (โซลเฮเวน)
@@ -3795,36 +3814,84 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}วาร์ปกลับเมืองหลวง (โซลเฮเวน) ด้วย Butterfly Wing...`;
     addConsolidationLog('🦋 ขั้นตอนที่ 2/5: สั่งกด Butterfly Wing / เดินทางกลับเมืองหลวงโซลเฮเวน...', 'info');
 
-    for (const p of involvedProfiles) {
-      if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
-      evalProfilePort(p.debugPort, `(() => {
-        window.__isConsolidating = true;
-        window.__isBotRunning = false;
-        window.__autoLoopEnabled = false;
-        window.__isWalkingToMap = false;
-        window.__isNavigating = false;
-        if (typeof window.executeBwingHome === 'function') {
-          window.executeBwingHome();
-        } else if (typeof window.useButterflyWing === 'function') {
-          window.useButterflyWing();
+    const triggerBwingOnProfile = (p) => evalProfilePort(p.debugPort, `(() => {
+      window.__consolidationAborted = false;
+      window.__isConsolidating = true;
+      window.__isBotRunning = false;
+      window.__autoLoopEnabled = false;
+      window.__isWalkingToMap = false;
+      window.__isNavigating = false;
+      window.__goHomeWingAt = 0;
+      window.__goHomeWingFails = 0;
+      try {
+        const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
+        if (typeof window.sendAutoSetPacket === 'function') window.sendAutoSetPacket(false);
+        else if (room && typeof room.send === 'function') room.send('auto_set', { enabled: false });
+        if (room && typeof room.send === 'function') {
+          room.send('select_target', { sessionId: null });
+          const me = room.state && room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
+          if (me && Number.isFinite(me.x) && Number.isFinite(me.y)) {
+            room.send('move_to', { x: Math.round(me.x), y: Math.round(me.y) });
+          }
         }
-        return { success: true };
-      })()`);
-      await new Promise(r => setTimeout(r, 250));
-    }
+      } catch (e) {}
+      if (typeof window.keepFarmMapForTrip === 'function') window.keepFarmMapForTrip();
+      if (typeof window.isInCapital === 'function' && window.isInCapital()) {
+        return { success: true, alreadyInCapital: true };
+      }
+      if (typeof window.executeBwingHome === 'function') {
+        Promise.resolve(window.executeBwingHome(12000)).catch(() => {});
+      } else if (typeof window.useButterflyWing === 'function') {
+        window.useButterflyWing();
+      } else if (typeof window.goToCapital === 'function') {
+        window.goToCapital('รวมเงิน', { allowDuringConsolidation: true });
+      }
+      return { success: true };
+    })()`, 6000);
 
-    addConsolidationLog('⏳ รอตัวละครโหลดเข้าสู่เมืองหลวง (3.5 วินาที)...', 'info');
-    await new Promise(r => setTimeout(r, 3500));
+    await Promise.all(involvedProfiles.map(async (p, idx) => {
+      if (consolidationAborted) return;
+      if (idx > 0) await new Promise(r => setTimeout(r, idx * 120));
+      await triggerBwingOnProfile(p);
+    }));
+
+    addConsolidationLog('⏳ รอตัวละครโหลดเข้าสู่เมืองหลวง (2.5 วินาที)...', 'info');
+    await new Promise(r => setTimeout(r, 2500));
+
+    // Second Butterfly Wing pulse for any character that was interrupted by monster attack / animation on first pulse
+    await Promise.all(involvedProfiles.map(async (p) => {
+      if (consolidationAborted) return;
+      await evalProfilePort(p.debugPort, `(() => {
+        if (typeof window.isInCapital === 'function' && window.isInCapital()) return { inCap: true };
+        const wings = typeof window.getBagItemCount === 'function' ? window.getBagItemCount(90311) : 0;
+        if (wings > 0 && typeof window.useButterflyWing === 'function') {
+          window.useButterflyWing();
+          return { retriedWing: true };
+        }
+        return { inCap: false };
+      })()`, 5000).catch(() => {});
+    }));
+    await new Promise(r => setTimeout(r, 1500));
 
     // The receiver must be in the capital before it changes channel (no Butterfly Wing: it walks home first)
-    const recvInCapCheck = await evalProfilePort(receiverProfile.debugPort, `window.isInCapital ? window.isInCapital() : true`, 4000);
+    const recvInCapCheck = await evalProfilePort(receiverProfile.debugPort, `window.isInCapital ? window.isInCapital() : true`, 5000);
     if (recvInCapCheck && recvInCapCheck.result === false) {
       addConsolidationLog(`🗺️ ตัวรับเงิน (${receiverProfile.name}) ยังไม่ถึงเมืองหลวง — กำลังรอให้เดินถึงเมืองหลวง...`, 'info');
       consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}รอตัวรับเงิน (${receiverProfile.name}) เดินทางถึงเมืองหลวง...`;
     }
-    const recvHome = await evalProfilePort(receiverProfile.debugPort, `window.ensureInCapital ? window.ensureInCapital(240000) : { success: true }`, 250000);
+    let recvHome = await evalProfilePort(receiverProfile.debugPort, `(() => {
+      window.__consolidationAborted = false;
+      window.__isConsolidating = true;
+      return window.ensureInCapital ? window.ensureInCapital(240000) : { success: true };
+    })()`, 250000);
+    if (!(recvHome && recvHome.result && recvHome.result.success) && !consolidationAborted) {
+      await triggerBwingOnProfile(receiverProfile);
+      await new Promise(r => setTimeout(r, 1500));
+      recvHome = await evalProfilePort(receiverProfile.debugPort, `window.ensureInCapital ? window.ensureInCapital(180000) : { success: true }`, 190000);
+    }
     if (!(recvHome && recvHome.result && recvHome.result.success)) {
-      throw new Error(`ตัวรับเงิน (${receiverProfile.name}) ไปไม่ถึงเมืองหลวง: ${(recvHome && recvHome.result && recvHome.result.error) || 'ไม่ทราบสาเหตุ'}`);
+      const recvErr = (recvHome && recvHome.result && recvHome.result.error) || (recvHome && recvHome.error) || 'ไม่ทราบสาเหตุ';
+      throw new Error(`ตัวรับเงิน (${receiverProfile.name}) ไปไม่ถึงเมืองหลวง: ${recvErr}`);
     }
 
     // If tradeItemsEnabled, have the Receiver also sell trash & deposit any current matching items to free bag space before receiving trades
@@ -3907,7 +3974,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         addConsolidationLog(`⏭️ จอ ${s.name} (${charName}) มีเงิน ${zeny.toLocaleString()} z (ไม่พอโอนหรือติดเก็บสำรอง) -> ข้ามและปล่อยกลับไปฟาร์ม`, 'warning');
         consolidationState.completedSenders.push(s.id);
         await evalProfilePort(s.debugPort, `(() => {
-          window.__isConsolidating = false; window.__consolidationPending = false; window.__isWalkingToMap = false; window.__isNavigating = false;
+          window.__consolidationAborted = true; window.__isConsolidating = false; window.__consolidationPending = false; window.__isWalkingToMap = false; window.__isNavigating = false;
           if (typeof window.restoreKeptFarmMap === 'function') window.restoreKeptFarmMap();
           window.__autoLoopEnabled = true; window.__isBotRunning = true;
           try { localStorage.setItem('pelican_auto_loop', 'true'); localStorage.setItem('pelican_bot_running', 'true'); } catch(e){}
@@ -3921,7 +3988,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       queue.push(s);
     }
     const startBotJs = `(() => {
-      window.__isConsolidating = false; window.__consolidationPending = false; window.__isWalkingToMap = false; window.__isNavigating = false;
+      window.__consolidationAborted = true; window.__isConsolidating = false; window.__consolidationPending = false; window.__isWalkingToMap = false; window.__isNavigating = false;
       if (typeof window.restoreKeptFarmMap === 'function') window.restoreKeptFarmMap();
       window.__autoLoopEnabled = true; window.__isBotRunning = true;
       try { localStorage.setItem('pelican_auto_loop', 'true'); localStorage.setItem('pelican_bot_running', 'true'); } catch(e){}
@@ -3935,12 +4002,26 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
 
     const prepareSender = async (s) => {
       if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel: null, earlyStop: true };
-      const sInCap = await evalProfilePort(s.debugPort, `window.isInCapital ? window.isInCapital() : true`, 4000);
+      const sInCap = await evalProfilePort(s.debugPort, `window.isInCapital ? window.isInCapital() : true`, 5000);
       if (sInCap && sInCap.result === false) {
         addConsolidationLog(`🗺️ จอ ${s.name} ยังไม่ถึงเมืองหลวง (กำลังเดินทางกลับเมืองหลวง)...`, 'info');
       }
-      const home = await evalProfilePort(s.debugPort, `window.ensureInCapital ? window.ensureInCapital(180000) : { success: true }`, 190000);
-      if (!(home && home.result && home.result.success)) return { ok: false, homeChannel: null, error: `ยังไม่ถึงเมืองหลวง: ${(home && home.result && home.result.error) || 'ไม่ทราบสาเหตุ'}` };
+      let home = await evalProfilePort(s.debugPort, `(() => {
+        window.__consolidationAborted = false;
+        window.__isConsolidating = true;
+        window.__isBotRunning = false;
+        window.__autoLoopEnabled = false;
+        return window.ensureInCapital ? window.ensureInCapital(180000) : { success: true };
+      })()`, 190000);
+      if (!(home && home.result && home.result.success) && !consolidationAborted && !consolidationEarlyStop) {
+        await triggerBwingOnProfile(s);
+        await new Promise(r => setTimeout(r, 1500));
+        home = await evalProfilePort(s.debugPort, `window.ensureInCapital ? window.ensureInCapital(120000) : { success: true }`, 130000);
+      }
+      if (!(home && home.result && home.result.success)) {
+        const errDetail = (home && home.result && home.result.error) || (home && home.error) || 'ไม่ทราบสาเหตุ';
+        return { ok: false, homeChannel: null, error: `ยังไม่ถึงเมืองหลวง: ${errDetail}` };
+      }
       const fromCh = await evalProfilePort(s.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 5000);
       const homeChannel = (fromCh && typeof fromCh.result === 'number') ? fromCh.result : null;
       if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
@@ -4260,10 +4341,13 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         await syncSenderAndReceiverForTrade(sender, senderCharName);
 
         addConsolidationLog(`👑 ตัวรับเงิน (${receiverCharName}) รอรับคำขอเทรดจาก '${senderCharName}'${attempt > 1 ? ' (ลองใหม่ครั้งที่ 2)' : ''}...`, 'info');
-        evalProfilePort(receiverProfile.debugPort, `
-          window.setupReceiverTradeWatcher ? window.setupReceiverTradeWatcher(${JSON.stringify(senderCharName)}, 45000) : null
-        `);
-        await new Promise(r => setTimeout(r, 500));
+        await evalProfilePort(receiverProfile.debugPort, `(() => {
+          if (typeof window.setupReceiverTradeWatcher === 'function') {
+            Promise.resolve(window.setupReceiverTradeWatcher(${JSON.stringify(senderCharName)}, 45000)).catch(() => {});
+          }
+          return { success: true };
+        })()`, 5000);
+        await new Promise(r => setTimeout(r, 350));
 
         const itemOfferNote = (tradeItemsEnabled && senderItemsQty > 0) ? ` + ไอเทม ${senderItemsQty} ชิ้น` : '';
         addConsolidationLog(`📤 จอ ${sender.name} (${senderCharName}) ส่งคำขอเทรดเงิน ${zenyToTransfer.toLocaleString()} z${itemOfferNote}...`, 'info');

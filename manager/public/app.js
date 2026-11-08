@@ -4970,7 +4970,7 @@ function updateZenyConsolidationView() {
       const hasPrem = isProfilePremium(p);
       const profileIp = getProfileIpGroupKey(p);
       const isSameIpAsReceiver = Boolean(activeReceiverIp && profileIp === activeReceiverIp);
-      const canSelectSender = isOnline && hasPrem && !isReceiver && (!sameIpOnly || isSameIpAsReceiver);
+      const canSelectSender = isOnline && hasPrem && !isReceiver;
       const state = p.liveState || {};
       const charName = state.charName || p.lastCharName || p.name;
       const charClass = state.charClass || p.lastCharClass || p.charClass || 'Novice';
@@ -4985,10 +4985,15 @@ function updateZenyConsolidationView() {
         isChecked = false;
       } else {
         eligibleCount++;
-        if (!selectedSenderIds.has(p.id) && !unselectedSenderIds.has(p.id)) {
-          selectedSenderIds.add(p.id);
+        if (sameIpOnly && !isSameIpAsReceiver) {
+          selectedSenderIds.delete(p.id);
+          isChecked = false;
+        } else {
+          if (!selectedSenderIds.has(p.id) && !unselectedSenderIds.has(p.id)) {
+            selectedSenderIds.add(p.id);
+          }
+          isChecked = selectedSenderIds.has(p.id);
         }
-        isChecked = selectedSenderIds.has(p.id);
         if (isChecked) {
           checkedEligibleCount++;
           pendingTransferSum += Math.max(0, zeny - getConsolidationKeepZeny());
@@ -5003,7 +5008,7 @@ function updateZenyConsolidationView() {
       } else if (!isOnline) {
         statusBadge = `<span class="zeny-badge-status offline">⚪ ออฟไลน์</span>`;
       } else if (sameIpOnly && !isSameIpAsReceiver) {
-        statusBadge = `<span class="zeny-badge-status offline" style="color: #c4b5fd; border-color: rgba(168, 85, 247, 0.35); background: rgba(168, 85, 247, 0.12);" title="อยู่คนละวง IP กับตัวรับเงิน (ข้ามเพื่อความปลอดภัย)">🛡️ คนละวง IP (${escapeHTML(profileIp)})</span>`;
+        statusBadge = `<span class="zeny-badge-status offline" style="color: #c4b5fd; border-color: rgba(168, 85, 247, 0.35); background: rgba(168, 85, 247, 0.12);" title="คลิกติ๊กที่ช่องด้านซ้ายเพื่อปลดล็อกและเลือกโอนข้ามวง IP ได้ทันที">🛡️ คนละวง IP (${escapeHTML(profileIp)})</span>`;
       } else if (isConsolidationRunning) {
         if (completedSet.has(p.id)) {
           statusBadge = `<span class="zeny-badge-status done">✅ โอนสำเร็จแล้ว</span>`;
@@ -5022,10 +5027,10 @@ function updateZenyConsolidationView() {
 
       const checkboxHtml = isReceiver ? 
         `<span style="color: #facc15; font-size: 14px;" title="ตัวรับเงิน (ยกเว้นจากการส่งเงิน)">👑</span>` :
-        `<input type="checkbox" class="zeny-sender-cb" data-profile-id="${p.id}" ${isChecked ? 'checked' : ''} ${!canSelectSender ? 'disabled' : ''} title="${!hasPrem ? 'เลือกไม่ได้: ตัวละครนี้ไม่มีสถานะ Premium' : (!isOnline ? 'เลือกไม่ได้: จอนี้ยังไม่ออนไลน์' : (sameIpOnly && !isSameIpAsReceiver ? 'เลือกไม่ได้: อยู่คนละวง IP กับตัวรับ' : 'เลือกเพื่อโอนเงิน'))}" style="accent-color: #0ea5e9; cursor: ${canSelectSender ? 'pointer' : 'not-allowed'};">`;
+        `<input type="checkbox" class="zeny-sender-cb" data-profile-id="${p.id}" ${isChecked ? 'checked' : ''} ${!canSelectSender ? 'disabled' : ''} title="${!hasPrem ? 'เลือกไม่ได้: ตัวละครนี้ไม่มีสถานะ Premium' : (!isOnline ? 'เลือกไม่ได้: จอนี้ยังไม่ออนไลน์' : (sameIpOnly && !isSameIpAsReceiver ? 'คลิกเพื่อปลดล็อกโหมดจำกัด IP และเลือกจอนี้รวมเงินด้วย' : 'เลือกเพื่อโอนเงิน'))}" style="accent-color: #0ea5e9; cursor: ${canSelectSender ? 'pointer' : 'not-allowed'};">`;
 
       return `
-        <tr class="${isReceiver ? 'receiver-row' : ''}" style="${(!hasPrem || (sameIpOnly && !isSameIpAsReceiver && !isReceiver)) ? 'opacity: 0.6;' : ''}">
+        <tr class="${isReceiver ? 'receiver-row' : ''}" style="${!hasPrem ? 'opacity: 0.6;' : (sameIpOnly && !isSameIpAsReceiver && !isReceiver ? 'opacity: 0.8;' : '')}">
           <td style="text-align: center;">${checkboxHtml}</td>
           <td>
             <div style="font-weight: 700; color: #f8fafc; display: flex; align-items: center; gap: 5px; flex-wrap: wrap;">
@@ -5160,10 +5165,43 @@ function initZenyConsolidationEvents() {
     };
   }
 
+  const btnSelectAllIps = document.getElementById("btn-zeny-select-all-ips");
+  if (btnSelectAllIps) {
+    btnSelectAllIps.onclick = () => {
+      setConsolidateSameIpOnly(false);
+      unselectedSenderIds.clear();
+      selectedSenderIds.clear();
+      currentProfiles.forEach(p => {
+        if (p.id !== selectedReceiverProfileId && p.isRunning && isProfilePremium(p)) {
+          selectedSenderIds.add(p.id);
+        }
+      });
+      updateZenyConsolidationView();
+      showToast(`🌐 เลือกทุกจอที่มี Premium ออนไลน์ครบทุกวง IP (${selectedSenderIds.size} จอ) เรียบร้อยแล้ว`, "success");
+    };
+  }
+
+  const btnSelectSameIp = document.getElementById("btn-zeny-select-same-ip");
+  if (btnSelectSameIp) {
+    btnSelectSameIp.onclick = () => {
+      if (!selectedReceiverProfileId) return;
+      setConsolidateSameIpOnly(true);
+      selectSendersForReceiverIp(selectedReceiverProfileId);
+      updateZenyConsolidationView();
+      const rec = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+      const ip = rec ? getProfileIpGroupKey(rec) : "-";
+      showToast(`🛡️ เลือกเฉพาะจอในวง IP เดียวกับตัวรับ (${ip} · ${selectedSenderIds.size} จอ)`, "info");
+    };
+  }
+
   const selectAllCb = document.getElementById("zeny-select-all-checkbox");
   if (selectAllCb) {
     selectAllCb.onchange = (e) => {
       const checked = e.target.checked;
+      if (checked && isConsolidateSameIpOnly()) {
+        // When user clicks "เลือกจอที่ส่งเงินทั้งหมด", unlock same-IP restriction so all screens across all IPs can be selected
+        setConsolidateSameIpOnly(false);
+      }
       const sameIpOnly = isConsolidateSameIpOnly();
       const rec = currentProfiles.find(p => p.id === selectedReceiverProfileId);
       const recIp = rec ? getProfileIpGroupKey(rec) : null;
@@ -5199,6 +5237,12 @@ function initZenyConsolidationEvents() {
           return;
         }
         if (cb.checked) {
+          const rec = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+          const recIp = rec ? getProfileIpGroupKey(rec) : null;
+          if (isConsolidateSameIpOnly() && recIp && getProfileIpGroupKey(prof) !== recIp) {
+            setConsolidateSameIpOnly(false);
+            showToast("🌐 ปลดล็อกโหมดจำกัดวง IP เพื่อให้เลือกโอนข้ามวง IP ได้แล้ว", "info");
+          }
           selectedSenderIds.add(pid);
           unselectedSenderIds.delete(pid);
         } else {
@@ -5353,9 +5397,6 @@ function initZenyConsolidationEvents() {
         if (!confirm(`คุณต้องการเริ่มรวมเงินเฉพาะในวง IP [${ip}]\nจาก ${grp.senders.length} จอ -> เข้าตัวรับ [${recName}] (ยอดโอน ~${grp.transferableZeny.toLocaleString()} z) ใช่หรือไม่?\n\n🛡️ ปลอดภัยสูงสุด: โอนเฉพาะจอที่ใช้ IP ${ip} เดียวกันเท่านั้น (จอวง IP อื่นฟาร์มต่อไม่หยุด)`)) {
           return;
         }
-        selectedReceiverProfileId = grp.receiver.id;
-        setConsolidateSameIpOnly(true);
-        selectSendersForReceiverIp(grp.receiver.id);
         await triggerConsolidationApi({
           receiverProfileId: grp.receiver.id,
           senderProfileIds: grp.senders.map(s => s.id),

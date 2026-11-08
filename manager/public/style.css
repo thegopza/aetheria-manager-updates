@@ -3044,17 +3044,30 @@ label {
   border: 1px solid var(--line);
 }
 
+.zeny-control-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .zeny-controls-row {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  height: 100%;
-  justify-content: space-between;
+}
+.zeny-inputs-grid {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 .zeny-receiver-box {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
+  min-width: 240px;
 }
 .zeny-input-label {
   font-size: 12px;
@@ -3072,7 +3085,7 @@ label {
   outline: none;
   transition: all 0.2s ease;
 }
-.zeny-keep-box { max-width: 210px; }
+.zeny-keep-box { flex: 0 0 190px; min-width: 165px; max-width: 220px; }
 .zeny-keep-box input { font-family: var(--font-mono); text-align: right; }
 .zeny-select:focus {
   border-color: #38bdf8;

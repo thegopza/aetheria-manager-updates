@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4.53.23">
+  <link rel="stylesheet" href="style.css?v=4.53.25">
   <link rel="stylesheet" href="inventory_market.css?v=4.44.23">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=4.45.0">
@@ -271,20 +271,32 @@
           <!-- CONTROLS & RECEIVER SELECTOR -->
           <div class="zeny-control-card">
             <div class="zeny-controls-row">
-              <div class="zeny-receiver-box">
-                <label for="zeny-receiver-select" class="zeny-input-label">
-                  👑 ตัวละครที่รับเงิน (Receiver):
-                </label>
-                <select id="zeny-receiver-select" class="zeny-select">
-                  <option value="">-- เลือกตัวละครที่รับเงิน --</option>
-                </select>
+              <div class="zeny-inputs-grid">
+                <div class="zeny-receiver-box">
+                  <label for="zeny-receiver-select" class="zeny-input-label">
+                    👑 ตัวละครที่รับเงิน (Receiver):
+                  </label>
+                  <select id="zeny-receiver-select" class="zeny-select">
+                    <option value="">-- เลือกตัวละครที่รับเงิน --</option>
+                  </select>
+                </div>
+
+                <div class="zeny-receiver-box zeny-keep-box">
+                  <label for="zeny-keep-input" class="zeny-input-label" title="จอที่โอนเงินจะเหลือเงินติดตัวไว้เท่านี้ (0 = โอนหมด)">
+                    💰 เหลือเงินติดตัวจอที่โอน:
+                  </label>
+                  <input type="text" inputmode="numeric" id="zeny-keep-input" class="zeny-select" value="0" placeholder="0 = โอนหมด" autocomplete="off">
+                </div>
               </div>
 
-              <div class="zeny-receiver-box zeny-keep-box">
-                <label for="zeny-keep-input" class="zeny-input-label" title="จอที่โอนเงินจะเหลือเงินติดตัวไว้เท่านี้ (0 = โอนหมด)">
-                  💰 เหลือเงินติดตัวจอที่โอน:
+              <!-- Same-IP Only Filter Toggle (Inside Control Card) -->
+              <div style="background: rgba(9, 14, 26, 0.72); border: 1px solid rgba(168, 85, 247, 0.28); border-radius: 8px; padding: 8px 11px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                <label for="cb-consolidate-same-ip-only" style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: #e2e8f0; font-weight: 600; margin: 0;">
+                  <input type="checkbox" id="cb-consolidate-same-ip-only" style="accent-color: #a855f7; width: 15px; height: 15px; cursor: pointer;">
+                  <span>🛡️ บังคับโอนเฉพาะในวง IP เดียวกับตัวรับเท่านั้น (ห้ามโอนข้าม IP)</span>
+                  <span id="zeny-receiver-ip-badge" style="font-size: 11px; padding: 2px 8px; border-radius: 99px; background: rgba(168, 85, 247, 0.18); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.4); font-family: monospace;">IP: -</span>
                 </label>
-                <input type="text" inputmode="numeric" id="zeny-keep-input" class="zeny-select" value="0" placeholder="0 = โอนหมด" autocomplete="off">
+                <span style="font-size: 11px; color: #94a3b8;">💡 ติ๊กออกเพื่อรวมเงินจากทุกจอทุก IP เข้าตัวหลักตัวเดียว</span>
               </div>
 
               <div class="zeny-btn-group">
@@ -298,15 +310,6 @@
                   <span class="icon">⏹️</span> หยุดการรวมเงิน
                 </button>
               </div>
-            </div>
-            <!-- Same-IP Only Filter Toggle -->
-            <div style="margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(255, 255, 255, 0.08); display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
-              <label for="cb-consolidate-same-ip-only" style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: #e2e8f0; font-weight: 600;">
-                <input type="checkbox" id="cb-consolidate-same-ip-only" style="accent-color: #a855f7; width: 15px; height: 15px; cursor: pointer;">
-                <span>🛡️ บังคับโอนเฉพาะในวง IP เดียวกับตัวรับเท่านั้น (ห้ามโอนข้าม IP)</span>
-                <span id="zeny-receiver-ip-badge" style="font-size: 11px; padding: 2px 8px; border-radius: 99px; background: rgba(168, 85, 247, 0.18); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.4); font-family: monospace;">IP: -</span>
-              </label>
-              <span style="font-size: 11px; color: #94a3b8;">💡 เมื่อติ๊กไว้ ระบบจะติ๊กเลือกเฉพาะจอที่อยู่ในวง IP เดียวกับตัวรับให้อัตโนมัติ</span>
             </div>
           </div>
         </div>
@@ -438,12 +441,18 @@
 
         <!-- SENDERS SELECTION TABLE -->
         <div class="zeny-table-card">
-          <div class="zeny-table-header">
-            <div style="display: flex; align-items: center; gap: 10px;">
+          <div class="zeny-table-header" style="flex-wrap: wrap; gap: 10px;">
+            <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
               <h3 style="font-size: 14px; font-weight: 700; color: #f8fafc; margin: 0;">📋 รายชื่อจอเกม (Sessions) ทั้งหมด</h3>
               <span class="badge" id="zeny-senders-count-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">0 จอ</span>
             </div>
-            <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <button type="button" id="btn-zeny-select-all-ips" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 9px; border-color: rgba(56, 189, 248, 0.45); color: #7dd3fc;" title="ปลดล็อกตัวกรอง IP และติ๊กเลือกทุกจอที่มี Premium ออนไลน์ทั้งหมดเพื่อรวมเข้าตัวรับตัวเดียว">
+                🌐 เลือกทุกจอ (ทุกวง IP)
+              </button>
+              <button type="button" id="btn-zeny-select-same-ip" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 9px; border-color: rgba(168, 85, 247, 0.45); color: #e9d5ff;" title="ติ๊กเลือกเฉพาะจอที่อยู่ในวง IP เดียวกับตัวรับเงินที่เลือกไว้">
+                🛡️ เลือกเฉพาะวง IP ตัวรับ
+              </button>
               <label class="zeny-checkbox-label" style="font-size: 11.5px; color: #94a3b8; cursor: pointer; display: flex; align-items: center; gap: 6px;">
                 <input type="checkbox" id="zeny-select-all-checkbox" checked style="accent-color: #0ea5e9; cursor: pointer;">
                 <span>เลือกจอที่ส่งเงินทั้งหมด</span>
@@ -1226,7 +1235,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4.53.24"></script>
-  <script src="app.js?v=4.53.23"></script>
+  <script src="app.js?v=4.53.25"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.53.0"></script>
@@ -1241,7 +1250,7 @@
   <script src="guild_manager.js?v=4.49.0"></script>
   <script src="jail_manager.js?v=4.51.9"></script>
   <script src="device_manager.js?v=4.53.6"></script>
-  <script src="update_log.js?v=4.53.24"></script>
+  <script src="update_log.js?v=4.53.25"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

@@ -2484,7 +2484,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   let phase2Running = false;
 
   // ---------- per-profile HTTP API (same as the Electron loader's) ----------
-  const MAX_CONCURRENT_CDP_EVALS = 10;
+  const MAX_CONCURRENT_CDP_EVALS = 18;
   let activeCdpEvals = 0;
   const cdpEvalWaiters = [];
   function acquireCdpEvalSlot(timeoutMs = 10000) {
@@ -2595,7 +2595,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       if (r.exceptionDetails) throw new Error((r.exceptionDetails.exception && r.exceptionDetails.exception.description) || r.exceptionDetails.text || 'Script failed');
       return r.result ? r.result.value : undefined;
     } catch (err) {
-      if (isRealSession && c && c.profileId && /CDP timeout:\s*Runtime\.evaluate/i.test(String(err && err.message || err))) {
+      if (!isInternal && isRealSession && c && c.profileId && /CDP timeout:\s*Runtime\.evaluate/i.test(String(err && err.message || err))) {
         c.evalTimeouts = (c.evalTimeouts || 0) + 1;
         c.evalCooldownUntil = Date.now() + Math.min(8000, 2500 * c.evalTimeouts);
       }
@@ -2607,7 +2607,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
 
   async function evaluate(c, code, timeoutMs = 20000, isInternal = false) {
-    const effectiveTimeout = isRealSession ? Math.min(Number(timeoutMs) || 10000, code && code.length > 20000 ? 25000 : 12000) : timeoutMs;
+    const reqMs = Number(timeoutMs) || 10000;
+    const effectiveTimeout = isRealSession
+      ? (isInternal || reqMs > 12000
+          ? Math.min(Math.max(reqMs, 4000), 300000)
+          : Math.min(reqMs, code && code.length > 20000 ? 25000 : 12000))
+      : timeoutMs;
     if (isRealSession && !isInternal && c && c.inFlightEvals && typeof code === 'string' && code.length < 4096) {
       const existing = c.inFlightEvals.get(code);
       if (existing) return existing;
@@ -2624,13 +2629,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const set = bounds => send('Browser.setWindowBounds', { windowId, bounds });
     if (action === 'hide' || action === 'zero-render-on') {
       await set({ windowState: 'normal' }).catch(() => {});
-      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(true) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(true))`, 4500).catch(() => {});
+      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(true) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(true))`, 4500, true).catch(() => {});
     } else if (action === 'minimize') {
       await set({ windowState: 'minimized' }).catch(() => {});
     } else if (action === 'show' || action === 'restore' || action === 'top' || action === 'focus' || action === 'zero-render-off') {
       await set({ windowState: 'normal' }).catch(() => {});
       if (action === 'top' || action === 'focus') await send('Target.activateTarget', { targetId: c.targetId });
-      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`, 4500).catch(() => {});
+      await evaluate(c, `typeof window.setZeroRenderMode === 'function' ? window.setZeroRenderMode(false) : (typeof window.setLowPowerMode === 'function' && window.setLowPowerMode(false))`, 4500, true).catch(() => {});
     } else if (action === 'set-bounds') {
       await set({ windowState: 'normal' });
       await set({ left: Number(q.get('x')) || 0, top: Number(q.get('y')) || 0, width: Number(q.get('w')) || 640, height: Number(q.get('h')) || 520 });
@@ -2663,20 +2668,27 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       try {
         if (url.pathname === '/api/eval') {
           let code = url.searchParams.get('code');
+          let reqTimeoutMs = Number(url.searchParams.get('timeoutMs')) || 0;
           if (req.method === 'POST') {
             let body = '';
             for await (const chunk of req) body += chunk;
-            try { code = JSON.parse(body).code || body; } catch (e) { code = body; }
+            try {
+              const parsed = JSON.parse(body);
+              code = parsed.code || body;
+              if (Number(parsed.timeoutMs) > 0) reqTimeoutMs = Number(parsed.timeoutMs);
+            } catch (e) { code = body; }
           }
           if (!code) return reply(400, { error: 'Missing code' });
           const isLiveStateProbe = code.includes('__getClientLiveState') && code.includes('grossZenyGained');
           const isBootstrapAccept = isRealSession && code.includes('__pmScriptBootstrap.accept(');
           const isReadyClient = diagnostics.get(c.profileId)?.state === 'ready';
-          if (isRealSession && !isBootstrapAccept && ((!c.initialHealthChecked && !isReadyClient) || (!isReadyClient && heavyInjectionInFlightCount > 0) || (c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
+          if (isRealSession && !isBootstrapAccept && ((!c.initialHealthChecked && !isReadyClient) || (!isReadyClient && heavyInjectionInFlightCount > 0) || (isLiveStateProbe && c.evalCooldownUntil && Date.now() < c.evalCooldownUntil))) {
             if (isLiveStateProbe && c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 180000)) {
               return reply(200, { success: true, result: c.lastGoodState, cached: true });
             }
-            return reply(503, { success: false, error: !c.initialHealthChecked ? 'Client initializing' : 'Client in timeout cooldown' });
+            if (isLiveStateProbe) {
+              return reply(503, { success: false, error: !c.initialHealthChecked ? 'Client initializing' : 'Client in timeout cooldown' });
+            }
           }
           try {
             let evalRes;
@@ -2685,7 +2697,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 return reply(200, { success: true, result: c.lastGoodState, cached: true });
               }
               if (!c.liveStateEvalPromise) {
-                c.liveStateEvalPromise = evaluate(c, code, 8000).finally(() => {
+                c.liveStateEvalPromise = evaluate(c, code, 8000, false).finally(() => {
                   c.liveStateEvalPromise = null;
                 });
               }
@@ -2717,7 +2729,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
               }
               return reply(503, { success: false, error: 'Bot injection pending' });
             } else {
-              evalRes = await evaluate(c, code, 8000);
+              const actionTimeoutMs = Math.min(Math.max(reqTimeoutMs || 10000, 4000), 300000);
+              evalRes = await evaluate(c, code, actionTimeoutMs, true);
               if (!code.includes('pelican_embedded_human_check_cfg') && /applyScriptPlan|applyPelicanSettings|importAllBotSettings|setItem\s*\(\s*['"]pelican_/.test(code)) {
                 if (!isRealSession || Date.now() - (c.lastStorageSyncAt || 0) > 15000) {
                   c.lastStorageSyncAt = Date.now();
@@ -2754,12 +2767,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             if (isRealSession && c.lastGoodState && (Date.now() - (c.lastGoodStateAt || 0) < 1800)) {
               return reply(200, c.lastGoodState);
             }
-            if (!c.stateEvalPromise) {
-              c.stateEvalPromise = evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`, 8000).finally(() => {
-                c.stateEvalPromise = null;
+            if (!c.liveStateEvalPromise) {
+              c.liveStateEvalPromise = evaluate(c, `typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null`, 8000, false).finally(() => {
+                c.liveStateEvalPromise = null;
               });
             }
-            const st = await c.stateEvalPromise;
+            const st = await c.liveStateEvalPromise;
             c.stateFailCount = 0;
             c.firstStateFailAt = 0;
             if (st) {

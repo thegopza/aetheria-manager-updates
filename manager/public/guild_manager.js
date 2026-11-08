@@ -590,7 +590,7 @@
           ${!isExternal
             ? (isLeader
               ? `<button type="button" class="gd-icon-btn" data-act="change-leader" data-guild="${esc(guildId)}" title="เปลี่ยนหัวกิลด์">🔄</button>`
-              : `<button type="button" class="gd-icon-btn gd-danger" data-act="remove-member" data-guild="${esc(guildId)}" data-profile="${esc(m.id)}" title="เอาออกจากรายการกิลด์">✕</button>`)
+              : `<button type="button" class="gd-icon-btn" data-act="promote-leader" data-guild="${esc(guildId)}" data-profile="${esc(m.id)}" title="ตั้งเป็นหัวกิลด์ / โอนตำแหน่งหัวกิลด์ให้ตัวละครนี้">👑</button><button type="button" class="gd-icon-btn gd-danger" data-act="remove-member" data-guild="${esc(guildId)}" data-profile="${esc(m.id)}" title="เอาออกจากรายการกิลด์">✕</button>`)
             : ''
           }
         </div>
@@ -826,6 +826,10 @@
             openMemberPickerModal(guildId, 'member');
           } else if (act === 'change-leader') {
             openMemberPickerModal(guildId, 'leader');
+          } else if (act === 'promote-leader') {
+            const targetId = el.dataset.profile;
+            await api('PATCH', `/api/guilds/${encodeURIComponent(guildId)}`, { leaderId: targetId });
+            if (typeof showToast === 'function') showToast('👑 เปลี่ยนหัวกิลด์เรียบร้อย');
           } else if (act === 'remove-member') {
             await api('DELETE', `/api/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(el.dataset.profile)}`);
           } else if (act === 'delete-guild') {

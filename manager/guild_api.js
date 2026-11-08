@@ -762,6 +762,143 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
     return null;
   }
 
+  function getEntryInGameGuild(id, probes = null) {
+    const key = String(id || '');
+    if (probes && typeof probes.get === 'function') {
+      const pr = probes.get(key);
+      if (pr && pr.inWorld && pr.inGameGuild && pr.inGameGuild.id) return pr.inGameGuild;
+    }
+    const ls = liveStatus[key];
+    if (ls && ls.inGameGuild && ls.inGameGuild.id) return ls.inGameGuild;
+    return null;
+  }
+
+  function findReferenceInGameGuild(g, probes = null) {
+    if (!g) return null;
+    const targetName = normName(g.inGameName || g.name);
+    const leaderIg = getEntryInGameGuild(g.leaderId, probes);
+    if (leaderIg && (!targetName || normName(leaderIg.name) === targetName)) {
+      return leaderIg;
+    }
+    for (const memId of (g.memberIds || [])) {
+      const memIg = getEntryInGameGuild(memId, probes);
+      if (memIg && (!targetName || normName(memIg.name) === targetName)) {
+        return memIg;
+      }
+    }
+    if (targetName) {
+      if (probes && typeof probes.entries === 'function') {
+        for (const [, pr] of probes.entries()) {
+          if (pr && pr.inWorld && pr.inGameGuild && normName(pr.inGameGuild.name) === targetName) {
+            return pr.inGameGuild;
+          }
+        }
+      }
+      for (const ls of Object.values(liveStatus)) {
+        if (ls && ls.inGameGuild && normName(ls.inGameGuild.name) === targetName) {
+          return ls.inGameGuild;
+        }
+      }
+    }
+    return leaderIg || null;
+  }
+
+  function reconcileGuildLeaderFromInGame(g, byId, probes = null) {
+    if (!g) return false;
+    const refIg = findReferenceInGameGuild(g, probes);
+    if (!refIg || !Array.isArray(refIg.members) || refIg.members.length === 0) return false;
+    const masterMember = refIg.members.find(m => m && m.role === 'master' && m.name);
+    if (!masterMember) return false;
+
+    const masterNorm = normName(masterMember.name);
+    if (!masterNorm) return false;
+
+    const getProfileCharNorm = (pid, onlineOnly = false) => {
+      const key = String(pid || '');
+      const pr = (probes && typeof probes.get === 'function') ? probes.get(key) : null;
+      if (pr && pr.inWorld && pr.charName) return normName(pr.charName);
+      const ls = liveStatus[key];
+      if (ls && ls.online && ls.charName) return normName(ls.charName);
+      if (onlineOnly) return '';
+      if (pr && pr.inWorld && pr.charName && normName(pr.charName) !== masterNorm) return normName(pr.charName);
+      if (ls && ls.online && ls.charName && normName(ls.charName) !== masterNorm) return normName(ls.charName);
+      const p = byId && typeof byId.get === 'function' ? byId.get(key) : null;
+      return normName((ls && ls.charName) || (p && (p.lastCharName || p.characterName)) || '');
+    };
+
+    if (getProfileCharNorm(g.leaderId, false) === masterNorm) {
+      // Ensure leader isn't duplicated in memberIds
+      const dupIdx = g.memberIds.indexOf(String(g.leaderId));
+      if (dupIdx !== -1) {
+        g.memberIds.splice(dupIdx, 1);
+        saveState();
+      }
+      return false;
+    }
+
+    const groupIds = [String(g.leaderId), ...(g.memberIds || []).map(String)];
+    let newLeaderId = null;
+
+    // 1. Check online profiles already in this guild card
+    for (const pid of groupIds) {
+      if (getProfileCharNorm(pid, true) === masterNorm) {
+        newLeaderId = pid;
+        break;
+      }
+    }
+    // 2. Check any other online profile not assigned to another guild card
+    if (!newLeaderId && byId && typeof byId.keys === 'function') {
+      for (const pid of byId.keys()) {
+        if (findGuildOfProfile(pid, g.id)) continue;
+        if (getProfileCharNorm(pid, true) === masterNorm) {
+          newLeaderId = String(pid);
+          break;
+        }
+      }
+    }
+    // 3. Fallback: check offline profiles in this guild card by last known charName
+    if (!newLeaderId) {
+      for (const pid of groupIds) {
+        if (getProfileCharNorm(pid, false) === masterNorm) {
+          newLeaderId = pid;
+          break;
+        }
+      }
+    }
+
+    if (!newLeaderId || String(newLeaderId) === String(g.leaderId)) return false;
+    if (findGuildOfProfile(newLeaderId, g.id)) return false;
+
+    const oldLeaderId = String(g.leaderId);
+    g.memberIds = (g.memberIds || []).map(String).filter(id => id !== String(newLeaderId));
+    if (Array.isArray(g.excludedMemberIds)) {
+      g.excludedMemberIds = g.excludedMemberIds.map(String).filter(id => id !== String(newLeaderId));
+    }
+    if (oldLeaderId && oldLeaderId !== String(newLeaderId) && !g.memberIds.includes(oldLeaderId)) {
+      const isExcluded = Array.isArray(g.excludedMemberIds) && g.excludedMemberIds.includes(oldLeaderId);
+      if (!isExcluded) {
+        g.memberIds.unshift(oldLeaderId);
+      }
+    }
+    g.leaderId = String(newLeaderId);
+    if (refIg.name && g.inGameName !== refIg.name) {
+      g.inGameName = refIg.name;
+      if (!g.name) g.name = refIg.name;
+    }
+    saveState();
+
+    // Clean up stale leader creation message on old leader
+    if (liveStatus[oldLeaderId] && liveStatus[oldLeaderId].lastAction && /สร้างกิลด์|หัวกิลด์/.test(liveStatus[oldLeaderId].lastAction)) {
+      const oldIg = getEntryInGameGuild(oldLeaderId, probes);
+      liveStatus[oldLeaderId].lastAction = oldIg ? (oldIg.donatedToday ? 'บริจาครายวันแล้ว' : 'อยู่ในกิลด์แล้ว') : null;
+    }
+    if (liveStatus[g.leaderId]) {
+      const newIg = getEntryInGameGuild(g.leaderId, probes) || refIg;
+      liveStatus[g.leaderId].lastAction = (newIg && newIg.donatedToday) ? 'หัวกิลด์ (บริจาครายวันแล้ว)' : 'หัวกิลด์พร้อม';
+    }
+    return true;
+  }
+
   async function probeClient(port) {
     if (!port) return { inWorld: false };
     const r = await evalProfilePort(port, PROBE_GUILD_CLIENT_JS, 4000);
@@ -813,6 +950,11 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
         liveStatus[id] = { ...(liveStatus[id] || {}), online: false };
       }
     }));
+    for (const g of state.guilds) {
+      try {
+        reconcileGuildLeaderFromInGame(g, byId, results);
+      } catch (_) {}
+    }
     return { byId, results };
   }
 
@@ -836,10 +978,10 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
   function autoFillMembersForGuild(g, byId, probes) {
     if (g.autoFill === false) return false;
     let changed = false;
-    const leaderProbe = probes.get(g.leaderId);
-    const maxMembers = (leaderProbe && leaderProbe.inGameGuild && leaderProbe.inGameGuild.maxMembers) || 20;
+    const refIg = findReferenceInGameGuild(g, probes);
+    const maxMembers = (refIg && refIg.maxMembers) || 20;
     const targetGuildName = normName(
-      (leaderProbe && leaderProbe.inGameGuild && leaderProbe.inGameGuild.name) ||
+      (refIg && refIg.name) ||
       g.inGameName ||
       g.name
     );
@@ -1199,10 +1341,14 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
   }
 
   async function syncSingleGuild(g, byId, probes) {
+    // 0. Reconcile Guild Leader automatically if leadership was transferred in-game
+    reconcileGuildLeaderFromInGame(g, byId, probes);
+
     // 1. Auto-select available online members if enabled
     autoFillMembersForGuild(g, byId, probes);
+    reconcileGuildLeaderFromInGame(g, byId, probes);
 
-    const leaderProfile = byId.get(g.leaderId);
+    let leaderProfile = byId.get(g.leaderId);
     let leaderProbe = probes.get(g.leaderId);
 
     if (!leaderProfile || !leaderProfile.debugPort || !leaderProbe || !leaderProbe.inWorld || !leaderProbe.roomOpen) {
@@ -1218,36 +1364,59 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       return;
     }
 
-    // 2. Ensure Leader has a guild in-game (create if not in a guild yet)
+    // 2. Ensure Leader has a guild in-game (create ONLY if the guild does not already exist on any member)
     if (!leaderProbe.inGameGuild) {
-      const desiredName = String(g.name || '').trim();
-      if (desiredName.length < 2 || desiredName.length > 16) {
-        setActionNote(g.leaderId, 'ชื่อกิลด์ต้องยาว 2–16 ตัวอักษร');
-        return;
-      }
-      if (Number(leaderProbe.zeny || 0) < 10000) {
-        setActionNote(g.leaderId, 'หัวกิลด์ต้องมีอย่างน้อย 10,000z เพื่อสร้างกิลด์');
-        return;
-      }
-      setActionNote(g.leaderId, `กำลังสร้างกิลด์ "${desiredName}"`);
-      await evalProfilePort(leaderProfile.debugPort, sendGuildActionJs({ action: 'create', name: desiredName }), 3000);
-      await new Promise(r => setTimeout(r, 900));
-      leaderProbe = await probeClient(leaderProfile.debugPort);
-      probes.set(g.leaderId, leaderProbe);
-      if (leaderProbe && leaderProbe.inWorld) {
-        liveStatus[g.leaderId] = {
-          ...(liveStatus[g.leaderId] || {}),
-          online: true,
-          charName: leaderProbe.charName,
-          zeny: leaderProbe.zeny,
-          inGameGuild: leaderProbe.inGameGuild,
-          donatedToday: !!(leaderProbe.inGameGuild && leaderProbe.inGameGuild.donatedToday),
-          donatableTiers: leaderProbe.donatableTiers || []
-        };
+      const existingRefIg = findReferenceInGameGuild(g, probes);
+      if (existingRefIg && existingRefIg.id) {
+        // The guild already exists in-game; do NOT try to create a duplicate guild!
+        if (reconcileGuildLeaderFromInGame(g, byId, probes)) {
+          leaderProfile = byId.get(g.leaderId);
+          leaderProbe = probes.get(g.leaderId);
+        }
       }
       if (!leaderProbe || !leaderProbe.inGameGuild) {
-        setActionNote(g.leaderId, `สั่งสร้างกิลด์ "${desiredName}" แล้ว (รอเซิร์ฟเวอร์ตอบกลับ)`);
-        return;
+        if (existingRefIg && existingRefIg.id) {
+          const masterEntry = (existingRefIg.members || []).find(m => m && m.role === 'master');
+          const masterLabel = masterEntry && masterEntry.name ? masterEntry.name : 'ตัวอื่น';
+          setActionNote(g.leaderId, `ตัวละครนี้ไม่ได้อยู่ในกิลด์ (หัวกิลด์ในเกม: ${masterLabel})`);
+          for (const memId of g.memberIds) {
+            const mp = byId.get(memId);
+            const mpr = probes.get(memId);
+            if (mp && mpr && mpr.inWorld && mpr.inGameGuild) {
+              await tryAutoDonateForProfile(g, memId, mp, mpr);
+            }
+          }
+          return;
+        }
+        const desiredName = String(g.name || '').trim();
+        if (desiredName.length < 2 || desiredName.length > 16) {
+          setActionNote(g.leaderId, 'ชื่อกิลด์ต้องยาว 2–16 ตัวอักษร');
+          return;
+        }
+        if (Number(leaderProbe.zeny || 0) < 10000) {
+          setActionNote(g.leaderId, 'หัวกิลด์ต้องมีอย่างน้อย 10,000z เพื่อสร้างกิลด์');
+          return;
+        }
+        setActionNote(g.leaderId, `กำลังสร้างกิลด์ "${desiredName}"`);
+        await evalProfilePort(leaderProfile.debugPort, sendGuildActionJs({ action: 'create', name: desiredName }), 3000);
+        await new Promise(r => setTimeout(r, 900));
+        leaderProbe = await probeClient(leaderProfile.debugPort);
+        probes.set(g.leaderId, leaderProbe);
+        if (leaderProbe && leaderProbe.inWorld) {
+          liveStatus[g.leaderId] = {
+            ...(liveStatus[g.leaderId] || {}),
+            online: true,
+            charName: leaderProbe.charName,
+            zeny: leaderProbe.zeny,
+            inGameGuild: leaderProbe.inGameGuild,
+            donatedToday: !!(leaderProbe.inGameGuild && leaderProbe.inGameGuild.donatedToday),
+            donatableTiers: leaderProbe.donatableTiers || []
+          };
+        }
+        if (!leaderProbe || !leaderProbe.inGameGuild) {
+          setActionNote(g.leaderId, `สั่งสร้างกิลด์ "${desiredName}" แล้ว (รอเซิร์ฟเวอร์ตอบกลับ)`);
+          return;
+        }
       }
     }
 
@@ -1559,14 +1728,32 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       };
     };
 
+    for (const g of state.guilds) {
+      try {
+        reconcileGuildLeaderFromInGame(g, byId, null);
+      } catch (_) {}
+    }
+
     const guilds = state.guilds.map(g => {
       const leader = decorateProfile(g.leaderId);
-      const leaderIg = (liveStatus[g.leaderId] && liveStatus[g.leaderId].inGameGuild) || null;
+      const leaderIg = findReferenceInGameGuild(g, null);
       const inGameRoster = leaderIg && Array.isArray(leaderIg.members) && leaderIg.members.length > 0
         ? new Set(leaderIg.members.map(m => normName(m.name)))
         : null;
+      const roleByNormName = new Map();
+      if (leaderIg && Array.isArray(leaderIg.members)) {
+        for (const rm of leaderIg.members) {
+          if (rm && rm.name) roleByNormName.set(normName(rm.name), rm.role || 'member');
+        }
+      }
+      if (leader.charName && roleByNormName.has(normName(leader.charName))) {
+        leader.inGameRole = roleByNormName.get(normName(leader.charName));
+      }
       const members = g.memberIds.map(id => {
         const m = decorateProfile(id);
+        if (m.charName && roleByNormName.has(normName(m.charName))) {
+          m.inGameRole = roleByNormName.get(normName(m.charName));
+        }
         if (inGameRoster && m.charName) {
           const inRoster = inGameRoster.has(normName(m.charName));
           if (!inRoster && m.inGameGuildName && leaderIg && normName(m.inGameGuildName) === normName(leaderIg.name)) {
@@ -1580,11 +1767,15 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
       });
       const allMembers = [leader, ...members];
       const donatedCount = allMembers.filter(m => m.donatedToday).length;
+      const masterInRoster = leaderIg && Array.isArray(leaderIg.members)
+        ? leaderIg.members.find(m => m && m.role === 'master')
+        : null;
       return {
         id: g.id,
         name: g.inGameName || g.name || 'กิลด์ใหม่',
         desiredName: g.name || '',
         inGameName: g.inGameName || (leaderIg ? leaderIg.name : ''),
+        inGameMasterName: masterInRoster ? masterInRoster.name : null,
         guildLevel: leaderIg ? leaderIg.level : null,
         guildExp: leaderIg ? leaderIg.exp : null,
         guildExpToNext: leaderIg ? leaderIg.expToNext : null,
@@ -2062,12 +2253,55 @@ function createGuildService({ loadProfiles, evalProfilePort, dataFile, isBusy })
           const newLeader = String(body.leaderId);
           const other = findGuildOfProfile(newLeader, g.id);
           if (other) return sendJSON({ success: false, error: 'ตัวละครนี้อยู่กิลด์อื่นแล้ว' }, 409), true;
+
+          // If current in-game master is online and newLeader is in the same guild, transfer in-game leadership automatically
+          try {
+            const profiles = loadProfiles();
+            const byId = new Map(profiles.map(p => [String(p.id), p]));
+            const oldLeaderId = String(g.leaderId);
+            const newLeaderProf = byId.get(newLeader);
+            let newLeaderProbe = newLeaderProf && newLeaderProf.debugPort ? await probeClient(newLeaderProf.debugPort) : null;
+            const targetCharName = (newLeaderProbe && newLeaderProbe.inWorld && newLeaderProbe.charName)
+              || (liveStatus[newLeader] && liveStatus[newLeader].charName)
+              || (newLeaderProf && (newLeaderProf.lastCharName || newLeaderProf.characterName))
+              || '';
+
+            if (targetCharName) {
+              const refIg = findReferenceInGameGuild(g, null) || (newLeaderProbe && newLeaderProbe.inGameGuild) || null;
+              const masterEntry = refIg && Array.isArray(refIg.members)
+                ? refIg.members.find(m => m && m.role === 'master' && m.name)
+                : null;
+              if (masterEntry && normName(masterEntry.name) !== normName(targetCharName)) {
+                // Find which online profile is currently the in-game master
+                let masterProf = null;
+                for (const pid of [oldLeaderId, ...g.memberIds.map(String)]) {
+                  const p = byId.get(pid);
+                  const ls = liveStatus[pid];
+                  const cName = (ls && ls.charName) || (p && (p.lastCharName || p.characterName)) || '';
+                  if (normName(cName) === normName(masterEntry.name) && p && p.debugPort) {
+                    masterProf = p;
+                    break;
+                  }
+                }
+                if (masterProf && masterProf.debugPort) {
+                  await evalProfilePort(masterProf.debugPort, sendGuildActionJs({ action: 'transfer', name: targetCharName }), 3500);
+                  await new Promise(r => setTimeout(r, 650));
+                }
+              }
+            }
+
+            if (liveStatus[oldLeaderId] && liveStatus[oldLeaderId].lastAction && /สร้างกิลด์|หัวกิลด์/.test(liveStatus[oldLeaderId].lastAction)) {
+              liveStatus[oldLeaderId].lastAction = null;
+            }
+          } catch (_) {}
+
           const idx = g.memberIds.indexOf(newLeader);
           if (idx !== -1) g.memberIds.splice(idx, 1);
           if (!g.memberIds.includes(g.leaderId)) g.memberIds.unshift(g.leaderId);
           g.leaderId = newLeader;
         }
         saveState();
+        await probeAllConfigured().catch(() => {});
         syncAllGuilds().catch(() => {});
         return sendJSON({ success: true, ...buildPublicView() }), true;
       } catch (e) {

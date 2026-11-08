@@ -296,17 +296,21 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         const boardEl = hc.querySelector('.human-check-board');
         const boardImg = boardEl ? boardEl.querySelector('img') : null;
         if (boardEl || boardImg || (packet && packet.image)) {
+          const isOddNow = /คลิกรูปที่ไม่เหมือนรูปอื่น|ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก|ไม่เข้าพวก/i.test(promptTextNow);
+          const maxSlots = isOddNow ? 5 : 4;
           const slotIdx = ${Number(pickIndex)};
-          if (slotIdx < 0 || slotIdx >= 4) {
-            return { success: false, error: 'ตัวเลือกบนกระดานต้องเป็นข้อ 1 ถึง 4' };
+          if (slotIdx < 0 || slotIdx >= maxSlots) {
+            return { success: false, error: 'ตัวเลือกบนกระดานต้องเป็นข้อ 1 ถึง ' + maxSlots };
           }
           const bw = (packet && packet.width) || 480;
           const bh = (packet && packet.height) || 330;
-          const colRanges = [[15, 120], [130, 232], [248, 355], [365, 468]];
+          const colRanges = isOddNow
+            ? [[10, 106], [102, 198], [194, 290], [286, 382], [378, 474]]
+            : [[15, 120], [130, 232], [248, 355], [365, 468]];
           let targetX = Math.round(((colRanges[slotIdx][0] + colRanges[slotIdx][1]) * 0.5) * (bw / 480));
-          let targetY = Math.round(235 * (bh / 330));
+          let targetY = Math.round((isOddNow ? 185 : 235) * (bh / 330));
 
-          if (Array.isArray(window.__latestBoardCandidates) && window.__latestBoardCandidates[slotIdx]) {
+          if (!isOddNow && Array.isArray(window.__latestBoardCandidates) && window.__latestBoardCandidates[slotIdx]) {
             const c = window.__latestBoardCandidates[slotIdx];
             if (typeof c.x === 'number' && typeof c.y === 'number') {
               targetX = Math.round(c.x);
@@ -321,7 +325,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
               if (ctx) {
                 ctx.drawImage(boardImg, 0, 0, bw, bh);
                 const imgData = ctx.getImageData(0, 0, bw, bh);
-                if (typeof window.findHumanCheckBoardCandidates === 'function') {
+                if (!isOddNow && typeof window.findHumanCheckBoardCandidates === 'function') {
                   const cands = window.findHumanCheckBoardCandidates(imgData);
                   if (Array.isArray(cands) && cands[slotIdx] && typeof cands[slotIdx].x === 'number') {
                     targetX = Math.round(cands[slotIdx].x);
@@ -330,7 +334,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 } else {
                   const sx = bw / 480, sy = bh / 330;
                   const x1 = Math.round(colRanges[slotIdx][0] * sx), x2 = Math.round(colRanges[slotIdx][1] * sx);
-                  const y1 = Math.round(175 * sy), y2 = Math.min(bh - 5, Math.round(318 * sy));
+                  const y1 = Math.round((isOddNow ? 60 : 175) * sy), y2 = Math.min(bh - 5, Math.round((isOddNow ? 305 : 318) * sy));
                   const data = imgData.data;
                   let sumW = 0, sumX = 0, sumY = 0;
                   const midX = (x1 + x2) * 0.5, midY = (y1 + y2) * 0.5;
@@ -378,20 +382,21 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                 bCtx.arc(targetX, targetY, 26, 0, Math.PI * 2);
                 bCtx.stroke();
                 bCtx.restore();
-                for (let i = 0; i < 4; i++) {
+                const boxW = isOddNow ? 82 : 88;
+                for (let i = 0; i < maxSlots; i++) {
                   const isPicked = (i === slotIdx);
-                  const cx = Math.round(((i + 0.5) * bw) / 4);
-                  const bx = cx - 44;
+                  const cx = Math.round(((i + 0.5) * bw) / maxSlots);
+                  const bx = Math.round(cx - boxW / 2);
                   const by = bh + 5;
                   bCtx.fillStyle = isPicked ? '#065f46' : '#1e293b';
                   bCtx.strokeStyle = isPicked ? '#10b981' : '#38bdf8';
                   bCtx.lineWidth = isPicked ? 2 : 1.5;
                   bCtx.beginPath();
-                  if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else if (bCtx.rect) bCtx.rect(bx, by, 88, 28);
+                  if (bCtx.roundRect) bCtx.roundRect(bx, by, boxW, 28, 6); else if (bCtx.rect) bCtx.rect(bx, by, boxW, 28);
                   bCtx.fill();
                   bCtx.stroke();
                   bCtx.fillStyle = '#f8fafc';
-                  bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
+                  bCtx.font = isOddNow ? 'bold 12px "Segoe UI", Tahoma, sans-serif' : 'bold 13px "Segoe UI", Tahoma, sans-serif';
                   bCtx.textAlign = 'center';
                   bCtx.fillText((isPicked ? '✓ ตัวเลือก ' : 'ตัวเลือก ') + (i + 1), cx, by + 19);
                 }
@@ -741,21 +746,24 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                     bCtx.fillText((isPicked ? '✗ ' : '') + 'คำตอบ ' + (i + 1) + ' (' + cntVal + ' อัน)', cx, by + 19, boxW - 4);
                   }
                 } else {
-                  const colCenters = [68, 181, 300, 416];
-                  for (let i = 0; i < 4; i++) {
+                  const isOddCheck = sObj.type === 'odd' || /ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก|ไม่เข้าพวก/i.test(promptNow);
+                  const colCenters = isOddCheck ? [58, 150, 242, 334, 426] : [68, 181, 300, 416];
+                  const boxW = isOddCheck ? 82 : 88;
+                  for (let i = 0; i < colCenters.length; i++) {
                     const cx = colCenters[i];
-                    const bx = cx - 44, by = bh + 5;
-                    bCtx.fillStyle = (lastSlot === i + 1) ? '#991b1b' : '#1e293b';
-                    bCtx.strokeStyle = (lastSlot === i + 1) ? '#ef4444' : '#38bdf8';
+                    const bx = Math.round(cx - boxW / 2), by = bh + 5;
+                    const isPicked = (lastSlot === i + 1);
+                    bCtx.fillStyle = isPicked ? '#991b1b' : '#1e293b';
+                    bCtx.strokeStyle = isPicked ? '#ef4444' : '#38bdf8';
                     bCtx.lineWidth = 1.5;
                     bCtx.beginPath();
-                    if (bCtx.roundRect) bCtx.roundRect(bx, by, 88, 28, 6); else bCtx.rect(bx, by, 88, 28);
+                    if (bCtx.roundRect) bCtx.roundRect(bx, by, boxW, 28, 6); else bCtx.rect(bx, by, boxW, 28);
                     bCtx.fill();
                     bCtx.stroke();
                     bCtx.fillStyle = '#f8fafc';
-                    bCtx.font = 'bold 13px "Segoe UI", Tahoma, sans-serif';
+                    bCtx.font = isOddCheck ? 'bold 12px "Segoe UI", Tahoma, sans-serif' : 'bold 13px "Segoe UI", Tahoma, sans-serif';
                     bCtx.textAlign = 'center';
-                    bCtx.fillText('ตัวเลือก ' + (i + 1), cx, by + 19);
+                    bCtx.fillText((isPicked ? '✗ ตัวเลือก ' : 'ตัวเลือก ') + (i + 1), cx, by + 19);
                   }
                 }
                 imageDataUrl = bCanvas.toDataURL('image/png');
@@ -876,6 +884,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     const promptText = attempt.prompt || '(กดรูปด้านล่างที่เหมือนกับรูปในกรอบ)';
     const isCountWrong = attempt.type === 'count' || /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(promptText);
     const isRotateWrong = attempt.type === 'rotate' || /หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(promptText);
+    const isOddWrong = !isCountWrong && !isRotateWrong && (attempt.type === 'odd' || /ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก|ไม่เข้าพวก/i.test(promptText));
     const turnVal = Number(attempt.turn) || 0;
     const turnDesc = turnVal === 0 ? '0°' : (turnVal > 0 ? `+${turnVal}° ตามเข็ม` : `${turnVal}° ทวนเข็ม`);
     const dedupChoiceKey = isRotateWrong ? `rot:${turnVal}` : (isCountWrong ? `cnt:${attempt.count || slotNum}` : `slot:${slotNum}`);
@@ -924,7 +933,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
         notifiedAt: now,
         options: isCountWrong
           ? [0, 1, 2, 3, 4, 5].map(i => ({ index: i, count: i + 1, label: `ตัวเลือกที่ ${i + 1} (${i + 1} อัน)`, itemName: `ตัวเลือกที่ ${i + 1} (${i + 1} อัน)` }))
-          : [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }]
+          : (isOddWrong ? [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }, { index: 4 }] : [{ index: 0 }, { index: 1 }, { index: 2 }, { index: 3 }])
       };
       activeChecks.set(profile.id, tracked);
       recentNonces.set(nonce, tracked);
@@ -932,8 +941,8 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
 
     const wrongOptCounts = Array.isArray(attempt.optionCounts) && attempt.optionCounts.length > 0
       ? attempt.optionCounts.map((oc, idx) => (typeof oc === 'object' && oc !== null ? (oc.count || idx + 1) : (Number(oc) || idx + 1)))
-      : (isCountWrong ? [1, 2, 3, 4, 5, 6] : [1, 2, 3, 4]);
-    const wrongBtnCount = isCountWrong ? wrongOptCounts.length : 4;
+      : (isCountWrong ? [1, 2, 3, 4, 5, 6] : (isOddWrong ? [1, 2, 3, 4, 5] : [1, 2, 3, 4]));
+    const wrongBtnCount = isCountWrong ? wrongOptCounts.length : (isOddWrong ? 5 : 4);
     const wrongOptionsFieldList = [];
     if (isRotateWrong) {
       wrongOptionsFieldList.push(`❌ **${chosenLabel}** 👈 *(หมุนมุมนี้แล้วผิด)*`);
@@ -1467,11 +1476,15 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
     }
 
     const isCountPrompt = /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(check.prompt || '');
+    const isOddPrompt = !isCountPrompt && /คลิกรูปที่ไม่เหมือนรูปอื่น|ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก|ไม่เข้าพวก/i.test(check.prompt || '');
     const defaultOptions = isCountPrompt
       ? [1, 2, 3, 4, 5, 6].map((cnt, i) => ({ index: i, count: cnt, label: `คำตอบ ${i + 1} (${cnt} อัน)`, itemName: `คำตอบ ${i + 1} (${cnt} อัน)` }))
-      : [0, 1, 2, 3].map(i => ({ index: i, label: `ตัวเลือกที่ ${i + 1}`, itemName: `ตัวเลือกที่ ${i + 1}` }));
+      : (isOddPrompt
+        ? [0, 1, 2, 3, 4].map(i => ({ index: i, label: `ตัวเลือกที่ ${i + 1}`, itemName: `ตัวเลือกที่ ${i + 1}` }))
+        : [0, 1, 2, 3].map(i => ({ index: i, label: `ตัวเลือกที่ ${i + 1}`, itemName: `ตัวเลือกที่ ${i + 1}` })));
     const rawOptions = (Array.isArray(check.options) && check.options.length > 0)
-      ? (isCountPrompt && check.options.length === 4 && check.options.every(o => !o || (!o.count && !/\(\d+\s*อัน\)/.test(o.label || o.itemName || '')))
+      ? ((isCountPrompt && check.options.length === 4 && check.options.every(o => !o || (!o.count && !/\(\d+\s*อัน\)/.test(o.label || o.itemName || ''))))
+        || (isOddPrompt && check.options.length === 4)
         ? defaultOptions
         : check.options)
       : defaultOptions;
@@ -1573,7 +1586,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
           (!trackedCheck.notifiedAt || !s.timestamp || s.timestamp >= trackedCheck.notifiedAt - 5000) &&
           (!trackedCheck.checkId || !s.checkId || String(s.checkId).startsWith('dom-') || String(trackedCheck.checkId).startsWith('dom-') || String(s.checkId) === String(trackedCheck.checkId))
         );
-        const isNonFramePrompt = /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ|ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก|หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(promptText || '');
+        const isNonFramePrompt = /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ|ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก|ไม่เข้าพวก|หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(promptText || '');
         for (let pollIdx = 0; pollIdx < maxPolls; pollIdx++) {
           await new Promise(r => setTimeout(r, pollIdx === 0 ? (isTest ? 700 : 1100) : (isTest ? 2100 : 1200)));
           if (trackedCheck.solvedManually) return;
@@ -1737,7 +1750,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                     const pText = (hc.querySelector('.human-check-prompt')?.innerText || '').trim();
                     const isRot = Boolean(dialEl || /หมุนรูป|หมุนภาพ|ตั้งตรง/i.test(pText));
                     const isCnt = !isRot && /กี่อัน|กี่ชิ้น|มีของแบบในกรอบ/i.test(pText);
-                    const isOdd = !isRot && !isCnt && /คลิกรูปที่ไม่เหมือนรูปอื่น|ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก/i.test(pText);
+                    const isOdd = !isRot && !isCnt && /คลิกรูปที่ไม่เหมือนรูปอื่น|ไม่เหมือนรูปอื่น|แยกผิดประเภท|ผิดประเภท|ต่างพวก|ไม่เข้าพวก/i.test(pText);
                     if (window.PmheeImageBoardSolver) {
                       const bw = boardImg.naturalWidth || boardImg.width || (isRot ? 220 : 480);
                       const bh = boardImg.naturalHeight || boardImg.height || (isRot ? 220 : (isCnt ? 360 : 330));
@@ -1809,7 +1822,7 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
                         }
                       } else if (isOdd && typeof window.PmheeImageBoardSolver.solveOddChallenge === 'function') {
                         const oSol = window.PmheeImageBoardSolver.solveOddChallenge(bd);
-                        if (oSol && oSol.slot >= 1 && oSol.slot <= 4) {
+                        if (oSol && oSol.slot >= 1 && oSol.slot <= 5) {
                           return { frameSol: { pickIndex: oSol.slot - 1, slot: oSol.slot, x: oSol.x, y: oSol.y, confidence: oSol.confidence, isOdd: true } };
                         }
                       } else if (!${isNonFramePrompt ? 'true' : 'false'} && typeof window.PmheeImageBoardSolver.solveFrameChallenge === 'function') {

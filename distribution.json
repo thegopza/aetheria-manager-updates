@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "5550594a510a180e4f5eeb658bf7b978cca46bcf",
+  "sourceCommit": "e50b98c0f0da0dc156d8fc703f63d3c0f314136e",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -40,7 +40,7 @@
     },
     {
       "path": "manager/discord_bot.js",
-      "sha256": "b588b0f9ef86b27e66caeb800d89e0be215b054f86e31135a4abff29138b5298"
+      "sha256": "6478c6fbd120dc523a183c37c63cbcacc43cefcce9d43c25bbe3015fe0502ad7"
     },
     {
       "path": "manager/embedded_human_check_bridge.js",
@@ -64,7 +64,7 @@
     },
     {
       "path": "manager/image_board_solver.js",
-      "sha256": "5c6d8cb79531d67a3daf73551d36f831f02b6c23cfca484b5abbadc8cec6dc57"
+      "sha256": "19289cb9c58ee11986fcf87ab2f94013b09a6addb4fca7c6705e7be6291a99e9"
     },
     {
       "path": "manager/installer.js",
@@ -188,7 +188,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "73ba426a77bebb58c5f4716ec8978194ec5440e6e90f5bb07f04d991bb5f361b"
+      "sha256": "90e65f27d310625e0276d1624949bfc4e361998911b3311877d37210755fab5f"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -256,7 +256,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "4a7e46a97c3d5b921126dd9e244013d8b60370f971985e7c01989bbfbb73a803"
+      "sha256": "e06d0b69ae503a769a7e6b53000a3858638ff2207ccb4d9472c5a16fa38b2a2f"
     },
     {
       "path": "manager/screen_proxy_manager.js",

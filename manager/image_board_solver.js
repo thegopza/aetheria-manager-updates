@@ -875,6 +875,32 @@
     return null;
   }
 
+  function extractWarmClubObject(boardData, x1, y1, x2, y2) {
+    const bw = boardData.width || 480;
+    const bp = boardData.data;
+    const ix1 = Math.max(0, Math.round(x1)), iy1 = Math.max(0, Math.round(y1));
+    const ix2 = Math.min(bw, Math.round(x2)), iy2 = Math.min(boardData.height || 330, Math.round(y2));
+    const w = ix2 - ix1, h = iy2 - iy1;
+    if (w < 8 || h < 8) return null;
+    const sub = new Uint8ClampedArray(w * h * 4);
+    for (let ly = 0; ly < h; ly++) {
+      for (let lx = 0; lx < w; lx++) {
+        const si = ((iy1 + ly) * bw + (ix1 + lx)) * 4;
+        const di = (ly * w + lx) * 4;
+        const r = bp[si], g = bp[si + 1], b = bp[si + 2];
+        if (b >= g + 8 && r < 110) {
+          sub[di] = 28; sub[di + 1] = 25; sub[di + 2] = 35; sub[di + 3] = 255;
+        } else {
+          sub[di] = r; sub[di + 1] = g; sub[di + 2] = b; sub[di + 3] = 255;
+        }
+      }
+    }
+    const obj = extractBoxObject({ width: w, height: h, data: sub }, 0, 0, w, h);
+    if (!obj) return null;
+    obj.cx += ix1; obj.cy += iy1; obj.x += ix1; obj.y += iy1;
+    return obj;
+  }
+
   /**
    * Auto-solve Count Challenge ("ในรูปมีของแบบในกรอบกี่อัน").
    * Returns { count: 1..6, confidence, items, scores }.
@@ -888,6 +914,7 @@
 
     // Inpaint green annotation ring (and optional dark-green numbered badge) if evaluating an annotated Discord screenshot
     const isRing = new Uint8Array(bw * bh);
+    const isBadge = new Uint8Array(bw * bh);
     let ringCount = 0;
     const ringPts = [];
     for (let y = 75; y < bh; y++) {
@@ -946,7 +973,10 @@
               for (let dx = -12; dx <= 12; dx++) {
                 if (dx * dx + dy * dy <= 11.8 * 11.8) {
                   const ny = by + dy, nx = bx + dx;
-                  if (ny >= 75 && ny < bh && nx >= 0 && nx < bw) isRing[ny * bw + nx] = 1;
+                  if (ny >= 75 && ny < bh && nx >= 0 && nx < bw) {
+                    isRing[ny * bw + nx] = 1;
+                    isBadge[ny * bw + nx] = 1;
+                  }
                 }
               }
             }
@@ -980,15 +1010,26 @@
             const p = y * bw + x;
             if (!isRing[p]) continue;
             let sr = 0, sg = 0, sb = 0, cnt = 0;
+            let bSr = 0, bSg = 0, bSb = 0, bCnt = 0;
             for (let dy = -2; dy <= 2; dy++) {
               for (let dx = -2; dx <= 2; dx++) {
                 const np = (y + dy) * bw + (x + dx);
                 if (!isRing[np]) {
-                  sr += cData[np * 4]; sg += cData[np * 4 + 1]; sb += cData[np * 4 + 2]; cnt++;
+                  const nr = cData[np * 4], ng = cData[np * 4 + 1], nb = cData[np * 4 + 2];
+                  sr += nr; sg += ng; sb += nb; cnt++;
+                  const sat = Math.max(nr, ng, nb) - Math.min(nr, ng, nb);
+                  if (!(nr + ng + nb >= 175 && sat <= 24)) {
+                    bSr += nr; bSg += ng; bSb += nb; bCnt++;
+                  }
                 }
               }
             }
-            if (cnt > 0) {
+            if (isBadge[p] && bCnt > 0) {
+              bp[p * 4] = Math.round(bSr / bCnt);
+              bp[p * 4 + 1] = Math.round(bSg / bCnt);
+              bp[p * 4 + 2] = Math.round(bSb / bCnt);
+              nextMask[p] = 0;
+            } else if (cnt > 0) {
               bp[p * 4] = Math.round(sr / cnt);
               bp[p * 4 + 1] = Math.round(sg / cnt);
               bp[p * 4 + 2] = Math.round(sb / cnt);
@@ -1009,17 +1050,77 @@
     const topGray = topObj.colorHist[0] + topObj.colorHist[1];
     const topWood = topObj.colorHist[4] + topObj.colorHist[5] + topObj.colorHist[6];
     const topR45 = topObj.colorHist[4] + topObj.colorHist[5];
-    const isTopClub = topWood >= 0.65 && topGray <= 0.18 && topObj.elongation >= 4.5 && topObj.rmsRadius >= 17.5;
+    const isTopClub = topWood >= 0.65 && topGray <= 0.18 && topObj.elongation >= 4.4 && topObj.rmsRadius >= 16.8;
     const isTopHammer = topGray >= 0.35 && topWood >= 0.15 && topObj.meanSat <= 31 && topObj.meanLum <= 98 && topR45 <= 0.15 && topObj.colorHist[5] <= 0.04;
-    const isTopAxe = !isTopHammer && topGray >= 0.30 && topGray <= 0.50 && topWood >= 0.48 && topR45 >= 0.18 && topObj.elongation >= 3.0;
+    const isTopAxe = !isTopHammer && topGray >= 0.30 && topGray <= 0.53 && topWood >= 0.45 && topR45 >= 0.18 && topObj.elongation >= 2.95;
     const isTopWhip = topGray <= 0.16 && topWood >= 0.70 && topR45 <= 0.12 && topObj.meanLum <= 60 && topObj.elongation <= 2.3;
-    const isTopBoots = topWood >= 0.78 && topGray <= 0.18 && topR45 <= 0.16 && topObj.elongation >= 1.30 && topObj.elongation <= 1.65 && topObj.meanLum >= 68;
+    const isTopBoots = topWood >= 0.70 && topGray <= 0.22 && topR45 <= 0.16 && topObj.elongation >= 1.30 && topObj.elongation <= 1.65 && topObj.meanLum >= 68;
     const isTopBook = topObj.area >= 1320 && topObj.elongation <= 1.48 && topGray <= 0.22 && topWood <= 0.35;
-    const isTopKatar = topObj.colorHist[0] >= 0.22 && topObj.colorHist[5] >= 0.18 && topObj.meanLum >= 95 && topObj.elongation >= 2.0 && topObj.elongation <= 3.2;
+    const isTopKatar = !isTopAxe && topObj.colorHist[0] >= 0.22 && topObj.colorHist[5] >= 0.18 && topObj.meanLum >= 95 && topObj.elongation >= 2.0 && topObj.elongation <= 2.85 && topObj.fillRatio >= 2.65;
+    const isTopSpear = topObj.elongation >= 5.8 && topObj.rmsRadius <= 14.5 && topObj.area <= 290 && topObj.fillRatio <= 1.42;
 
     const bW = Math.max(54, Math.min(68, Math.round(topObj.rmsRadius * 3.2))), bH = bW;
     const step = 7;
     const candidates = [];
+
+    function evalObj(obj, x, y, isWarmRec) {
+      if (!obj || obj.cy < 82 || obj.area < Math.max(40, topObj.area * 0.22) || obj.area > topObj.area * 2.4) return;
+      const areaRatio = obj.area / topObj.area;
+      const areaPenalty = Math.abs(Math.log(Math.max(0.35, Math.min(2.8, areaRatio)))) * 0.9;
+      const rmsRatio = obj.rmsRadius / topObj.rmsRadius;
+      const rmsPenalty = Math.abs(Math.log(Math.max(0.4, Math.min(2.5, rmsRatio)))) * 0.9;
+
+      const slotGray = obj.colorHist[0] + obj.colorHist[1];
+      const slotWood = obj.colorHist[4] + obj.colorHist[5] + obj.colorHist[6];
+      const slotR45 = obj.colorHist[4] + obj.colorHist[5];
+
+      let itemPenalty = 0;
+      if (!isTopClub && !isTopWhip && slotWood >= 0.65 && slotGray <= 0.12 && obj.elongation >= 2.2 && (topGray >= 0.10 || topWood <= 0.60)) {
+        itemPenalty = 1.30;
+      } else if (isTopClub) {
+        if (obj.area < 310 || obj.area < topObj.area * 0.45 || obj.elongation < 2.4 || slotGray >= 0.34 || (obj.colorHist[4] < 0.02 && (obj.colorHist[6] >= 0.62 || obj.colorHist[5] >= 0.20) && obj.meanLum < 73) || (topObj.elongation < 4.7 && obj.area < 420)) {
+          itemPenalty = 1.30;
+        } else {
+          let isHalfBootSlice = false;
+          if (Math.hypot(obj.cx - x, obj.cy - y) >= 13) {
+            const rec = extractBoxObject({ width: bw, height: bh, data: bp }, obj.cx - bW / 2, obj.cy - bH / 2, obj.cx + bW / 2, obj.cy + bH / 2);
+            if (rec && rec.area >= obj.area * 1.45 && rec.elongation >= 1.425 && rec.elongation <= 2.1 && rec.fillRatio >= 2.7) {
+              isHalfBootSlice = true;
+            }
+          }
+          if (isHalfBootSlice) {
+            itemPenalty = 1.30;
+          } else if (slotWood >= 0.58 && slotGray <= 0.26 && obj.elongation >= 2.7 && (obj.rmsRadius < topObj.rmsRadius * 0.85 || isWarmRec)) {
+            itemPenalty = (topGray < 0.05 && obj.colorHist[4] >= 0.20) ? -0.85 : -0.75;
+          }
+        }
+      } else if (isTopHammer) {
+        if (obj.meanSat >= 35 || slotGray <= 0.24 || obj.elongation >= 6.8 || obj.meanLum >= 104 || obj.colorHist[5] >= 0.18) itemPenalty = 1.10;
+        else if (slotGray >= 0.45 && slotWood >= 0.16 && obj.meanSat >= 15 && obj.meanSat <= 32 && obj.meanLum <= 105 && obj.elongation <= 4.4) itemPenalty = -0.65;
+        else if (topGray < 0.45 && slotGray >= 0.25 && slotWood >= 0.20 && obj.meanSat <= 34 && obj.meanLum <= 96 && obj.colorHist[5] <= 0.10) itemPenalty = -0.45;
+      } else if (isTopAxe) {
+        if (slotGray >= 0.50 && obj.meanSat <= 30 && slotR45 <= 0.12) itemPenalty = 0.85;
+        else if (slotWood >= 0.70 && slotGray <= 0.12) itemPenalty = 1.10;
+      } else if (isTopWhip) {
+        if (slotGray >= 0.35 || obj.elongation >= 2.6 || obj.meanLum >= 66 || obj.colorHist[5] >= 0.11) itemPenalty = 1.00;
+      } else if (isTopBoots) {
+        if (obj.elongation >= 2.4 || obj.elongation <= 1.21 || obj.meanLum <= 55 || slotWood <= 0.45 || obj.colorHist[3] >= 0.08 || (slotGray >= 0.45 && obj.meanSat <= 28)) itemPenalty = 0.90;
+        else if (slotWood >= 0.50 && slotGray <= 0.39 && slotR45 <= 0.18 && obj.elongation <= 1.85 && obj.meanLum >= 50 && obj.meanLum <= 90 && obj.rmsRadius >= 14.8) itemPenalty = -0.55;
+      } else if (isTopBook) {
+        if (slotGray >= 0.28 || slotWood >= 0.65) itemPenalty = 0.90;
+      } else if (isTopKatar) {
+        if (slotGray < 0.22 || slotGray > 0.57 || slotWood < 0.36 || slotWood > 0.80 || obj.meanSat < 30 || obj.meanSat > 58 || obj.fillRatio < 2.75 || obj.fillRatio > 3.90 || obj.elongation < 1.55 || obj.colorHist[0] < 0.12 || obj.meanLum < 88 || (obj.colorHist[4] >= 0.18 && obj.colorHist[5] <= 0.07)) itemPenalty = 1.00;
+      } else if (isTopSpear) {
+        if (obj.fillRatio >= 1.44 || obj.area >= 305 || obj.area < 150 || obj.rmsRadius >= 15.2 || obj.rmsRadius < 10.5 || obj.colorHist[4] >= 0.35 || obj.elongation < 7.45 || obj.colorHist[3] >= 0.20 || slotWood < 0.30 || obj.meanSat < 26) itemPenalty = 1.10;
+      }
+
+      const cmp = compareObjects(topObj, obj);
+      if (!isNaN(cmp.totalScore)) {
+        const shapeScore = cmp.bestPolarDist * 1.3 + cmp.elongDiff * 1.0 + cmp.fillDiff * 0.8 + areaPenalty + rmsPenalty;
+        const combined = shapeScore + cmp.totalScore * 0.25 + itemPenalty;
+        candidates.push({ x: obj.cx, y: obj.cy, score: combined, obj });
+      }
+    }
 
     for (let y = 84 + bH / 2; y <= bh - bH / 2 - 2; y += step) {
       for (let x = bW / 2 + 4; x <= bw - bW / 2 - 4; x += step) {
@@ -1033,48 +1134,10 @@
         if (fgCount < 16) continue;
 
         const obj = extractBoxObject({ width: bw, height: bh, data: bp }, x - bW / 2, y - bH / 2, x + bW / 2, y + bH / 2);
-        if (obj && obj.cy >= 82 && obj.area >= Math.max(40, topObj.area * 0.22) && obj.area <= topObj.area * 2.4) {
-          const areaRatio = obj.area / topObj.area;
-          const areaPenalty = Math.abs(Math.log(Math.max(0.35, Math.min(2.8, areaRatio)))) * 0.9;
-          const rmsRatio = obj.rmsRadius / topObj.rmsRadius;
-          const rmsPenalty = Math.abs(Math.log(Math.max(0.4, Math.min(2.5, rmsRatio)))) * 0.9;
-
-          const slotGray = obj.colorHist[0] + obj.colorHist[1];
-          const slotWood = obj.colorHist[4] + obj.colorHist[5] + obj.colorHist[6];
-          const slotR45 = obj.colorHist[4] + obj.colorHist[5];
-
-          let itemPenalty = 0;
-          if (!isTopClub && !isTopWhip && slotWood >= 0.65 && slotGray <= 0.12 && obj.elongation >= 2.2 && (topGray >= 0.10 || topWood <= 0.60)) {
-            itemPenalty = 1.30;
-          } else if (isTopClub) {
-            if (obj.elongation < 2.4 || slotGray >= 0.34 || (obj.colorHist[4] < 0.02 && (obj.colorHist[6] >= 0.62 || obj.colorHist[5] >= 0.20) && obj.meanLum < 73)) itemPenalty = 1.30;
-            else if (slotWood >= 0.58 && slotGray <= 0.26 && obj.elongation >= 2.7 && obj.rmsRadius < topObj.rmsRadius * 0.85) {
-              itemPenalty = (topGray < 0.05 && obj.colorHist[4] >= 0.20) ? -0.85 : -0.75;
-            }
-          } else if (isTopHammer) {
-            if (obj.meanSat >= 35 || slotGray <= 0.24 || obj.elongation >= 6.8 || obj.meanLum >= 104 || obj.colorHist[5] >= 0.18) itemPenalty = 1.10;
-            else if (slotGray >= 0.45 && slotWood >= 0.16 && obj.meanSat >= 15 && obj.meanSat <= 32 && obj.meanLum <= 105 && obj.elongation <= 4.4) itemPenalty = -0.65;
-            else if (topGray < 0.45 && slotGray >= 0.25 && slotWood >= 0.20 && obj.meanSat <= 34 && obj.meanLum <= 96 && obj.colorHist[5] <= 0.10) itemPenalty = -0.45;
-          } else if (isTopAxe) {
-            if (slotGray >= 0.50 && obj.meanSat <= 30 && slotR45 <= 0.12) itemPenalty = 0.85;
-            else if (slotWood >= 0.70 && slotGray <= 0.12) itemPenalty = 1.10;
-          } else if (isTopWhip) {
-            if (slotGray >= 0.35 || obj.elongation >= 2.6 || obj.meanLum >= 66 || obj.colorHist[5] >= 0.11) itemPenalty = 1.00;
-          } else if (isTopBoots) {
-            if (obj.elongation >= 2.4 || (slotGray >= 0.45 && obj.meanSat <= 28)) itemPenalty = 0.90;
-            else if (slotWood >= 0.50 && slotGray <= 0.35 && slotR45 <= 0.18 && obj.elongation <= 1.85 && obj.meanLum >= 50 && obj.meanLum <= 90 && obj.rmsRadius >= 14.8) itemPenalty = -0.55;
-          } else if (isTopBook) {
-            if (slotGray >= 0.28 || slotWood >= 0.65) itemPenalty = 0.90;
-          } else if (isTopKatar) {
-            if (slotGray < 0.22 || slotGray > 0.57 || slotWood < 0.36 || slotWood > 0.80 || obj.meanSat < 30 || obj.meanSat > 58 || obj.fillRatio < 2.75 || obj.fillRatio > 3.90 || obj.elongation < 1.55 || obj.colorHist[0] < 0.12 || obj.meanLum < 88) itemPenalty = 1.00;
-          }
-
-          const cmp = compareObjects(topObj, obj);
-          if (!isNaN(cmp.totalScore)) {
-            const shapeScore = cmp.bestPolarDist * 1.3 + cmp.elongDiff * 1.0 + cmp.fillDiff * 0.8 + areaPenalty + rmsPenalty;
-            const combined = shapeScore + cmp.totalScore * 0.25 + itemPenalty;
-            candidates.push({ x: obj.cx, y: obj.cy, score: combined, obj });
-          }
+        evalObj(obj, x, y, false);
+        if (isTopClub && topObj.elongation < 4.7 && obj && obj.area < topObj.area * 0.55) {
+          const wObj = extractWarmClubObject({ width: bw, height: bh, data: bp }, x - bW / 2, y - bH / 2, x + bW / 2, y + bH / 2);
+          if (wObj && wObj.elongation >= 2.8 && wObj.area >= 480) evalObj(wObj, x, y, true);
         }
       }
     }
@@ -1151,8 +1214,307 @@
     };
   }
 
+  function extractSlotObjectForOdd(boardData, x1, y1, x2, y2) {
+    const bw = boardData.width, bh = boardData.height, bp = boardData.data;
+    x1 = Math.max(0, Math.min(bw - 1, Math.round(x1)));
+    x2 = Math.max(x1 + 4, Math.min(bw - 1, Math.round(x2)));
+    y1 = Math.max(0, Math.min(bh - 1, Math.round(y1)));
+    y2 = Math.max(y1 + 4, Math.min(bh - 1, Math.round(y2)));
+    const w = x2 - x1 + 1, h = y2 - y1 + 1;
+    const R = new Float32Array(w * h), G = new Float32Array(w * h), B = new Float32Array(w * h);
+    const isRing = new Uint8Array(w * h);
+    let ringCnt = 0;
+    for (let ly = 0; ly < h; ly++) {
+      for (let lx = 0; lx < w; lx++) {
+        const i = ((y1 + ly) * bw + (x1 + lx)) * 4;
+        const r = bp[i], g = bp[i + 1], b = bp[i + 2];
+        const p = ly * w + lx;
+        R[p] = r; G[p] = g; B[p] = b;
+        if (g > 110 && r < 75 && b > 65 && (g - r) > 55) {
+          isRing[p] = 1;
+          ringCnt++;
+        }
+      }
+    }
+    if (ringCnt >= 18) {
+      const dil = new Uint8Array(isRing);
+      for (let ly = 1; ly < h - 1; ly++) {
+        for (let lx = 1; lx < w - 1; lx++) {
+          const p = ly * w + lx;
+          if (isRing[p]) { dil[p - 1] = 1; dil[p + 1] = 1; dil[p - w] = 1; dil[p + w] = 1; }
+        }
+      }
+      isRing.set(dil);
+      for (let pass = 0; pass < 5; pass++) {
+        const cR = new Float32Array(R), cG = new Float32Array(G), cB = new Float32Array(B);
+        const next = new Uint8Array(isRing);
+        for (let ly = 2; ly < h - 2; ly++) {
+          for (let lx = 2; lx < w - 2; lx++) {
+            const p = ly * w + lx;
+            if (!isRing[p]) continue;
+            let sr = 0, sg = 0, sb = 0, c = 0;
+            for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+              const np = (ly + dy) * w + (lx + dx);
+              if (!isRing[np]) { sr += cR[np]; sg += cG[np]; sb += cB[np]; c++; }
+            }
+            if (c > 0) { R[p] = sr / c; G[p] = sg / c; B[p] = sb / c; next[p] = 0; }
+          }
+        }
+        isRing.set(next);
+      }
+    }
+
+    for (let pass = 0; pass < 2; pass++) {
+      const nR = new Float32Array(R), nG = new Float32Array(G), nB = new Float32Array(B);
+      const rad = pass === 0 ? 2 : 3;
+      for (let ly = rad; ly < h - rad; ly++) {
+        for (let lx = rad; lx < w - rad; lx++) {
+          const p = ly * w + lx;
+          if (pass === 1 && R[p] > G[p] + 12 && G[p] >= B[p] - 2) continue;
+          const dirs = [[p - rad, p + rad], [p - rad * w, p + rad * w], [p - rad * w - rad, p + rad * w + rad], [p - rad * w + rad, p + rad * w - rad]];
+          let matchPairs = 0, sR = 0, sG = 0, sB = 0;
+          for (const [p1, p2] of dirs) {
+            const d12 = Math.abs(R[p1] - R[p2]) + Math.abs(G[p1] - G[p2]) + Math.abs(B[p1] - B[p2]);
+            const mR = (R[p1] + R[p2]) * 0.5, mG = (G[p1] + G[p2]) * 0.5, mB = (B[p1] + B[p2]) * 0.5;
+            const dC = Math.abs(R[p] - mR) + Math.abs(G[p] - mG) + Math.abs(B[p] - mB);
+            if (d12 < 24 && dC > 30 && (pass === 0 || dC < 190)) { matchPairs++; sR += mR; sG += mG; sB += mB; }
+          }
+          if (matchPairs >= 2) { nR[p] = sR / matchPairs; nG[p] = sG / matchPairs; nB[p] = sB / matchPairs; }
+        }
+      }
+      R.set(nR); G.set(nG); B.set(nB);
+    }
+    for (const rad of [3, 4, 3, 4]) {
+      const nR = new Float32Array(R), nG = new Float32Array(G), nB = new Float32Array(B);
+      for (let ly = rad; ly < h - rad; ly++) {
+        for (let lx = rad; lx < w - rad; lx++) {
+          const p = ly * w + lx;
+          const dirs = [[p - rad, p + rad], [p - rad * w, p + rad * w], [p - rad * w - rad, p + rad * w + rad], [p - rad * w + rad, p + rad * w - rad]];
+          let scribPairs = 0, sR = 0, sG = 0, sB = 0;
+          for (const [p1, p2] of dirs) {
+            const d12 = Math.abs(R[p1] - R[p2]) + Math.abs(G[p1] - G[p2]) + Math.abs(B[p1] - B[p2]);
+            if (d12 >= 22) continue;
+            const mR = (R[p1] + R[p2]) * 0.5, mG = (G[p1] + G[p2]) * 0.5, mB = (B[p1] + B[p2]) * 0.5;
+            const dR = R[p] - mR, dG = G[p] - mG, dB = B[p] - mB;
+            const chromaDelta = Math.max(dR, dG, dB) - Math.min(dR, dG, dB);
+            if (dR > 10 && dG > 10 && dB > 10 && dR < 85 && chromaDelta <= 16) { scribPairs++; sR += mR; sG += mG; sB += mB; }
+          }
+          if (scribPairs >= 1) { nR[p] = sR / scribPairs; nG[p] = sG / scribPairs; nB[p] = sB / scribPairs; }
+        }
+      }
+      R.set(nR); G.set(nG); B.set(nB);
+    }
+
+    const colorBins = new Map();
+    for (let ly = 2; ly < h - 2; ly++) {
+      for (let lx = 2; lx < w - 2; lx++) {
+        const p = ly * w + lx;
+        let maxDiff = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const np = (ly + dy) * w + (lx + dx);
+          const d = Math.abs(R[p] - R[np]) + Math.abs(G[p] - G[np]) + Math.abs(B[p] - B[np]);
+          if (d > maxDiff) maxDiff = d;
+        }
+        if (maxDiff <= 13) {
+          const kr = Math.round(R[p] / 8), kg = Math.round(G[p] / 8), kb = Math.round(B[p] / 8);
+          const key = (kr << 12) | (kg << 6) | kb;
+          let entry = colorBins.get(key);
+          if (!entry) { entry = { count: 0, borderCount: 0, sumR: 0, sumG: 0, sumB: 0 }; colorBins.set(key, entry); }
+          entry.count++;
+          if (lx <= 8 || lx >= w - 9 || ly <= 8 || ly >= h - 9) entry.borderCount++;
+          entry.sumR += R[p]; entry.sumG += G[p]; entry.sumB += B[p];
+        }
+      }
+    }
+    const bgColors = [{ r: 25, g: 22, b: 37 }];
+    for (const entry of colorBins.values()) {
+      const mr = entry.sumR / entry.count, mg = entry.sumG / entry.count, mb = entry.sumB / entry.count;
+      const sum = mr + mg + mb, sat = Math.max(mr, mg, mb) - Math.min(mr, mg, mb);
+      const isWarmBrown = mr > mg + 10 && mg >= mb - 3;
+      const minCnt = isWarmBrown ? 140 : 32;
+      if (sum >= 65 && sum < 260 && sat < 56 && (entry.count >= minCnt || (entry.borderCount >= 6 && entry.count >= 16 && !isWarmBrown))) {
+        bgColors.push({ r: mr, g: mg, b: mb });
+      }
+    }
+
+    const mask = new Uint8Array(w * h);
+    for (let ly = 2; ly < h - 2; ly++) {
+      for (let lx = 2; lx < w - 2; lx++) {
+        const p = ly * w + lx;
+        let minDist = Infinity;
+        for (const bg of bgColors) {
+          let d = Math.abs(R[p] - bg.r) + Math.abs(G[p] - bg.g) + Math.abs(B[p] - bg.b);
+          if (G[p] - B[p] > 6 && bg.b - bg.g > 4) {
+            d += ((G[p] - B[p]) - (bg.g - bg.b)) * 0.75;
+          }
+          if (d < minDist) minDist = d;
+        }
+        if (minDist > 28) mask[p] = 1;
+      }
+    }
+
+    const eroded = new Uint8Array(w * h);
+    for (let ly = 2; ly < h - 2; ly++) {
+      for (let lx = 2; lx < w - 2; lx++) {
+        const p = ly * w + lx;
+        if (!mask[p]) continue;
+        let n = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) n += mask[(ly + dy) * w + (lx + dx)];
+        if (n >= 5) eroded[p] = 1;
+      }
+    }
+    const visited = new Uint8Array(w * h);
+    const comps = [];
+    for (let ly = 2; ly < h - 2; ly++) {
+      for (let lx = 2; lx < w - 2; lx++) {
+        const p = ly * w + lx;
+        if (eroded[p] && !visited[p]) {
+          const q = [p]; visited[p] = 1;
+          const pts = []; let sx = 0, sy = 0;
+          while (q.length > 0) {
+            const cur = q.pop();
+            const cy = Math.floor(cur / w), cx = cur % w;
+            pts.push([cx, cy]); sx += cx; sy += cy;
+            for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+              const ny = cy + dy, nx = cx + dx;
+              if (ny >= 0 && ny < h && nx >= 0 && nx < w) {
+                const np = ny * w + nx;
+                if (eroded[np] && !visited[np]) { visited[np] = 1; q.push(np); }
+              }
+            }
+          }
+          if (pts.length >= 16) comps.push({ pts, count: pts.length, cx: sx / pts.length, cy: sy / pts.length });
+        }
+      }
+    }
+    comps.sort((a, b) => b.count - a.count);
+    if (!comps.length) return null;
+
+    const finalMask = new Uint8Array(w * h);
+    const main = comps[0];
+    const validPts = [];
+    for (const c of comps) {
+      const distMain = Math.hypot(c.cx - main.cx, c.cy - main.cy);
+      if (c === main || (c.count >= 25 && distMain <= 42)) {
+        for (const [px, py] of c.pts) {
+          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+            const ny = py + dy, nx = px + dx;
+            if (ny >= 0 && ny < h && nx >= 0 && nx < w) {
+              const np = ny * w + nx;
+              if (mask[np] && !finalMask[np]) { finalMask[np] = 1; validPts.push([nx, ny]); }
+            }
+          }
+        }
+      }
+    }
+    if (validPts.length < 10) return null;
+
+    let warmCnt = 0;
+    for (const [px, py] of validPts) {
+      const p = py * w + px;
+      if (R[p] > G[p] + 8 && R[p] > B[p] + 6) warmCnt++;
+    }
+    if (warmCnt >= validPts.length * 0.45) {
+      const prunedPts = [];
+      for (const [px, py] of validPts) {
+        const p = py * w + px;
+        const r = R[p], g = G[p], b = B[p];
+        const l = 0.299 * r + 0.587 * g + 0.114 * b;
+        if (l < 90 && (b > r + 2 || g > r + 4)) {
+          finalMask[p] = 0;
+        } else {
+          prunedPts.push([px, py]);
+        }
+      }
+      if (prunedPts.length >= 120) {
+        validPts.length = 0;
+        for (const pt of prunedPts) validPts.push(pt);
+      }
+    }
+
+    const grad = new Float32Array(w * h);
+    for (let ly = 1; ly < h - 1; ly++) for (let lx = 1; lx < w - 1; lx++) {
+      const p = ly * w + lx;
+      grad[p] = Math.abs(R[p + 1] - R[p - 1]) + Math.abs(G[p + 1] - G[p - 1]) + Math.abs(B[p + 1] - B[p - 1])
+              + Math.abs(R[p + w] - R[p - w]) + Math.abs(G[p + w] - G[p - w]) + Math.abs(B[p + w] - B[p - w]);
+    }
+
+    let cx = 0, cy = 0, lumSum = 0, lumSqSum = 0, satSum = 0, sumR = 0, sumG = 0, sumB = 0;
+    const colorHist = new Float32Array(8);
+    for (const [px, py] of validPts) {
+      cx += px; cy += py;
+      const p = py * w + px;
+      const r = R[p], g = G[p], b = B[p];
+      sumR += r; sumG += g; sumB += b;
+      const l = 0.299 * r + 0.587 * g + 0.114 * b;
+      const sat = Math.max(r, g, b) - Math.min(r, g, b);
+      lumSum += l; lumSqSum += l * l; satSum += sat;
+      if (sat < 22) { if (l > 95) colorHist[0]++; else colorHist[1]++; }
+      else if (b > r + 15 && b >= g) colorHist[2]++;
+      else if (b > g + 6 && r > g + 2 && r < b + 25) colorHist[3]++;
+      else if (r - g > 42 && r > b + 35) colorHist[4]++;
+      else if (r > g + 5 && r > b + 50 && g > b + 30) colorHist[5]++;
+      else if (r >= g && g >= b - 8) colorHist[6]++;
+      else colorHist[7]++;
+    }
+    for (let i = 0; i < 8; i++) colorHist[i] /= validPts.length;
+    cx /= validPts.length; cy /= validPts.length;
+    const meanLum = lumSum / validPts.length;
+    const stdLum = Math.max(10, Math.sqrt(Math.max(0, lumSqSum / validPts.length - meanLum * meanLum)));
+    const meanSat = satSum / validPts.length;
+    const meanR = sumR / validPts.length, meanG = sumG / validPts.length, meanB = sumB / validPts.length;
+
+    let m20 = 0, m02 = 0, m11 = 0, r2Sum = 0;
+    for (const [px, py] of validPts) {
+      const dx = px - cx, dy = py - cy;
+      m20 += dx * dx; m02 += dy * dy; m11 += dx * dy; r2Sum += dx * dx + dy * dy;
+    }
+    m20 /= validPts.length; m02 /= validPts.length; m11 /= validPts.length;
+    const rmsRadius = Math.max(2, Math.sqrt(r2Sum / validPts.length));
+    const trace = m20 + m02;
+    const det = Math.sqrt((m20 - m02) * (m20 - m02) + 4 * m11 * m11);
+    const l1 = Math.max(1, (trace + det) * 0.5), l2 = Math.max(1, (trace - det) * 0.5);
+    const elongation = Math.sqrt(l1 / l2);
+    const fillRatio = validPts.length / (rmsRadius * rmsRadius);
+
+    const NR = 12, NA = 36;
+    const polarMask = new Float32Array(NR * NA), polarLum = new Float32Array(NR * NA), polarGrad = new Float32Array(NR * NA);
+    for (let rIdx = 0; rIdx < NR; rIdx++) {
+      const rNorm = 0.15 + (rIdx / (NR - 1)) * 1.9;
+      const rad = rNorm * rmsRadius;
+      for (let aIdx = 0; aIdx < NA; aIdx++) {
+        const ang = (aIdx * 2 * Math.PI) / NA;
+        const px = Math.round(cx + rad * Math.cos(ang)), py = Math.round(cy + rad * Math.sin(ang));
+        let mVal = 0, lVal = 0, gVal = 0, cnt = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const sx = px + dx, sy = py + dy;
+          if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
+            const p = sy * w + sx, m = finalMask[p];
+            mVal += m;
+            if (m) {
+              const l = 0.299 * R[p] + 0.587 * G[p] + 0.114 * B[p];
+              lVal += (l - meanLum) / stdLum;
+              gVal += grad[p] / 100;
+            }
+            cnt++;
+          }
+        }
+        if (cnt > 0) {
+          polarMask[rIdx * NA + aIdx] = mVal / cnt;
+          polarLum[rIdx * NA + aIdx] = mVal > 0 ? lVal / mVal : 0;
+          polarGrad[rIdx * NA + aIdx] = mVal > 0 ? gVal / mVal : 0;
+        }
+      }
+    }
+    return {
+      cx: cx + x1, cy: cy + y1, x: Math.round(cx + x1), y: Math.round(cy + y1),
+      area: validPts.length, rmsRadius, elongation, fillRatio,
+      meanLum, stdLum, meanSat, meanR, meanG, meanB, colorHist, polarMask, polarLum, polarGrad
+    };
+  }
+
   /**
-   * Auto-solve Odd-One-Out Challenge ("แยกผิดประเภท").
+   * Auto-solve Odd-One-Out Challenge ("แยกผิดประเภท" / "กดอันที่ไม่เข้าพวก").
    * Identifies 5 horizontal items, computes pairwise distance matrix, and picks outlier.
    * Returns { slot: 1..5, x, y, confidence, margin, ranked }.
    */
@@ -1160,25 +1522,15 @@
     if (!boardData || !boardData.data) return null;
     const bw = boardData.width || 480;
     const rawBh = boardData.height || 330;
-    const bh = (bw === 480 && rawBh === 368) ? 330 : rawBh;
-    let bp = boardData.data;
-
-    if (rawBh === 368) {
-      bp = new Uint8ClampedArray(boardData.data);
-      for (let i = 0; i < bw * bh * 4; i += 4) {
-        const r = bp[i], g = bp[i + 1], b = bp[i + 2];
-        if (g > 130 && r < 70 && b > 80 && (g - r) > 70) {
-          bp[i] = 28; bp[i + 1] = 26; bp[i + 2] = 38;
-        }
-      }
-    }
+    const bh = (bw === 480 && (rawBh === 368 || rawBh === 398)) ? (rawBh - 38) : rawBh;
+    const bp = boardData.data;
 
     const sectionX = [[10, 106], [102, 198], [194, 290], [286, 382], [378, 474]];
     const items = [];
 
     for (let sIdx = 0; sIdx < 5; sIdx++) {
       const [x1, x2] = sectionX[sIdx];
-      const obj = extractBoxObject({ width: bw, height: bh, data: bp }, x1, 60, x2, bh - 25);
+      const obj = extractSlotObjectForOdd({ width: bw, height: bh, data: bp }, x1, 60, x2, bh - 25);
       const cx = obj ? Math.round(obj.cx) : Math.round((x1 + x2) / 2);
       const cy = obj ? Math.round(obj.cy) : 180;
       items.push({ slot: sIdx + 1, x: cx, y: cy, obj });
@@ -1191,8 +1543,21 @@
         if (i === j) {
           dist[i][j] = 0;
         } else if (items[i].obj && items[j].obj) {
-          const cmp = compareObjects(items[i].obj, items[j].obj);
-          dist[i][j] = isNaN(cmp.totalScore) ? 10 : cmp.totalScore;
+          const a = items[i].obj, b = items[j].obj;
+          const cmp = compareObjects(a, b);
+          if (isNaN(cmp.totalScore)) {
+            dist[i][j] = 10;
+          } else {
+            const lumBoardDiff = Math.abs(a.meanLum - b.meanLum) / 26;
+            const rgNormA = (a.meanR - a.meanG) / Math.max(30, a.meanLum);
+            const rgNormB = (b.meanR - b.meanG) / Math.max(30, b.meanLum);
+            const hueRatioDiff = Math.abs(rgNormA - rgNormB) * 1.8;
+            const warmA = a.colorHist[4] + a.colorHist[5] + a.colorHist[6];
+            const warmB = b.colorHist[4] + b.colorHist[5] + b.colorHist[6];
+            const splitWarmDiff = Math.abs((a.colorHist[4] + a.colorHist[5]) - (b.colorHist[4] + b.colorHist[5])) + Math.abs(a.colorHist[6] - b.colorHist[6]);
+            const warmRelief = (warmA >= 0.65 && warmB >= 0.65) ? Math.max(0, splitWarmDiff - Math.abs(warmA - warmB)) * 0.45 : 0;
+            dist[i][j] = cmp.totalScore + lumBoardDiff + hueRatioDiff - warmRelief;
+          }
         } else {
           dist[i][j] = 10;
         }
@@ -1349,8 +1714,11 @@
           }
         }
         const idx = rIdx * NA + aIdx;
-        pLum[idx] = sl / cnt;
-        pGrad[idx] = sg / cnt;
+        const mg = sg / cnt;
+        let ml = sl / cnt;
+        if (mg <= 24) ml = Math.min(ml, 25 + mg * 0.8);
+        pLum[idx] = ml;
+        pGrad[idx] = mg;
       }
     }
     return { lum: zNormalizePolarArray(pLum), grad: zNormalizePolarArray(pGrad) };
@@ -1366,13 +1734,17 @@
     let dialCy = Math.round(bh / 2);
     let dialImg = { width: bw, height: bh, data: bp };
 
-    if (bw > 260 || bh > 260) {
+    if (bw > 224 || bh > 224) {
       let minX = 9999, maxX = 0, minY = 9999, maxY = 0;
-      for (let y = Math.round(bh * 0.2); y < Math.round(bh * 0.76); y++) {
-        for (let x = Math.round(bw * 0.2); x < Math.round(bw * 0.8); x++) {
+      const startY = bh > 350 ? Math.round(bh * 0.2) : 4;
+      const endY = bh > 350 ? Math.round(bh * 0.76) : Math.min(bh - 4, 235);
+      const startX = bw > 500 ? Math.round(bw * 0.2) : 4;
+      const endX = (bw >= 420 && bh <= 300) ? Math.round(bw * 0.5) : (bw > 500 ? Math.round(bw * 0.8) : bw - 4);
+      for (let y = startY; y < endY; y++) {
+        for (let x = startX; x < endX; x++) {
           const i = (y * bw + x) * 4;
           const r = bp[i], g = bp[i + 1], b = bp[i + 2];
-          if (r > 180 && g > 155 && b < 130 && (r - b) > 55) {
+          if (r > 190 && g > 165 && b > 95 && b < 150 && (r - b) > 55) {
             if (x < minX) minX = x;
             if (x > maxX) maxX = x;
             if (y < minY) minY = y;
@@ -1417,6 +1789,15 @@
                 }
               }
               corr /= (NR * NA);
+              if (c === 289) {
+                let cuffOuter = 0, cuffInner = 0;
+                for (const ca of [17, 18, 19]) {
+                  const da = (ca + shift) % NA;
+                  cuffOuter += dp.grad[4 * NA + da];
+                  cuffInner += dp.grad[1 * NA + da];
+                }
+                corr += (cuffOuter - cuffInner) * 0.04;
+              }
               if (corr > shiftScores[shift]) {
                 shiftScores[shift] = corr;
               }

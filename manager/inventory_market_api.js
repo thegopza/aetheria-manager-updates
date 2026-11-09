@@ -613,7 +613,7 @@ function buildMarketCode(p) {
           active = active.filter(e => Number(e && (e.listingId ?? e.id)) !== ${targetCancelId});
         }
         if (${targetCollectId} > 0) {
-          deliveries = deliveries.filter(e => Number(e && (e.deliveryId ?? e.id)) !== ${targetCollectId});
+          deliveries = deliveries.filter(e => Number(e && (e.deliveryId ?? e.id)) !== ${targetCollectId} || Boolean(e && e.held));
         }
         window.__lastMarketMine = { active, closed, deliveries };
         window.__myMarketActiveCount = active.length;
@@ -2044,7 +2044,7 @@ function buildCancelUnderHoursProfileCode(underHours, autoCollect = true) {
     const cancelledIdSet = new Set(cancelledItems.map(x => Number(x.listingId)));
     const active = enrich(mine.active).filter(e => !cancelledIdSet.has(Number(e && (e.listingId ?? e.id))));
     const closed = enrich(mine.closed);
-    const deliveries = ${Boolean(autoCollect)} && cancelledItems.length > 0 ? [] : enrich(mine.deliveries);
+    const deliveries = ${Boolean(autoCollect)} && cancelledItems.length > 0 ? enrich(mine.deliveries).filter(e => Boolean(e && e.held)) : enrich(mine.deliveries);
     window.__lastMarketMine = { active, closed, deliveries };
     window.__myMarketActiveCount = active.length;
     const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
@@ -2217,7 +2217,7 @@ function buildCancelMatchedProfileCode({ query = '', mode = 'search', explicitId
     const actuallyCancelledSet = new Set(actuallyCancelled.map(x => Number(x.listingId)));
     const active = enrich(mine.active).filter(e => !actuallyCancelledSet.has(Number(e && (e.listingId ?? e.id))));
     const closed = enrich(mine.closed);
-    const deliveries = ${Boolean(autoCollect)} && actuallyCancelled.length > 0 ? [] : enrich(mine.deliveries);
+    const deliveries = ${Boolean(autoCollect)} && actuallyCancelled.length > 0 ? enrich(mine.deliveries).filter(e => Boolean(e && e.held)) : enrich(mine.deliveries);
     window.__lastMarketMine = { active, closed, deliveries };
     window.__myMarketActiveCount = active.length;
     const premium = Array.isArray(ch.buffs) && ch.buffs.some(b => b && b.skillId === 'ui:token');

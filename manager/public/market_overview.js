@@ -68,6 +68,29 @@
     return h >= 1 ? `${h} ชม.` : `${Math.max(1, Math.floor(ms / 60000))} นาที`;
   }
 
+  function isDeliveryHeld(d) {
+    if (!d || !d.held) return false;
+    if (d.heldUntil && Number(d.heldUntil) > 0) {
+      return Number(d.heldUntil) > Date.now();
+    }
+    return true;
+  }
+
+  function fmtHeldUntil(ts) {
+    const n = Number(ts) || 0;
+    if (!(n > 0)) return 'รอระบบเกมตรวจสอบ';
+    try {
+      return new Date(n).toLocaleString('th-TH', {
+        day: 'numeric',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (_) {
+      return new Date(n).toLocaleString();
+    }
+  }
+
   function notify(msg, type = 'info') {
     if (typeof showToast === 'function') {
       showToast(msg, type);
@@ -130,6 +153,10 @@
     let totalPendingZeny = 0;
     let totalPendingItems = 0;
     let charsWithDeliveries = 0;
+    let claimableDeliveries = 0;
+    let claimablePendingZeny = 0;
+    let heldDeliveries = 0;
+    let heldPendingZeny = 0;
 
     let autoSellEnabledCount = 0;
     let autoSellReadyChars = 0;
@@ -175,8 +202,16 @@
         charsWithDeliveries++;
         totalDeliveries += deliv.length;
         for (const d of deliv) {
-          totalPendingZeny += Number(d && d.zeny) || 0;
+          const z = Number(d && d.zeny) || 0;
+          totalPendingZeny += z;
           if (d && d.item) totalPendingItems++;
+          if (isDeliveryHeld(d)) {
+            heldDeliveries++;
+            heldPendingZeny += z;
+          } else {
+            claimableDeliveries++;
+            claimablePendingZeny += z;
+          }
         }
       }
       if (c.autoSell && c.autoSell.enabled) {
@@ -199,6 +234,10 @@
       totalPendingZeny,
       totalPendingItems,
       charsWithDeliveries,
+      claimableDeliveries,
+      claimablePendingZeny,
+      heldDeliveries,
+      heldPendingZeny,
       autoSellEnabledCount,
       autoSellReadyChars,
       totalReadyRules,
@@ -302,7 +341,8 @@
         </div>
         <div class="mko-stat-main gold">+${fmtZ(s.totalPendingZeny)}</div>
         <div class="mko-stat-sub">
-          <span>พัสดุรอรับทั้งหมด: <b>${s.totalDeliveries} รายการ</b>${s.totalPendingItems > 0 ? ` (ไอเทมคืน ${s.totalPendingItems} ชิ้น)` : ''}</span>
+          <span>พร้อมกดรับทันที: <b style="color:#4ade80;">${s.claimableDeliveries} รายการ (+${fmtZ(s.claimablePendingZeny)})</b>${s.totalPendingItems > 0 ? ` · ไอเทมคืน ${s.totalPendingItems} ชิ้น` : ''}</span>
+          ${s.heldDeliveries > 0 ? `<span style="color:#fbbf24;" title="เซิร์ฟเวอร์เกมกักเงินชั่วคราว (48–60 ชม.) สำหรับไอเทมที่ราคาขายตลาดสูงกว่าราคากลางร้านค้า NPC เช่น Elunium หรือการ์ด จะปลดล็อคให้กดรับได้เมื่อถึงเวลาที่กำหนด">⏳ รอเกมตรวจสอบ: <b>${s.heldDeliveries} รายการ (+${fmtZ(s.heldPendingZeny)})</b></span>` : ''}
         </div>
       </div>
 
@@ -323,8 +363,8 @@
           <span style="font-size:11px; color:#7dd3fc;">${state.loading ? '⏳ กำลังซิงค์...' : (state.lastUpdated ? 'ซิงค์ล่าสุดเมื่อสักครู่' : '')}</span>
         </div>
         <div class="mko-actions-btns">
-          <button type="button" class="mko-btn gold" data-mko-act="claim-all" ${s.onlineCount === 0 ? 'disabled' : ''} title="กดรับเงินจากการขายและไอเทมหมดเวลาของทุกจอที่ออนไลน์พร้อมกัน">
-            📥 รับเงิน/ของคืนทุกจอ ${s.totalDeliveries > 0 ? `(${s.totalDeliveries})` : ''}
+          <button type="button" class="mko-btn gold" data-mko-act="claim-all" ${s.onlineCount === 0 ? 'disabled' : ''} title="กดรับเงินจากการขายและไอเทมหมดเวลาของทุกจอที่ออนไลน์พร้อมกัน (รายการที่ติดเวลารอตรวจสอบจากเซิร์ฟเวอร์เกมจะรับได้เมื่อครบเวลา)">
+            📥 รับเงิน/ของคืนทุกจอ ${s.claimableDeliveries > 0 ? `(${s.claimableDeliveries})` : (s.heldDeliveries > 0 ? `(รอตรวจ ${s.heldDeliveries})` : '')}
           </button>
           <button type="button" class="mko-btn emerald" data-mko-act="autosell-all" ${s.onlineCount === 0 ? 'disabled' : ''} title="สั่งให้ทุกจอที่ออนไลน์ตรวจสอบกระเป๋าและนำไอเทมตามรายการ Auto-Sell ขึ้นวางขายทันที">
             ⚡ สั่งเช็ค Auto-Sell ทุกจอ
@@ -532,6 +572,10 @@
     const rs = as.ruleStates || {};
 
     const pendingZeny = deliv.reduce((sum, d) => sum + (Number(d && d.zeny) || 0), 0);
+    const claimableDeliv = deliv.filter(d => !isDeliveryHeld(d));
+    const heldDeliv = deliv.filter(isDeliveryHeld);
+    const claimableZeny = claimableDeliv.reduce((sum, d) => sum + (Number(d && d.zeny) || 0), 0);
+    const heldZeny = heldDeliv.reduce((sum, d) => sum + (Number(d && d.zeny) || 0), 0);
     const displayChar = c.charName ? `${c.charName}` : c.name;
     const subProfile = c.charName && c.charName !== c.name ? `(${c.name})` : '';
     const lvJobText = [c.job || '', c.baseLv ? `Lv.${c.baseLv}${c.jobLv ? '/' + c.jobLv : ''}` : ''].filter(Boolean).join(' ');
@@ -557,7 +601,9 @@
         const it = d.item || null;
         const did = d.deliveryId ?? d.id;
         const reason = String(d.reason || '').toLowerCase();
-        const badgeTxt = reason.includes('sale') || (d.zeny > 0 && !it)
+        const held = isDeliveryHeld(d);
+        const heldTimeStr = held ? fmtHeldUntil(d.heldUntil) : '';
+        const badgeTxt = reason.includes('sale') || reason.includes('sold') || (d.zeny > 0 && !it)
           ? '💰 ขายออกแล้ว!'
           : reason.includes('cancel')
           ? '🚫 ของยกเลิกขาย'
@@ -565,7 +611,7 @@
           ? '⏰ หมดเวลาขาย'
           : '📬 รอรับ';
         itemCards.push(`
-          <div class="mko-item-card delivery">
+          <div class="mko-item-card delivery" style="${held ? 'border-color:rgba(245,158,11,0.35); background:linear-gradient(135deg, rgba(30,41,59,0.85), rgba(120,53,15,0.22));' : ''}">
             <div class="mko-item-left">
               <div class="mko-item-icon" style="--rc:${it ? rarityCol(it.rarity) : '#facc15'};">
                 ${it && it.icon ? `<img src="${esc(iconUrl(it.icon))}" alt="">` : '💰'}
@@ -577,14 +623,21 @@
                 </div>
                 <div class="mko-item-sub">
                   ${d.zeny > 0 ? `<b style="color:#fde047;">+${fmtZ(d.zeny)}</b>` : ''}
+                  ${held ? `<span style="color:#fbbf24; font-weight:600;" title="ระบบของเซิร์ฟเวอร์เกมกักเงินตรวจสอบอัตโนมัติ เนื่องจากราคาขายในตลาดสูงกว่าราคากลางร้านค้า NPC มาก — จะปลดล็อคให้กดรับได้ตามวันเวลาที่แสดง">⏳ รอเกมตรวจสอบ · รับได้ ${esc(heldTimeStr)}</span>` : ''}
                   ${d.note ? `<span>${esc(d.note)}</span>` : ''}
                 </div>
               </div>
             </div>
             <div class="mko-item-right">
-              <button type="button" class="mko-btn gold sm" data-mko-collect="${esc(did)}" data-profile-id="${esc(c.id)}" ${c.online ? '' : 'disabled'}>
-                📥 กดรับ
-              </button>
+              ${held ? `
+                <button type="button" class="mko-btn sm" disabled style="opacity:0.75; cursor:not-allowed; border-color:rgba(245,158,11,0.45); color:#fde68a; background:rgba(120,53,15,0.35);" title="เซิร์ฟเวอร์เกมล็อคเวลารอตรวจสอบอัตโนมัติ (ราคาสูงกว่าราคาอ้างอิง NPC) — จะกดรับได้เมื่อถึงเวลา ${esc(heldTimeStr)}">
+                  ⏳ รอตรวจ (${esc(heldTimeStr)})
+                </button>
+              ` : `
+                <button type="button" class="mko-btn gold sm" data-mko-collect="${esc(did)}" data-profile-id="${esc(c.id)}" ${c.online ? '' : 'disabled'}>
+                  📥 กดรับ
+                </button>
+              `}
             </div>
           </div>
         `);
@@ -685,7 +738,8 @@
             <span class="mko-badge slots ${isFull ? 'full' : ''}">📦 วางขาย ${act.length}/${lim} ช่อง</span>
             ${state.searchQuery && matchedActOnChar.length > 0 ? `<span class="mko-badge slots full">🔍 ตรงที่ค้นหา ${matchedActOnChar.length} รายการ</span>` : ''}
             ${charUnderCount > 0 ? `<span class="mko-badge slots full">⚠️ เหลือ &lt; ${underHLabel} ชม. (${charUnderCount})</span>` : ''}
-            ${deliv.length > 0 ? `<span class="mko-badge deliv">📬 รอรับ ${deliv.length} รายการ${pendingZeny > 0 ? ` (+${fmtZ(pendingZeny)})` : ''}</span>` : ''}
+            ${claimableDeliv.length > 0 ? `<span class="mko-badge deliv">📬 พร้อมรับ ${claimableDeliv.length} รายการ${claimableZeny > 0 ? ` (+${fmtZ(claimableZeny)})` : ''}</span>` : ''}
+            ${heldDeliv.length > 0 ? `<span class="mko-badge" style="background:rgba(245,158,11,0.16); border-color:rgba(245,158,11,0.45); color:#fcd34d;" title="เซิร์ฟเวอร์เกมกักเงินชั่วคราวเนื่องจากราคาตลาดสูงกว่าราคากลาง NPC — จะรับได้เมื่อครบเวลาตรวจสอบ">⏳ รอเกมตรวจ ${heldDeliv.length} รายการ${heldZeny > 0 ? ` (+${fmtZ(heldZeny)})` : ''}</span>` : ''}
           </div>
 
           <div class="mko-char-controls">
@@ -720,11 +774,15 @@
               </button>
             ` : ''}
 
-            ${deliv.length > 0 ? `
-              <button type="button" class="mko-btn gold sm" data-mko-collect-profile="${esc(c.id)}" ${c.online ? '' : 'disabled'} title="กดรับเงินและไอเทมที่ค้างในตลาดของตัวละครนี้ทั้งหมด">
-                📥 รับเงิน/ของคืน (${deliv.length})
+            ${claimableDeliv.length > 0 ? `
+              <button type="button" class="mko-btn gold sm" data-mko-collect-profile="${esc(c.id)}" ${c.online ? '' : 'disabled'} title="กดรับเงินและไอเทมที่พร้อมรับของตัวละครนี้ทั้งหมด (${claimableDeliv.length} รายการ)">
+                📥 รับเงิน/ของคืน (${claimableDeliv.length})
               </button>
-            ` : ''}
+            ` : (heldDeliv.length > 0 ? `
+              <button type="button" class="mko-btn sm" disabled style="opacity:0.75; cursor:not-allowed; border-color:rgba(245,158,11,0.45); color:#fde68a; background:rgba(120,53,15,0.35);" title="ทุกรายการของตัวละครนี้ยังติดเวลารอตรวจสอบจากเซิร์ฟเวอร์เกม จะกดรับได้เมื่อถึงเวลาที่กำหนด">
+                ⏳ รอเกมตรวจสอบ (${heldDeliv.length})
+              </button>
+            ` : '')}
           </div>
         </div>
 
@@ -1069,11 +1127,16 @@
         });
         const data = await res.json();
         if (data && data.success) {
+          let heldRemain = 0;
           if (data.client) {
             const idx = state.clients.findIndex(c => c.id === profileId);
             if (idx >= 0) state.clients[idx] = data.client;
+            heldRemain = Array.isArray(data.client.deliveries) ? data.client.deliveries.filter(isDeliveryHeld).length : 0;
           }
-          notify('📥 รับเงินและไอเทมทั้งหมดของตัวละครนี้เรียบร้อยแล้ว!', 'success');
+          const heldMsg = heldRemain > 0
+            ? ` (ส่วนอีก ${heldRemain} รายการยังติดเวลารอตรวจสอบจากเซิร์ฟเวอร์เกม จะกดรับได้เมื่อถึงเวลาที่กำหนด)`
+            : '';
+          notify(`📥 รับเงินและไอเทมที่พร้อมรับของตัวละครนี้เรียบร้อยแล้ว!${heldMsg}`, 'success');
           updateMainTabBadges();
           renderAll();
         } else {
@@ -1324,7 +1387,11 @@
         const data = await res.json();
         if (data && data.success) {
           if (Array.isArray(data.clients)) state.clients = data.clients;
-          notify(`📥 สั่งรับเงินและของคืนจากตลาดกลางสำเร็จ ${data.claimedProfilesCount || 0} จอ!`, 'success');
+          const sAfter = computeSummary();
+          const heldMsg = sAfter.heldDeliveries > 0
+            ? ` (ส่วนอีก ${sAfter.heldDeliveries} รายการยังติดเวลารอตรวจสอบจากเซิร์ฟเวอร์เกม จะกดรับได้เมื่อถึงเวลาที่กำหนด)`
+            : '';
+          notify(`📥 สั่งรับเงินและของคืนที่พร้อมรับจากตลาดกลางสำเร็จ ${data.claimedProfilesCount || 0} จอ!${heldMsg}`, 'success');
           updateMainTabBadges();
           renderAll();
         } else {

@@ -2107,23 +2107,49 @@
 
     // 2. Deliveries (Claim box)
     const delivs = m.deliveries || [];
+    const isHeldDeliv = d => Boolean(d && d.held && (!d.heldUntil || Number(d.heldUntil) > Date.now()));
+    const fmtHeldTime = ts => {
+      const n = Number(ts) || 0;
+      if (!(n > 0)) return 'รอระบบเกมตรวจสอบ';
+      try {
+        return new Date(n).toLocaleString('th-TH', {
+          day: 'numeric',
+          month: 'short',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      } catch (_) {
+        return new Date(n).toLocaleString();
+      }
+    };
+    const claimableDelivs = delivs.filter(d => !isHeldDeliv(d));
+    const heldDelivs = delivs.filter(isHeldDeliv);
     const totalPendingZeny = delivs.reduce((s, d) => s + (Number(d.zeny) || 0), 0);
+    const claimablePendingZeny = claimableDelivs.reduce((s, d) => s + (Number(d.zeny) || 0), 0);
+    const heldPendingZeny = heldDelivs.reduce((s, d) => s + (Number(d.zeny) || 0), 0);
     const totalPendingItems = delivs.filter(d => d && d.item).length;
 
     if (delivBannerEl) {
       delivBannerEl.innerHTML = `
         <div class="im-claim-stats">
           <div class="im-claim-stat">
-            <span>💰 เงินรอรับจากการขาย</span>
-            <b class="zeny">+${fmtZ(totalPendingZeny)}</b>
+            <span>💰 เงินรอรับจากการขาย (พร้อมรับ)</span>
+            <b class="zeny">+${fmtZ(claimablePendingZeny)}</b>
           </div>
+          ${heldDelivs.length > 0 ? `
+          <div class="im-claim-stat" title="เซิร์ฟเวอร์เกมกักเงินชั่วคราวเนื่องจากราคาตลาดสูงกว่าราคากลางร้านค้า NPC — จะรับได้เมื่อครบเวลาตรวจสอบ">
+            <span style="color:#fbbf24;">⏳ รอเกมตรวจสอบ (${heldDelivs.length} รายการ)</span>
+            <b style="color:#fde68a;">+${fmtZ(heldPendingZeny)}</b>
+          </div>` : ''}
           <div class="im-claim-stat">
             <span>📦 ไอเทมรอรับเข้ากระเป๋า</span>
             <b>${totalPendingItems.toLocaleString()} รายการ</b>
           </div>
         </div>
-        <button type="button" class="im-btn primary lg" data-hub-act="collect-all" ${delivs.length ? '' : 'disabled'}>
-          📥 รับของและเงินทั้งหมด (${delivs.length})
+        <button type="button" class="im-btn primary lg" data-hub-act="collect-all" ${claimableDelivs.length ? '' : 'disabled'}>
+          ${claimableDelivs.length > 0
+            ? `📥 รับของและเงินที่พร้อมรับ (${claimableDelivs.length})`
+            : (heldDelivs.length > 0 ? `⏳ รอเกมตรวจสอบ (${heldDelivs.length})` : `📥 รับของและเงินทั้งหมด (0)`)}
         </button>`;
     }
 
@@ -2134,7 +2160,9 @@
         delivListEl.innerHTML = `<div class="im-hub-rows">${delivs.map(d => {
           const it = d.item || null;
           const r = String(d.reason || '').toLowerCase();
-          const reasonBadge = r.includes('sale') || (d.zeny > 0 && !it)
+          const held = isHeldDeliv(d);
+          const heldTimeStr = held ? fmtHeldTime(d.heldUntil) : '';
+          const reasonBadge = r.includes('sale') || r.includes('sold') || (d.zeny > 0 && !it)
             ? `<span class="im-st-badge sold">💰 เงินจากการขาย</span>`
             : r.includes('purchase') || r.includes('won')
             ? `<span class="im-st-badge buy">🛒 ซื้อสำเร็จ</span>`
@@ -2144,7 +2172,7 @@
             ? `<span class="im-st-badge exp">⏰ ของหมดเวลาขาย</span>`
             : `<span class="im-st-badge">📬 พัสดุตลาด</span>`;
           return `
-            <div class="im-hub-item-row">
+            <div class="im-hub-item-row" style="${held ? 'border-color:rgba(245,158,11,0.35); background:rgba(120,53,15,0.16);' : ''}">
               <div class="im-hub-item-left">
                 <div class="im-hub-icon" style="--rc:${it ? getRarityColor(it.rarity) : '#fbbf24'};">
                   ${it && it.icon ? `<img src="${esc(gameAssetUrl(it.icon))}" alt="">` : '💰'}
@@ -2156,12 +2184,15 @@
                     ${it && it.qty > 1 ? `<span class="im-hub-qty">x${Number(it.qty).toLocaleString()}</span>` : ''}
                     ${d.zeny > 0 ? `<b style="color:#fde047; font-family:var(--font-mono);">+${fmtZ(d.zeny)}</b>` : ''}
                   </div>
+                  ${held ? `<div style="font-size:12px; color:#fbbf24; font-weight:600; margin-top:2px;">⏳ ราคาสูงกว่าราคากลาง NPC — เงินรอตรวจสอบ รับได้ ${esc(heldTimeStr)}</div>` : ''}
                   <div class="im-muted">${esc(d.note || '')} ${d.createdAt ? `· ${timeAgo(d.createdAt)}` : ''}</div>
                   ${it && it.affixes && it.affixes.length ? renderItemStatGroups({ affixes: it.affixes }) : ''}
                 </div>
               </div>
               <div class="im-hub-item-right">
-                <button type="button" class="im-btn primary sm" data-hub-collect="${esc(d.deliveryId ?? d.id)}">📥 กดรับ</button>
+                ${held
+                  ? `<button type="button" class="im-btn sm" disabled style="opacity:0.75; cursor:not-allowed; border-color:rgba(245,158,11,0.45); color:#fde68a;">⏳ รอตรวจ (${esc(heldTimeStr)})</button>`
+                  : `<button type="button" class="im-btn primary sm" data-hub-collect="${esc(d.deliveryId ?? d.id)}">📥 กดรับ</button>`}
               </div>
             </div>`;
         }).join('')}</div>`;

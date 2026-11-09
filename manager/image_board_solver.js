@@ -1051,13 +1051,15 @@
     const topWood = topObj.colorHist[4] + topObj.colorHist[5] + topObj.colorHist[6];
     const topR45 = topObj.colorHist[4] + topObj.colorHist[5];
     const isTopClub = topWood >= 0.65 && topGray <= 0.18 && topObj.elongation >= 4.4 && topObj.rmsRadius >= 16.8;
-    const isTopHammer = topGray >= 0.35 && topWood >= 0.15 && topObj.meanSat <= 31 && topObj.meanLum <= 98 && topR45 <= 0.15 && topObj.colorHist[5] <= 0.04;
+    const isTopHammer = topGray >= 0.35 && topWood >= 0.15 && topObj.meanSat <= 31 && topObj.meanLum <= 105 && topR45 <= 0.15 && topObj.colorHist[5] <= 0.04;
     const isTopAxe = !isTopHammer && topGray >= 0.30 && topGray <= 0.53 && topWood >= 0.45 && topR45 >= 0.18 && topObj.elongation >= 2.95;
-    const isTopWhip = topGray <= 0.16 && topWood >= 0.70 && topR45 <= 0.12 && topObj.meanLum <= 60 && topObj.elongation <= 2.3;
-    const isTopBoots = topWood >= 0.70 && topGray <= 0.22 && topR45 <= 0.16 && topObj.elongation >= 1.30 && topObj.elongation <= 1.65 && topObj.meanLum >= 68;
+    const isTopWhip = topGray <= 0.16 && (topWood >= 0.70 || (topObj.colorHist[3] + topObj.colorHist[7]) >= 0.40) && topR45 <= 0.12 && topObj.meanLum <= 60 && topObj.elongation >= 1.50 && topObj.elongation <= 2.3 && topObj.fillRatio <= 3.55;
+    const isTopBoots = !isTopWhip && topWood >= 0.70 && topGray <= 0.22 && topR45 <= 0.22 && topObj.elongation >= 1.30 && topObj.elongation <= 1.65 && topObj.meanLum >= 54 && topObj.fillRatio >= 3.65;
     const isTopBook = topObj.area >= 1320 && topObj.elongation <= 1.48 && topGray <= 0.22 && topWood <= 0.35;
-    const isTopKatar = !isTopAxe && topObj.colorHist[0] >= 0.22 && topObj.colorHist[5] >= 0.18 && topObj.meanLum >= 95 && topObj.elongation >= 2.0 && topObj.elongation <= 2.85 && topObj.fillRatio >= 2.65;
-    const isTopSpear = topObj.elongation >= 5.8 && topObj.rmsRadius <= 14.5 && topObj.area <= 290 && topObj.fillRatio <= 1.42;
+    const isTopKatar = !isTopAxe && topObj.colorHist[0] >= 0.19 && topObj.colorHist[5] >= 0.18 && topObj.meanLum >= 95 && topObj.elongation >= 1.95 && topObj.elongation <= 2.85 && topObj.fillRatio >= 2.65;
+    const isTopSpear = topObj.elongation >= 5.8 && topObj.rmsRadius <= 14.55 && topObj.area <= 290 && topObj.fillRatio <= 1.42;
+    const isTopNecklace = topGray <= 0.08 && topWood >= 0.85 && topObj.colorHist[4] >= 0.24 && topObj.colorHist[5] >= 0.15 && topObj.meanSat >= 60 && topObj.area >= 450 && topObj.area <= 650 && topObj.elongation <= 1.85;
+    const isTopHat = (topObj.colorHist[2] + topObj.colorHist[3]) >= 0.25 && topObj.area >= 650 && topObj.area <= 1050 && topObj.elongation <= 1.85 && topObj.meanSat <= 50;
 
     const bW = Math.max(54, Math.min(68, Math.round(topObj.rmsRadius * 3.2))), bH = bW;
     const step = 7;
@@ -1082,15 +1084,22 @@
           itemPenalty = 1.30;
         } else {
           let isHalfBootSlice = false;
+          let rec = null;
           if (Math.hypot(obj.cx - x, obj.cy - y) >= 13) {
-            const rec = extractBoxObject({ width: bw, height: bh, data: bp }, obj.cx - bW / 2, obj.cy - bH / 2, obj.cx + bW / 2, obj.cy + bH / 2);
-            if (rec && rec.area >= obj.area * 1.45 && rec.elongation >= 1.425 && rec.elongation <= 2.1 && rec.fillRatio >= 2.7) {
-              isHalfBootSlice = true;
+            rec = extractBoxObject({ width: bw, height: bh, data: bp }, obj.cx - bW / 2, obj.cy - bH / 2, obj.cx + bW / 2, obj.cy + bH / 2);
+            if (rec) {
+              if (rec.area >= obj.area * 1.45 && rec.elongation >= 1.425 && rec.elongation <= 2.15 && rec.fillRatio >= 2.7) {
+                isHalfBootSlice = true;
+              } else if (rec.area >= 780 && rec.elongation <= 2.20 && rec.fillRatio >= 3.40) {
+                isHalfBootSlice = true;
+              } else if (rec.area >= obj.area * 1.50 && rec.elongation <= 1.65 && obj.colorHist[5] <= 0.05 && obj.colorHist[6] >= 0.70 && obj.meanLum < 72) {
+                isHalfBootSlice = true;
+              }
             }
           }
           if (isHalfBootSlice) {
             itemPenalty = 1.30;
-          } else if (slotWood >= 0.58 && slotGray <= 0.26 && obj.elongation >= 2.7 && (obj.rmsRadius < topObj.rmsRadius * 0.85 || isWarmRec)) {
+          } else if (((slotWood >= 0.58 && slotGray <= 0.26) || (rec && rec.elongation >= 2.25 && rec.fillRatio <= 2.95 && slotGray <= 0.28 && obj.colorHist[4] >= 0.10)) && obj.elongation >= 2.7 && (obj.rmsRadius < topObj.rmsRadius * 0.85 || isWarmRec)) {
             itemPenalty = (topGray < 0.05 && obj.colorHist[4] >= 0.20) ? -0.85 : -0.75;
           }
         }
@@ -1103,15 +1112,40 @@
         else if (slotWood >= 0.70 && slotGray <= 0.12) itemPenalty = 1.10;
       } else if (isTopWhip) {
         if (slotGray >= 0.35 || obj.elongation >= 2.6 || obj.meanLum >= 66 || obj.colorHist[5] >= 0.11) itemPenalty = 1.00;
+        else if (obj.meanLum <= 58 && obj.fillRatio <= 3.55 && slotGray <= 0.16) itemPenalty = -0.50;
       } else if (isTopBoots) {
         if (obj.elongation >= 2.4 || obj.elongation <= 1.21 || obj.meanLum <= 55 || slotWood <= 0.45 || obj.colorHist[3] >= 0.08 || (slotGray >= 0.45 && obj.meanSat <= 28)) itemPenalty = 0.90;
-        else if (slotWood >= 0.50 && slotGray <= 0.39 && slotR45 <= 0.18 && obj.elongation <= 1.85 && obj.meanLum >= 50 && obj.meanLum <= 90 && obj.rmsRadius >= 14.8) itemPenalty = -0.55;
+        else if (slotWood >= 0.50 && slotGray <= 0.39 && slotR45 <= 0.18 && obj.elongation <= 1.85 && obj.meanLum >= 50 && obj.meanLum <= 92 && obj.rmsRadius >= 14.8) itemPenalty = -0.55;
       } else if (isTopBook) {
         if (slotGray >= 0.28 || slotWood >= 0.65) itemPenalty = 0.90;
       } else if (isTopKatar) {
-        if (slotGray < 0.22 || slotGray > 0.57 || slotWood < 0.36 || slotWood > 0.80 || obj.meanSat < 30 || obj.meanSat > 58 || obj.fillRatio < 2.75 || obj.fillRatio > 3.90 || obj.elongation < 1.55 || obj.colorHist[0] < 0.12 || obj.meanLum < 88 || (obj.colorHist[4] >= 0.18 && obj.colorHist[5] <= 0.07)) itemPenalty = 1.00;
+        if (slotGray < 0.22 || slotGray > 0.57 || slotWood < 0.36 || slotWood > 0.80 || obj.meanSat < 32 || obj.meanSat > 58 || obj.fillRatio < 2.75 || obj.fillRatio > 3.90 || obj.elongation < 1.55 || obj.colorHist[0] < 0.14 || obj.meanLum < 86 || (obj.colorHist[4] >= 0.18 && obj.colorHist[5] <= 0.07)) itemPenalty = 1.00;
+        else if (slotGray >= 0.22 && slotGray <= 0.45 && obj.colorHist[0] >= 0.18 && (obj.colorHist[5] >= 0.18 || obj.colorHist[4] >= 0.20) && obj.meanSat >= 35) itemPenalty = -0.35;
       } else if (isTopSpear) {
-        if (obj.fillRatio >= 1.44 || obj.area >= 305 || obj.area < 150 || obj.rmsRadius >= 15.2 || obj.rmsRadius < 10.5 || obj.colorHist[4] >= 0.35 || obj.elongation < 7.45 || obj.colorHist[3] >= 0.20 || slotWood < 0.30 || obj.meanSat < 26) itemPenalty = 1.10;
+        if (obj.area >= 305 || obj.area < 150 || obj.rmsRadius >= 15.2 || obj.rmsRadius < 10.5 || obj.colorHist[4] >= 0.35 || obj.elongation < 6.0 || obj.colorHist[3] >= 0.20 || slotWood < 0.30 || obj.meanSat < 26) {
+          itemPenalty = 1.10;
+        } else if (obj.elongation < 7.45 || obj.fillRatio >= 1.44) {
+          const r64 = extractBoxObject({ width: bw, height: bh, data: bp }, obj.cx - 32, obj.cy - 32, obj.cx + 32, obj.cy + 32);
+          if (r64 && r64.area <= 290 && r64.elongation >= 6.0 && r64.fillRatio <= 1.50) {
+            itemPenalty = -0.85;
+          } else {
+            itemPenalty = 1.10;
+          }
+        } else {
+          const r64 = extractBoxObject({ width: bw, height: bh, data: bp }, obj.cx - 32, obj.cy - 32, obj.cx + 32, obj.cy + 32);
+          if (r64 && r64.area <= 290 && r64.elongation >= 7.5 && r64.fillRatio <= 1.35) {
+            itemPenalty = -0.45;
+          }
+        }
+      } else if (isTopNecklace) {
+        if (slotGray >= 0.26 || obj.colorHist[4] <= 0.18 || obj.colorHist[4] >= 0.48 || obj.meanSat <= 51 || obj.elongation >= 2.85 || (obj.colorHist[5] >= 0.45 && obj.colorHist[4] <= 0.20)) {
+          itemPenalty = 1.00;
+        } else if (obj.rmsRadius < 10.5 && obj.area >= 300 && obj.meanSat >= 75 && slotGray <= 0.04 && obj.colorHist[4] >= 0.30 && obj.colorHist[5] >= 0.30) {
+          itemPenalty = -1.45;
+        }
+      } else if (isTopHat) {
+        if ((obj.colorHist[2] + obj.colorHist[3]) < 0.15 || obj.meanSat >= 52 || slotGray >= 0.32) itemPenalty = 1.00;
+        else if ((obj.colorHist[2] + obj.colorHist[3]) >= 0.25 && obj.area >= 700 && obj.elongation <= 1.85) itemPenalty = -0.55;
       }
 
       const cmp = compareObjects(topObj, obj);
@@ -1131,7 +1165,7 @@
             if (0.299 * bp[idx] + 0.587 * bp[idx + 1] + 0.114 * bp[idx + 2] > 42) fgCount++;
           }
         }
-        if (fgCount < 16) continue;
+        if (fgCount < (isTopSpear ? 9 : 16)) continue;
 
         const obj = extractBoxObject({ width: bw, height: bh, data: bp }, x - bW / 2, y - bH / 2, x + bW / 2, y + bH / 2);
         evalObj(obj, x, y, false);
@@ -1143,9 +1177,10 @@
     }
 
     candidates.sort((a, b) => a.score - b.score);
+    const dedupDist = isTopSpear ? 31 : 25;
     const unique = [];
     for (const c of candidates) {
-      if (!unique.some(u => Math.hypot(u.x - c.x, u.y - c.y) < 25)) unique.push(c);
+      if (!unique.some(u => Math.hypot(u.x - c.x, u.y - c.y) < dedupDist)) unique.push(c);
     }
 
     const scores = unique.map(u => +u.score.toFixed(2));

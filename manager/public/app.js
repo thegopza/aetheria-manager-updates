@@ -6152,6 +6152,11 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                         <b>Require Arrow (เช็ค & ซื้ออัตโนมัติ)</b>
                     </label>
 
+                    <label class="p-check-box" style="color: #34d399;">
+                        <input type="checkbox" id="p-archer-smart" ${archer.smartArrow !== false ? "checked" : ""}>
+                        <b>🧠 Smart Arrow (เลือกธนูตามธาตุมอน & ทิ้งธนูเก่า)</b>
+                    </label>
+
                     <div>
                         <span style="font-size: 10px; color: #94a3b8;">ชนิดลูกธนู:</span>
                         <select id="p-archer-type" class="p-select">
@@ -7255,6 +7260,7 @@ async function openWebBotHUD(profileId) {
     };
   };
   bindArcherField('#p-archer-req', el => ({ requireArrow: !!el.checked }));
+  bindArcherField('#p-archer-smart', el => ({ smartArrow: !!el.checked }));
   bindArcherField('#p-archer-type', el => ({ arrowType: parseInt(el.value || '90030', 10) }));
   bindArcherField('#p-archer-qty', el => ({ arrowBuyQty: parseInt(el.value || '5000', 10) }));
   bindArcherField('#p-archer-threshold', el => ({ ammoThreshold: parseInt(el.value || '50', 10) }));
@@ -8037,6 +8043,11 @@ function populateWebHudData(profileId, data) {
 
   const reqArrow = hud.querySelector('#p-archer-req');
   if (reqArrow && document.activeElement !== reqArrow) reqArrow.checked = !!archer.requireArrow;
+
+  const smartArrow = hud.querySelector('#p-archer-smart');
+  if (smartArrow && archer.smartArrow !== undefined && document.activeElement !== smartArrow) {
+    smartArrow.checked = archer.smartArrow !== false;
+  }
 
   const autoEquipArrow = hud.querySelector('#p-archer-auto-equip');
   if (autoEquipArrow && archer.autoEquipArrow !== undefined && document.activeElement !== autoEquipArrow) {
@@ -8963,6 +8974,7 @@ function planMapLabel(value) {
 
 // Same arrow list as the in-game HUD (ธนู tab)
 const PLAN_ARROW_OPTIONS = [
+  { value: 0, label: '🧠 Smart Arrow (เลือกธนูชนะธาตุตามแมพ + ทิ้งธนูเก่า)' },
   { value: 90030, label: 'Arrow (ธรรมดา - 1z)' },
   { value: 90031, label: 'Fire Arrow (ไฟ - 3z)' },
   { value: 90032, label: 'Crystal Arrow (น้ำ - 3z)' },
@@ -8973,6 +8985,7 @@ const PLAN_ARROW_OPTIONS = [
   { value: 90037, label: 'Shadow Arrow (เงา - 3z)' }
 ];
 function planArrowLabel(value) {
+  if (Number(value) === 0) return 'Smart Arrow (ตามธาตุมอน)';
   const a = PLAN_ARROW_OPTIONS.find(x => x.value === Number(value));
   return a ? a.label : 'Arrow';
 }
@@ -9427,8 +9440,8 @@ function renderActionNodeHtml(trigIdx, actIdx, act) {
           ${on ? `
           <div class="pe-fields pe-fields-3">
             <label>ชนิดลูกธนู
-              <select class="form-select" onchange="updateActionField(${trigIdx}, ${actIdx}, 'arrowType', Number(this.value))">
-                ${PLAN_ARROW_OPTIONS.map(a => `<option value="${a.value}" ${Number(act.arrowType || 90030) === a.value ? 'selected' : ''}>${a.label}</option>`).join('')}
+              <select class="form-select" onchange="updateActionField(${trigIdx}, ${actIdx}, 'arrowType', Number(this.value)); updateActionField(${trigIdx}, ${actIdx}, 'smartArrow', Number(this.value) === 0)">
+                ${PLAN_ARROW_OPTIONS.map(a => `<option value="${a.value}" ${Number(act.smartArrow ? 0 : (act.arrowType !== undefined ? act.arrowType : 0)) === a.value ? 'selected' : ''}>${a.label}</option>`).join('')}
               </select>
             </label>
             <label>ซื้อให้ครบ (ดอก)
@@ -9530,7 +9543,7 @@ function addActionToTrigger(trigIdx, actionType) {
       refreshAutoJobUi();
     }
   } else if (actionType === 'set_arrow') {
-    Object.assign(newAction, { requireArrow: true, arrowType: 90030, arrowBuyQty: 200, ammoThreshold: 50 });
+    Object.assign(newAction, { requireArrow: true, smartArrow: true, arrowType: 0, arrowBuyQty: 5000, ammoThreshold: 50 });
   } else if (actionType === 'weight_scroll') {
     Object.assign(newAction, { qty: 10, maxPrice: 0 });
   }

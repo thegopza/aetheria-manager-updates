@@ -77,17 +77,19 @@
   const itemById = id => (items || []).find(i => i.id === id);
 
   const cardById = id => cards.find(c => c.id === id);
-  // what the steps plan for a slot: last item + highest refine + its cards
+  const SOCKETABLE_SLOTS = ['main-hand', 'head-upper', 'head-middle', 'head-lower', 'accessory-left', 'accessory-right'];
+  // what the steps plan for a slot: last item + highest refine + socket step + its cards
   function slotPlan(slotKey) {
     const steps = gp().steps;
-    let equip = null, refine = 0, cardCount = 0;
+    let equip = null, refine = 0, cardCount = 0, socketed = false;
     steps.forEach(st => {
       if (st.slot !== slotKey) return;
-      if (st.kind === 'equip') { equip = st; refine = 0; cardCount = 0; }
+      if (st.kind === 'equip') { equip = st; refine = 0; cardCount = 0; socketed = false; }
+      else if (st.kind === 'socket' && equip && st.itemName === equip.itemName) socketed = true;
       else if (st.kind === 'refine' && equip && st.itemName === equip.itemName) refine = Math.max(refine, st.toLevel || 0);
       else if (st.kind === 'card' && equip && st.itemName === equip.itemName) cardCount++;
     });
-    return { equip, refine, cardCount };
+    return { equip, refine, cardCount, socketed };
   }
 
   function ensureModal() {
@@ -101,7 +103,7 @@
         <header class="gb-head">
           <div>
             <h3>🛡️ เซ็ตอุปกรณ์ <span class="gb-plan-name"></span></h3>
-            <small>คลิกช่องสวมใส่ / เจม → เลือกไอเทม → ใส่เงินและเลเวลที่ต้องถึงก่อน · <b>+</b> = ตีบวก · <b>🃏</b> = ใส่การ์ด (ไอเทมที่มีรู) · บอททำทีละรายการตามลำดับ · เจม % สูงกว่าที่ตั้งก็นับว่าผ่าน</small>
+            <small>คลิกช่องสวมใส่ / เจม → เลือกไอเทม → ใส่เงินและเลเวลที่ต้องถึงก่อน · <b>🕳️</b> = เจาะรู · <b>+</b> = ตีบวก · <b>🃏</b> = ใส่การ์ด · บอททำทีละรายการตามลำดับ · เจม % สูงกว่าที่ตั้งก็นับว่าผ่าน</small>
           </div>
           <button type="button" class="gb-x" data-gb="cancel" aria-label="ปิด">✕</button>
         </header>
@@ -182,13 +184,16 @@
         const isFlex = !!(sp.equip && sp.equip.flexSlot);
         const slotColor = it ? (RARITY[it.rarity] || '#e2e8f0') : (isFlex ? (RARITY[sp.equip.minRarity] || '#38bdf8') : '');
         const hasSlottedInSlot = items && items.some(x => s.types.includes(x.slotType) && x.slots > 0);
-        const maxSlots = it ? (Number(it.slots) || 0) : (isFlex && hasSlottedInSlot ? Math.max(Number(sp.equip.minSlots) || 0, 1) : 0);
+        const baseSlots = it ? (Number(it.slots) || 0) : (isFlex && hasSlottedInSlot ? Math.max(Number(sp.equip.minSlots) || 0, 1) : 0);
+        const maxSlots = Math.max(baseSlots, sp.socketed ? 1 : 0);
+        const canSocket = Boolean(sp.equip && SOCKETABLE_SLOTS.includes(s.key));
         return `<div class="gb-slot ${slotSel === s.key ? 'active' : ''} ${sp.equip ? 'filled' : ''}" data-slot="${s.key}">
           <div class="gb-slot-icon">${it && it.icon ? `<img src="${esc(it.icon)}" alt="">` : (isFlex ? '<span style="font-size:15px">⚡</span>' : '')}</div>
           <div class="gb-slot-text">
             <small>${esc(s.label)}</small>
-            <b style="${slotColor ? 'color:' + slotColor : ''}">${sp.equip ? esc(sp.equip.itemName) + (sp.refine ? ` <span class="gb-ref">+${sp.refine}</span>` : '') + (sp.cardCount ? ` <span class="gb-cardn">🃏${sp.cardCount}</span>` : '') : 'ว่าง'}</b>
+            <b style="${slotColor ? 'color:' + slotColor : ''}">${sp.equip ? esc(sp.equip.itemName) + (sp.socketed ? ' <span class="gb-ref" style="color:#d8b4fe;">🕳️[1]</span>' : '') + (sp.refine ? ` <span class="gb-ref">+${sp.refine}</span>` : '') + (sp.cardCount ? ` <span class="gb-cardn">🃏${sp.cardCount}</span>` : '') : 'ว่าง'}</b>
           </div>
+          ${canSocket ? `<button type="button" class="gb-card-btn ${sp.socketed ? 'on' : ''}" data-gb="socket-toggle" data-slot="${s.key}" title="${sp.socketed ? 'ยกเลิกรายการเจาะรูการ์ด' : 'เพิ่มรายการเจาะรูการ์ด [1] (สำหรับอุปกรณ์ที่ยังไม่มีรู บอทจะไปเจาะรูที่ NPC ให้ก่อนใส่การ์ด)'}" style="${sp.socketed ? 'border-color:#a855f7;color:#e9d5ff;background:rgba(168,85,247,0.22);' : ''}">🕳️${sp.socketed ? ' [1]' : ''}</button>` : ''}
           ${sp.equip && maxSlots > 0 ? `<button type="button" class="gb-card-btn ${slotSel === s.key && pickMode === 'card' ? 'on' : ''}" data-gb="card-mode" data-slot="${s.key}" title="ใส่การ์ดใน ${esc(sp.equip.itemName)} (${sp.cardCount}/${maxSlots} ช่อง)">🃏 ${sp.cardCount}/${maxSlots}</button>` : ''}
           ${sp.equip && (!it || it.refineable) ? `<div class="gb-slot-ref"><button type="button" data-gb="ref-minus" data-slot="${s.key}" title="เอาขั้นตีบวกล่าสุดออก" ${sp.refine ? '' : 'disabled'}>−</button><button type="button" data-gb="ref-plus" data-slot="${s.key}" title="เพิ่มรายการตีบวก +${sp.refine + 1}" ${sp.refine >= 10 ? 'disabled' : ''}>+</button></div>` : ''}
         </div>`;
@@ -292,7 +297,7 @@
     const isFlex = !!(sp.equip && sp.equip.flexSlot);
     if (!sp.equip || (!it && !isFlex)) { pickMode = 'item'; return renderPicker(); }
     const targetSlotType = it ? it.slotType : (sp.equip.slotType || (slot && slot.types[0]) || '');
-    const maxSlots = it ? (Number(it.slots) || 0) : Math.max(Number(sp.equip.minSlots) || 0, 1);
+    const maxSlots = Math.max(it ? (Number(it.slots) || 0) : Math.max(Number(sp.equip.minSlots) || 0, 1), sp.socketed ? 1 : 0);
     m.querySelector('.gb-picker-title').textContent = `🃏 เลือกการ์ดใส่ ${sp.equip.itemName} (${sp.cardCount}/${maxSlots} ช่อง)`;
     const q = query.trim().toLowerCase();
     const list = cards.filter(c => (c.cardSlotTypes || []).includes(targetSlotType))
@@ -313,6 +318,7 @@
   }
 
   function stepText(st) {
+    if (st.kind === 'socket') return `🕳️ เจาะรูการ์ด <b>${esc(st.itemName)}</b> → <span class="gb-ref">[${Number(st.toSlots) || 1}]</span>`;
     if (st.kind === 'card') return `🃏 ใส่การ์ด <b>${esc(st.cardName)}</b> ใน <b>${esc(st.itemName)}</b>`;
     if (st.kind === 'refine') return `🔨 ตีบวก <b>${esc(st.itemName)}</b> → <span class="gb-ref">+${Number(st.toLevel) || 0}</span>`;
     if (st.flexSlot) return `⚡ ซื้อ / สวมแบบยืดหยุ่น <b>${esc(st.itemName)}</b>`;
@@ -334,8 +340,8 @@
     box.innerHTML = steps.map((st, i) => {
       const it = st.kind === 'card' ? cardById(st.cardId) : st.itemId ? itemById(st.itemId) : (items || []).find(x => x.name === st.itemName);
       const slot = SLOTS.find(s => s.key === st.slot);
-      // a refine step needs its item equipped by an earlier step
-      const orphan = (st.kind === 'refine' || st.kind === 'card') && !steps.slice(0, i).some(x => x.kind === 'equip' && x.slot === st.slot && x.itemName === st.itemName);
+      // a refine/socket/card step needs its item equipped by an earlier step
+      const orphan = (st.kind === 'refine' || st.kind === 'socket' || st.kind === 'card') && !steps.slice(0, i).some(x => x.kind === 'equip' && x.slot === st.slot && x.itemName === st.itemName);
       return `<div class="gb-step ${focusStepId === st.id ? 'flash' : ''} ${orphan ? 'warn' : ''}" data-id="${esc(st.id)}">
         <span class="gb-step-no">${i + 1}</span>
         <div class="gb-step-icon">${it && it.icon ? `<img src="${esc(it.icon)}" alt="">` : (st.flexSlot ? '<span style="font-size:16px">⚡</span>' : '')}</div>
@@ -345,6 +351,8 @@
             <select class="gb-opt-type" data-id="${esc(st.id)}"><option value="">+ เพิ่มออปชั่น</option>${OPTION_TYPES.map(o => `<option value="${o}">${o}</option>`).join('')}</select></div>` : ''}
           ${st.kind === 'equip' && st.flexSlot ? `<small class="gb-muted" style="color:#7dd3fc;">⚡ เลือกชิ้นไหนก็ได้ในช่องนี้ที่อาชีพในแผนใส่ได้ · ระดับ ${esc(RARITY_TH[st.minRarity] || st.minRarity || 'หายาก')} ขึ้นไป${st.minSlots ? ` · ต้องมีรูการ์ด [${st.minSlots}]` : ' (ถ้ามหากาพย์ถูกกว่าจะซื้อมหากาพย์ให้)'}</small>` : ''}
           ${st.kind === 'equip' && /^gem-/.test(st.slot || '') && /\d+(?:\.\d+)?\s*%?$/.test(st.itemName || '') ? `<small class="gb-muted" style="color:#7dd3fc;">💎 ขั้นต่ำตามชื่อที่เลือก — ถ้าเจมชนิดเดียวกันที่ % สูงกว่าในตลาดราคาถูกกว่าหรือเท่ากัน บอทจะซื้ออัน % สูงกว่าให้อัตโนมัติ</small>` : ''}
+          ${st.kind === 'socket' ? `<label class="gb-step-bless"><input type="checkbox" data-gb="charm" data-id="${esc(st.id)}" ${st.useCharm !== false ? 'checked' : ''}> ใช้ Socket Charm (ยันต์เจาะรู +5%) ถ้ามีในกระเป๋า</label>` : ''}
+          ${st.kind === 'socket' ? `<small class="gb-muted" style="color:#d8b4fe;">${st.slot === 'main-hand' ? '🕳️ เจาะช่องอาวุธที่ Blacksmith Enok (ใช้ Oridecon + อาวุธวัตถุดิบ +0 [0] ชื่อเดียวกัน 1–2 ชิ้น · หากขาดจะหาซื้อจากตลาดในงบซื้อไม่เกิน ≤)' : (st.slot === 'accessory-left' || st.slot === 'accessory-right') ? '🕳️ เจาะช่องประดับม่วงที่ ลักกี้ลูลู่ (Auger Socket) · ใช้สว่านรูนบัวหลวง + Elunium + Oridecon' : '🕳️ เจาะช่องการ์ดหมวกที่ ลักกี้ลูลู่ (Auger Socket) · ใช้ Auger Of Spirit + Elunium'}</small>` : ''}
           ${st.kind === 'refine' ? `<label class="gb-step-bless"><input type="checkbox" data-gb="bless" data-id="${esc(st.id)}" ${st.blessing !== false ? 'checked' : ''}> ใช้ Blacksmith Blessing เฉพาะขั้นสูง (+8 ถึง +10 หรือขั้นที่เสี่ยงแตก · ไม่เปลือง Blessing กับ +1 ถึง +7)</label>` : ''}
           ${st.kind === 'refine' && st.toLevel > 4 ? `<small class="gb-warn-text">${['armor','garment','boots','head-upper','head-middle','head-lower','off-hand','gloves','legs'].includes(st.slot) && st.toLevel <= 7 ? '🛡️ ชุดเกราะ/โล่/ผ้าคลุม/รองเท้า/หมวก ตีบวกด้วย Elunium ถึง +7 โอกาสแตก 0% (พลาดอาจลดขั้น แต่ของไม่มีวันหาย)' : `⚠️ เกิน +4 ตีพลาดอาจลดขั้น (ไม่แตกที่ +5..+7)${st.toLevel >= 10 ? ' · +10 มีโอกาสแตกหากไม่มี Blessing ในกระเป๋า' : ''}`}</small>` : ''}
           ${st.kind === 'card' ? '<small class="gb-warn-text">🃏 ใส่แล้วถอดเองไม่ได้ · ไม่มีการ์ดในกระเป๋า = ซื้อในตลาด (ราคาไม่เกินเพดานที่ตั้ง)</small>' : ''}
@@ -426,6 +434,36 @@
       focusStepId = st.id;
       return render();
     }
+    if (act === 'socket-toggle') {
+      const tSlot = btn.dataset.slot;
+      const sp = slotPlan(tSlot);
+      if (!sp.equip) return;
+      if (sp.socketed) {
+        for (let i = steps.length - 1; i >= 0; i--) {
+          if (steps[i].kind === 'socket' && steps[i].slot === tSlot && steps[i].itemName === sp.equip.itemName) {
+            steps.splice(i, 1);
+          }
+        }
+      } else {
+        sp.equip.minSlots = 0;
+        const st = {
+          id: newId(),
+          kind: 'socket',
+          slot: tSlot,
+          itemName: sp.equip.itemName,
+          toSlots: 1,
+          useCharm: true,
+          zeny: lastZeny(),
+          maxPrice: 0,
+          minLevel: lastLevel()
+        };
+        const firstCardIdx = steps.findIndex(s => s.kind === 'card' && s.slot === tSlot && s.itemName === sp.equip.itemName);
+        if (firstCardIdx >= 0) steps.splice(firstCardIdx, 0, st);
+        else steps.push(st);
+        focusStepId = st.id;
+      }
+      return render();
+    }
     if (act === 'card-mode') {
       slotSel = btn.dataset.slot;
       pickMode = 'card';
@@ -439,9 +477,9 @@
       const it = sp.equip && itemById(sp.equip.itemId);
       const isFlex = !!(sp.equip && sp.equip.flexSlot);
       if (!c || !sp.equip || (!it && !isFlex)) return;
-      const maxSlots = it ? (Number(it.slots) || 0) : Math.max(Number(sp.equip.minSlots) || 0, 1);
+      const maxSlots = Math.max(it ? (Number(it.slots) || 0) : Math.max(Number(sp.equip.minSlots) || 0, 1), sp.socketed ? 1 : 0);
       if (sp.cardCount >= maxSlots) return alert(`${sp.equip.itemName} มีช่องการ์ดแค่ ${maxSlots} ช่อง`);
-      if (isFlex && !sp.equip.minSlots) {
+      if (isFlex && !sp.equip.minSlots && !sp.socketed) {
         const oldName = sp.equip.itemName;
         sp.equip.minSlots = 1;
         if (!/\[\s*1\s*\]/.test(sp.equip.itemName)) {
@@ -498,6 +536,7 @@
       return;
     }
     if (t.dataset.gb === 'bless') { const st = stepById(t.dataset.id); if (st) st.blessing = t.checked; return; }
+    if (t.dataset.gb === 'charm') { const st = stepById(t.dataset.id); if (st) st.useCharm = t.checked; return; }
     if (t.classList.contains('gb-reserve-inp')) { t.value = num(parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0); return; }
     if (t.dataset.gb === 'zeny') { t.value = num(parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0); }
     if (t.dataset.gb === 'maxprice') { t.value = num(parseInt(String(t.value).replace(/[^0-9]/g, ''), 10) || 0); }

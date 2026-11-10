@@ -511,8 +511,9 @@ function createPartyService(opts) {
 
   function isSoloActivelyFarmingMap(S) {
     if (!S || !S.ok || !S.mapId || isCityMapName(S.mapName)) return false;
+    if (S.botRunning === false) return false;
     // Ignore transit maps while travelling to a different non-city target map
-    if (S.botRunning && S.targetMap && !isCityMapName(S.targetMap) && S.mapName && !mapsMatch(null, S.mapName, null, S.targetMap)) {
+    if (S.targetMap && !isCityMapName(S.targetMap) && S.mapName && !mapsMatch(null, S.mapName, null, S.targetMap)) {
       return false;
     }
     return true;
@@ -1398,7 +1399,7 @@ function createPartyService(opts) {
         }
       }
 
-      if (chMode === 'no_overlap' && onFarm && !planBlocked(S) && !isBusy()) {
+      if (chMode === 'no_overlap' && S.botRunning !== false && onFarm && !planBlocked(S) && !isBusy()) {
         const inOtherInGameParty = Boolean(S.party && Array.isArray(S.party.members) && S.party.members.length > 1 && S.party.leader && S.party.leader !== S.name);
         const busyNow = Array.isArray(S.busy) && S.busy.length > 0;
         if (!inOtherInGameParty && !busyNow && !rt.moving) {

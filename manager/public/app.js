@@ -6179,7 +6179,7 @@ function getGitHubHudTemplate(profileId, clientData, profile) {
                     </label>
 
                     <label class="p-check-box" style="color: #34d399;">
-                        <input type="checkbox" id="p-archer-smart" ${archer.smartArrow !== false ? "checked" : ""}>
+                        <input type="checkbox" id="p-archer-smart" ${archer.smartArrow ? "checked" : ""}>
                         <b>🧠 Smart Arrow (เลือกธนูตามธาตุมอน & ทิ้งธนูเก่า)</b>
                     </label>
 
@@ -8072,7 +8072,7 @@ function populateWebHudData(profileId, data) {
 
   const smartArrow = hud.querySelector('#p-archer-smart');
   if (smartArrow && archer.smartArrow !== undefined && document.activeElement !== smartArrow) {
-    smartArrow.checked = archer.smartArrow !== false;
+    smartArrow.checked = !!archer.smartArrow;
   }
 
   const autoEquipArrow = hud.querySelector('#p-archer-auto-equip');
@@ -9467,7 +9467,7 @@ function renderActionNodeHtml(trigIdx, actIdx, act) {
           <div class="pe-fields pe-fields-3">
             <label>ชนิดลูกธนู
               <select class="form-select" onchange="updateActionField(${trigIdx}, ${actIdx}, 'arrowType', Number(this.value)); updateActionField(${trigIdx}, ${actIdx}, 'smartArrow', Number(this.value) === 0)">
-                ${PLAN_ARROW_OPTIONS.map(a => `<option value="${a.value}" ${Number(act.smartArrow ? 0 : (act.arrowType !== undefined ? act.arrowType : 0)) === a.value ? 'selected' : ''}>${a.label}</option>`).join('')}
+                ${PLAN_ARROW_OPTIONS.map(a => `<option value="${a.value}" ${Number(act.smartArrow ? 0 : (act.arrowType || 90030)) === a.value ? 'selected' : ''}>${a.label}</option>`).join('')}
               </select>
             </label>
             <label>ซื้อให้ครบ (ดอก)
@@ -9569,7 +9569,7 @@ function addActionToTrigger(trigIdx, actionType) {
       refreshAutoJobUi();
     }
   } else if (actionType === 'set_arrow') {
-    Object.assign(newAction, { requireArrow: true, smartArrow: true, arrowType: 0, arrowBuyQty: 5000, ammoThreshold: 50 });
+    Object.assign(newAction, { requireArrow: true, smartArrow: false, arrowType: 90030, arrowBuyQty: 5000, ammoThreshold: 50 });
   } else if (actionType === 'weight_scroll') {
     Object.assign(newAction, { qty: 10, maxPrice: 0 });
   }

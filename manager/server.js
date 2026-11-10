@@ -186,6 +186,7 @@ function loadPresets() {
           },
           archerConfig: {
             requireArrow: false,
+            smartArrow: false,
             arrowType: 90030,
             arrowBuyQty: 200,
             useBwing: true,
@@ -2352,6 +2353,8 @@ function buildClientActionEvalCode(payload) {
       try { localStorage.setItem('pelican_archer_cfg', JSON.stringify(window.__archerConfig)); } catch(e){}
       const reqEl = document.getElementById('p-archer-req');
       if (reqEl && patch.requireArrow !== undefined) reqEl.checked = !!window.__archerConfig.requireArrow;
+      const smartEl = document.getElementById('p-archer-smart');
+      if (smartEl && patch.smartArrow !== undefined) smartEl.checked = !!window.__archerConfig.smartArrow;
       const autoEqEl = document.getElementById('p-archer-auto-equip');
       if (autoEqEl && patch.autoEquipArrow !== undefined) autoEqEl.checked = !!window.__archerConfig.autoEquipArrow;
       const typeEl = document.getElementById('p-archer-type');
@@ -2364,6 +2367,9 @@ function buildClientActionEvalCode(payload) {
       if (bwingEl && patch.useBwing !== undefined) bwingEl.checked = !!window.__archerConfig.useBwing;
       const bwingQtyEl = document.getElementById('p-archer-bwing-qty');
       if (bwingQtyEl && patch.bwingBuyQty !== undefined) bwingQtyEl.value = String(window.__archerConfig.bwingBuyQty);
+      if (window.__archerConfig.smartArrow && typeof window.syncSmartArrowForTargetMap === 'function') {
+        try { window.syncSmartArrowForTargetMap(); } catch (e) {}
+      }
       if (typeof updateMasterBotUI === 'function') updateMasterBotUI();
       if (typeof updateAmmoHUD === 'function') updateAmmoHUD();
       if (typeof window.syncAllHudInputsFromConfig === 'function') window.syncAllHudInputsFromConfig();

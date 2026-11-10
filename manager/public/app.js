@@ -4676,6 +4676,32 @@ document.getElementById("tile-grid").onclick = async (e) => {
   await fetch(`${API_BASE}/api/tile-windows?layout=grid`, { method: "POST" });
 };
 
+// Keep the "จัดหน้าต่าง" dropdown clamped inside viewport (away from left floating sidebar & right screen edge)
+(function initDropdownViewportClamp() {
+  const clampDropdown = (dd) => {
+    const menu = dd && dd.querySelector(".dropdown-content");
+    if (!menu) return;
+    menu.style.left = "0px";
+    menu.style.right = "auto";
+    requestAnimationFrame(() => {
+      const rect = menu.getBoundingClientRect();
+      if (!rect.width) return;
+      const minLeft = 56; // clear left floating dock icons
+      const maxRight = window.innerWidth - 12;
+      if (rect.left < minLeft) {
+        menu.style.left = `${Math.round(minLeft - rect.left)}px`;
+      } else if (rect.right > maxRight) {
+        menu.style.left = `${Math.round(maxRight - rect.right)}px`;
+      }
+    });
+  };
+  document.querySelectorAll(".dropdown").forEach((dd) => {
+    dd.addEventListener("mouseenter", () => clampDropdown(dd));
+    dd.addEventListener("focusin", () => clampDropdown(dd));
+    dd.addEventListener("click", () => clampDropdown(dd));
+  });
+})();
+
 document.getElementById("btn-refresh").onclick = () => {
   fetchProfiles();
 };

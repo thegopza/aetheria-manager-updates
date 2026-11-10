@@ -586,15 +586,18 @@ body {
 .dropdown-content {
   display: none;
   position: absolute;
-  right: 0;
+  left: 0;
+  right: auto;
   top: 100%;
   margin-top: 6px;
   background: rgba(12, 19, 37, 0.98);
   border: 1px solid var(--line-strong);
-  min-width: 230px;
+  min-width: 260px;
+  max-width: calc(100vw - 64px);
+  white-space: nowrap;
   border-radius: var(--radius-md);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
-  z-index: 100;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75);
+  z-index: 3000;
   padding: 5px;
 }
 

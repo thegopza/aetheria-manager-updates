@@ -729,6 +729,52 @@ body.hw-open .hw-drawer.im-hw-panel {
   white-space: nowrap;
 }
 
+.im-hw-kbox-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.82);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+.im-hw-kbox-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: #cbd5e1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.im-hw-kbox-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #38bdf8;
+  cursor: pointer;
+}
+.im-hw-kbox-toggle.on {
+  color: #7dd3fc;
+}
+.im-btn.hw-use-now {
+  background: linear-gradient(135deg, #0284c7, #0ea5e9);
+  color: #fff;
+  border: 1px solid rgba(125, 211, 252, 0.45);
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 4px 9px;
+  border-radius: 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.im-btn.hw-use-now:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0ea5e9, #38bdf8);
+}
+
 .im-hw-wl-banner {
   font-size: 10px;
   line-height: 1.35;
@@ -1549,8 +1595,41 @@ body.hw-open .hw-drawer.im-hw-panel {
 .im-hw-cond-right {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   margin-left: auto;
+}
+.im-hw-autouse {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  color: #cbd5e1;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.im-hw-autouse:hover {
+  border-color: rgba(56, 189, 248, 0.55);
+  color: #f8fafc;
+}
+.im-hw-autouse.on {
+  background: rgba(14, 165, 233, 0.18);
+  border-color: rgba(56, 189, 248, 0.65);
+  color: #7dd3fc;
+  box-shadow: 0 0 8px rgba(14, 165, 233, 0.22);
+}
+.im-hw-autouse input[type="checkbox"] {
+  width: 12.5px;
+  height: 12.5px;
+  margin: 0;
+  accent-color: #38bdf8;
+  cursor: pointer;
 }
 .im-hw-state.full { color: #f87171; }
 .im-btn.xs { font-size: 9.5px; padding: 2px 6px; border-radius: 6px; }

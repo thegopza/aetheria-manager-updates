@@ -229,10 +229,12 @@
     pollTimer: null,
     profileId: 'all',   // 'all' or specific profile.id
     enabled: true,
-    rules: {},          // itemId -> { enabled: boolean, minQty: number }
+    autoOpenKrathongBox: false,
+    rules: {},          // itemId -> { enabled: boolean, minQty: number, autoUse?: boolean }
     catalog: DEFAULT_WITCH_HAZEL_ITEMS,
     clients: [],
     quotaState: {},
+    ownedByItem: {},
     bagCounts: { 90989: 0, 90987: 0, 90880: 0, 90881: 0 },
     zeny: 0,
     filter: 'all',      // 'all' | 'selected' | 'ready'
@@ -281,23 +283,33 @@
       hw.bagCounts[90987] = hw.bagCounts[90881] = box;
       hw.zeny = Number(chosen.zeny) || 0;
       hw.quotaState = chosen.quotaState || {};
+      hw.ownedByItem = chosen.ownedByItem || {};
       return;
     }
 
     if (onlineClients.length > 0) {
       // When "all" is selected, sum materials across online screens (or show the active screen if 1)
       let totalCandy = 0, totalPumpkin = 0, totalZeny = 0;
+      const sumOwned = {};
       for (const c of onlineClients) {
         totalCandy += Number(c.candy) || 0;
         totalPumpkin += Number(c.pumpkin) || 0;
         totalZeny += Number(c.zeny) || 0;
+        if (c.ownedByItem && typeof c.ownedByItem === 'object') {
+          for (const [k, v] of Object.entries(c.ownedByItem)) {
+            sumOwned[k] = (sumOwned[k] || 0) + (Number(v) || 0);
+          }
+        }
       }
       hw.bagCounts[90989] = hw.bagCounts[90880] = totalCandy;
       hw.bagCounts[90987] = hw.bagCounts[90881] = totalPumpkin;
       hw.zeny = totalZeny;
       hw.quotaState = onlineClients[0].quotaState || {};
+      hw.ownedByItem = sumOwned;
       return;
     }
+
+    hw.ownedByItem = {};
 
     // Fallback to opened character bag if any
     if (bag.data && Array.isArray(bag.data.items)) {
@@ -400,6 +412,14 @@
         </div>
       </div>
 
+      <div class="im-hw-kbox-bar">
+        <label class="im-hw-kbox-toggle" data-role="hw-kbox-label" title="เมื่อติ๊กเปิด บอทจะเปิดกล่อง Krathong Box ที่ดรอปจากมอนสเตอร์ในกระเป๋าทั้งหมดให้อัตโนมัติ (หยุดพักชั่วคราวเมื่อช่องว่างเหลือน้อยกว่า 5 ช่อง)">
+          <input type="checkbox" data-hw="auto-open-kbox">
+          <span>🎁 Auto Open Krathong Box</span>
+        </label>
+        <button type="button" class="im-btn hw-use-now" data-hw="use-now" title="สั่งเปิดกล่องและใช้งานไอเทมที่ติ๊ก Auto Use / Auto Open ที่มีอยู่ในกระเป๋าตอนนี้ทันที">📦 เปิดใช้ในตัวทันที</button>
+      </div>
+
       <div class="im-hw-wl-banner">
         🛡️ <b>กันขาย NPC อัตโนมัติ:</b> รายการที่ติ๊กเลือก (รวม Lotus Candle & Krathong Box) จะอยู่ใน <b>WL ห้ามขายลง NPC</b> แต่สามารถตั้งขายลง<b>ตลาดกลาง</b>ได้ตามปกติ
       </div>
@@ -440,6 +460,7 @@
         if (Array.isArray(data.clients)) hw.clients = data.clients;
         const cfg = data.config || {};
         hw.enabled = cfg.enabled !== false;
+        hw.autoOpenKrathongBox = Boolean(cfg.autoOpenKrathongBox);
         hw.rules = cfg.rules && typeof cfg.rules === 'object' ? cfg.rules : {};
         syncHwDisplayedStats();
         updateHwTabBadge();
@@ -465,6 +486,7 @@
         op: 'save',
         profileId: hw.profileId || 'all',
         enabled: hw.enabled,
+        autoOpenKrathongBox: hw.autoOpenKrathongBox,
         rules: hw.rules
       });
       if (!r || !r.success) {
@@ -483,6 +505,11 @@
 
     const masterCb = el.querySelector('[data-hw="master-toggle"]');
     if (masterCb && document.activeElement !== masterCb) masterCb.checked = hw.enabled !== false;
+
+    const kboxCb = el.querySelector('[data-hw="auto-open-kbox"]');
+    const kboxLbl = el.querySelector('[data-role="hw-kbox-label"]');
+    if (kboxCb && document.activeElement !== kboxCb) kboxCb.checked = Boolean(hw.autoOpenKrathongBox);
+    if (kboxLbl) kboxLbl.classList.toggle('on', Boolean(hw.autoOpenKrathongBox));
 
     const selectEl = el.querySelector('[data-hw="client-select"]');
     if (selectEl && document.activeElement !== selectEl) {
@@ -548,8 +575,11 @@
     }
 
     listEl.innerHTML = visible.map(it => {
-      const rule = hw.rules[it.itemId] || { enabled: false, minQty: 1 };
+      const rule = hw.rules[it.itemId] || { enabled: false, minQty: 1, autoUse: false };
       const isSelected = Boolean(rule.enabled);
+      const isAutoUse = Boolean(rule.autoUse);
+      const canAutoUse = it.type === 'Consumable';
+      const ownedCount = Number((hw.ownedByItem && hw.ownedByItem[String(it.itemId)]) || 0);
       const minQty = Math.max(1, Number(rule.minQty) || 1);
       const calc = calcHwMaxExchangeable(it);
       const isReady = calc.cappedByQuota >= minQty && calc.quotaLeft > 0;
@@ -591,6 +621,21 @@
         ? `${getHwLimitLabel(it.limit)} · เหลือ ${hw.quotaState[it.itemId].limitLeft}/${calc.maxLimit}`
         : getHwLimitLabel(it.limit);
 
+      let autoUseHtml = '';
+      if (canAutoUse) {
+        const autoTip = it.itemId === 91036
+          ? 'เมื่อแลกมาหรือมีในกระเป๋า จะเปิดกล่องสุ่มทั้งหมดให้อัตโนมัติ (หยุดพักเมื่อช่องกระเป๋าว่างเหลือน้อยกว่า 5 ช่อง)'
+          : it.itemId === 90991
+            ? 'เมื่อแลกมาหรือมีในกระเป๋า บอทจะเดินไปลอยกระทงพร้อมคำอธิษฐานที่สระน้ำกลางเมืองโซลเฮเวนเพื่อรับพรแสงจันทร์อัตโนมัติ'
+            : 'ซิงค์เข้าช่องยาบัฟอัตโนมัติและกดดื่มทีละขวดทุก 5 นาทีจนกว่าจะหมด (ไม่กดซ้ำรัวให้เสียยาเปล่า)';
+        const autoLabel = '✨ Auto Use';
+        autoUseHtml = `
+          <label class="im-hw-autouse ${isAutoUse ? 'on' : ''}" title="${esc(autoTip)}">
+            <input type="checkbox" data-hw-autouse="${it.itemId}" ${isAutoUse ? 'checked' : ''}>
+            <span>${autoLabel}</span>
+          </label>`;
+      }
+
       return `
         <div class="im-hw-card ${isSelected ? 'selected' : ''} ${isReady && isSelected ? 'ready-glow' : ''}" data-item-id="${it.itemId}">
           <div class="im-hw-card-top">
@@ -606,7 +651,8 @@
                 ${!it.bound
                   ? `<span class="im-hw-tag tradable" title="แลกมาแล้วไม่ติดตัว สามารถตั้งขายลงตลาดกลางได้">🏪 ขายตลาดได้</span>`
                   : `<span class="im-hw-tag bound" title="ไอเทมผูกมัดตัวละคร">🔒 ติดตัว</span>`}
-                ${isSelected ? `<span class="im-hw-tag wl" title="อยู่ใน Whitelist ห้ามขายให้ NPC">🛡️ WL</span>` : ''}
+                ${(isSelected || isAutoUse) ? `<span class="im-hw-tag wl" title="อยู่ใน Whitelist ห้ามขายให้ NPC">🛡️ WL</span>` : ''}
+                ${ownedCount > 0 ? `<span class="im-hw-tag bag" title="จำนวนที่มีอยู่ในกระเป๋าตอนนี้">🎒 ในตัว x${ownedCount.toLocaleString()}</span>` : ''}
               </div>
               <div class="im-hw-desc">${esc(it.desc || '')}</div>
               <div class="im-hw-costs-row">
@@ -627,6 +673,7 @@
               <span>ชิ้น</span>
             </div>
             <div class="im-hw-cond-right">
+              ${autoUseHtml}
               ${statusHtml}
               ${!it.bound ? `<button type="button" class="im-btn ghost xs" data-hw-autosell="${esc(it.name)}" title="ตั้งให้บอทนำ ${esc(it.name)} ไปลงขายตลาดกลางอัตโนมัติ">🏷️ Auto-Sell</button>` : ''}
             </div>
@@ -636,7 +683,7 @@
   }
 
   function ensureHwRule(itemId) {
-    if (!hw.rules[itemId]) hw.rules[itemId] = { enabled: false, minQty: 1 };
+    if (!hw.rules[itemId]) hw.rules[itemId] = { enabled: false, minQty: 1, autoUse: false };
     return hw.rules[itemId];
   }
 
@@ -714,7 +761,8 @@
     }
     if (act === 'exchange-now') {
       const activeCount = Object.values(hw.rules).filter(r => r && r.enabled).length;
-      if (activeCount === 0) {
+      const autoFloatKrathong = Boolean(hw.rules['90991'] && hw.rules['90991'].autoUse);
+      if (activeCount === 0 && !autoFloatKrathong) {
         toast('⚠️ กรุณาติ๊กเลือกรายการของรางวัลลอยกระทงที่ต้องการแลกอย่างน้อย 1 รายการก่อนครับ', 'warn');
         return;
       }
@@ -726,6 +774,7 @@
           op: 'exchange_now',
           profileId: hw.profileId || 'all',
           enabled: true,
+          autoOpenKrathongBox: hw.autoOpenKrathongBox,
           rules: hw.rules
         });
         if (r && r.success) {
@@ -740,16 +789,45 @@
       }
       return;
     }
+    if (act === 'use-now') {
+      const anyUseEnabled = Boolean(hw.autoOpenKrathongBox) || Object.values(hw.rules).some(r => r && r.autoUse);
+      if (!anyUseEnabled) {
+        toast('⚠️ กรุณาติ๊ก Auto Open Krathong Box หรือติ๊ก Auto Use ในรายการที่ต้องการเปิดใช้ก่อนครับ', 'warn');
+        return;
+      }
+      actBtn.disabled = true;
+      const origTxt = actBtn.textContent;
+      actBtn.textContent = '⏳ กำลังเปิดใช้...';
+      try {
+        const r = await api('/api/halloween', {
+          op: 'use_now',
+          profileId: hw.profileId || 'all',
+          autoOpenKrathongBox: hw.autoOpenKrathongBox,
+          rules: hw.rules
+        });
+        if (r && r.success) {
+          toast(`🎁 ${r.summary || 'สั่งเปิดใช้ของกิจกรรมในกระเป๋าเรียบร้อยแล้ว'}`);
+          setTimeout(() => { refreshHalloween(); }, 1800);
+        } else {
+          toast(`❌ เปิดใช้ไม่สำเร็จ: ${(r && r.error) || 'จอเกมไม่ตอบสนอง'}`, 'err');
+        }
+      } finally {
+        actBtn.disabled = false;
+        actBtn.textContent = origTxt;
+      }
+      return;
+    }
     if (act === 'apply-all') {
       actBtn.disabled = true;
       try {
         const r = await api('/api/halloween', {
           op: 'apply_all',
           enabled: hw.enabled,
+          autoOpenKrathongBox: hw.autoOpenKrathongBox,
           rules: hw.rules
         });
         if (r && r.success) {
-          toast(`📋 ซิงค์ตั้งค่าแลกของลอยกระทง + WL กันขาย NPC ไปยังทุกโปรไฟล์แล้ว (อัปเดตออนไลน์ ${r.appliedOnline || 0} จอ)`);
+          toast(`📋 ซิงค์ตั้งค่าแลกของลอยกระทง + Auto Use + WL กันขาย NPC ไปยังทุกโปรไฟล์แล้ว (อัปเดตออนไลน์ ${r.appliedOnline || 0} จอ)`);
         } else {
           toast(`❌ ซิงค์ไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
         }
@@ -769,6 +847,34 @@
       hw.enabled = Boolean(e.target.checked);
       scheduleSaveHalloween(true);
       toast(hw.enabled ? '🪷 เปิดระบบเดินไปแลกของลอยกระทงอัตโนมัติแล้ว' : '⏸️ ปิดระบบแลกของลอยกระทงอัตโนมัติชั่วคราว');
+      return;
+    }
+    if (e.target.dataset.hw === 'auto-open-kbox') {
+      hw.autoOpenKrathongBox = Boolean(e.target.checked);
+      renderHalloweenPanel();
+      scheduleSaveHalloween(true);
+      toast(hw.autoOpenKrathongBox
+        ? '🎁 เปิด Auto Open กล่อง Krathong Box อัตโนมัติแล้ว (จะทยอยเปิดกล่องในกระเป๋าให้ทันที)'
+        : '⏸️ ปิด Auto Open กล่อง Krathong Box แล้ว');
+      return;
+    }
+    if (e.target.dataset.hwAutouse) {
+      const id = Number(e.target.dataset.hwAutouse);
+      const r = ensureHwRule(id);
+      r.autoUse = Boolean(e.target.checked);
+      renderHalloweenPanel();
+      scheduleSaveHalloween(true);
+      const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
+      if (it) {
+        const desc = id === 90991
+          ? 'บอทจะเดินไปลอยกระทงพร้อมคำอธิษฐานที่สระน้ำกลางเมืองให้อัตโนมัติ'
+          : id === 91036
+            ? 'บอทจะเปิดกล่องสุ่มในกระเป๋าทั้งหมดให้อัตโนมัติ'
+            : 'บอทจะซิงค์และกดดื่มยาบัฟต่อเนื่องทีละขวดทุก 5 นาที';
+        toast(r.autoUse
+          ? `✨ เปิด Auto Use "${it.name}" แล้ว — ${desc}`
+          : `⏸️ ปิด Auto Use "${it.name}" แล้ว`);
+      }
       return;
     }
     if (e.target.dataset.hwCheck) {

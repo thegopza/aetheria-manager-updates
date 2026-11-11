@@ -324,29 +324,33 @@ function loadGlobalHalloweenStore() {
       if (parsed && typeof parsed === 'object') {
         return {
           enabled: parsed.enabled === true,
+          autoOpenKrathongBox: parsed.autoOpenKrathongBox === true,
           rules: (parsed.rules && typeof parsed.rules === 'object') ? parsed.rules : {}
         };
       }
     }
   } catch (_) {}
-  return { enabled: false, rules: {} };
+  return { enabled: false, autoOpenKrathongBox: false, rules: {} };
 }
 
 function saveGlobalHalloweenStore(cfg) {
+  const prev = loadGlobalHalloweenStore();
   const cleanRules = {};
-  const rawRules = (cfg && cfg.rules && typeof cfg.rules === 'object') ? cfg.rules : {};
+  const rawRules = (cfg && cfg.rules && typeof cfg.rules === 'object') ? cfg.rules : (prev.rules || {});
   WITCH_HAZEL_ITEMS.forEach(it => {
     const k = String(it.itemId);
     const r = rawRules[k];
     if (r && typeof r === 'object') {
       cleanRules[k] = {
         enabled: !!r.enabled,
-        minQty: Math.max(1, Math.min(9999, parseInt(r.minQty, 10) || 1))
+        minQty: Math.max(1, Math.min(9999, parseInt(r.minQty, 10) || 1)),
+        autoUse: it.type === 'Consumable' ? !!r.autoUse : false
       };
     }
   });
   const out = {
-    enabled: cfg && cfg.enabled !== undefined ? !!cfg.enabled : false,
+    enabled: cfg && cfg.enabled !== undefined ? !!cfg.enabled : Boolean(prev.enabled),
+    autoOpenKrathongBox: cfg && cfg.autoOpenKrathongBox !== undefined ? !!cfg.autoOpenKrathongBox : Boolean(prev.autoOpenKrathongBox),
     rules: cleanRules,
     updatedAt: Date.now()
   };
@@ -868,14 +872,57 @@ const WITCH_HAZEL_ITEMS = [
 const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
   window.WITCH_HAZEL_ITEMS = ${JSON.stringify(WITCH_HAZEL_ITEMS)};
   const CFG_KEY = 'pelican_halloween_cfg';
+  const EVENT_BUFF_POTIONS = [90351, 90352, 90353];
+  const PROTECTED_EVENT_NAMES = new Set([
+    'lotus candle', 'krathong box', 'krathong', 'loy krathong festival box',
+    'halloween candy', 'golden pumpkin',
+    'socket charm', 'lotus rune drill', 'mighty stone', 'refine luck stone',
+    'epic weapon box', 'socketed weapon box', 'allstar box',
+    'moonlit river wings', 'river daughter title', 'valor elixir'
+  ]);
+  const KRATHONG_WISHES = [
+    'สุขสันต์วันลอยกระทง',
+    'ขอให้โชคดีตลอดปี',
+    'สาธุ ขอให้ดรอปของดีๆ',
+    'ลอยทุกข์ลอยโศก ขอให้เจอแต่สิ่งดีๆ',
+    'ขอให้สมหวังทุกประการ',
+    'สุขภาพแข็งแรง เฮงๆ รวยๆ',
+    'ขอให้มีแต่ความสุขความเจริญ',
+    'เพี้ยง ขอให้เปิดกล่องได้ของแรร์',
+    'วันเพ็ญเดือนสิบสอง ขอพรพระจันทร์',
+    'ขอให้ฟาร์มลื่นๆ ได้การ์ดทอง',
+    'หมดทุกข์หมดโศก โชคลาภไหลมา',
+    'ขอพรแม่คงคาคุ้มครอง',
+    'ขอให้ตีบวกติดรัวๆ',
+    'เงินทองไหลมาเทมา',
+    'ขอให้วันนี้เป็นวันที่ดี',
+    'สาธุ ขอให้รวยๆ ปังๆ',
+    'ขอให้เจอแต่คนดีๆ ตี้ดีๆ',
+    'รับพรแสงจันทร์ โชคดีมีชัย',
+    'ขอให้เดินทางปลอดภัย โชคดีตลอดไป',
+    'อธิษฐานขอให้สมปรารถนา',
+    'ลอยเคราะห์ร้ายออกไป รับโชคใหญ่เข้ามา',
+    'ขอให้ได้ของดีสมใจหวัง',
+    'ค่ำคืนพระจันทร์เต็มดวง ขอให้มีความสุข',
+    'สาธุ เฮงๆ ปังๆ ตลอดเทศกาล',
+    'ขอให้การงานการเงินราบรื่น',
+    'ขอให้ได้การ์ดบอสสักใบ',
+    'ขอพรแห่งสายน้ำนำความร่มเย็นมาให้',
+    'สุขใจวันลอยกระทง ขอให้โชคดี',
+    'ขอให้เจาะรูติด ตีบวกผ่านฉลุย',
+    'สาธุ ขอให้มีแต่เรื่องราวดีๆ เข้ามา'
+  ];
   if (!window.__halloweenExchangeConfig) {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(CFG_KEY) || 'null'); } catch (_) {}
     window.__halloweenExchangeConfig = {
       enabled: (saved && typeof saved.enabled === 'boolean') ? saved.enabled : false,
+      autoOpenKrathongBox: (saved && typeof saved.autoOpenKrathongBox === 'boolean') ? saved.autoOpenKrathongBox : false,
       rules: (saved && saved.rules && typeof saved.rules === 'object') ? saved.rules : {},
       quotaState: (saved && saved.quotaState && typeof saved.quotaState === 'object') ? saved.quotaState : {}
     };
+  } else if (typeof window.__halloweenExchangeConfig.autoOpenKrathongBox !== 'boolean') {
+    window.__halloweenExchangeConfig.autoOpenKrathongBox = false;
   }
   window.saveHalloweenExchangeConfig = function () {
     try { localStorage.setItem(CFG_KEY, JSON.stringify(window.__halloweenExchangeConfig)); } catch (_) {}
@@ -885,7 +932,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     const day = bkk.toISOString().slice(0, 10);
     if (reset === 'Daily') return 'D:' + day;
     if (reset === 'Weekly') {
-      const dow = (bkk.getUTCDay() + 6) % 7; // Monday = 0
+      const dow = (bkk.getUTCDay() + 6) % 7;
       const mon = new Date(bkk.getTime() - dow * 86400000).toISOString().slice(0, 10);
       return 'W:' + mon;
     }
@@ -898,14 +945,15 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     if (!sellCfg || typeof sellCfg !== 'object' || typeof sellCfg.weaponRarity !== 'string') {
       return (sellCfg && sellCfg.whitelist) || '';
     }
-    if (!cfg.enabled) {
+    const rules = cfg.rules || {};
+    const anyAutoUse = Boolean(cfg.autoOpenKrathongBox) || Object.values(rules).some(r => r && (r.enabled || r.autoUse));
+    if (!cfg.enabled && !anyAutoUse) {
       return sellCfg.whitelist || '';
     }
-    const rules = cfg.rules || {};
-    const enabledNames = ['Lotus Candle', 'Krathong Box', 'Krathong'];
+    const enabledNames = ['Lotus Candle', 'Krathong Box', 'Krathong', 'Loy Krathong Festival Box'];
     (window.WITCH_HAZEL_ITEMS || []).forEach(it => {
       const r = rules[String(it.itemId)];
-      if (r && r.enabled) enabledNames.push(it.name);
+      if (r && (r.enabled || r.autoUse)) enabledNames.push(it.name);
     });
     const list = String(sellCfg.whitelist || '').split(',').map(s => s.trim()).filter(Boolean);
     let changed = false;
@@ -926,11 +974,11 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
   window.isHalloweenExchangeProtectedItem = function (itemName) {
     if (!itemName) return false;
     const clean = String(itemName).trim().toLowerCase();
-    if (clean === 'lotus candle' || clean === 'krathong box' || clean === 'krathong' || clean === 'halloween candy' || clean === 'golden pumpkin') return true;
+    if (PROTECTED_EVENT_NAMES.has(clean)) return true;
     const rules = (window.__halloweenExchangeConfig && window.__halloweenExchangeConfig.rules) || {};
     return (window.WITCH_HAZEL_ITEMS || []).some(it => {
       const r = rules[String(it.itemId)];
-      return r && r.enabled && it.name.toLowerCase() === clean;
+      return r && (r.enabled || r.autoUse) && it.name.toLowerCase() === clean;
     });
   };
   if (typeof window.isSellWhitelisted === 'function' && !window.__hwWlHooked) {
@@ -944,6 +992,344 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     };
     window.__hwWlHooked = true;
   }
+  function getActiveOpenGameRoom(manual) {
+    if (typeof window.isGameLoadingOrPreWorld === 'function' && window.isGameLoadingOrPreWorld()) return null;
+    const room = ${ROOM_JS} || window.__colyseusRoom || window.__activeRoom || Array.from(window.__trackedRooms || []).find(r => r && r.connection?.isOpen);
+    if (!room || typeof room.send !== 'function' || (room.connection && room.connection.isOpen === false)) return null;
+    const minAge = manual ? 1500 : 4000;
+    if (room.__pmAttachedAt && (Date.now() - room.__pmAttachedAt) < minAge) return null;
+    return room;
+  }
+  function getAuthoritativeLiveInventory() {
+    if (typeof window.isGameLoadingOrPreWorld === 'function' && window.isGameLoadingOrPreWorld()) return null;
+    if ((!window.__latestInventory || window.__latestInventory.__fromCache) && typeof window.getLiveInventoryData === 'function') {
+      try { window.getLiveInventoryData(); } catch (_) {}
+    }
+    const inv = window.__latestInventory;
+    if (!inv || inv.__fromCache || !Array.isArray(inv.items)) return null;
+    return inv;
+  }
+  window.closeGameBoxResultModal = function () {
+    let closed = false;
+    document.querySelectorAll('.box-result .qty-actions button.primary, .box-result button.primary, .box-result .win-close').forEach(btn => {
+      try { btn.click(); closed = true; } catch (_) {}
+    });
+    return closed;
+  };
+  window.syncLoyKrathongAutoBuffPotions = function () {
+    try {
+      const room = getActiveOpenGameRoom(false);
+      if (!room) return false;
+      const charData = (typeof window.getLiveCharacterData === 'function') ? window.getLiveCharacterData() : (window.__latestCharacterData || null);
+      const currentConfig = (charData && charData.auto && charData.auto.config) ? charData.auto.config : null;
+      if (!currentConfig || typeof currentConfig !== 'object') return false;
+      const rules = (window.__halloweenExchangeConfig && window.__halloweenExchangeConfig.rules) || {};
+      if (!window.__lkSyncedBuffSet) window.__lkSyncedBuffSet = new Set();
+      const wantBuffs = EVENT_BUFF_POTIONS.filter(id => Boolean(rules[String(id)] && rules[String(id)].autoUse));
+      wantBuffs.forEach(id => window.__lkSyncedBuffSet.add(id));
+      const disableBuffSet = new Set(
+        EVENT_BUFF_POTIONS.filter(id => !(rules[String(id)] && rules[String(id)].autoUse) && window.__lkSyncedBuffSet.has(id))
+      );
+      const curList = Array.isArray(currentConfig.buffItems)
+        ? currentConfig.buffItems.map(Number).filter(Number.isFinite)
+        : [];
+      const kept = curList.filter(id => !disableBuffSet.has(id) && !wantBuffs.includes(id));
+      const nextBuffItems = Array.from(new Set([...wantBuffs, ...kept])).slice(0, 6);
+      disableBuffSet.forEach(id => window.__lkSyncedBuffSet.delete(id));
+      const same = nextBuffItems.length === curList.length && nextBuffItems.every((v, idx) => v === curList[idx]);
+      if (same) return false;
+      const baseNewConfig = Object.assign({}, currentConfig, { buffItems: nextBuffItems });
+      const newConfig = (typeof window.mergeInGameAutoConfigOverrides === 'function')
+        ? window.mergeInGameAutoConfigOverrides(baseNewConfig)
+        : baseNewConfig;
+      room.send('auto_set', { config: newConfig });
+      if (charData && charData.auto) {
+        charData.auto.config = Object.assign({}, charData.auto.config, newConfig);
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+  window.floatKrathongsAtPond = async function (room, manual = false) {
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const POND_X = 1664;
+    const POND_WATER_Y = 1740;
+    let floated = 0;
+    for (let round = 0; round < 10; round++) {
+      const activeRoom = getActiveOpenGameRoom(manual) || room;
+      if (!activeRoom || (activeRoom.connection && activeRoom.connection.isOpen === false)) break;
+      const isCap = typeof window.isInCapital === 'function'
+        ? window.isInCapital()
+        : /เมืองหลวง|โซลเฮเวน|capital/i.test((typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '') || (activeRoom.state && activeRoom.state.mapId) || '');
+      if (!isCap) break;
+      const inv = getAuthoritativeLiveInventory();
+      if (!inv) break;
+      const krathongItem = inv.items.find(x => x && Number(x.itemId) === 90991 && (Number(x.qty) || 0) > 0 && Number.isInteger(Number(x.slot)));
+      if (!krathongItem) break;
+      const countBefore = inv.items.filter(x => x && Number(x.itemId) === 90991).reduce((s, x) => s + (Number(x.qty) || 0), 0);
+      const getMe = () => (activeRoom.state && activeRoom.state.players && typeof activeRoom.state.players.get === 'function')
+        ? activeRoom.state.players.get(activeRoom.sessionId)
+        : null;
+      let me = getMe();
+      const seedStr = String(activeRoom.sessionId || window.__pmProfileId || '') + ':' + round;
+      let hash = 0;
+      for (let i = 0; i < seedStr.length; i++) hash = ((hash << 5) - hash + seedStr.charCodeAt(i)) | 0;
+      const norm = ((Math.abs(hash) % 1000) / 1000);
+      const theta = (0.22 + norm * 0.56) * Math.PI;
+      const rimX = Math.round(POND_X + Math.cos(theta) * 162);
+      const rimY = Math.round(POND_WATER_Y + Math.sin(theta) * 132);
+      if (me && Number.isFinite(Number(me.x)) && Math.hypot(me.x - POND_X, me.y - (POND_WATER_Y + 35)) > 195) {
+        const walkStart = Date.now();
+        let lastMove = 0;
+        while (Date.now() - walkStart < 14000) {
+          if (!manual && (window.__isShopping || window.__isConsolidating || document.querySelector('.human-check'))) break;
+          me = getMe();
+          if (me && (Math.hypot(me.x - rimX, me.y - rimY) <= 48 || Math.hypot(me.x - POND_X, me.y - (POND_WATER_Y + 35)) <= 180)) break;
+          if (Date.now() - lastMove > 1700) {
+            lastMove = Date.now();
+            try { activeRoom.send('move_to', { x: rimX, y: rimY }); } catch (_) {}
+          }
+          await sleep(250);
+        }
+        await sleep(300);
+      }
+      me = getMe();
+      if (me && Number.isFinite(Number(me.x)) && Math.hypot(me.x - POND_X, me.y - (POND_WATER_Y + 35)) > 240) {
+        break;
+      }
+      let openMsg = null;
+      let alertMsg = null;
+      let unsubOpen = null;
+      let unsubAlert = null;
+      try {
+        if (typeof activeRoom.onMessage === 'function') {
+          try { unsubOpen = activeRoom.onMessage('krathong_open', m => { openMsg = m || { ok: true }; }); } catch (_) {}
+          try { unsubAlert = activeRoom.onMessage('alert', m => { alertMsg = m; }); } catch (_) {}
+        }
+        const freshInv = getAuthoritativeLiveInventory();
+        const curItem = freshInv && freshInv.items.find(x => x && Number(x.itemId) === 90991 && (Number(x.qty) || 0) > 0 && Number.isInteger(Number(x.slot)));
+        if (!curItem) break;
+        activeRoom.send('inv_use', { slot: Number(curItem.slot) });
+        for (let w = 0; w < 13 && !openMsg && !document.querySelector('.megaphone-window'); w++) {
+          await sleep(200);
+          if (alertMsg) break;
+        }
+        if (!openMsg && !document.querySelector('.megaphone-window')) {
+          const retryX = POND_X + Math.round((Math.random() - 0.5) * 44);
+          const retryY = 1860;
+          alertMsg = null;
+          try { activeRoom.send('move_to', { x: retryX, y: retryY }); } catch (_) {}
+          for (let w = 0; w < 12; w++) {
+            await sleep(250);
+            me = getMe();
+            if (me && Math.hypot(me.x - retryX, me.y - retryY) <= 40) break;
+          }
+          const invRetry = getAuthoritativeLiveInventory();
+          const itemRetry = invRetry && invRetry.items.find(x => x && Number(x.itemId) === 90991 && (Number(x.qty) || 0) > 0 && Number.isInteger(Number(x.slot)));
+          if (itemRetry) {
+            activeRoom.send('inv_use', { slot: Number(itemRetry.slot) });
+            for (let w = 0; w < 13 && !openMsg && !document.querySelector('.megaphone-window'); w++) {
+              await sleep(200);
+            }
+          }
+        }
+        if (openMsg || document.querySelector('.megaphone-window')) {
+          await sleep(550 + Math.floor(Math.random() * 400));
+          const wish = KRATHONG_WISHES[Math.floor(Math.random() * KRATHONG_WISHES.length)] || 'สุขสันต์วันลอยกระทง';
+          const targetSlot = Number((openMsg && openMsg.slot !== undefined) ? openMsg.slot : curItem.slot);
+          activeRoom.send('krathong_send', { slot: targetSlot, wish });
+          for (let w = 0; w < 12; w++) {
+            await sleep(200);
+            const afterInv = getAuthoritativeLiveInventory();
+            const countAfter = afterInv ? afterInv.items.filter(x => x && Number(x.itemId) === 90991).reduce((s, x) => s + (Number(x.qty) || 0), 0) : countBefore;
+            if (countAfter < countBefore) break;
+          }
+          document.querySelectorAll('.megaphone-window .win-close').forEach(b => { try { b.click(); } catch (_) {} });
+        }
+      } finally {
+        if (typeof unsubOpen === 'function') { try { unsubOpen(); } catch (_) {} }
+        if (typeof unsubAlert === 'function') { try { unsubAlert(); } catch (_) {} }
+      }
+      const checkInv = getAuthoritativeLiveInventory();
+      const countNow = checkInv ? checkInv.items.filter(x => x && Number(x.itemId) === 90991).reduce((s, x) => s + (Number(x.qty) || 0), 0) : countBefore;
+      if (countNow < countBefore) {
+        floated += (countBefore - countNow);
+        window.__krathongFloatFails = 0;
+        window.__krathongFloatCooldownUntil = 0;
+        window.__halloweenLastLog = '🪷 ลอยกระทงอธิษฐานที่สระกลางเมืองสำเร็จ (' + floated + ' ชิ้น)';
+        console.log('%c[PmheeAether LoyKrathong] ' + window.__halloweenLastLog, 'color: #34d399; font-weight: bold;');
+      } else {
+        window.__krathongFloatFails = (window.__krathongFloatFails || 0) + 1;
+        if (window.__krathongFloatFails >= 2) {
+          window.__krathongFloatCooldownUntil = Date.now() + 10 * 60 * 1000;
+        }
+        break;
+      }
+    }
+    return floated;
+  };
+  window.runLoyKrathongAutoUseInBag = async function (manual = false) {
+    if (window.__isUsingEventItems) {
+      return { success: false, busy: true, message: 'กำลังเปิดกล่อง/ใช้งานของกิจกรรมลอยกระทงอยู่...' };
+    }
+    const room = getActiveOpenGameRoom(manual);
+    if (!room) {
+      return manual ? { success: false, error: 'ยังไม่ได้เชื่อมต่อเข้าสู่แผนที่เกม หรือเกมกำลังโหลดอยู่' } : false;
+    }
+    if (!manual && (window.__isShopping || window.__isStoring || window.__isGearRefining || window.__isChangingJob || window.__isManualSelling || window.__isAutoSellingNow || window.__isConsolidating || window.__senderTradeBusy || document.querySelector('.human-check'))) {
+      return false;
+    }
+    const inv0 = getAuthoritativeLiveInventory();
+    if (!inv0) {
+      return manual ? { success: false, error: 'กำลังรอข้อมูลกระเป๋าล่าสุดจากเซิร์ฟเวอร์' } : false;
+    }
+    window.syncLoyKrathongAutoBuffPotions();
+    const cfg = window.__halloweenExchangeConfig || {};
+    const rules = cfg.rules || {};
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const actionsDone = [];
+    const wantKrathongBox = Boolean(cfg.autoOpenKrathongBox);
+    const wantFestivalBox = Boolean(rules['91036'] && rules['91036'].autoUse);
+    const wantFloatKrathong = Boolean(rules['90991'] && rules['90991'].autoUse);
+    const enabledPotions = EVENT_BUFF_POTIONS.filter(id => Boolean(rules[String(id)] && rules[String(id)].autoUse));
+    if (!wantKrathongBox && !wantFestivalBox && !wantFloatKrathong && !enabledPotions.length) {
+      if (manual) {
+        return { success: false, error: 'ยังไม่ได้ติ๊กเปิด Auto Use หรือ Auto Open รายการใดเลย' };
+      }
+      return false;
+    }
+    window.__isUsingEventItems = true;
+    try {
+      const openBoxType = async (boxId, boxName) => {
+        let openedTotal = 0;
+        for (let batch = 0; batch < 25; batch++) {
+          const rNow = getActiveOpenGameRoom(manual);
+          const inv = getAuthoritativeLiveInventory();
+          if (!rNow || !inv) break;
+          const stack = inv.items.find(x => x && Number(x.itemId) === Number(boxId) && (Number(x.qty) || 0) > 0 && Number.isInteger(Number(x.slot)));
+          if (!stack) break;
+          const maxSlots = Number(inv.slots || inv.maxSlots) || 100;
+          const usedSlots = inv.items.filter(Boolean).length;
+          const freeSlots = maxSlots - usedSlots;
+          if (freeSlots < 5) {
+            window.__halloweenLastLog = '⚠️ ช่องกระเป๋าว่างเหลือ ' + freeSlots + ' ช่อง (< 5) — พักการเปิด ' + boxName + ' ชั่วคราวกันของล้น';
+            break;
+          }
+          const countBefore = inv.items.filter(x => x && Number(x.itemId) === Number(boxId)).reduce((s, x) => s + (Number(x.qty) || 0), 0);
+          const openQty = Math.min(Number(stack.qty) || 1, 200);
+          if (openQty <= 1) {
+            rNow.send('inv_use', { slot: Number(stack.slot) });
+          } else {
+            rNow.send('inv_use', { slot: Number(stack.slot), count: openQty });
+          }
+          let decreased = false;
+          for (let w = 0; w < 15; w++) {
+            await sleep(160);
+            window.closeGameBoxResultModal();
+            const invAfter = getAuthoritativeLiveInventory();
+            if (invAfter) {
+              const countAfter = invAfter.items.filter(x => x && Number(x.itemId) === Number(boxId)).reduce((s, x) => s + (Number(x.qty) || 0), 0);
+              if (countAfter < countBefore) {
+                openedTotal += (countBefore - countAfter);
+                decreased = true;
+                break;
+              }
+            }
+          }
+          await sleep(180);
+          window.closeGameBoxResultModal();
+          if (!decreased) break;
+        }
+        if (openedTotal > 0) {
+          window.syncHalloweenWhitelist();
+          actionsDone.push('เปิด ' + boxName + ' x' + openedTotal);
+          window.__halloweenLastLog = '🎁 เปิด ' + boxName + ' สำเร็จ ' + openedTotal + ' กล่อง';
+          console.log('%c[PmheeAether LoyKrathong] ' + window.__halloweenLastLog, 'color: #38bdf8; font-weight: bold;');
+        }
+        return openedTotal;
+      };
+      if (wantKrathongBox) {
+        await openBoxType(90987, 'Krathong Box');
+      }
+      if (wantFestivalBox) {
+        const openedFest = await openBoxType(91036, 'Loy Krathong Festival Box');
+        if (openedFest > 0) {
+          window.__halloweenNextTryAt = Math.min(window.__halloweenNextTryAt || 0, Date.now() + 2500);
+        }
+      }
+      const isCap = typeof window.isInCapital === 'function'
+        ? window.isInCapital()
+        : /เมืองหลวง|โซลเฮเวน|capital/i.test((typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '') || (room.state && room.state.mapId) || '');
+      if (enabledPotions.length > 0 && (!isCap || manual)) {
+        if (!window.__lastEventPotionUsedAt) window.__lastEventPotionUsedAt = {};
+        const invNow = getAuthoritativeLiveInventory();
+        if (invNow) {
+          for (const pid of enabledPotions) {
+            const minGap = manual ? 15000 : 302000;
+            if (Date.now() - (window.__lastEventPotionUsedAt[pid] || 0) < minGap) continue;
+            const pot = invNow.items.find(x => x && Number(x.itemId) === Number(pid) && (Number(x.qty) || 0) > 0 && Number.isInteger(Number(x.slot)));
+            if (!pot) continue;
+            const rNow = getActiveOpenGameRoom(manual);
+            if (!rNow) break;
+            rNow.send('inv_use', { slot: Number(pot.slot) });
+            window.__lastEventPotionUsedAt[pid] = Date.now();
+            const pMeta = (window.WITCH_HAZEL_ITEMS || []).find(x => Number(x.itemId) === Number(pid));
+            actionsDone.push('กดใช้ ' + ((pMeta && pMeta.name) || ('Potion #' + pid)) + ' x1');
+            await sleep(220);
+          }
+        }
+      }
+      if (wantFloatKrathong && isCap && (manual || (window.__krathongFloatCooldownUntil || 0) <= Date.now())) {
+        const invNow = getAuthoritativeLiveInventory();
+        const hasKrathong = invNow && invNow.items.some(x => x && Number(x.itemId) === 90991 && (Number(x.qty) || 0) > 0);
+        if (hasKrathong) {
+          const floated = await window.floatKrathongsAtPond(room, manual);
+          if (floated > 0) actionsDone.push('ลอยกระทง x' + floated);
+        }
+      }
+      return {
+        success: true,
+        used: actionsDone.length > 0,
+        summary: actionsDone.length > 0 ? actionsDone.join(', ') : 'ไม่มีไอเทมที่ต้องเปิดใช้ในขณะนี้ (หรือช่องกระเป๋าเต็ม)',
+        status: window.getHalloweenExchangeStatus()
+      };
+    } finally {
+      window.closeGameBoxResultModal();
+      window.__isUsingEventItems = false;
+    }
+  };
+  window.runHalloweenUseNow = async function () {
+    const room = getActiveOpenGameRoom(true);
+    if (!room) return { success: false, error: 'ไม่ได้เชื่อมต่อเกม หรือเกมกำลังโหลดแผนที่อยู่' };
+    const cfg = window.__halloweenExchangeConfig || {};
+    const rules = cfg.rules || {};
+    const res = await window.runLoyKrathongAutoUseInBag(true);
+    const inv = getAuthoritativeLiveInventory();
+    const hasKrathongLeft = Boolean(rules['90991'] && rules['90991'].autoUse && inv && inv.items.some(x => x && Number(x.itemId) === 90991 && (Number(x.qty) || 0) > 0));
+    const isCap = typeof window.isInCapital === 'function'
+      ? window.isInCapital()
+      : /เมืองหลวง|โซลเฮเวน|capital/i.test((typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '') || (room.state && room.state.mapId) || '');
+    if (hasKrathongLeft && !isCap) {
+      const farm = window.__targetFarmMap || '';
+      if (farm && !/เมืองหลวง|โซลเฮเวน/.test(farm)) {
+        try { localStorage.setItem('pelican_job_return_map', farm); } catch (_) {}
+      }
+      window.__krathongFloatCooldownUntil = 0;
+      window.__planJobChangeHoldUntil = Date.now() + 120000;
+      if (typeof window.needTown === 'function') window.needTown('halloween');
+      if (typeof window.planTripToCapital === 'function') window.planTripToCapital('halloween');
+      else if (typeof window.goToCapital === 'function') window.goToCapital('halloween');
+      const extraMsg = 'กำลังเดินทางกลับเมืองหลวงเพื่อนำกระทงไปลอยที่สระน้ำ';
+      return {
+        success: true,
+        navigating: true,
+        summary: (res && res.used ? (res.summary + ' · ') : '') + extraMsg,
+        status: window.getHalloweenExchangeStatus()
+      };
+    }
+    return res;
+  };
   window.readLiveWitchShopState = function () {
     const rows = document.querySelectorAll('.shop-row');
     if (!rows.length) return null;
@@ -994,12 +1380,13 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     const pumpkin = countItem(90987);
     const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
     const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : 0);
-    const cfg = window.__halloweenExchangeConfig || { enabled: true, rules: {}, quotaState: {} };
+    const cfg = window.__halloweenExchangeConfig || { enabled: true, autoOpenKrathongBox: false, rules: {}, quotaState: {} };
     const rules = cfg.rules || {};
     const qs = cfg.quotaState || {};
+    const ownedByItem = {};
     const items = (window.WITCH_HAZEL_ITEMS || []).map(it => {
       const key = String(it.itemId);
-      const r = rules[key] || { enabled: false, minQty: 1 };
+      const r = rules[key] || { enabled: false, minQty: 1, autoUse: false };
       const minQty = Math.max(1, parseInt(r.minQty, 10) || 1);
       const q = qs[key];
       const pKey = window.getHalloweenPeriodKey(it.limit && it.limit.reset);
@@ -1015,6 +1402,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       }
       const exchangeableNow = limitLeft >= 0 ? Math.min(maxByMaterials, limitLeft) : maxByMaterials;
       const ownedInBag = countItem(it.itemId);
+      ownedByItem[key] = ownedInBag;
       return {
         ...it,
         ownedInBag,
@@ -1023,6 +1411,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         maxByMaterials,
         exchangeableNow,
         enabled: !!r.enabled,
+        autoUse: !!r.autoUse,
         minQty,
         ready: !!r.enabled && exchangeableNow >= minQty && limitLeft !== 0
       };
@@ -1030,7 +1419,8 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     return {
       success: true,
       enabled: cfg.enabled !== false,
-      exchanging: !!window.__isHalloweenExchanging,
+      autoOpenKrathongBox: Boolean(cfg.autoOpenKrathongBox),
+      exchanging: !!(window.__isHalloweenExchanging || window.__isUsingEventItems),
       candy,
       pumpkin,
       lotusCandle: candy,
@@ -1041,33 +1431,44 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       catalog: window.WITCH_HAZEL_ITEMS,
       config: {
         enabled: cfg.enabled !== false,
+        autoOpenKrathongBox: Boolean(cfg.autoOpenKrathongBox),
         rules
       },
       live: {
-        bagCounts: { 90989: candy, 90987: pumpkin, 90880: candy, 90881: pumpkin },
+        bagCounts: Object.assign({ 90989: candy, 90987: pumpkin, 90880: candy, 90881: pumpkin }, ownedByItem),
+        ownedByItem,
         zeny,
         quotaState: qs
       }
     };
   };
   window.runHalloweenExchangeStep = async function (manual = false, targetItemId = null) {
-    if (window.__isHalloweenExchanging) return { success: false, busy: true, message: 'กำลังดำเนินการแลกของกิจกรรมลอยกระทงอยู่...' };
+    if (window.__isHalloweenExchanging || window.__isUsingEventItems) {
+      return { success: false, busy: true, message: 'กำลังดำเนินการแลก/เปิดใช้ของกิจกรรมลอยกระทงอยู่...' };
+    }
     if (!manual && (window.__halloweenNextTryAt || 0) > Date.now()) return false;
     const st = window.getHalloweenExchangeStatus();
-    if (!manual && !st.enabled) return false;
+    const cfg = window.__halloweenExchangeConfig || {};
+    const rules = cfg.rules || {};
+    const krathongItemStat = st.items.find(x => Number(x.itemId) === 90991);
+    const needFloatExistingKrathong = !targetItemId
+      && Boolean(rules['90991'] && rules['90991'].autoUse)
+      && ((krathongItemStat && krathongItemStat.ownedInBag > 0) || false)
+      && (manual || (window.__krathongFloatCooldownUntil || 0) <= Date.now());
+    if (!manual && !st.enabled && !needFloatExistingKrathong) return false;
     const candidates = st.items.filter(it => {
       if (targetItemId && Number(it.itemId) !== Number(targetItemId)) return false;
       if (manual && targetItemId) return it.exchangeableNow >= 1;
       if (manual) return it.enabled && it.exchangeableNow >= 1;
-      return it.ready;
+      return st.enabled && it.ready;
     });
-    if (!candidates.length) {
+    if (!candidates.length && !needFloatExistingKrathong) {
       if (manual) return { success: false, error: 'วัตถุดิบ (เทียนดอกบัว / Zeny) ยังไม่พอแลก หรือครบโควต้าแล้ว' };
       return false;
     }
-    const room = ${ROOM_JS};
-    if (!room || !room.connection?.isOpen) {
-      if (manual) return { success: false, error: 'ไม่ได้เชื่อมต่อเกม' };
+    const room = getActiveOpenGameRoom(manual);
+    if (!room) {
+      if (manual) return { success: false, error: 'ไม่ได้เชื่อมต่อเกม หรือกำลังโหลดแผนที่อยู่' };
       return false;
     }
     const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -1075,12 +1476,14 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       ? window.isInCapital()
       : /เมืองหลวง|โซลเฮเวน|capital/i.test((typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '') || (room.state && room.state.mapId) || '');
     if (!isCap) {
-      if (window.__isWalkingToMap || window.__isNavigating) return false;
+      if (!manual && (window.__isWalkingToMap || window.__isNavigating)) return false;
       const farm = window.__targetFarmMap || '';
       if (farm && !/เมืองหลวง|โซลเฮเวน/.test(farm)) {
         try { localStorage.setItem('pelican_job_return_map', farm); } catch (_) {}
       }
-      window.__halloweenLastLog = '🪷 ของครบเงื่อนไขแลก (' + candidates.map(c => c.name + ' x' + c.exchangeableNow).join(', ') + ') -> เดินทางกลับเมืองหลวงไปหานางนพมาศ (Nang Noppamas)';
+      window.__halloweenLastLog = candidates.length
+        ? ('🪷 ของครบเงื่อนไขแลก (' + candidates.map(c => c.name + ' x' + c.exchangeableNow).join(', ') + ') -> เดินทางกลับเมืองหลวงไปหานางนพมาศ (Nang Noppamas)')
+        : '🪷 มีกระทงในกระเป๋าและเปิด Auto Use -> เดินทางกลับสระน้ำเมืองหลวงเพื่อลอยกระทงรับพรแสงจันทร์';
       console.log('%c[PmheeAether LoyKrathong] ' + window.__halloweenLastLog, 'color: #fb923c; font-weight: bold;');
       window.__planJobChangeHoldUntil = Date.now() + 120000;
       if (typeof window.needTown === 'function') window.needTown('halloween');
@@ -1088,6 +1491,21 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       else if (typeof window.goToCapital === 'function') window.goToCapital('halloween');
       window.__halloweenNextTryAt = Date.now() + 8000;
       return { success: true, navigating: true, message: window.__halloweenLastLog };
+    }
+    if (!candidates.length && needFloatExistingKrathong) {
+      window.__isHalloweenExchanging = true;
+      window.__planJobChangeHoldUntil = Date.now() + 45000;
+      if (typeof window.needTown === 'function') window.needTown('halloween');
+      if (typeof window.cancelGameAutoRoute === 'function') window.cancelGameAutoRoute();
+      try {
+        const useRes = await window.runLoyKrathongAutoUseInBag(true);
+        window.__halloweenNextTryAt = Date.now() + 8000;
+        window.__planJobChangeHoldUntil = 0;
+        if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
+        return { success: true, exchanged: [], summary: (useRes && useRes.summary) || 'ลอยกระทงเรียบร้อยแล้ว', status: window.getHalloweenExchangeStatus() };
+      } finally {
+        window.__isHalloweenExchanging = false;
+      }
     }
     let witchKey = null;
     let witchNpc = null;
@@ -1111,8 +1529,9 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       return { success: false, error: 'ไม่พบ NPC นางนพมาศ (Nang Noppamas) ในเมืองหลวง (ปิดระบบแลกอัตโนมัติ)' };
     }
     window.__isHalloweenExchanging = true;
-    window.__planJobChangeHoldUntil = Date.now() + 45000;
+    window.__planJobChangeHoldUntil = Date.now() + 60000;
     if (typeof window.needTown === 'function') window.needTown('halloween');
+    if (typeof window.cancelGameAutoRoute === 'function') window.cancelGameAutoRoute();
     let unsubDlg = null, unsubShop = null;
     try {
       window.syncHalloweenWhitelist();
@@ -1216,6 +1635,10 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       window.saveHalloweenExchangeConfig();
       if (!lines.length) {
         closeAll();
+        if (needFloatExistingKrathong) {
+          await sleep(300);
+          await window.runLoyKrathongAutoUseInBag(false);
+        }
         window.__halloweenLastLog = '⏭️ โควต้าของที่เลือกเต็มแล้ววันนี้ — เดินทางกลับแมพฟาร์ม';
         window.__planJobChangeHoldUntil = 0;
         if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
@@ -1233,27 +1656,38 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         if (curSt.candy < beforeCandy) break;
       }
       closeAll();
+      await sleep(350);
+      const autoUseRes = await window.runLoyKrathongAutoUseInBag(manual);
+      if (autoUseRes && autoUseRes.used && autoUseRes.summary) {
+        exchangedSummary.push(autoUseRes.summary);
+        window.__halloweenLastLog = '✅ แลกและใช้งานสำเร็จ: ' + exchangedSummary.join(' · ');
+      }
       window.__halloweenNextTryAt = Date.now() + 8000;
       window.__planJobChangeHoldUntil = 0;
       if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
-      return { success: true, exchanged: lines, summary: exchangedSummary.join(', '), status: window.getHalloweenExchangeStatus() };
+      return { success: true, exchanged: lines, summary: exchangedSummary.join(' · '), status: window.getHalloweenExchangeStatus() };
     } finally {
       if (typeof unsubDlg === 'function') { try { unsubDlg(); } catch (_) {} }
       if (typeof unsubShop === 'function') { try { unsubShop(); } catch (_) {} }
       window.__isHalloweenExchanging = false;
     }
   };
-  if (!window.__pmHalloweenLoopId || window.__pmHalloweenLoopVer !== 4) {
+  if (!window.__pmHalloweenLoopId || window.__pmHalloweenLoopVer !== 5) {
     if (window.__pmHalloweenLoopId) { try { clearInterval(window.__pmHalloweenLoopId); } catch (_) {} }
-    window.__pmHalloweenLoopVer = 4;
+    window.__pmHalloweenLoopVer = 5;
     window.__halloweenEventEnded = false;
     if ((window.__halloweenNextTryAt || 0) > Date.now() + 86400000) window.__halloweenNextTryAt = 0;
-    window.__pmHalloweenLoopId = setInterval(() => {
+    window.__pmHalloweenLoopId = setInterval(async () => {
       try {
         const liveShop = window.readLiveWitchShopState && window.readLiveWitchShopState();
         if (liveShop && !window.__isHalloweenExchanging) window.updateHalloweenQuotaFromShop(liveShop);
-        if (window.__isBotRunning && !window.__consolidationPending && !window.__isHalloweenExchanging) {
-          window.runHalloweenExchangeStep(false);
+        if (!window.__consolidationPending && !window.__isHalloweenExchanging && !window.__isUsingEventItems) {
+          if (typeof window.runLoyKrathongAutoUseInBag === 'function') {
+            await window.runLoyKrathongAutoUseInBag(false);
+          }
+          if (window.__isBotRunning && !window.__isUsingEventItems) {
+            await window.runHalloweenExchangeStep(false);
+          }
         }
       } catch (_) {}
     }, 5000);
@@ -1267,27 +1701,42 @@ function buildHalloweenReadCode() {
   })()`;
 }
 
-function buildHalloweenSaveCode(payload) {
-  const enabled = payload.enabled !== undefined ? !!payload.enabled : true;
-  const rawRules = (payload && payload.rules && typeof payload.rules === 'object') ? payload.rules : {};
+function sanitizeHalloweenRules(rawRules) {
   const cleanRules = {};
+  const src = (rawRules && typeof rawRules === 'object') ? rawRules : {};
   WITCH_HAZEL_ITEMS.forEach(it => {
     const k = String(it.itemId);
-    const r = rawRules[k];
+    const r = src[k];
     if (r && typeof r === 'object') {
       cleanRules[k] = {
         enabled: !!r.enabled,
-        minQty: Math.max(1, Math.min(9999, parseInt(r.minQty, 10) || 1))
+        minQty: Math.max(1, Math.min(9999, parseInt(r.minQty, 10) || 1)),
+        autoUse: it.type === 'Consumable' ? !!r.autoUse : false
       };
     }
   });
+  return cleanRules;
+}
+
+function buildHalloweenSaveCode(payload) {
+  const enabled = payload.enabled !== undefined ? !!payload.enabled : true;
+  const autoOpenKrathongBox = payload && payload.autoOpenKrathongBox !== undefined ? !!payload.autoOpenKrathongBox : false;
+  const cleanRules = sanitizeHalloweenRules(payload && payload.rules);
+  const anyAutoUse = autoOpenKrathongBox || Object.values(cleanRules).some(r => r && r.autoUse);
   return `(() => {
     ${HALLOWEEN_RUNTIME_INSTALL_JS};
     const cfg = window.__halloweenExchangeConfig;
     cfg.enabled = ${JSON.stringify(enabled)};
+    cfg.autoOpenKrathongBox = ${JSON.stringify(autoOpenKrathongBox)};
     cfg.rules = ${JSON.stringify(cleanRules)};
     window.saveHalloweenExchangeConfig();
     const wl = window.syncHalloweenWhitelist();
+    if (typeof window.syncLoyKrathongAutoBuffPotions === 'function') window.syncLoyKrathongAutoBuffPotions();
+    if (${JSON.stringify(anyAutoUse)}) {
+      setTimeout(() => {
+        try { if (typeof window.runLoyKrathongAutoUseInBag === 'function') window.runLoyKrathongAutoUseInBag(false); } catch (_) {}
+      }, 150);
+    }
     return Object.assign(window.getHalloweenExchangeStatus(), { whitelist: wl });
   })()`;
 }
@@ -1296,29 +1745,48 @@ function buildHalloweenExchangeNowCode(payload) {
   const itemId = payload && payload.itemId ? toInt(payload.itemId, 1, 10000000) : null;
   const hasRules = payload && payload.rules && typeof payload.rules === 'object';
   let saveSnippet = '';
-  if (hasRules) {
-    const cleanRules = {};
-    WITCH_HAZEL_ITEMS.forEach(it => {
-      const k = String(it.itemId);
-      const r = payload.rules[k];
-      if (r && typeof r === 'object') {
-        cleanRules[k] = {
-          enabled: !!r.enabled,
-          minQty: Math.max(1, Math.min(9999, parseInt(r.minQty, 10) || 1))
-        };
-      }
-    });
+  if (hasRules || (payload && payload.autoOpenKrathongBox !== undefined)) {
+    const cleanRules = sanitizeHalloweenRules(payload && payload.rules);
+    const setKbox = payload && payload.autoOpenKrathongBox !== undefined
+      ? `cfg.autoOpenKrathongBox = ${JSON.stringify(!!payload.autoOpenKrathongBox)};`
+      : '';
     saveSnippet = `
       const cfg = window.__halloweenExchangeConfig;
-      cfg.rules = ${JSON.stringify(cleanRules)};
+      ${hasRules ? `cfg.rules = ${JSON.stringify(cleanRules)};` : ''}
+      ${setKbox}
       window.saveHalloweenExchangeConfig();
       window.syncHalloweenWhitelist();
+      if (typeof window.syncLoyKrathongAutoBuffPotions === 'function') window.syncLoyKrathongAutoBuffPotions();
     `;
   }
   return `(async () => {
     ${HALLOWEEN_RUNTIME_INSTALL_JS};
     ${saveSnippet}
     return await window.runHalloweenExchangeStep(true, ${JSON.stringify(itemId)});
+  })()`;
+}
+
+function buildHalloweenUseNowCode(payload) {
+  const hasRules = payload && payload.rules && typeof payload.rules === 'object';
+  let saveSnippet = '';
+  if (hasRules || (payload && payload.autoOpenKrathongBox !== undefined)) {
+    const cleanRules = sanitizeHalloweenRules(payload && payload.rules);
+    const setKbox = payload && payload.autoOpenKrathongBox !== undefined
+      ? `cfg.autoOpenKrathongBox = ${JSON.stringify(!!payload.autoOpenKrathongBox)};`
+      : '';
+    saveSnippet = `
+      const cfg = window.__halloweenExchangeConfig;
+      ${hasRules ? `cfg.rules = ${JSON.stringify(cleanRules)};` : ''}
+      ${setKbox}
+      window.saveHalloweenExchangeConfig();
+      window.syncHalloweenWhitelist();
+      if (typeof window.syncLoyKrathongAutoBuffPotions === 'function') window.syncLoyKrathongAutoBuffPotions();
+    `;
+  }
+  return `(async () => {
+    ${HALLOWEEN_RUNTIME_INSTALL_JS};
+    ${saveSnippet}
+    return await window.runHalloweenUseNow();
   })()`;
 }
 
@@ -2971,7 +3439,7 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
 
     if (req.method === 'GET') {
       const readCode = buildHalloweenReadCode();
-      const hasGlobalRules = Object.keys(store.rules || {}).length > 0;
+      const hasGlobalRules = Boolean(store.autoOpenKrathongBox) || Object.keys(store.rules || {}).some(k => store.rules[k] && (store.rules[k].enabled || store.rules[k].autoUse));
       const clients = await Promise.all(profiles.map(async (p) => {
         const base = {
           id: p.id,
@@ -2984,6 +3452,7 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           exchanging: false,
           lastLog: '',
           quotaState: {},
+          ownedByItem: {},
           readyCount: 0
         };
         if (!p.debugPort) return base;
@@ -2992,10 +3461,14 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           let st = r && r.result && r.result.success ? r.result : null;
           if (!st) return base;
           const clientRules = (st.config && st.config.rules) || {};
-          const clientHasRules = Object.keys(clientRules).some(k => clientRules[k] && clientRules[k].enabled);
+          const clientHasRules = Boolean(st.autoOpenKrathongBox) || Object.keys(clientRules).some(k => clientRules[k] && (clientRules[k].enabled || clientRules[k].autoUse));
           if (!hasGlobalRules && clientHasRules && Object.keys(store.rules || {}).length === 0) {
-            store = saveGlobalHalloweenStore({ enabled: st.enabled !== false, rules: clientRules });
-          } else if (store.enabled && hasGlobalRules && !clientHasRules) {
+            store = saveGlobalHalloweenStore({
+              enabled: st.enabled !== false,
+              autoOpenKrathongBox: Boolean(st.autoOpenKrathongBox),
+              rules: clientRules
+            });
+          } else if ((store.enabled || store.autoOpenKrathongBox || hasGlobalRules) && !clientHasRules) {
             const syncRes = await evalProfilePort(p.debugPort, buildHalloweenSaveCode(store), 2800);
             if (syncRes && syncRes.result && syncRes.result.success) st = syncRes.result;
           }
@@ -3008,9 +3481,11 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
             candy: Number(st.candy) || 0,
             pumpkin: Number(st.pumpkin) || 0,
             zeny: Number(st.zeny) || 0,
+            autoOpenKrathongBox: Boolean(st.autoOpenKrathongBox),
             exchanging: Boolean(st.exchanging),
             lastLog: st.lastLog || '',
             quotaState: (st.live && st.live.quotaState) || {},
+            ownedByItem: (st.live && st.live.ownedByItem) || {},
             readyCount,
             config: st.config || store
           };
@@ -3059,7 +3534,7 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
       }
 
       if (op === 'exchange_now') {
-        if (payload.rules && typeof payload.rules === 'object') {
+        if ((payload.rules && typeof payload.rules === 'object') || payload.autoOpenKrathongBox !== undefined) {
           store = saveGlobalHalloweenStore(payload);
         }
         const targets = targetId
@@ -3071,6 +3546,7 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
         }
         const code = buildHalloweenExchangeNowCode({
           itemId: payload.itemId || null,
+          autoOpenKrathongBox: store.autoOpenKrathongBox,
           rules: store.rules
         });
         const results = await Promise.all(targets.map(async (p) => {
@@ -3091,6 +3567,49 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           success: true,
           triggeredCount: okList.length,
           summary: okList.map(x => `${x.name}: ${x.summary || x.message || 'กำลังเดินไปแลก'}`).join(' · '),
+          results
+        });
+        return true;
+      }
+
+      if (op === 'use_now') {
+        if ((payload.rules && typeof payload.rules === 'object') || payload.autoOpenKrathongBox !== undefined) {
+          store = saveGlobalHalloweenStore(payload);
+        }
+        const targets = targetId
+          ? profiles.filter(p => p && p.debugPort && p.id === targetId)
+          : profiles.filter(p => p && p.debugPort);
+        if (targets.length === 0) {
+          sendJSON({ success: false, error: 'ไม่มีจอเกมที่ออนไลน์อยู่' }, 400);
+          return true;
+        }
+        const code = buildHalloweenUseNowCode({
+          autoOpenKrathongBox: store.autoOpenKrathongBox,
+          rules: store.rules
+        });
+        const results = await Promise.all(targets.map(async (p) => {
+          try {
+            const r = await evalProfilePort(p.debugPort, code, 30000);
+            return Object.assign({ profileId: p.id, name: p.name || p.id }, (r && r.result) || { success: false, error: r?.error || 'ไม่ตอบสนอง' });
+          } catch (e) {
+            return { profileId: p.id, name: p.name || p.id, success: false, error: e.message };
+          }
+        }));
+        const okList = results.filter(x => x && x.success);
+        const activeList = okList.filter(x => x.used || x.navigating);
+        if (okList.length === 0) {
+          const firstErr = (results[0] && results[0].error) || 'ไม่สามารถเปิดใช้ไอเทมได้ หรือจอเกมไม่ตอบสนอง';
+          sendJSON({ success: false, error: firstErr, results });
+          return true;
+        }
+        const summaryText = activeList.length > 0
+          ? activeList.slice(0, 6).map(x => `${x.name}: ${x.summary}`).join(' · ') + (activeList.length > 6 ? ` (+อีก ${activeList.length - 6} จอ)` : '')
+          : `ตรวจสอบครบ ${okList.length} จอ — ไม่มีไอเทมที่ต้องเปิดใช้ในกระเป๋าตอนนี้`;
+        sendJSON({
+          success: true,
+          triggeredCount: okList.length,
+          usedCount: activeList.length,
+          summary: summaryText,
           results
         });
         return true;
@@ -3424,9 +3943,15 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
       return true;
     }
     if (op === 'exchange_now') {
-      if (payload.rules && typeof payload.rules === 'object') saveGlobalHalloweenStore(payload);
+      if ((payload.rules && typeof payload.rules === 'object') || payload.autoOpenKrathongBox !== undefined) saveGlobalHalloweenStore(payload);
       const r = await evalProfilePort(profile.debugPort, buildHalloweenExchangeNowCode(payload), 25000);
-      sendJSON(r && r.result ? r.result : { success: false, error: r?.error || 'สั่งแลกของ Halloween ไม่สำเร็จ' });
+      sendJSON(r && r.result ? r.result : { success: false, error: r?.error || 'สั่งแลกของลอยกระทงไม่สำเร็จ' });
+      return true;
+    }
+    if (op === 'use_now') {
+      if ((payload.rules && typeof payload.rules === 'object') || payload.autoOpenKrathongBox !== undefined) saveGlobalHalloweenStore(payload);
+      const r = await evalProfilePort(profile.debugPort, buildHalloweenUseNowCode(payload), 30000);
+      sendJSON(r && r.result ? r.result : { success: false, error: r?.error || 'สั่งเปิดใช้ของลอยกระทงไม่สำเร็จ' });
       return true;
     }
     if (op === 'apply_all') {

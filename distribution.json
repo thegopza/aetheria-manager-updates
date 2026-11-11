@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "19aa44302cb5d3148312461962b4baaa12972290",
+  "sourceCommit": "c5faead990b113bb63c845ce242a90f02a0204eb",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -8,7 +8,7 @@
     },
     {
       "path": "manager/auth_sync.js",
-      "sha256": "de75a2ddb4547ca2dbe228cc344b899c83a0e1259b04e5694306b4aba5c3bdc0"
+      "sha256": "b1657a20d03030dca48d4605e1d06e0b1a7deef0182ff7b1bf9167ab1358c183"
     },
     {
       "path": "manager/bot_auto_update.js",
@@ -132,7 +132,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "b9f70855a8c547f5294fc2393f8776dac9368649c94b84b0d478ec8e42c619a8"
+      "sha256": "10f71d1a4f9ae4331e7cf394a18222b0011f0c1b6cd8608c74ec3f01201aafe7"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -188,7 +188,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "724bfe8f34112762d22603b504f311db756664977b9b40d0985983351bc59818"
+      "sha256": "80014bcb9f6401015a548dce2e51664cc5d287febccb4a5e468f2b6fcfa72ca4"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -252,11 +252,11 @@
     },
     {
       "path": "manager/public/style.css",
-      "sha256": "a29a3e7fd9ea615fd9fd8337c304eb6a82f80d19ea2e1a2972fbedee15ae0c42"
+      "sha256": "0bf03051c26bbca5c525ffcab6e506cc3e129b11dbf2ad0742dd44cd0c7148da"
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "10db925e45bfdae26f6a805025421073ab0a4c226adba94edb9e7a215e4bb3ff"
+      "sha256": "f33e86ecbad66f336a451576596c77cbe23fab918ad06cedd96611665face41b"
     },
     {
       "path": "manager/screen_proxy_manager.js",
@@ -284,7 +284,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "15d3e641ec6bbcc08849a3eb2789e6b359eac166c3505783eda94b880959a4e3"
+      "sha256": "ea1d5b897c37bb48767dc17dec83e36b6c85d59380ee154fd8e635c43b75e578"
     },
     {
       "path": "manager/test_isolation.js",

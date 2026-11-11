@@ -1137,12 +1137,12 @@ function getPortraitSrc(p, state) {
 function getActivityTone(text, screenPhase) {
   if (screenPhase && screenPhase !== 'in_game') {
     if (screenPhase === 'account_banned' || screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'login_auth_error' || screenPhase === 'char_select_online' || screenPhase === 'disconnected') return 'danger';
-    if (screenPhase === 'char_select_limit' || screenPhase === 'loading' || screenPhase === 'char_select_loading') return 'warn';
+    if (screenPhase === 'char_select_limit' || screenPhase === 'loading' || screenPhase === 'char_select_loading' || screenPhase === 'register_queue') return 'warn';
     if (screenPhase === 'login' || screenPhase === 'login_loading' || screenPhase === 'char_select' || screenPhase === 'char_create' || screenPhase === 'register') return 'travel';
   }
   const t = String(text || '');
   if (t.includes('ตาย') || t.includes('ชุบ') || t.includes('พลาด') || t.includes('ไม่ตอบ') || t.includes('ไม่ผ่าน') || t.includes('Error') || t.includes('HTTP 5') || t.includes('ค้างออนไลน์')) return 'danger';
-  if (t.includes('ซื้อ') || t.includes('ขาย') || t.includes('กำลังโหลด') || t.includes('จำกัด 3 จอ') || t.includes('รีเฟรช')) return 'warn';
+  if (t.includes('ซื้อ') || t.includes('ขาย') || t.includes('กำลังโหลด') || t.includes('จำกัด 3 จอ') || t.includes('รีเฟรช') || t.includes('รอคิวสมัคร') || t.includes('ถึงคิวสมัคร')) return 'warn';
   if (t.includes('เดิน') || t.includes('หน้า Login') || t.includes('เลือกตัวละคร') || t.includes('สมัครบัญชี') || t.includes('สร้างตัวละคร') || t.includes('กำลังเข้าสู่ระบบ')) return 'travel';
   if (t.includes('ฟาร์ม') || t.includes('Farm')) return 'farm';
   if (t.includes('รอ') || t.includes('แสตนด์บาย') || t.includes('หยุด')) return 'idle';
@@ -10336,11 +10336,47 @@ bindBulkDeleteModalEvents();
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", bindBulkDeleteModalEvents);
 }
+
+function openAntiBanGuideModal() {
+  const modal = document.getElementById("modal-anti-ban-guide");
+  if (modal) modal.classList.add("active");
+}
+
+function closeAntiBanGuideModal() {
+  const modal = document.getElementById("modal-anti-ban-guide");
+  if (modal) modal.classList.remove("active");
+}
+
+function bindAntiBanGuideModalEvents() {
+  const openBtn = document.getElementById("btn-anti-ban-guide");
+  const closeBtn = document.getElementById("anti-ban-close-btn");
+  const okBtn = document.getElementById("anti-ban-ok-btn");
+  const modal = document.getElementById("modal-anti-ban-guide");
+  if (openBtn) openBtn.onclick = openAntiBanGuideModal;
+  if (closeBtn) closeBtn.onclick = closeAntiBanGuideModal;
+  if (okBtn) okBtn.onclick = closeAntiBanGuideModal;
+  if (modal && !modal.dataset.abgBound) {
+    modal.dataset.abgBound = "1";
+    modal.addEventListener("click", (e) => {
+      if (e.target === modal) closeAntiBanGuideModal();
+    });
+  }
+}
+
+bindAntiBanGuideModalEvents();
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bindAntiBanGuideModalEvents);
+}
+
 window.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     const modal = document.getElementById("modal-bulk-delete-profiles");
     if (modal && modal.style.display && modal.style.display !== "none") {
       closeBulkDeleteProfilesModal();
+    }
+    const abgModal = document.getElementById("modal-anti-ban-guide");
+    if (abgModal && abgModal.classList.contains("active")) {
+      closeAntiBanGuideModal();
     }
   }
 });

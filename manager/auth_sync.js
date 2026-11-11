@@ -258,11 +258,112 @@ const READ_JS = `(() => {
     userToggledAt: Number(c.userToggledAt) || 0,
     inGame,
     charName,
-    isEditingAuth
+    isEditingAuth,
+    registerQueueWaiting: Boolean(window.__pmRegisterQueueState && window.__pmRegisterQueueState.waiting),
+    registerQueueDismissed: Boolean(window.__pmRegisterQueueDismissedUntil && Date.now() < window.__pmRegisterQueueDismissedUntil)
   };
 })()`;
 
+const QUEUE_OVERLAY_HELPER_JS = `
+  if (typeof window.__setPmRegisterQueueOverlay !== 'function') {
+    window.__setPmRegisterQueueOverlay = function(q) {
+      const fmtRemain = (targetMs) => {
+        const sec = Math.max(0, Math.ceil(((Number(targetMs) || 0) - Date.now()) / 1000));
+        const m = Math.floor(sec / 60);
+        const s = sec % 60;
+        return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+      };
+      if (!q || !q.waiting || (window.__pmRegisterQueueDismissedUntil && Date.now() < window.__pmRegisterQueueDismissedUntil)) {
+        window.__pmRegisterQueueState = null;
+        if (window.__pmRegisterQueueTimer) {
+          clearInterval(window.__pmRegisterQueueTimer);
+          window.__pmRegisterQueueTimer = null;
+        }
+        const old = document.getElementById('pm-register-queue-overlay');
+        if (old) old.remove();
+        return;
+      }
+      window.__pmRegisterQueueState = q;
+      if (window.__authConfig && window.__authConfig.register) {
+        window.__authConfig.register = false;
+      }
+      let root = document.getElementById('pm-register-queue-overlay');
+      if (!root) {
+        root = document.createElement('div');
+        root.id = 'pm-register-queue-overlay';
+        root.style.cssText = 'position:fixed;inset:0;z-index:99985;background:rgba(6,10,22,0.82);backdrop-filter:blur(5px);display:flex;align-items:center;justify-content:center;padding:10px;box-sizing:border-box;font-family:"IBM Plex Sans Thai","Plus Jakarta Sans",sans-serif;color:#f8fafc;user-select:none;';
+        root.innerHTML = [
+          '<div style="width:100%;max-width:360px;background:linear-gradient(155deg,rgba(15,23,42,0.97) 0%,rgba(30,20,45,0.97) 100%);border:1.5px solid rgba(245,158,11,0.6);border-radius:14px;padding:14px 16px;box-shadow:0 20px 50px rgba(0,0,0,0.8),0 0 28px rgba(245,158,11,0.18);text-align:center;">',
+          '  <div data-rq="badge" style="display:inline-flex;align-items:center;gap:6px;background:rgba(245,158,11,0.16);border:1px solid rgba(251,191,36,0.5);color:#fde68a;border-radius:999px;padding:4px 12px;font-size:13px;font-weight:800;letter-spacing:0.2px;margin-bottom:8px;">⏳ กำลังรอคิวสมัคร</div>',
+          '  <div data-rq="title" style="font-size:15px;font-weight:800;color:#fff;margin-bottom:4px;">กำลังรอคิวสมัครไอดีอัตโนมัติ</div>',
+          '  <div data-rq="sub" style="font-size:11.5px;line-height:1.45;color:#cbd5e1;margin-bottom:10px;">ระบบทยอยสมัครทีละ 1–3 จอ แล้วเว้นช่วง 10–20 นาที เพื่อลดความเสี่ยงโดนแบนยกชุด</div>',
+          '  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">',
+          '    <div style="background:rgba(2,6,23,0.72);border:1px solid rgba(148,163,184,0.22);border-radius:10px;padding:8px 6px;">',
+          '      <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;" data-rq="pos-lbl">ลำดับคิวรอ</div>',
+          '      <div data-rq="pos" style="font-size:17px;font-weight:800;color:#38bdf8;font-family:monospace;">#1</div>',
+          '    </div>',
+          '    <div style="background:rgba(2,6,23,0.72);border:1px solid rgba(245,158,11,0.32);border-radius:10px;padding:8px 6px;">',
+          '      <div style="font-size:10px;color:#94a3b8;margin-bottom:2px;" data-rq="timer-lbl">ชุดถัดไปในอีก</div>',
+          '      <div data-rq="timer" style="font-size:17px;font-weight:800;color:#fbbf24;font-family:monospace;">--:--</div>',
+          '    </div>',
+          '  </div>',
+          '  <button type="button" data-rq="dismiss" style="background:rgba(30,41,59,0.8);border:1px solid rgba(148,163,184,0.32);color:#cbd5e1;border-radius:8px;padding:4px 10px;font-size:11px;cursor:pointer;">✏️ กรอกไอดีเอง (ซ่อน 5 นาที)</button>',
+          '</div>'
+        ].join('');
+        (document.body || document.documentElement).appendChild(root);
+        const disBtn = root.querySelector('[data-rq="dismiss"]');
+        if (disBtn) {
+          disBtn.onclick = () => {
+            window.__pmRegisterQueueDismissedUntil = Date.now() + 5 * 60 * 1000;
+            window.__setPmRegisterQueueOverlay(null);
+          };
+        }
+      }
+      const updateUi = () => {
+        const st = window.__pmRegisterQueueState;
+        if (!st || !st.waiting) return;
+        const badge = root.querySelector('[data-rq="badge"]');
+        const title = root.querySelector('[data-rq="title"]');
+        const sub = root.querySelector('[data-rq="sub"]');
+        const posLbl = root.querySelector('[data-rq="pos-lbl"]');
+        const posEl = root.querySelector('[data-rq="pos"]');
+        const timerLbl = root.querySelector('[data-rq="timer-lbl"]');
+        const timerEl = root.querySelector('[data-rq="timer"]');
+        if (st.startingSoon) {
+          if (badge) badge.textContent = '⚡ ถึงคิวสมัครรอบนี้แล้ว';
+          if (title) title.textContent = 'กำลังเตรียมสมัครไอดีให้จอนี้...';
+          if (sub) sub.textContent = 'เว้นจังหวะห่างกันเล็กน้อยภายในกลุ่ม 1–3 จอ เพื่อความเป็นธรรมชาติ';
+          if (posLbl) posLbl.textContent = 'ลำดับในรอบนี้';
+          if (posEl) posEl.textContent = (st.waveSlot || 1) + ' / ' + (st.waveTargetSize || 1);
+          if (timerLbl) timerLbl.textContent = 'เริ่มสมัครในอีก';
+          if (timerEl) timerEl.textContent = fmtRemain(st.readyAt || Date.now());
+        } else {
+          if (badge) badge.textContent = '⏳ กำลังรอคิวสมัคร';
+          if (title) title.textContent = 'กำลังรอคิวสมัครไอดีอัตโนมัติ';
+          if (sub) sub.textContent = 'ระบบทยอยสมัครทีละ 1–3 จอ แล้วเว้นช่วง 10–20 นาที เพื่อลดความเสี่ยงโดนแบนยกชุด';
+          if (posLbl) posLbl.textContent = 'ลำดับคิวรอ';
+          if (posEl) posEl.textContent = '#' + (st.position || 1) + (st.totalWaiting ? ' / ' + st.totalWaiting : '');
+          if (timerLbl) timerLbl.textContent = 'ชุดถัดไปในอีก';
+          if (timerEl) timerEl.textContent = fmtRemain(st.nextWaveAt || Date.now());
+        }
+      };
+      updateUi();
+      if (!window.__pmRegisterQueueTimer) {
+        window.__pmRegisterQueueTimer = setInterval(updateUi, 1000);
+      }
+    };
+  }
+`;
+
+const pushQueueOverlayJs = q => `(() => {
+  ${QUEUE_OVERLAY_HELPER_JS}
+  window.__setPmRegisterQueueOverlay(${JSON.stringify(q)});
+  return { success: true };
+})()`;
+
 const pushJs = cfg => `(() => {
+  ${QUEUE_OVERLAY_HELPER_JS}
+  window.__setPmRegisterQueueOverlay(null);
   const c = window.__authConfig || (window.__authConfig = {});
   const patch = ${JSON.stringify(cfg)};
   const domUser = (document.getElementById('p-auth-user')?.value || '').trim();
@@ -279,7 +380,7 @@ const pushJs = cfg => `(() => {
   );
   const hasManualUserCreds = Boolean(
     c.username && c.password && !c.generatedUser && !c.register &&
-    (Number(c.userEditedAt) > 0 || Number(c.verifiedLoginAt) > 0 || !/^pm[a-z0-9]{8}$/.test(String(c.username)))
+    (Number(c.userEditedAt) > 0 || Number(c.verifiedLoginAt) > 0)
   );
   if ((patch.register || patch.generatedUser) && (hasManualUserCreds || isEditingAuth)) {
     return {
@@ -303,10 +404,236 @@ const pushJs = cfg => `(() => {
   return { success: true };
 })()`;
 
-function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentials, proxyRegister }) {
+function createAuthSync({
+  loadProfiles,
+  saveProfiles,
+  evalProfilePort,
+  credentials,
+  proxyRegister,
+  requireOnlineWindowForQueue = false,
+  waveOptions = {}
+}) {
   // passwords live in data/credentials.json (git-ignored), not in profiles.json
   const pw = p => credentials.getPassword(p.id);
   const pendingCreds = new Map(); // profileId -> { username, password, generatedUser }
+
+  // Staggered Auto-Register Wave Queue (1–3 accounts per wave, 10–20 min cooldown between waves)
+  const nowFn = typeof waveOptions.now === 'function' ? waveOptions.now : () => Date.now();
+  const randIntFn = typeof waveOptions.randInt === 'function' ? waveOptions.randInt : rInt;
+  const minBatchSize = Math.max(1, Number(waveOptions.minBatchSize ?? 1));
+  const maxBatchSize = Math.max(minBatchSize, Number(waveOptions.maxBatchSize ?? 3));
+  const minCooldownMs = Math.max(0, Number(waveOptions.minCooldownMs ?? 10 * 60 * 1000));
+  const maxCooldownMs = Math.max(minCooldownMs, Number(waveOptions.maxCooldownMs ?? 20 * 60 * 1000));
+  const admissionWindowMs = Math.max(0, Number(waveOptions.admissionWindowMs ?? 90 * 1000));
+  const intraWaveStaggerMinMs = Math.max(0, Number(waveOptions.intraWaveStaggerMinMs ?? 6000));
+  const intraWaveStaggerMaxMs = Math.max(intraWaveStaggerMinMs, Number(waveOptions.intraWaveStaggerMaxMs ?? 15000));
+  const slotMaxActiveMs = Math.max(1000, Number(waveOptions.slotMaxActiveMs ?? 5 * 60 * 1000));
+  const scheduleTimers = waveOptions.disableTimers !== true;
+
+  const lastClientOnlineAt = new Map(); // profileId -> timestamp
+  const lastPushedQueueDigest = new Map(); // profileId -> digest string
+  const scheduledReadyTimers = new Map(); // profileId -> Timeout
+
+  const waveState = {
+    waveId: 0,
+    targetSize: 0,
+    startedAt: 0,
+    rolledCooldownMs: 0,
+    nextWaveAt: 0,
+    sealed: true,
+    admitted: new Map(), // profileId -> { slotIndex, admittedAt, readyAt, completedAt, timedOut }
+    queueOrder: []       // FIFO profileIds waiting for upcoming waves
+  };
+
+  function isSlotStillBlocking(slot, now) {
+    if (!slot || slot.completedAt || slot.timedOut) return false;
+    if (now - slot.admittedAt >= slotMaxActiveMs) {
+      slot.timedOut = true;
+      return false;
+    }
+    return true;
+  }
+
+  function reconcileWaveState(allProfiles) {
+    const now = nowFn();
+    const byId = new Map((allProfiles || []).filter(Boolean).map(p => [p.id, p]));
+    let anyNewlyCompleted = false;
+    for (const [pid, slot] of waveState.admitted.entries()) {
+      if (slot.completedAt || slot.timedOut) continue;
+      const p = byId.get(pid);
+      const creatingCharGrace = Boolean(p && !p.lastCharName && p.registeredAt && (now - p.registeredAt < 60000));
+      const finished = !p || Boolean(p.lastCharName) || (!p.autoRegister && !p.loginSyncPending && !creatingCharGrace);
+      const clientGone = requireOnlineWindowForQueue && ((now - (lastClientOnlineAt.get(pid) || 0)) > 45000);
+      if (finished) {
+        slot.completedAt = now;
+        anyNewlyCompleted = true;
+        lastPushedQueueDigest.delete(pid);
+      } else if (clientGone || (now - slot.admittedAt >= slotMaxActiveMs)) {
+        slot.timedOut = true;
+        lastPushedQueueDigest.delete(pid);
+      }
+    }
+    if (anyNewlyCompleted && waveState.admitted.size > 0) {
+      const stillActive = Array.from(waveState.admitted.values()).some(s => isSlotStillBlocking(s, now));
+      if (!stillActive && (now - waveState.startedAt) > 60000) {
+        waveState.nextWaveAt = Math.max(waveState.nextWaveAt, now + waveState.rolledCooldownMs);
+      }
+    }
+    waveState.queueOrder = waveState.queueOrder.filter(pid => {
+      if (waveState.admitted.has(pid)) return false;
+      const p = byId.get(pid);
+      if (!p || !p.autoRegister || p.lastCharName) return false;
+      if (requireOnlineWindowForQueue) {
+        const seenAt = lastClientOnlineAt.get(pid) || 0;
+        if (!seenAt || (now - seenAt > 45000)) return false;
+      }
+      return true;
+    });
+  }
+
+  function admitIntoCurrentWave(pid, now) {
+    const slotIndex = waveState.admitted.size;
+    const stagger = slotIndex === 0
+      ? 0
+      : (intraWaveStaggerMaxMs > 0 ? slotIndex * randIntFn(intraWaveStaggerMinMs, intraWaveStaggerMaxMs) : 0);
+    const readyAt = now + stagger;
+    const slot = { slotIndex, admittedAt: now, readyAt, completedAt: 0, timedOut: false };
+    waveState.admitted.set(pid, slot);
+    const qIdx = waveState.queueOrder.indexOf(pid);
+    if (qIdx !== -1) waveState.queueOrder.splice(qIdx, 1);
+    if (waveState.admitted.size >= waveState.targetSize) {
+      waveState.sealed = true;
+    }
+    return slot;
+  }
+
+  function requestRegisterWaveAccess(profile, allProfiles) {
+    const now = nowFn();
+    reconcileWaveState(allProfiles);
+    const pid = profile.id;
+
+    // 1. Already admitted in current wave
+    if (waveState.admitted.has(pid)) {
+      const slot = waveState.admitted.get(pid);
+      if (now < slot.readyAt) {
+        return {
+          allowed: false,
+          startingSoon: true,
+          readyAt: slot.readyAt,
+          waveSlot: slot.slotIndex + 1,
+          waveTargetSize: waveState.targetSize,
+          nextWaveAt: waveState.nextWaveAt
+        };
+      }
+      return { allowed: true, waveId: waveState.waveId };
+    }
+
+    // 2. Join currently open unsealed wave if within admission window and front of queue
+    if (waveState.waveId > 0 && !waveState.sealed) {
+      if (waveState.admitted.size < waveState.targetSize && (now - waveState.startedAt) <= admissionWindowMs) {
+        if (waveState.queueOrder.length === 0 || waveState.queueOrder[0] === pid) {
+          const slot = admitIntoCurrentWave(pid, now);
+          return {
+            allowed: now >= slot.readyAt,
+            startingSoon: now < slot.readyAt,
+            readyAt: slot.readyAt,
+            waveSlot: slot.slotIndex + 1,
+            waveTargetSize: waveState.targetSize,
+            nextWaveAt: waveState.nextWaveAt
+          };
+        }
+      } else {
+        waveState.sealed = true;
+      }
+    }
+
+    // 3. Start a new wave if cooldown has elapsed and previous wave slots are no longer blocking
+    const anyBlocking = Array.from(waveState.admitted.values()).some(s => isSlotStillBlocking(s, now));
+    if (!anyBlocking && now >= waveState.nextWaveAt) {
+      if (!waveState.queueOrder.includes(pid)) {
+        waveState.queueOrder.push(pid);
+      }
+      const targetSize = randIntFn(minBatchSize, maxBatchSize);
+      const rolledCooldownMs = randIntFn(minCooldownMs, maxCooldownMs);
+      waveState.waveId += 1;
+      waveState.targetSize = targetSize;
+      waveState.startedAt = now;
+      waveState.rolledCooldownMs = rolledCooldownMs;
+      waveState.nextWaveAt = now + rolledCooldownMs;
+      waveState.admitted.clear();
+      waveState.sealed = false;
+
+      const toAdmit = waveState.queueOrder.slice(0, targetSize);
+      for (const nextPid of toAdmit) {
+        admitIntoCurrentWave(nextPid, now);
+      }
+      console.log(`[AuthSync] 🌊 เริ่มรอบคิวสมัครชุดที่ #${waveState.waveId}: อนุญาต ${waveState.admitted.size}/${targetSize} จอ (พักรอรอบถัดไป ${Math.round(rolledCooldownMs / 60000)} นาที)`);
+
+      if (waveState.admitted.has(pid)) {
+        const slot = waveState.admitted.get(pid);
+        return {
+          allowed: now >= slot.readyAt,
+          startingSoon: now < slot.readyAt,
+          readyAt: slot.readyAt,
+          waveSlot: slot.slotIndex + 1,
+          waveTargetSize: waveState.targetSize,
+          nextWaveAt: waveState.nextWaveAt
+        };
+      }
+    }
+
+    // 4. Enqueue for future wave
+    if (!waveState.queueOrder.includes(pid)) {
+      waveState.queueOrder.push(pid);
+    }
+    const position = waveState.queueOrder.indexOf(pid) + 1;
+    const allEligibleWaiting = (allProfiles || []).filter(x => {
+      if (!x || !x.autoRegister || x.lastCharName || waveState.admitted.has(x.id)) return false;
+      if (requireOnlineWindowForQueue) {
+        const seen = lastClientOnlineAt.get(x.id) || 0;
+        return x.id === pid || (seen > 0 && (now - seen <= 45000));
+      }
+      return true;
+    }).length;
+    const totalWaiting = Math.max(waveState.queueOrder.length, allEligibleWaiting);
+
+    return {
+      allowed: false,
+      startingSoon: false,
+      position,
+      totalWaiting,
+      waveTargetSize: waveState.targetSize,
+      nextWaveAt: waveState.nextWaveAt
+    };
+  }
+
+  function scheduleReadyWakeup(profileId, readyAt) {
+    if (!scheduleTimers || scheduledReadyTimers.has(profileId)) return;
+    const delay = Math.max(100, readyAt - nowFn() + 120);
+    const t = setTimeout(() => {
+      scheduledReadyTimers.delete(profileId);
+      try {
+        const fresh = (loadProfiles() || []).find(x => x && x.id === profileId);
+        if (fresh) syncOne(fresh).catch(() => {});
+      } catch (_) {}
+    }, delay);
+    if (typeof t.unref === 'function') t.unref();
+    scheduledReadyTimers.set(profileId, t);
+  }
+
+  function getRegisterQueueSnapshot() {
+    const now = nowFn();
+    return {
+      waveId: waveState.waveId,
+      targetSize: waveState.targetSize,
+      startedAt: waveState.startedAt,
+      nextWaveAt: waveState.nextWaveAt,
+      remainMs: Math.max(0, waveState.nextWaveAt - now),
+      sealed: waveState.sealed,
+      admittedIds: Array.from(waveState.admitted.keys()),
+      queueOrder: waveState.queueOrder.slice()
+    };
+  }
 
   function updateProfile(id, patch) {
     const profiles = loadProfiles();
@@ -451,13 +778,24 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     const r = profile.debugPort ? await evalProfilePort(profile.debugPort, READ_JS, 2500) : null;
     const cur = r && r.success ? r.result : null;
     if (!cur) {
-      // Allow Proxy registration to proceed even before the game client window is online,
-      // ONLY if this profile does not already have a character or user account!
-      if (profile.autoRegister && !profile.lastCharName && !(profile.account && pw(profile)) && (proxyRegister?.hasPending?.(profile.id) || proxyAvailable)) {
-        await syncProxyRegistration(profile, { clientOnline: false });
+      // Allow Proxy registration recovery if a request was already in flight,
+      // or offline Proxy registration (gated by wave queue) when requireOnlineWindowForQueue is false.
+      if (profile.autoRegister && !profile.lastCharName && !(profile.account && pw(profile))) {
+        if (proxyRegister?.hasPending?.(profile.id)) {
+          await syncProxyRegistration(profile, { clientOnline: false });
+        } else if (!requireOnlineWindowForQueue && proxyAvailable) {
+          const allProfilesOffline = (typeof loadProfiles === 'function' ? loadProfiles() : []) || [];
+          const access = requestRegisterWaveAccess(profile, allProfilesOffline);
+          if (access.allowed) {
+            await syncProxyRegistration(profile, { clientOnline: false });
+          } else if (access.startingSoon && access.readyAt) {
+            scheduleReadyWakeup(profile.id, access.readyAt);
+          }
+        }
       }
       return;
     }
+    lastClientOnlineAt.set(profile.id, nowFn());
 
     // If user is actively typing in the in-game Auth HUD or login form right now, wait for next sync tick
     if (cur.isEditingAuth && (!cur.username || !cur.password)) {
@@ -478,13 +816,18 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     const hasClientCreds = Boolean(cur.username && cur.password && !cur.register && !cur.registerError);
     const managerMissingCreds = !profile.account || !pw(profile);
     const isSameGeneratedAccount = Boolean(profile.generatedAccount && profile.account && cur.username === profile.account);
-    const shouldAdoptFromClient = hasClientCreds && !isSameGeneratedAccount && !ownedByOtherProfile && (
+    const isCompletedBotSignup = Boolean(profile.autoRegister && cur.registerDone && cur.generatedUser);
+    const shouldAdoptFromClient = hasClientCreds && !isCompletedBotSignup && !isSameGeneratedAccount && !ownedByOtherProfile && (
       (manualUserEditedAt > 0 && manualUserEditedAt > lastManagerPushAt) ||
       managerMissingCreds ||
       (!cur.generatedUser && (profile.autoRegister || profile.generatedAccount))
     );
 
     if (shouldAdoptFromClient) {
+      if (cur.registerQueueWaiting) {
+        await evalProfilePort(profile.debugPort, pushQueueOverlayJs(null), 2000);
+        lastPushedQueueDigest.delete(profile.id);
+      }
       if (cur.username !== profile.account || cur.password !== pw(profile) || profile.autoRegister || (profile.generatedAccount && !cur.generatedUser)) {
         credentials.setPassword(profile.id, cur.password);
         updateProfile(profile.id, {
@@ -507,6 +850,10 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     if (profile.autoRegister) {
       // NEVER auto-register over a profile that already has a character or manual credentials in HUD!
       if (cur.username && cur.password && !cur.register && !cur.registerError && !cur.generatedUser && !isSameGeneratedAccount && !ownedByOtherProfile) {
+        if (cur.registerQueueWaiting) {
+          await evalProfilePort(profile.debugPort, pushQueueOverlayJs(null), 2000);
+          lastPushedQueueDigest.delete(profile.id);
+        }
         credentials.setPassword(profile.id, cur.password);
         updateProfile(profile.id, {
           account: cur.username,
@@ -522,6 +869,10 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
         return;
       }
       if (profile.lastCharName || ((cur.inGame || cur.charName) && !cur.registerDone)) {
+        if (cur.registerQueueWaiting) {
+          await evalProfilePort(profile.debugPort, pushQueueOverlayJs(null), 2000);
+          lastPushedQueueDigest.delete(profile.id);
+        }
         updateProfile(profile.id, {
           autoRegister: false,
           ...(cur.charName && !profile.lastCharName ? { lastCharName: cur.charName } : {})
@@ -535,25 +886,64 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
         return;
       }
       if (cur.registerDone && cur.username) {
+        if (cur.registerQueueWaiting) {
+          await evalProfilePort(profile.debugPort, pushQueueOverlayJs(null), 2000);
+          lastPushedQueueDigest.delete(profile.id);
+        }
         const cred = getCandidateCreds(profile);
         commitSuccessfulRegistration(profile, cur.username, cur.password || cred.password);
         console.log(`[AuthSync] ✅ ${profile.name}: สมัครบัญชีผ่านหน้าเกม "${cur.username}" สำเร็จ`);
         return;
       }
-      // If Proxy is enabled and not in browser fallback, use proxy registration (even if cur.register was previously set)
-      if (proxyAvailable) {
-        await syncProxyRegistration(profile, { clientOnline: true });
-        return;
-      }
-      if (cur.register) {
+      if (!proxyAvailable && cur.register) {
         if (cur.username) {
           const cred = getCandidateCreds(profile);
           if (cur.username !== cred.username) cred.username = cur.username;
         }
         return;
       }
-      if (cur.registerError) {
+      if (!proxyAvailable && cur.registerError) {
+        if (cur.registerQueueWaiting) {
+          await evalProfilePort(profile.debugPort, pushQueueOverlayJs(null), 2000);
+          lastPushedQueueDigest.delete(profile.id);
+        }
         updateProfile(profile.id, { autoRegister: false, registerError: cur.registerError });
+        return;
+      }
+      if (cur.registerQueueDismissed) {
+        return;
+      }
+
+      // Gate both Proxy and Direct Browser Auto-Register through the 1–3 / 10–20m Wave Queue
+      const access = requestRegisterWaveAccess(profile, allProfiles);
+      if (!access.allowed) {
+        const overlayPayload = {
+          waiting: true,
+          startingSoon: Boolean(access.startingSoon),
+          position: access.position || 1,
+          totalWaiting: access.totalWaiting || 1,
+          waveSlot: access.waveSlot || 1,
+          waveTargetSize: access.waveTargetSize || 1,
+          readyAt: access.readyAt || 0,
+          nextWaveAt: access.nextWaveAt || 0
+        };
+        const digest = JSON.stringify(overlayPayload);
+        if (!cur.registerQueueWaiting || lastPushedQueueDigest.get(profile.id) !== digest) {
+          const ovRes = await evalProfilePort(profile.debugPort, pushQueueOverlayJs(overlayPayload), 2500);
+          if (ovRes?.success) {
+            lastPushedQueueDigest.set(profile.id, digest);
+          }
+        }
+        if (access.startingSoon && access.readyAt) {
+          scheduleReadyWakeup(profile.id, access.readyAt);
+        }
+        return;
+      }
+      lastPushedQueueDigest.delete(profile.id);
+
+      // If Proxy is enabled and not in browser fallback, use proxy registration (even if cur.register was previously set)
+      if (proxyAvailable) {
+        await syncProxyRegistration(profile, { clientOnline: true });
         return;
       }
 
@@ -579,6 +969,11 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
       updateProfile(profile.id, { lastAuthSyncPushAt: Date.now() });
       console.log(`[AuthSync] 📝 ${profile.name}: ส่งคำสั่งสมัครบัญชี "${cred.username}" ไปที่จอ`);
       return;
+    }
+
+    if (cur.registerQueueWaiting) {
+      await evalProfilePort(profile.debugPort, pushQueueOverlayJs(null), 2000);
+      lastPushedQueueDigest.delete(profile.id);
     }
 
     // Only push Manager credentials to the client when Manager actually has both account and password
@@ -639,7 +1034,7 @@ function createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentia
     setTimeout(() => { tick(); setInterval(tick, SYNC_MS); }, 8000);
   }
 
-  return { start, tick, syncOne, resetProxyFallback };
+  return { start, tick, syncOne, resetProxyFallback, getRegisterQueueSnapshot };
 }
 
 module.exports = { createAuthSync, genUserId, genPassword };

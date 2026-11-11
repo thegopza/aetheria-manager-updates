@@ -240,6 +240,180 @@ body {
   margin-left: 2px;
 }
 
+.read-alert-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 55%, #991b1b 100%);
+  border: 1.5px solid #fca5a5;
+  border-radius: 999px;
+  padding: 3px 14px 3px 11px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  color: #ffffff;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.72), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  animation: readAlertBlink 1.15s ease-in-out infinite;
+  transition: transform 0.16s ease;
+}
+
+.read-alert-btn:hover {
+  animation-play-state: paused;
+  transform: translateY(-1px) scale(1.04);
+  background: linear-gradient(135deg, #f87171 0%, #ef4444 55%, #b91c1c 100%);
+  border-color: #ffffff;
+  box-shadow: 0 0 24px rgba(248, 113, 113, 0.95), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+}
+
+.read-alert-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fef08a;
+  box-shadow: 0 0 8px #fde047, 0 0 14px #ffffff;
+  flex-shrink: 0;
+}
+
+@keyframes readAlertBlink {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+    box-shadow: 0 0 18px rgba(239, 68, 68, 0.88), 0 0 32px rgba(220, 38, 38, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.38);
+    border-color: #fecaca;
+  }
+  50% {
+    opacity: 0.46;
+    transform: scale(0.97);
+    box-shadow: 0 0 6px rgba(239, 68, 68, 0.32);
+    border-color: rgba(248, 113, 113, 0.55);
+  }
+}
+
+.anti-ban-modal-card {
+  max-width: 660px;
+  width: 95%;
+  border: 1.5px solid rgba(239, 68, 68, 0.48);
+  box-shadow: 0 30px 75px rgba(0, 0, 0, 0.78), 0 0 40px rgba(220, 38, 38, 0.18);
+  display: flex;
+  flex-direction: column;
+}
+
+.anti-ban-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(248, 113, 113, 0.24);
+}
+
+.anti-ban-header-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(248, 113, 113, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.anti-ban-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: 76vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.anti-ban-section {
+  background: rgba(15, 23, 42, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+
+.anti-ban-section-warn {
+  background: linear-gradient(155deg, rgba(30, 20, 35, 0.88), rgba(15, 23, 42, 0.92));
+  border-color: rgba(245, 158, 11, 0.36);
+}
+
+.anti-ban-section-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  font-weight: 800;
+  color: #f8fafc;
+  margin-bottom: 8px;
+}
+
+.anti-ban-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(56, 189, 248, 0.18);
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  color: #7dd3fc;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 800;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.anti-ban-num-warn {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(251, 191, 36, 0.55);
+  color: #fde68a;
+}
+
+.anti-ban-list {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.58;
+  color: #cbd5e1;
+}
+
+.anti-ban-list b {
+  color: #f8fafc;
+}
+
+.anti-ban-highlight {
+  margin-top: 6px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(248, 113, 113, 0.38);
+  border-radius: 9px;
+  padding: 8px 11px;
+  color: #fee2e2;
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+.anti-ban-auto-note {
+  margin-top: 10px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.36);
+  border-radius: 9px;
+  padding: 8px 11px;
+  font-size: 12.2px;
+  line-height: 1.5;
+  color: #d1fae5;
+}
+
 .header-actions {
   display: flex;
   align-items: center;

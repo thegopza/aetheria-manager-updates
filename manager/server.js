@@ -1155,11 +1155,25 @@ const LIVE_STATE_EVAL = `(() => {
         autoReloadAfterMs = 18000;
       }
     } else if (loginForm) {
+      const regQ = window.__pmRegisterQueueState;
       const inputs = Array.from(loginForm.querySelectorAll('input'));
       const isRegisterForm = inputs.length >= 3 || Boolean(authCfg && authCfg.register);
       const submitBtn = loginForm.querySelector('button.login-go, button[type="submit"]');
       const isSubmitting = Boolean(submitBtn && submitBtn.disabled);
-      if (isRegisterForm) {
+      if (regQ && regQ.waiting) {
+        screenPhase = 'register_queue';
+        const targetMs = regQ.startingSoon ? (Number(regQ.readyAt) || 0) : (Number(regQ.nextWaveAt) || 0);
+        const remSec = Math.max(0, Math.ceil((targetMs - Date.now()) / 1000));
+        const remTxt = String(Math.floor(remSec / 60)).padStart(2, '0') + ':' + String(remSec % 60).padStart(2, '0');
+        if (regQ.startingSoon) {
+          baseLabel = '⚡ ถึงคิวสมัครรอบนี้ (' + (regQ.waveSlot || 1) + '/' + (regQ.waveTargetSize || 1) + ' · อีก ' + remTxt + ')';
+          detail = '⚡ กำลังเตรียมสมัครไอดีในกลุ่ม 1–3 จอ (เริ่มในอีก ' + remTxt + ')';
+        } else {
+          baseLabel = '⏳ กำลังรอคิวสมัคร (คิว #' + (regQ.position || 1) + ' · อีก ' + remTxt + ')';
+          detail = '⏳ รอคิวสมัครไอดีอัตโนมัติ ลำดับ #' + (regQ.position || 1) + (regQ.totalWaiting ? '/' + regQ.totalWaiting : '') + ' (ชุดถัดไปในอีก ' + remTxt + ')';
+        }
+        autoReloadAfterMs = 0;
+      } else if (isRegisterForm) {
         screenPhase = 'register';
         baseLabel = errText ? ('⚠️ สมัครไอดี: ' + errText.slice(0, 28)) : '📝 กำลังสมัครบัญชีใหม่...';
         detail = errText ? ('⚠️ หน้าสมัครสมาชิก: ' + errText) : '📝 หน้าสมัครสมาชิก: กำลังกรอกข้อมูลสมัครบัญชีใหม่';
@@ -5563,7 +5577,7 @@ const botAutoUpdater = createBotAutoUpdater({
   dataDir: path.join(__dirname, "data")
 });
 // Auto-login / auto-register: game clients get their profile's ID + password (manager/auth_sync.js)
-const authSync = createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentials, proxyRegister });
+const authSync = createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentials, proxyRegister, requireOnlineWindowForQueue: true });
 // Per-screen IP queue & split-tunnel forwarder (1 IP : 3 screens)
 const screenProxy = createScreenProxyManager({
   dataDir: path.join(__dirname, "data"),
@@ -8523,9 +8537,6 @@ const server = http.createServer(async (req, res) => {
         if (!fs.existsSync(sessionFolder)) fs.mkdirSync(sessionFolder, { recursive: true });
 
         if ((data.loginPassword || "").trim()) credentials.setPassword(newProfile.id, data.loginPassword.trim());
-        if (newProfile.autoRegister && proxyRegister.isEnabled()) {
-          setImmediate(() => authSync.syncOne(newProfile).catch(() => {}));
-        }
         sendJSON({ success: true, profile: newProfile });
       } catch (err) {
         sendJSON({ success: false, error: err.message }, 400);
@@ -8597,7 +8608,7 @@ const server = http.createServer(async (req, res) => {
         }
         saveProfiles(profiles);
         if (nextPassword) credentials.setPassword(id, nextPassword);
-        if (profiles[idx].autoRegister && proxyRegister.isEnabled()) {
+        if (profiles[idx].debugPort) {
           setImmediate(() => authSync.syncOne(profiles[idx]).catch(() => {}));
         }
         sendJSON({ success: true, profile: profiles[idx] });
@@ -8990,6 +9001,7 @@ const server = http.createServer(async (req, res) => {
           if (profile.autoRegister || profile.loginSyncPending) {
             setImmediate(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}));
             setTimeout(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}), 2500);
+            setTimeout(() => authSync.syncOne(loadProfiles().find(x => x.id === profile.id) || profile).catch(() => {}), 5500);
           }
           sendJSON(r);
         })
@@ -9088,7 +9100,11 @@ const server = http.createServer(async (req, res) => {
           }
           catch (e) { failed.push(`${p.name}: ${e.message}`); }
         }
-        if (launched.length > 0) setTimeout(() => scriptCoordinator.cycle?.().catch(() => {}), 2500);
+        if (launched.length > 0) {
+          setTimeout(() => scriptCoordinator.cycle?.().catch(() => {}), 2500);
+          setTimeout(() => authSync.tick().catch(() => {}), 3800);
+          setTimeout(() => authSync.tick().catch(() => {}), 7500);
+        }
         sendJSON({ success: failed.length === 0, launched, skipped, error: failed.length ? failed.join('\n') : undefined });
       })();
       return;
@@ -9132,6 +9148,10 @@ const server = http.createServer(async (req, res) => {
           setImmediate(() => authSync.syncOne(loadProfiles().find(x => x.id === p.id) || p).catch(() => {}));
         }
       } catch (e) {}
+    }
+    if (launched.length > 0) {
+      setTimeout(() => authSync.tick().catch(() => {}), 4000);
+      setTimeout(() => authSync.tick().catch(() => {}), 8000);
     }
     return sendJSON({ success:failed.length===0, launched, skipped, error:failed.length?failed.join('\n'):undefined });
   }

@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4.54.1">
+  <link rel="stylesheet" href="style.css?v=4.56.0">
   <link rel="stylesheet" href="inventory_market.css?v=4.55.0">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=4.45.0">
@@ -42,6 +42,10 @@
               <span id="device-hwid-short" class="hwid-code">----</span>
               <span id="device-hwid-copy-hint" class="hwid-copy-icon">📋</span>
             </div>
+            <button type="button" id="btn-anti-ban-guide" class="read-alert-btn" title="คลิกเพื่ออ่านคำแนะนำสำคัญ: วิธีหลีกเลี่ยงการโดนแบนและสาเหตุการติดคุก">
+              <span class="read-alert-dot"></span>
+              <span>อ่าน !!</span>
+            </button>
           </div>
           <span class="subtext">Multi-Client Isolated Sessions & Bot Control <span class="ver-pill">v4.3.0</span></span>
         </div>
@@ -1234,8 +1238,72 @@
     </div>
   </div>
 
+  <!-- MODAL: ANTI-BAN & JAIL PREVENTION GUIDE ("อ่าน !!") -->
+  <div class="modal-overlay" id="modal-anti-ban-guide">
+    <div class="modal-card anti-ban-modal-card">
+      <div class="modal-header anti-ban-modal-header">
+        <div style="display: flex; align-items: center; gap: 12px;">
+          <div class="anti-ban-header-icon">🚨</div>
+          <div>
+            <h3 style="margin: 0; font-size: 16.5px; font-weight: 800; color: #fef2f2;">คำแนะนำสำคัญ: วิธีหลีกเลี่ยงแบน &amp; สาเหตุการติดคุก</h3>
+            <span style="font-size: 11.5px; color: #fca5a5;">โปรดอ่านทำความเข้าใจก่อนเปิดบอทหลายจอหรือทำการโอนรวมเงิน</span>
+          </div>
+        </div>
+        <button type="button" class="modal-close" id="anti-ban-close-btn">&times;</button>
+      </div>
+
+      <div class="anti-ban-modal-body">
+        <div class="anti-ban-section">
+          <div class="anti-ban-section-title">
+            <span class="anti-ban-num">1</span>
+            <span>💰 วิธีรวมเงิน (แนวทางลดความเสี่ยงตอนโอนเงิน)</span>
+          </div>
+          <ul class="anti-ban-list">
+            <li>ปัจจุบัน <b>ยังไม่มีวิธีตายตัว 100%</b> ว่าจะเทรดหรือโอนเงินแบบไหนให้ไม่โดนแบน</li>
+            <li>เท่าที่วิเคราะห์ได้ แนะนำให้ <b>มีจำนวนธุรกรรม (Transaction) เยอะๆ</b> และ <b>กระจายเส้นทางโยงเงินให้ซับซ้อนหรือสลับสายมั่วๆ หน่อย</b> ไม่ควรโอนตรงจากบอททุกตัวพุ่งเข้าตัวเก็บเงินตัวเดียวแบบเป็นเส้นตรงซ้ำๆ</li>
+          </ul>
+        </div>
+
+        <div class="anti-ban-section">
+          <div class="anti-ban-section-title">
+            <span class="anti-ban-num">2</span>
+            <span>🛡️ โดนแบนแล้วต้องทำยังไง</span>
+          </div>
+          <ul class="anti-ban-list">
+            <li><b>กรณีใช้ระบบ Proxy:</b> IP ที่โดนแบนจะถูกนำเข้า <b>Blacklist อัตโนมัติ</b> และระบบจะไม่นำ IP นั้นกลับมาใช้งานซ้ำอีก</li>
+            <li><b>กรณีใช้เน็ตบ้าน (IP บ้าน):</b> หากโดนแบนแล้ว <b>ควร Re-router (ปิด–เปิดเร้าเตอร์ใหม่) 1 ครั้ง</b> เพื่อให้ IP บ้านเปลี่ยนเป็นเลขใหม่ก่อนเข้าใช้งานรอบถัดไป</li>
+          </ul>
+        </div>
+
+        <div class="anti-ban-section anti-ban-section-warn">
+          <div class="anti-ban-section-title">
+            <span class="anti-ban-num anti-ban-num-warn">3</span>
+            <span>🚔 ทำไมใช้ Proxy และ Re-router แล้ว ตัวละครยังเข้าคุกรัวๆ</span>
+          </div>
+          <ul class="anti-ban-list">
+            <li>คาดว่าเกิดจาก <b>การตรวจจับแบบ Manual ของ GM เอง</b> หรือมาจาก <b>ระบบ AI ของตัวเกม</b> ที่ใช้วิเคราะห์พฤติกรรมเพื่อตรวจหาบอท</li>
+            <li><b>จุดที่ตรวจพบชัดเจนว่าทำให้โดนจับ:</b>
+              <div class="anti-ban-highlight">
+                <b>⚠️ เวลาสร้างตัวละครไล่เลี่ยกัน:</b> หากสร้างตัวละครพร้อมกันติดๆ กันหลายจอ เมื่อปล่อยเล่นไปสักพัก <b>ติดคุกยกชุดแน่นอน!</b><br>
+                👉 <b>วิธีแก้:</b> ควรทยอยสร้างทีละ <b>1 – 3 ตัว</b> แล้วเว้นช่วงเวลาพักก่อนสร้างชุดถัดไป
+              </div>
+            </li>
+            <li><b>นอกเหนือจากข้อข้างต้น:</b> ปัจจุบันยังไม่พบสาเหตุแน่ชัดเพิ่มเติมว่าเกิดจากจุดใด</li>
+          </ul>
+          <div class="anti-ban-auto-note">
+            ✅ <b>อัปเดตระบบสมัคร AUTO ให้แล้ว:</b> แม้กด <b>"เปิดทุกจอ"</b> พร้อมกัน 30 จอ (ทั้งเปิดหรือปิด Proxy) บอทจะทยอยสมัครให้ทีละ <b>1–3 ตัว</b> แล้วเว้นระยะ <b>10–20 นาที</b> ก่อนสมัครชุดถัดไปให้อัตโนมัติ โดยจอที่รอจะขึ้นหน้าจอ <b>"กำลังรอคิวสมัคร"</b>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="margin-top: 14px; border-top: 1px solid rgba(255, 255, 255, 0.08); padding-top: 12px; display: flex; justify-content: flex-end;">
+        <button type="button" class="btn btn-danger" id="anti-ban-ok-btn" style="font-weight: 700; padding: 7px 18px;">✅ รับทราบ เข้าใจแล้ว</button>
+      </div>
+    </div>
+  </div>
+
   <script src="image_board_solver.js?v=4.53.35"></script>
-  <script src="app.js?v=4.54.5"></script>
+  <script src="app.js?v=4.56.0"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.54.0"></script>
@@ -1250,7 +1318,7 @@
   <script src="guild_manager.js?v=4.53.26"></script>
   <script src="jail_manager.js?v=4.51.9"></script>
   <script src="device_manager.js?v=4.53.6"></script>
-  <script src="update_log.js?v=4.55.0"></script>
+  <script src="update_log.js?v=4.56.0"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

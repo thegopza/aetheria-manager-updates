@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "a08b316d2aaa767198050de181c3f9e9db2da9c3",
+  "sourceCommit": "27e91c3ac36a7d4a24a1121b5f70f72d711e1904",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -188,15 +188,15 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "fe8caae770b61100fc01b37d49a0859411e36527db38b9b081569a22b489e90c"
+      "sha256": "21423828e288fafe40b9a6fa477da59d14e30003e9b32e7fa8e0c09b65c7ae9d"
     },
     {
       "path": "manager/public/inventory_market.css",
-      "sha256": "57ca8b59477db8bf31ee20ead48b17aca4fa4e49201cb22717d73cd156544af6"
+      "sha256": "dc73c7b8ea80fb15efa63c261c346fd747f2578bc6bbed4dc6ee42da64eda93f"
     },
     {
       "path": "manager/public/inventory_market.js",
-      "sha256": "198198d8327b7144cea6d58395ca8996d3e2526194a5f7c79794a0fbdcb23cdd"
+      "sha256": "8aeb4e1cdb8a301298bd77ff3a09f783f6edd20bd13791286df42be7af8c53f1"
     },
     {
       "path": "manager/public/jail_manager.css",

@@ -128,6 +128,7 @@
 
   const CANDY_ICON_PATH = '/art/icons/items/lotus-candle.webp';
   const PUMPKIN_ICON_PATH = '/art/icons/items/krathong-box.webp';
+  const KRATHONG_ICON_PATH = '/art/icons/items/krathong.webp';
 
   const DEFAULT_WITCH_HAZEL_ITEMS = [
     { itemId: 91036, name: 'Loy Krathong Festival Box', type: 'Consumable', rarity: 'epic', icon: '/art/icons/items/loykrathong-festival-box.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 30, icon: CANDY_ICON_PATH }], limit: { max: 10, perAccount: true, reset: 'Daily' }, desc: 'กล่องสุ่มเทศกาลลอยกระทง สุ่มรับการ์ดบอส ยันต์เจาะรู สว่านเจาะรูน และแร่ตีบวก' },
@@ -351,7 +352,7 @@
     tab.type = 'button';
     tab.title = 'แลกของกิจกรรมลอยกระทง (NPC นางนพมาศ · เมืองหลวงโซลเฮเวน)';
     tab.setAttribute('aria-label', 'เปิดหน้าแลกของกิจกรรมลอยกระทง');
-    tab.innerHTML = `<span class="hw-tab-emoji">🪷</span><span class="hw-tab-badge" id="hw-tab-badge"></span>`;
+    tab.innerHTML = `<img class="hw-tab-emoji hw-tab-icon-img" src="${esc(gameAssetUrl(KRATHONG_ICON_PATH))}" alt="กระทง"><span class="hw-tab-badge" id="hw-tab-badge"></span>`;
 
     const scrim = document.createElement('div');
     scrim.className = 'hw-scrim';
@@ -364,7 +365,7 @@
     el.innerHTML = `
       <div class="im-hw-head">
         <div class="im-hw-title-wrap">
-          <div class="im-hw-title">🪷 แลกของลอยกระทง</div>
+          <div class="im-hw-title"><img class="im-hw-title-icon" src="${esc(gameAssetUrl(KRATHONG_ICON_PATH))}" alt=""> แลกของลอยกระทง</div>
           <div class="im-hw-sub">NPC นางนพมาศ (Nang Noppamas) · เมืองหลวงโซลเฮเวน</div>
         </div>
         <div class="im-hw-head-right">

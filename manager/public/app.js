@@ -9466,7 +9466,7 @@ function renderActionNodeHtml(trigIdx, actIdx, act) {
           ${on ? `
           <div class="pe-fields pe-fields-3">
             <label>ชนิดลูกธนู
-              <select class="form-select" onchange="updateActionField(${trigIdx}, ${actIdx}, 'arrowType', Number(this.value)); updateActionField(${trigIdx}, ${actIdx}, 'smartArrow', Number(this.value) === 0)">
+              <select class="form-select" onchange="const v = Number(this.value); updateActionField(${trigIdx}, ${actIdx}, 'smartArrow', v === 0); if (v > 0) updateActionField(${trigIdx}, ${actIdx}, 'arrowType', v);">
                 ${PLAN_ARROW_OPTIONS.map(a => `<option value="${a.value}" ${Number(act.smartArrow ? 0 : (act.arrowType || 90030)) === a.value ? 'selected' : ''}>${a.label}</option>`).join('')}
               </select>
             </label>

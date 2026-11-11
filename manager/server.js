@@ -5744,7 +5744,11 @@ const marketSniperService = createMarketSniperService({
 marketSniperService.start();
 
 function getDefaultDeviceNickname() {
-  return process.env.USERNAME || (typeof os.userInfo === 'function' ? os.userInfo()?.username : '') || os.hostname() || 'PmheeUser';
+  const user = String(process.env.USERNAME || (typeof os.userInfo === 'function' ? os.userInfo()?.username : '') || '').trim();
+  const host = String(os.hostname() || '').trim();
+  if (user && !/^administrator$/i.test(user)) return user;
+  if (host && !/^administrator$/i.test(host)) return host;
+  return user || host || 'PmheeUser';
 }
 
 function getEffectiveDeviceNickname() {
@@ -6226,7 +6230,11 @@ let centralProfileBackupInFlight = false;
 
 function buildLocalProfileBackupPayload() {
   const profiles = loadProfiles() || [];
-  const deviceId = getEffectiveDeviceNickname();
+  const deviceName = getEffectiveDeviceNickname();
+  const hcSettings = humanCheckSolver.loadSettings() || {};
+  const hwidCode = String(hcSettings.hwidCode || "").trim();
+  const accountId = String(hcSettings.accountId || "").trim();
+  const machineId = (hwidCode && hwidCode !== "UNKNOWN") ? hwidCode : (accountId || deviceName);
   const cleanProfiles = [];
   const credsMap = {};
   const seenBackupAccounts = new Set();
@@ -6266,8 +6274,9 @@ function buildLocalProfileBackupPayload() {
   return {
     format: "pmhee-aetheria-profile-backup-v1",
     exportedAt: new Date().toISOString(),
-    machineId: deviceId,
-    machineName: deviceId,
+    machineId,
+    machineName: deviceName,
+    hwidCode: hwidCode || undefined,
     profiles: cleanProfiles,
     credentials: credsMap
   };

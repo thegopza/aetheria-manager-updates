@@ -126,24 +126,27 @@
   const BAG_TABS = [['all', 'ทั้งหมด'], ['weapon', 'อาวุธ'], ['armor', 'ชุดเกราะ'], ['accessory', 'ประดับ/เจม'],
     ['usable', 'ใช้ได้'], ['card', 'การ์ด'], ['refine', 'แร่/ตีบวก'], ['material', 'วัตถุดิบ'], ['other', 'อื่นๆ']];
 
-  const CANDY_ICON_PATH = '/art/icons/items/halloween-candy.webp';
-  const PUMPKIN_ICON_PATH = '/art/icons/items/golden-pumpkin.webp';
+  const CANDY_ICON_PATH = '/art/icons/items/lotus-candle.webp';
+  const PUMPKIN_ICON_PATH = '/art/icons/items/krathong-box.webp';
 
   const DEFAULT_WITCH_HAZEL_ITEMS = [
-    { itemId: 90888, name: 'Halloween Box', type: 'Consumable', rarity: 'epic', icon: '/art/icons/items/halloween-box.webp', price: 0, bound: false, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 200, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 1, icon: PUMPKIN_ICON_PATH }], limit: { max: 10, perAccount: true, reset: 'Daily' }, desc: 'กล่องสุ่มฮาโลวีน (แลกเปลี่ยน/ตั้งขายตลาดกลางได้)' },
-    { itemId: 90340, name: 'Enchant Rune', type: 'Enchantment', rarity: 'rare', icon: '/art/icons/items/greater-enchant-rune.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 150, icon: CANDY_ICON_PATH }], limit: { max: 100, perAccount: true, reset: 'Weekly' }, desc: 'รูนสุ่มออปชั่นอุปกรณ์' },
-    { itemId: 90341, name: 'Accessory Enchant Rune', type: 'Enchantment', rarity: 'epic', icon: '/art/icons/items/accessory-enchant-rune.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 1000, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 1, icon: PUMPKIN_ICON_PATH }], limit: { max: 10, perAccount: true, reset: 'Weekly' }, desc: 'รูนสุ่มออปชั่นเครื่องประดับ' },
-    { itemId: 90889, name: 'Socket Charm', type: 'Enchantment', rarity: 'legendary', icon: '/art/icons/items/socket-charm.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 5000, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 30, icon: PUMPKIN_ICON_PATH }], limit: { max: 2, perAccount: true, reset: 'Weekly' }, desc: 'ยันต์เจาะรูอุปกรณ์การันตีสำเร็จ 100%' },
-    { itemId: 90206, name: 'Enriched Elunium', type: 'Enchantment', rarity: 'epic', icon: '/art/icons/items/enriched-elunium.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 300, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'None' }, desc: 'แร่อีลูเนียมบริสุทธิ์ เพิ่มโอกาสตีบวกชุดเกราะ' },
-    { itemId: 90886, name: 'Halloween Pecopeco Hairband', type: 'Equipment', equipType: 'Helmet', rarity: 'epic', icon: '/art/icons/items/pecopeco-hairband.webp', price: 5000000, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 2000, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 15, icon: PUMPKIN_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'หมวกคาดผมเปโกะฮาโลวีน (Move Speed +5%)' },
-    { itemId: 90887, name: 'Halloween Snake Head', type: 'Equipment', equipType: 'Helmet', rarity: 'epic', icon: '/art/icons/items/coiled-snake-hat.webp', price: 5000000, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 2000, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 15, icon: PUMPKIN_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'หมวกงูฮาโลวีน (Double Attack +10%)' },
-    { itemId: 90882, name: 'Pumpkin Head Hat', type: 'Equipment', equipType: 'CostumeHeadTop', rarity: 'rare', icon: '/art/icons/items/pumpkin-head-hat.webp', price: 0, bound: true, cost: [], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'คอสตูมหมวกหัวฟักทองฮาโลวีน (รับฟรี)' },
-    { itemId: 90885, name: 'Pumpkin Imp Egg', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/pumpkin-imp-egg.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 200, icon: CANDY_ICON_PATH }, { itemId: 90881, name: 'Golden Pumpkin', qty: 2, icon: PUMPKIN_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'ไข่สัตว์เลี้ยงภูตฟักทองฮาโลวีน' },
-    { itemId: 90203, name: 'Oridecon', type: 'Enchantment', rarity: 'uncommon', icon: '/art/icons/items/oridecon.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 30, icon: CANDY_ICON_PATH }], limit: { max: 500, perAccount: true, reset: 'Weekly' }, desc: 'แร่ตีบวกอาวุธ' },
-    { itemId: 90205, name: 'Elunium', type: 'Enchantment', rarity: 'uncommon', icon: '/art/icons/items/elunium.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 30, icon: CANDY_ICON_PATH }], limit: { max: 500, perAccount: true, reset: 'Weekly' }, desc: 'แร่ตีบวกชุดเกราะ' },
-    { itemId: 90351, name: 'Fury Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/fury-potion.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 40, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มพลังโจมตีกายภาพ (ATK +25, Melee DMG +5%)' },
-    { itemId: 90352, name: 'Arcane Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/arcane-potion.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 40, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มพลังโจมตีเวท (MATK +25, Magic DMG +5%)' },
-    { itemId: 90353, name: 'Keen Eye Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/keen-eye-potion.webp', price: 0, bound: true, cost: [{ itemId: 90880, name: 'Halloween Candy', qty: 40, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มความแม่นยำและระยะไกล (HIT +20, Ranged DMG +5%)' }
+    { itemId: 91036, name: 'Loy Krathong Festival Box', type: 'Consumable', rarity: 'epic', icon: '/art/icons/items/loykrathong-festival-box.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 30, icon: CANDY_ICON_PATH }], limit: { max: 10, perAccount: true, reset: 'Daily' }, desc: 'กล่องสุ่มเทศกาลลอยกระทง สุ่มรับการ์ดบอส ยันต์เจาะรู สว่านเจาะรูน และแร่ตีบวก' },
+    { itemId: 90991, name: 'Krathong', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/krathong.webp', price: 2000, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 1, icon: CANDY_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'Daily' }, desc: 'กระทงใบตองสำหรับลอยที่สระน้ำเมืองหลวงโซลเฮเวน รับบัฟ EXP +15%, Drop +10% นาน 2 ชม.' },
+    { itemId: 90340, name: 'Enchant Rune', type: 'Enchantment', rarity: 'rare', icon: '/art/icons/items/greater-enchant-rune.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 6, icon: CANDY_ICON_PATH }], limit: { max: 100, perAccount: true, reset: 'Weekly' }, desc: 'รูนสุ่มออปชั่นอุปกรณ์' },
+    { itemId: 90341, name: 'Accessory Enchant Rune', type: 'Enchantment', rarity: 'epic', icon: '/art/icons/items/accessory-enchant-rune.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 20, icon: CANDY_ICON_PATH }], limit: { max: 10, perAccount: true, reset: 'Weekly' }, desc: 'รูนสุ่มออปชั่นเครื่องประดับ' },
+    { itemId: 90889, name: 'Socket Charm', type: 'Enchantment', rarity: 'legendary', icon: '/art/icons/items/socket-charm.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 800, icon: CANDY_ICON_PATH }], limit: { max: 2, perAccount: true, reset: 'Weekly' }, desc: 'ยันต์เจาะรูอุปกรณ์การันตีสำเร็จ 100%' },
+    { itemId: 91037, name: 'Lotus Rune Drill', type: 'Enchantment', rarity: 'legendary', icon: '/art/icons/items/lotus-rune-drill.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 1500, icon: CANDY_ICON_PATH }], limit: { max: 3, perAccount: true, reset: 'Weekly' }, desc: 'สว่านดอกบัวเจาะช่องรูนที่ 4 ของอาวุธ Lv.110+' },
+    { itemId: 90206, name: 'Enriched Elunium', type: 'Enchantment', rarity: 'epic', icon: '/art/icons/items/enriched-elunium.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 50, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'None' }, desc: 'แร่อีลูเนียมบริสุทธิ์ เพิ่มโอกาสตีบวกชุดเกราะ' },
+    { itemId: 90203, name: 'Oridecon', type: 'Enchantment', rarity: 'uncommon', icon: '/art/icons/items/oridecon.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 5, icon: CANDY_ICON_PATH }], limit: { max: 500, perAccount: true, reset: 'Weekly' }, desc: 'แร่ตีบวกอาวุธ' },
+    { itemId: 90205, name: 'Elunium', type: 'Enchantment', rarity: 'uncommon', icon: '/art/icons/items/elunium.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 5, icon: CANDY_ICON_PATH }], limit: { max: 500, perAccount: true, reset: 'Weekly' }, desc: 'แร่ตีบวกชุดเกราะ' },
+    { itemId: 90351, name: 'Fury Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/fury-potion.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 3, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มพลังโจมตีกายภาพ (ATK +25, Melee DMG +5%)' },
+    { itemId: 90352, name: 'Arcane Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/arcane-potion.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 3, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มพลังโจมตีเวท (MATK +25, Magic DMG +5%)' },
+    { itemId: 90353, name: 'Keen Eye Potion', type: 'Consumable', rarity: 'rare', icon: '/art/icons/items/keen-eye-potion.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 3, icon: CANDY_ICON_PATH }], limit: { max: 5, perAccount: true, reset: 'Daily' }, desc: 'ยาเพิ่มความแม่นยำและระยะไกล (HIT +20, Ranged DMG +5%)' },
+    { itemId: 90393, name: 'Sky Lantern', type: 'Equipment', equipType: 'CostumeCompanion', rarity: 'epic', icon: '/art/icons/items/sky-lantern.webp', price: 0, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 2000, icon: CANDY_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'โคมลอยคู่ใจส่องสว่างเคียงข้างผู้เดินทาง' },
+    { itemId: 90392, name: 'Krathong Hat', type: 'Equipment', equipType: 'Helmet', rarity: 'epic', icon: '/art/icons/items/krathong-hat.webp', price: 5000000, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 5000, icon: CANDY_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'หมวกกระทงประดับดอกบัวและเทียนหอม [1] (EXP +5%)' },
+    { itemId: 90994, name: 'Moonlit Trinity Crest', type: 'Equipment', equipType: 'HeadMid', rarity: 'epic', icon: '/art/icons/items/trinity-crest.webp', price: 5000000, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 5000, icon: CANDY_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'ตราตรีศูลต้องแสงจันทร์ [1] (All Stats +1)' },
+    { itemId: 91008, name: 'Moonlit Executioner Mask', type: 'Equipment', equipType: 'HeadMid', rarity: 'epic', icon: '/art/icons/items/executioner-mask.webp', price: 5000000, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 5000, icon: CANDY_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'หน้ากากเพชฌฆาตต้องแสงจันทร์ [1] (ATK +3, MATK +3)' },
+    { itemId: 91009, name: 'Moonlit Devil Horn', type: 'Equipment', equipType: 'HeadMid', rarity: 'epic', icon: '/art/icons/items/devil-horn.webp', price: 5000000, bound: true, cost: [{ itemId: 90989, name: 'Lotus Candle', qty: 5000, icon: CANDY_ICON_PATH }], limit: { max: 1, perAccount: true, reset: 'None' }, desc: 'เขาปีศาจต้องแสงจันทร์ [1] (ASPD +2%)' }
   ];
 
   function bagCategory(it) {
@@ -218,7 +221,7 @@
   }
 
   // ==========================================================================
-  // MAIN-SCREEN LEFT DRAWER: HALLOWEEN EXCHANGE (NPC WITCH HAZEL)
+  // MAIN-SCREEN LEFT DRAWER: LOY KRATHONG EXCHANGE (NPC NANG NOPPAMAS)
   // ==========================================================================
   const hw = {
     open: false,
@@ -229,7 +232,7 @@
     catalog: DEFAULT_WITCH_HAZEL_ITEMS,
     clients: [],
     quotaState: {},
-    bagCounts: { 90880: 0, 90881: 0 },
+    bagCounts: { 90989: 0, 90987: 0, 90880: 0, 90881: 0 },
     zeny: 0,
     filter: 'all',      // 'all' | 'selected' | 'ready'
     loading: false,
@@ -250,7 +253,7 @@
     let maxByMat = 9999;
     const costs = Array.isArray(item.cost) ? item.cost : [];
     for (const c of costs) {
-      const have = Number(hw.bagCounts[c.itemId] || 0);
+      const have = Number(hw.bagCounts[c.itemId] ?? (c.itemId === 90989 ? hw.bagCounts[90880] : 0) ?? 0);
       const need = Math.max(1, Number(c.qty ?? c.amount) || 1);
       maxByMat = Math.min(maxByMat, Math.floor(have / need));
     }
@@ -271,8 +274,10 @@
       : null;
 
     if (chosen && chosen.online) {
-      hw.bagCounts[90880] = Number(chosen.candy) || 0;
-      hw.bagCounts[90881] = Number(chosen.pumpkin) || 0;
+      const candle = Number(chosen.candy) || 0;
+      const box = Number(chosen.pumpkin) || 0;
+      hw.bagCounts[90989] = hw.bagCounts[90880] = candle;
+      hw.bagCounts[90987] = hw.bagCounts[90881] = box;
       hw.zeny = Number(chosen.zeny) || 0;
       hw.quotaState = chosen.quotaState || {};
       return;
@@ -286,8 +291,8 @@
         totalPumpkin += Number(c.pumpkin) || 0;
         totalZeny += Number(c.zeny) || 0;
       }
-      hw.bagCounts[90880] = totalCandy;
-      hw.bagCounts[90881] = totalPumpkin;
+      hw.bagCounts[90989] = hw.bagCounts[90880] = totalCandy;
+      hw.bagCounts[90987] = hw.bagCounts[90881] = totalPumpkin;
       hw.zeny = totalZeny;
       hw.quotaState = onlineClients[0].quotaState || {};
       return;
@@ -299,11 +304,11 @@
       for (const it of bag.data.items) {
         const id = Number(it.itemId);
         const nm = String(it.name || '').trim().toLowerCase();
-        if (id === 90880 || nm === 'halloween candy') candy += (Number(it.qty) || 0);
-        else if (id === 90881 || nm === 'golden pumpkin') pumpkin += (Number(it.qty) || 0);
+        if (id === 90989 || nm === 'lotus candle') candy += (Number(it.qty) || 0);
+        else if (id === 90987 || nm === 'krathong box') pumpkin += (Number(it.qty) || 0);
       }
-      hw.bagCounts[90880] = candy;
-      hw.bagCounts[90881] = pumpkin;
+      hw.bagCounts[90989] = hw.bagCounts[90880] = candy;
+      hw.bagCounts[90987] = hw.bagCounts[90881] = pumpkin;
       if (typeof bag.data.zeny === 'number') hw.zeny = bag.data.zeny;
     }
   }
@@ -344,9 +349,9 @@
     tab.className = 'hw-tab';
     tab.id = 'hw-tab';
     tab.type = 'button';
-    tab.title = 'แลกของกิจกรรม Halloween (NPC Witch Hazel · เมืองหลวงโซลเฮเวน)';
-    tab.setAttribute('aria-label', 'เปิดหน้าแลกของกิจกรรม Halloween');
-    tab.innerHTML = `<span class="hw-tab-emoji">🎃</span><span class="hw-tab-badge" id="hw-tab-badge"></span>`;
+    tab.title = 'แลกของกิจกรรมลอยกระทง (NPC นางนพมาศ · เมืองหลวงโซลเฮเวน)';
+    tab.setAttribute('aria-label', 'เปิดหน้าแลกของกิจกรรมลอยกระทง');
+    tab.innerHTML = `<span class="hw-tab-emoji">🪷</span><span class="hw-tab-badge" id="hw-tab-badge"></span>`;
 
     const scrim = document.createElement('div');
     scrim.className = 'hw-scrim';
@@ -355,15 +360,15 @@
     const el = document.createElement('aside');
     el.className = 'hw-drawer im-hw-panel';
     el.id = 'hw-drawer';
-    el.setAttribute('aria-label', 'แลกของกิจกรรม Halloween');
+    el.setAttribute('aria-label', 'แลกของกิจกรรมลอยกระทง');
     el.innerHTML = `
       <div class="im-hw-head">
         <div class="im-hw-title-wrap">
-          <div class="im-hw-title">🎃 แลกของ Halloween</div>
-          <div class="im-hw-sub">NPC Witch Hazel · เมืองหลวงโซลเฮเวน</div>
+          <div class="im-hw-title">🪷 แลกของลอยกระทง</div>
+          <div class="im-hw-sub">NPC นางนพมาศ (Nang Noppamas) · เมืองหลวงโซลเฮเวน</div>
         </div>
         <div class="im-hw-head-right">
-          <label class="im-hw-master-toggle" title="เปิด/ปิด ให้บอทเดินไปแลกของกับ Witch Hazel อัตโนมัติเมื่อของในตัวครบตามจำนวนที่ตั้ง">
+          <label class="im-hw-master-toggle" title="เปิด/ปิด ให้บอทเดินไปแลกของกับนางนพมาศอัตโนมัติเมื่อเทียนดอกบัวในตัวครบตามจำนวนที่ตั้ง">
             <input type="checkbox" data-hw="master-toggle" checked>
             <span>ออโต้แลก</span>
           </label>
@@ -382,11 +387,11 @@
       <div class="im-hw-mats" data-role="hw-mats">
         <div class="im-hw-mat">
           <img src="${esc(gameAssetUrl(CANDY_ICON_PATH))}" alt="">
-          <div><small>Candy</small><b data-role="hw-candy">0</b></div>
+          <div><small>Lotus Candle</small><b data-role="hw-candy">0</b></div>
         </div>
         <div class="im-hw-mat">
           <img src="${esc(gameAssetUrl(PUMPKIN_ICON_PATH))}" alt="">
-          <div><small>Pumpkin</small><b data-role="hw-pumpkin">0</b></div>
+          <div><small>Krathong Box</small><b data-role="hw-pumpkin">0</b></div>
         </div>
         <div class="im-hw-mat zeny">
           <span>💰</span>
@@ -395,11 +400,11 @@
       </div>
 
       <div class="im-hw-wl-banner">
-        🛡️ <b>กันขาย NPC อัตโนมัติ:</b> รายการที่ติ๊กเลือก (รวม Candy & Pumpkin) จะอยู่ใน <b>WL ห้ามขายลง NPC</b> แต่สามารถตั้งขายลง<b>ตลาดกลาง</b>ได้ตามปกติ
+        🛡️ <b>กันขาย NPC อัตโนมัติ:</b> รายการที่ติ๊กเลือก (รวม Lotus Candle & Krathong Box) จะอยู่ใน <b>WL ห้ามขายลง NPC</b> แต่สามารถตั้งขายลง<b>ตลาดกลาง</b>ได้ตามปกติ
       </div>
 
       <div class="im-hw-actions-bar">
-        <button type="button" class="im-btn hw-go" data-hw="exchange-now" title="สั่งบอทเดินไปหา Witch Hazel เพื่อแลกของที่ครบเงื่อนไขทันที">⚡ เดินไปแลกทันที</button>
+        <button type="button" class="im-btn hw-go" data-hw="exchange-now" title="สั่งบอทเดินไปหานางนพมาศเพื่อแลกของที่ครบเงื่อนไขทันที">⚡ เดินไปแลกทันที</button>
         <button type="button" class="im-btn ghost sm" data-hw="apply-all" title="คัดลอกรายการที่เลือกและจำนวนขั้นต่ำไปใช้กับทุกจอทันที">📋 ใช้กับทุกจอ</button>
       </div>
 
@@ -462,7 +467,7 @@
         rules: hw.rules
       });
       if (!r || !r.success) {
-        toast(`❌ บันทึกตั้งค่า Halloween ไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
+        toast(`❌ บันทึกตั้งค่าแลกของลอยกระทงไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
       }
     } finally {
       hw.saving = false;
@@ -487,7 +492,7 @@
       (hw.clients || []).forEach(c => {
         const label = c.charName ? `${c.name} (${c.charName})` : c.name;
         const statusTxt = c.online
-          ? `🍬 ${(c.candy || 0).toLocaleString()} · 🎃 ${(c.pumpkin || 0).toLocaleString()}`
+          ? `🕯️ ${(c.candy || 0).toLocaleString()} · 📦 ${(c.pumpkin || 0).toLocaleString()}`
           : 'ออฟไลน์';
         opts.push(`<option value="${esc(c.id)}" ${hw.profileId === c.id ? 'selected' : ''}>${esc(label)} — ${esc(statusTxt)}</option>`);
       });
@@ -497,8 +502,8 @@
     const candyEl = el.querySelector('[data-role="hw-candy"]');
     const pumpEl = el.querySelector('[data-role="hw-pumpkin"]');
     const zenyEl = el.querySelector('[data-role="hw-zeny"]');
-    if (candyEl) candyEl.textContent = Number(hw.bagCounts[90880] || 0).toLocaleString();
-    if (pumpEl) pumpEl.textContent = Number(hw.bagCounts[90881] || 0).toLocaleString();
+    if (candyEl) candyEl.textContent = Number(hw.bagCounts[90989] ?? hw.bagCounts[90880] ?? 0).toLocaleString();
+    if (pumpEl) pumpEl.textContent = Number(hw.bagCounts[90987] ?? hw.bagCounts[90881] ?? 0).toLocaleString();
     if (zenyEl) zenyEl.textContent = fmtShort(hw.zeny || 0);
 
     const items = hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS;
@@ -537,7 +542,7 @@
     if (!listEl) return;
 
     if (visible.length === 0) {
-      listEl.innerHTML = `<div class="im-empty">${hw.filter === 'selected' ? '🎃 ยังไม่ได้ติ๊กเลือกไอเทมที่จะแลก — คลิกติ๊กหน้าไอเทมที่ต้องการด้านล่างได้เลย' : '🔍 ไม่มีรายการในหมวดนี้'}</div>`;
+      listEl.innerHTML = `<div class="im-empty">${hw.filter === 'selected' ? '🪷 ยังไม่ได้ติ๊กเลือกไอเทมที่จะแลก — คลิกติ๊กหน้าไอเทมที่ต้องการด้านล่างได้เลย' : '🔍 ไม่มีรายการในหมวดนี้'}</div>`;
       return;
     }
 
@@ -552,12 +557,12 @@
       // Render cost chips
       const costChips = [];
       (it.cost || []).forEach(c => {
-        const have = Number(hw.bagCounts[c.itemId] || 0);
+        const have = Number(hw.bagCounts[c.itemId] ?? (c.itemId === 90989 ? hw.bagCounts[90880] : 0) ?? 0);
         const unitNeed = Math.max(1, Number(c.qty ?? c.amount) || 1);
         const totalNeed = unitNeed * minQty;
         const enough = have >= totalNeed;
-        const shortName = c.itemId === 90880 ? 'Candy' : c.itemId === 90881 ? 'Pumpkin' : c.name;
-        const iconUrl = c.icon || (c.itemId === 90880 ? CANDY_ICON_PATH : c.itemId === 90881 ? PUMPKIN_ICON_PATH : '');
+        const shortName = (c.itemId === 90989 || c.itemId === 90880) ? 'Lotus Candle' : (c.itemId === 90987 || c.itemId === 90881) ? 'Krathong Box' : c.name;
+        const iconUrl = c.icon || ((c.itemId === 90989 || c.itemId === 90880) ? CANDY_ICON_PATH : (c.itemId === 90987 || c.itemId === 90881) ? PUMPKIN_ICON_PATH : '');
         costChips.push(`
           <span class="im-hw-cost ${enough ? 'ok' : 'lack'}" title="ใช้ ${c.name} ${unitNeed} ชิ้นต่อการแลก 1 ครั้ง (มีในกระเป๋า ${have.toLocaleString()} ชิ้น)">
             ${iconUrl ? `<img src="${esc(gameAssetUrl(iconUrl))}" alt="">` : ''}
@@ -653,7 +658,7 @@
       const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
       if (it) {
         toast(r.enabled
-          ? `🎃 เลือกแลก "${it.name}" (ครบ ≥ ${r.minQty} ชิ้น) + เพิ่มเข้า WL กันขาย NPC แล้ว`
+          ? `🪷 เลือกแลก "${it.name}" (ครบ ≥ ${r.minQty} ชิ้น) + เพิ่มเข้า WL กันขาย NPC แล้ว`
           : `ยกเลิกแลก "${it.name}" อัตโนมัติแล้ว`);
       }
       return;
@@ -703,13 +708,13 @@
     }
     if (act === 'refresh') {
       await refreshHalloween();
-      toast('🎃 รีเฟรชข้อมูลกิจกรรม Halloween แล้ว');
+      toast('🪷 รีเฟรชข้อมูลกิจกรรมลอยกระทงแล้ว');
       return;
     }
     if (act === 'exchange-now') {
       const activeCount = Object.values(hw.rules).filter(r => r && r.enabled).length;
       if (activeCount === 0) {
-        toast('⚠️ กรุณาติ๊กเลือกรายการของรางวัล Halloween ที่ต้องการแลกอย่างน้อย 1 รายการก่อนครับ', 'warn');
+        toast('⚠️ กรุณาติ๊กเลือกรายการของรางวัลลอยกระทงที่ต้องการแลกอย่างน้อย 1 รายการก่อนครับ', 'warn');
         return;
       }
       actBtn.disabled = true;
@@ -723,7 +728,7 @@
           rules: hw.rules
         });
         if (r && r.success) {
-          toast(`🎃 ${r.summary || 'สั่งบอทเดินไปแลกของกับ Witch Hazel แล้ว!'}`);
+          toast(`🪷 ${r.summary || 'สั่งบอทเดินไปแลกของกับนางนพมาศแล้ว!'}`);
           setTimeout(() => { refreshHalloween(); }, 2500);
         } else {
           toast(`❌ สั่งแลกไม่สำเร็จ: ${(r && r.error) || 'จอเกมไม่ตอบ'}`, 'err');
@@ -743,7 +748,7 @@
           rules: hw.rules
         });
         if (r && r.success) {
-          toast(`📋 ซิงค์ตั้งค่า Halloween + WL กันขาย NPC ไปยังทุกโปรไฟล์แล้ว (อัปเดตออนไลน์ ${r.appliedOnline || 0} จอ)`);
+          toast(`📋 ซิงค์ตั้งค่าแลกของลอยกระทง + WL กันขาย NPC ไปยังทุกโปรไฟล์แล้ว (อัปเดตออนไลน์ ${r.appliedOnline || 0} จอ)`);
         } else {
           toast(`❌ ซิงค์ไม่สำเร็จ: ${(r && r.error) || ''}`, 'err');
         }
@@ -762,7 +767,7 @@
     if (e.target.dataset.hw === 'master-toggle') {
       hw.enabled = Boolean(e.target.checked);
       scheduleSaveHalloween(true);
-      toast(hw.enabled ? '🎃 เปิดระบบเดินไปแลกของ Halloween อัตโนมัติแล้ว' : '⏸️ ปิดระบบแลกของ Halloween อัตโนมัติชั่วคราว');
+      toast(hw.enabled ? '🪷 เปิดระบบเดินไปแลกของลอยกระทงอัตโนมัติแล้ว' : '⏸️ ปิดระบบแลกของลอยกระทงอัตโนมัติชั่วคราว');
       return;
     }
     if (e.target.dataset.hwCheck) {
@@ -775,7 +780,7 @@
       const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
       if (it) {
         toast(r.enabled
-          ? `🎃 เลือกแลก "${it.name}" (ครบ ≥ ${r.minQty} ชิ้น) + เพิ่มเข้า WL กันขาย NPC แล้ว`
+          ? `🪷 เลือกแลก "${it.name}" (ครบ ≥ ${r.minQty} ชิ้น) + เพิ่มเข้า WL กันขาย NPC แล้ว`
           : `ยกเลิกแลก "${it.name}" อัตโนมัติแล้ว`);
       }
       return;

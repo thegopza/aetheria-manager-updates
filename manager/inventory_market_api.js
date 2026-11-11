@@ -738,138 +738,141 @@ function buildMarketCode(p) {
 }
 
 // ==========================================================================
-// HALLOWEEN EVENT EXCHANGE (NPC Witch Hazel, npcId: 223, shopId: 950)
+// LOY KRATHONG EVENT EXCHANGE (NPC Nang Noppamas, npcId: 243, shopId: 951)
 // ==========================================================================
-const CANDY_ICON = 'https://www.aetheria-online.in.th/art/icons/items/halloween-candy.webp';
-const PUMPKIN_ICON = 'https://www.aetheria-online.in.th/art/icons/items/golden-pumpkin.webp';
+const CANDY_ICON = 'https://www.aetheria-online.in.th/art/icons/items/lotus-candle.webp';
+const PUMPKIN_ICON = 'https://www.aetheria-online.in.th/art/icons/items/krathong-box.webp';
 
 const WITCH_HAZEL_ITEMS = [
   {
-    itemId: 90888, name: 'Halloween Box', type: 'Consumable', rarity: 'epic', price: 0, bound: false,
-    icon: 'https://www.aetheria-online.in.th/art/icons/items/halloween-box.webp',
-    cost: [
-      { itemId: 90880, name: 'Halloween Candy', amount: 200, qty: 200, icon: CANDY_ICON },
-      { itemId: 90881, name: 'Golden Pumpkin', amount: 1, qty: 1, icon: PUMPKIN_ICON }
-    ],
+    itemId: 91036, name: 'Loy Krathong Festival Box', type: 'Consumable', rarity: 'epic', price: 0, bound: true,
+    icon: 'https://www.aetheria-online.in.th/art/icons/items/loykrathong-festival-box.webp',
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 30, qty: 30, icon: CANDY_ICON }],
     limit: { max: 10, perAccount: true, reset: 'Daily' },
-    desc: 'กล่องสุ่มฮาโลวีน (แลกเปลี่ยน/ตั้งขายตลาดกลางได้)'
+    desc: 'กล่องเทศกาลลอยกระทง (สุ่มของรางวัลกิจกรรม)'
+  },
+  {
+    itemId: 90991, name: 'Krathong', type: 'Consumable', rarity: 'rare', price: 2000, bound: true,
+    icon: 'https://www.aetheria-online.in.th/art/icons/items/krathong.webp',
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 1, qty: 1, icon: CANDY_ICON }],
+    limit: { max: 1, perAccount: true, reset: 'Daily' },
+    desc: 'กระทงอธิษฐาน (นำไปลอยที่สระกลางเมืองรับพรแสงจันทร์)'
   },
   {
     itemId: 90340, name: 'Enchant Rune', type: 'Enchantment', rarity: 'rare', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/greater-enchant-rune.webp',
-    cost: [{ itemId: 90880, name: 'Halloween Candy', amount: 150, qty: 150, icon: CANDY_ICON }],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 6, qty: 6, icon: CANDY_ICON }],
     limit: { max: 100, perAccount: true, reset: 'Weekly' },
     desc: 'รูนสุ่มออปชั่นอุปกรณ์'
   },
   {
     itemId: 90341, name: 'Accessory Enchant Rune', type: 'Enchantment', rarity: 'epic', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/accessory-enchant-rune.webp',
-    cost: [
-      { itemId: 90880, name: 'Halloween Candy', amount: 1000, qty: 1000, icon: CANDY_ICON },
-      { itemId: 90881, name: 'Golden Pumpkin', amount: 1, qty: 1, icon: PUMPKIN_ICON }
-    ],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 20, qty: 20, icon: CANDY_ICON }],
     limit: { max: 10, perAccount: true, reset: 'Weekly' },
     desc: 'รูนสุ่มออปชั่นเครื่องประดับ'
   },
   {
     itemId: 90889, name: 'Socket Charm', type: 'Enchantment', rarity: 'legendary', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/socket-charm.webp',
-    cost: [
-      { itemId: 90880, name: 'Halloween Candy', amount: 5000, qty: 5000, icon: CANDY_ICON },
-      { itemId: 90881, name: 'Golden Pumpkin', amount: 30, qty: 30, icon: PUMPKIN_ICON }
-    ],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 800, qty: 800, icon: CANDY_ICON }],
     limit: { max: 2, perAccount: true, reset: 'Weekly' },
-    desc: 'ยันต์เจาะรูอุปกรณ์การันตีสำเร็จ 100%'
+    desc: 'เครื่องรางเจาะรูอุปกรณ์ (เพิ่มโอกาสสำเร็จ +5%)'
+  },
+  {
+    itemId: 91037, name: 'Lotus Rune Drill', type: 'Enchantment', rarity: 'legendary', price: 0, bound: true,
+    icon: 'https://www.aetheria-online.in.th/art/icons/items/lotus-rune-drill.webp',
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 1500, qty: 1500, icon: CANDY_ICON }],
+    limit: { max: 3, perAccount: true, reset: 'Weekly' },
+    desc: 'สว่านรูนดอกบัว (เจาะช่องศิลารูน)'
   },
   {
     itemId: 90206, name: 'Enriched Elunium', type: 'Enchantment', rarity: 'epic', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/enriched-elunium.webp',
-    cost: [{ itemId: 90880, name: 'Halloween Candy', amount: 300, qty: 300, icon: CANDY_ICON }],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 50, qty: 50, icon: CANDY_ICON }],
     limit: { max: 5, perAccount: true, reset: 'None' },
     desc: 'แร่อีลูเนียมบริสุทธิ์ เพิ่มโอกาสตีบวกชุดเกราะ'
   },
   {
-    itemId: 90886, name: 'Halloween Pecopeco Hairband', type: 'Equipment', equipType: 'Helmet', rarity: 'epic', price: 5000000, bound: true,
-    icon: 'https://www.aetheria-online.in.th/art/icons/items/pecopeco-hairband.webp',
-    cost: [
-      { itemId: 90880, name: 'Halloween Candy', amount: 2000, qty: 2000, icon: CANDY_ICON },
-      { itemId: 90881, name: 'Golden Pumpkin', amount: 15, qty: 15, icon: PUMPKIN_ICON }
-    ],
-    limit: { max: 1, perAccount: true, reset: 'None' },
-    desc: 'หมวกคาดผมเปโกะฮาโลวีน (Move Speed +5%)'
-  },
-  {
-    itemId: 90887, name: 'Halloween Snake Head', type: 'Equipment', equipType: 'Helmet', rarity: 'epic', price: 5000000, bound: true,
-    icon: 'https://www.aetheria-online.in.th/art/icons/items/coiled-snake-hat.webp',
-    cost: [
-      { itemId: 90880, name: 'Halloween Candy', amount: 2000, qty: 2000, icon: CANDY_ICON },
-      { itemId: 90881, name: 'Golden Pumpkin', amount: 15, qty: 15, icon: PUMPKIN_ICON }
-    ],
-    limit: { max: 1, perAccount: true, reset: 'None' },
-    desc: 'หมวกงูฮาโลวีน (Double Attack +10%)'
-  },
-  {
-    itemId: 90882, name: 'Pumpkin Head Hat', type: 'Equipment', equipType: 'CostumeHeadTop', rarity: 'rare', price: 0, bound: true,
-    icon: 'https://www.aetheria-online.in.th/art/icons/items/pumpkin-head-hat.webp',
-    cost: [],
-    limit: { max: 1, perAccount: true, reset: 'None' },
-    desc: 'คอสตูมหมวกหัวฟักทองฮาโลวีน (รับฟรี)'
-  },
-  {
-    itemId: 90885, name: 'Pumpkin Imp Egg', type: 'Consumable', rarity: 'rare', price: 0, bound: true,
-    icon: 'https://www.aetheria-online.in.th/art/icons/items/pumpkin-imp-egg.webp',
-    cost: [
-      { itemId: 90880, name: 'Halloween Candy', amount: 200, qty: 200, icon: CANDY_ICON },
-      { itemId: 90881, name: 'Golden Pumpkin', amount: 2, qty: 2, icon: PUMPKIN_ICON }
-    ],
-    limit: { max: 1, perAccount: true, reset: 'None' },
-    desc: 'ไข่สัตว์เลี้ยงภูตฟักทองฮาโลวีน'
-  },
-  {
     itemId: 90203, name: 'Oridecon', type: 'Enchantment', rarity: 'uncommon', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/oridecon.webp',
-    cost: [{ itemId: 90880, name: 'Halloween Candy', amount: 30, qty: 30, icon: CANDY_ICON }],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 5, qty: 5, icon: CANDY_ICON }],
     limit: { max: 500, perAccount: true, reset: 'Weekly' },
     desc: 'แร่ตีบวกอาวุธ'
   },
   {
     itemId: 90205, name: 'Elunium', type: 'Enchantment', rarity: 'uncommon', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/elunium.webp',
-    cost: [{ itemId: 90880, name: 'Halloween Candy', amount: 30, qty: 30, icon: CANDY_ICON }],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 5, qty: 5, icon: CANDY_ICON }],
     limit: { max: 500, perAccount: true, reset: 'Weekly' },
     desc: 'แร่ตีบวกชุดเกราะ'
   },
   {
     itemId: 90351, name: 'Fury Potion', type: 'Consumable', rarity: 'rare', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/fury-potion.webp',
-    cost: [{ itemId: 90880, name: 'Halloween Candy', amount: 40, qty: 40, icon: CANDY_ICON }],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 3, qty: 3, icon: CANDY_ICON }],
     limit: { max: 5, perAccount: true, reset: 'Daily' },
     desc: 'ยาเพิ่มพลังโจมตีกายภาพ (ATK +25, Melee DMG +5%)'
   },
   {
     itemId: 90352, name: 'Arcane Potion', type: 'Consumable', rarity: 'rare', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/arcane-potion.webp',
-    cost: [{ itemId: 90880, name: 'Halloween Candy', amount: 40, qty: 40, icon: CANDY_ICON }],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 3, qty: 3, icon: CANDY_ICON }],
     limit: { max: 5, perAccount: true, reset: 'Daily' },
     desc: 'ยาเพิ่มพลังโจมตีเวท (MATK +25, Magic DMG +5%)'
   },
   {
     itemId: 90353, name: 'Keen Eye Potion', type: 'Consumable', rarity: 'rare', price: 0, bound: true,
     icon: 'https://www.aetheria-online.in.th/art/icons/items/keen-eye-potion.webp',
-    cost: [{ itemId: 90880, name: 'Halloween Candy', amount: 40, qty: 40, icon: CANDY_ICON }],
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 3, qty: 3, icon: CANDY_ICON }],
     limit: { max: 5, perAccount: true, reset: 'Daily' },
     desc: 'ยาเพิ่มความแม่นยำและระยะไกล (HIT +20, Ranged DMG +5%)'
+  },
+  {
+    itemId: 90393, name: 'Sky Lantern', type: 'Equipment', equipType: 'CostumeCompanion', rarity: 'epic', price: 0, bound: true,
+    icon: 'https://www.aetheria-online.in.th/art/icons/items/sky-lantern.webp',
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 2000, qty: 2000, icon: CANDY_ICON }],
+    limit: { max: 1, perAccount: true, reset: 'None' },
+    desc: 'คอสตูมโคมลอยคู่ใจเทศกาลลอยกระทง'
+  },
+  {
+    itemId: 90392, name: 'Krathong Hat', type: 'Equipment', equipType: 'Helmet', rarity: 'epic', price: 5000000, bound: true,
+    icon: 'https://www.aetheria-online.in.th/art/icons/items/krathong-hat.webp',
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 5000, qty: 5000, icon: CANDY_ICON }],
+    limit: { max: 1, perAccount: true, reset: 'None' },
+    desc: 'หมวกกระทงเทศกาลลอยกระทง'
+  },
+  {
+    itemId: 90994, name: 'Moonlit Trinity Crest', type: 'Equipment', equipType: 'HeadMid', rarity: 'epic', price: 5000000, bound: true,
+    icon: 'https://www.aetheria-online.in.th/art/icons/items/trinity-crest.webp',
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 5000, qty: 5000, icon: CANDY_ICON }],
+    limit: { max: 1, perAccount: true, reset: 'None' },
+    desc: 'หน้ากากมหากาพย์แสงจันทร์ (Moonlit Trinity Crest)'
+  },
+  {
+    itemId: 91008, name: 'Moonlit Executioner Mask', type: 'Equipment', equipType: 'HeadMid', rarity: 'epic', price: 5000000, bound: true,
+    icon: 'https://www.aetheria-online.in.th/art/icons/items/executioner-mask.webp',
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 5000, qty: 5000, icon: CANDY_ICON }],
+    limit: { max: 1, perAccount: true, reset: 'None' },
+    desc: 'หน้ากากเพชฌฆาตแสงจันทร์ (Moonlit Executioner Mask)'
+  },
+  {
+    itemId: 91009, name: 'Moonlit Devil Horn', type: 'Equipment', equipType: 'HeadMid', rarity: 'epic', price: 5000000, bound: true,
+    icon: 'https://www.aetheria-online.in.th/art/icons/items/devil-horn.webp',
+    cost: [{ itemId: 90989, name: 'Lotus Candle', amount: 5000, qty: 5000, icon: CANDY_ICON }],
+    limit: { max: 1, perAccount: true, reset: 'None' },
+    desc: 'เขาปีศาจแสงจันทร์ (Moonlit Devil Horn)'
   }
 ];
 
 const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
-  if (!window.WITCH_HAZEL_ITEMS) window.WITCH_HAZEL_ITEMS = ${JSON.stringify(WITCH_HAZEL_ITEMS)};
+  window.WITCH_HAZEL_ITEMS = ${JSON.stringify(WITCH_HAZEL_ITEMS)};
   const CFG_KEY = 'pelican_halloween_cfg';
   if (!window.__halloweenExchangeConfig) {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(CFG_KEY) || 'null'); } catch (_) {}
     window.__halloweenExchangeConfig = {
-      enabled: false,
+      enabled: (saved && typeof saved.enabled === 'boolean') ? saved.enabled : false,
       rules: (saved && saved.rules && typeof saved.rules === 'object') ? saved.rules : {},
       quotaState: (saved && saved.quotaState && typeof saved.quotaState === 'object') ? saved.quotaState : {}
     };
@@ -899,7 +902,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       return sellCfg.whitelist || '';
     }
     const rules = cfg.rules || {};
-    const enabledNames = ['Halloween Candy', 'Golden Pumpkin'];
+    const enabledNames = ['Lotus Candle', 'Krathong Box', 'Krathong'];
     (window.WITCH_HAZEL_ITEMS || []).forEach(it => {
       const r = rules[String(it.itemId)];
       if (r && r.enabled) enabledNames.push(it.name);
@@ -923,7 +926,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
   window.isHalloweenExchangeProtectedItem = function (itemName) {
     if (!itemName) return false;
     const clean = String(itemName).trim().toLowerCase();
-    if (clean === 'halloween candy' || clean === 'golden pumpkin') return true;
+    if (clean === 'lotus candle' || clean === 'krathong box' || clean === 'krathong' || clean === 'halloween candy' || clean === 'golden pumpkin') return true;
     const rules = (window.__halloweenExchangeConfig && window.__halloweenExchangeConfig.rules) || {};
     return (window.WITCH_HAZEL_ITEMS || []).some(it => {
       const r = rules[String(it.itemId)];
@@ -953,7 +956,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
             while (s) {
               const v = s.memoizedState;
               const cand = (v && Array.isArray(v.items)) ? v : (v && v.value && Array.isArray(v.value.items) ? v.value : null);
-              if (cand && (cand.shopId === 950 || /ฮาโลวีน|แม่มด|Witch Hazel/i.test(cand.name || ''))) return cand;
+              if (cand && (cand.shopId === 951 || /ลอยกระทง|นพมาศ|Noppamas/i.test(cand.name || ''))) return cand;
               s = s.next;
             }
             f = f.return;
@@ -987,8 +990,8 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       ? window.__latestInventory.items.filter(Boolean)
       : ((typeof window.getBagItems === 'function') ? window.getBagItems() : []);
     const countItem = id => bag.filter(x => Number((x.raw && x.raw.itemId) ?? x.itemId ?? x.id) === Number(id)).reduce((s, x) => s + (Number(x.qty) || 0), 0);
-    const candy = countItem(90880);
-    const pumpkin = countItem(90881);
+    const candy = countItem(90989);
+    const pumpkin = countItem(90987);
     const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
     const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : 0);
     const cfg = window.__halloweenExchangeConfig || { enabled: true, rules: {}, quotaState: {} };
@@ -1004,7 +1007,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       const limitLeft = (q && q.periodKey === pKey && typeof q.limitLeft === 'number') ? q.limitLeft : limitMax;
       let maxByMaterials = 9999;
       (it.cost || []).forEach(c => {
-        const have = Number(c.itemId) === 90880 ? candy : (Number(c.itemId) === 90881 ? pumpkin : countItem(c.itemId));
+        const have = Number(c.itemId) === 90989 ? candy : (Number(c.itemId) === 90987 ? pumpkin : countItem(c.itemId));
         maxByMaterials = Math.min(maxByMaterials, Math.floor(have / Math.max(1, c.amount)));
       });
       if (it.price > 0) {
@@ -1030,6 +1033,8 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       exchanging: !!window.__isHalloweenExchanging,
       candy,
       pumpkin,
+      lotusCandle: candy,
+      krathongBox: pumpkin,
       zeny,
       lastLog: window.__halloweenLastLog || '',
       items,
@@ -1039,14 +1044,14 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         rules
       },
       live: {
-        bagCounts: { 90880: candy, 90881: pumpkin },
+        bagCounts: { 90989: candy, 90987: pumpkin, 90880: candy, 90881: pumpkin },
         zeny,
         quotaState: qs
       }
     };
   };
   window.runHalloweenExchangeStep = async function (manual = false, targetItemId = null) {
-    if (window.__isHalloweenExchanging) return { success: false, busy: true, message: 'กำลังดำเนินการแลกของ Halloween อยู่...' };
+    if (window.__isHalloweenExchanging) return { success: false, busy: true, message: 'กำลังดำเนินการแลกของกิจกรรมลอยกระทงอยู่...' };
     if (!manual && (window.__halloweenNextTryAt || 0) > Date.now()) return false;
     const st = window.getHalloweenExchangeStatus();
     if (!manual && !st.enabled) return false;
@@ -1057,7 +1062,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       return it.ready;
     });
     if (!candidates.length) {
-      if (manual) return { success: false, error: 'วัตถุดิบ (ลูกอม/ฟักทอง/Zeny) ยังไม่พอแลก หรือครบโควต้าแล้ว' };
+      if (manual) return { success: false, error: 'วัตถุดิบ (เทียนดอกบัว / Zeny) ยังไม่พอแลก หรือครบโควต้าแล้ว' };
       return false;
     }
     const room = ${ROOM_JS};
@@ -1075,8 +1080,8 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       if (farm && !/เมืองหลวง|โซลเฮเวน/.test(farm)) {
         try { localStorage.setItem('pelican_job_return_map', farm); } catch (_) {}
       }
-      window.__halloweenLastLog = '🎃 ของครบเงื่อนไขแลก (' + candidates.map(c => c.name + ' x' + c.exchangeableNow).join(', ') + ') -> เดินทางกลับเมืองหลวงไปหา Witch Hazel';
-      console.log('%c[PmheeAether Halloween] ' + window.__halloweenLastLog, 'color: #fb923c; font-weight: bold;');
+      window.__halloweenLastLog = '🪷 ของครบเงื่อนไขแลก (' + candidates.map(c => c.name + ' x' + c.exchangeableNow).join(', ') + ') -> เดินทางกลับเมืองหลวงไปหานางนพมาศ (Nang Noppamas)';
+      console.log('%c[PmheeAether LoyKrathong] ' + window.__halloweenLastLog, 'color: #fb923c; font-weight: bold;');
       window.__planJobChangeHoldUntil = Date.now() + 120000;
       if (typeof window.needTown === 'function') window.needTown('halloween');
       if (typeof window.planTripToCapital === 'function') window.planTripToCapital('halloween');
@@ -1085,9 +1090,13 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       return { success: true, navigating: true, message: window.__halloweenLastLog };
     }
     let witchKey = null;
+    let witchNpc = null;
     if (room.state && room.state.npcs && typeof room.state.npcs.forEach === 'function') {
       room.state.npcs.forEach((n, k) => {
-        if (!witchKey && n && (n.npcId === 223 || /Witch Hazel|แม่มดฮาเซล/i.test(n.name || ''))) witchKey = k;
+        if (!witchKey && n && (n.npcId === 243 || /Nang Noppamas|Noppamas|นางนพมาศ|นพมาศ/i.test(n.name || ''))) {
+          witchKey = k;
+          witchNpc = n;
+        }
       });
     }
     if (!witchKey) {
@@ -1099,7 +1108,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       }
       window.__planJobChangeHoldUntil = 0;
       if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
-      return { success: false, error: 'ไม่พบ NPC Witch Hazel ในเมืองหลวง (ปิดระบบแลกฮาโลวีนอัตโนมัติ)' };
+      return { success: false, error: 'ไม่พบ NPC นางนพมาศ (Nang Noppamas) ในเมืองหลวง (ปิดระบบแลกอัตโนมัติ)' };
     }
     window.__isHalloweenExchanging = true;
     window.__planJobChangeHoldUntil = Date.now() + 45000;
@@ -1111,12 +1120,33 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         document.querySelectorAll('.shop-window .win-close, .npc-dialog .win-close').forEach(b => { try { b.click(); } catch (_) {} });
         try { room.send('npc_close', {}); } catch (_) {}
       };
+      if (witchNpc && Number.isFinite(Number(witchNpc.x)) && Number.isFinite(Number(witchNpc.y))) {
+        const getMe = () => (room.state && room.state.players && typeof room.state.players.get === 'function') ? room.state.players.get(room.sessionId) : null;
+        let me = getMe();
+        if (me && Number.isFinite(Number(me.x)) && Math.hypot(me.x - witchNpc.x, me.y - witchNpc.y) > 115) {
+          const walkStart = Date.now();
+          let lastMove = 0;
+          while (Date.now() - walkStart < 15000 && (manual || window.__isBotRunning)) {
+            me = getMe();
+            if (me && Math.hypot(me.x - witchNpc.x, me.y - witchNpc.y) <= 115) break;
+            if (Date.now() - lastMove > 1800) {
+              lastMove = Date.now();
+              const targetWitchPos = (typeof window.getScatteredNpcApproachPos === 'function')
+                ? window.getScatteredNpcApproachPos(witchNpc, me)
+                : { x: Number(witchNpc.x), y: Number(witchNpc.y) };
+              room.send('move_to', { x: Number(targetWitchPos.x), y: Number(targetWitchPos.y) });
+            }
+            await sleep(250);
+          }
+          await sleep(250);
+        }
+      }
       let netDlg = null, netShop = null;
       if (typeof room.onMessage === 'function') {
         try {
           unsubDlg = room.onMessage('npc_dialog', m => { if (m) netDlg = m; });
           unsubShop = room.onMessage('shop', m => {
-            if (m && (m.shopId === 950 || /ฮาโลวีน|แม่มด|Witch Hazel/i.test(m.name || ''))) netShop = m;
+            if (m && (m.shopId === 951 || /ลอยกระทง|นพมาศ|Noppamas/i.test(m.name || ''))) netShop = m;
           });
         } catch (_) {}
       }
@@ -1128,13 +1158,13 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
           if (i === 40) { try { room.send('npc_talk', { npcKey: witchKey }); } catch (_) {} }
           await sleep(200);
           shopObj = netShop || window.readLiveWitchShopState();
-          dlg = document.querySelector('.npc-dialog');
+          dlg = document.querySelector('.npc-dialog:not(.guide-talk)');
         }
         if ((dlg || netDlg) && !shopObj) {
           const opts = netDlg && Array.isArray(netDlg.options)
             ? netDlg.options.map(s => String(s || '').trim())
             : Array.from((dlg ? dlg.querySelectorAll('.npc-options button') : [])).map(b => (b.innerText || '').replace(/^\\s*\\d+\\s*/, '').trim());
-          let optIdx = opts.findIndex(o => /รางวัล|แลก|ร้าน|ฮาโลวีน|reward|shop/i.test(o));
+          let optIdx = opts.findIndex(o => /แลก|เทียน|รางวัล|ร้าน|กระทง|reward|shop|exchange/i.test(o));
           if (optIdx < 0) optIdx = 0;
           room.send('npc_option', { index: optIdx });
           for (let i = 0; i < 40 && !shopObj; i++) {
@@ -1146,7 +1176,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       if (!shopObj) {
         closeAll();
         window.__halloweenNextTryAt = Date.now() + 15000;
-        return { success: false, error: 'เปิดหน้าต่างแลกของ Witch Hazel ไม่สำเร็จ (กำลังเดินไปหา NPC)' };
+        return { success: false, error: 'เปิดหน้าต่างแลกของนางนพมาศ (Nang Noppamas) ไม่สำเร็จ (กำลังเดินไปหา NPC)' };
       }
       window.updateHalloweenQuotaFromShop(shopObj);
       const fresh = window.getHalloweenExchangeStatus();
@@ -1165,7 +1195,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         if (limLeft === 0) continue;
         let maxNow = limLeft > 0 ? limLeft : 9999;
         (it.cost || []).forEach(c => {
-          const pool = Number(c.itemId) === 90880 ? remCandy : (Number(c.itemId) === 90881 ? remPumpkin : 0);
+          const pool = Number(c.itemId) === 90989 ? remCandy : (Number(c.itemId) === 90987 ? remPumpkin : 0);
           maxNow = Math.min(maxNow, Math.floor(pool / Math.max(1, c.amount)));
         });
         if (it.price > 0) maxNow = Math.min(maxNow, Math.floor(remZeny / it.price));
@@ -1174,8 +1204,8 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         lines.push({ itemId: Number(it.itemId), qty: maxNow });
         exchangedSummary.push(it.name + ' x' + maxNow);
         (it.cost || []).forEach(c => {
-          if (Number(c.itemId) === 90880) remCandy -= c.amount * maxNow;
-          if (Number(c.itemId) === 90881) remPumpkin -= c.amount * maxNow;
+          if (Number(c.itemId) === 90989) remCandy -= c.amount * maxNow;
+          if (Number(c.itemId) === 90987) remPumpkin -= c.amount * maxNow;
         });
         if (it.price > 0) remZeny -= it.price * maxNow;
         const qEntry = window.__halloweenExchangeConfig.quotaState[String(it.itemId)];
@@ -1189,13 +1219,13 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         window.__halloweenLastLog = '⏭️ โควต้าของที่เลือกเต็มแล้ววันนี้ — เดินทางกลับแมพฟาร์ม';
         window.__planJobChangeHoldUntil = 0;
         if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
-        return { success: false, error: 'โควต้าของที่เลือกเต็มแล้ว หรือวัตถุดิบไม่พอแลกตามจำนวนขั้นต่ำที่ตั้งไว้' };
+        return { success: false, error: 'โควต้าของที่เลือกเต็มแล้ว หรือเทียนดอกบัว/Zeny ไม่พอแลกตามจำนวนขั้นต่ำที่ตั้งไว้' };
       }
       netShop = null;
       const beforeCandy = fresh.candy;
       room.send('shop_buy_many', { lines });
       window.__halloweenLastLog = '✅ แลกสำเร็จ: ' + exchangedSummary.join(', ');
-      console.log('%c[PmheeAether Halloween] ' + window.__halloweenLastLog, 'color: #22c55e; font-weight: bold;');
+      console.log('%c[PmheeAether LoyKrathong] ' + window.__halloweenLastLog, 'color: #22c55e; font-weight: bold;');
       for (let i = 0; i < 12; i++) {
         await sleep(200);
         if (netShop) { window.updateHalloweenQuotaFromShop(netShop); break; }
@@ -1213,9 +1243,11 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       window.__isHalloweenExchanging = false;
     }
   };
-  if (!window.__pmHalloweenLoopId || window.__pmHalloweenLoopVer !== 3) {
+  if (!window.__pmHalloweenLoopId || window.__pmHalloweenLoopVer !== 4) {
     if (window.__pmHalloweenLoopId) { try { clearInterval(window.__pmHalloweenLoopId); } catch (_) {} }
-    window.__pmHalloweenLoopVer = 3;
+    window.__pmHalloweenLoopVer = 4;
+    window.__halloweenEventEnded = false;
+    if ((window.__halloweenNextTryAt || 0) > Date.now() + 86400000) window.__halloweenNextTryAt = 0;
     window.__pmHalloweenLoopId = setInterval(() => {
       try {
         const liveShop = window.readLiveWitchShopState && window.readLiveWitchShopState();

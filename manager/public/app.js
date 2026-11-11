@@ -7642,7 +7642,7 @@ async function openWebBotHUD(profileId) {
   gameCall('#p-btn-test-login', `(typeof window.executeAutoLogin === 'function' && window.executeAutoLogin(true), true)`);
   gameCall('#p-btn-mk-scan', `(window.__isMarketScanning ? (typeof window.stopMarketScan === 'function' && window.stopMarketScan()) : (typeof window.startMarketMultiPageScan === 'function' && window.startMarketMultiPageScan('all')), true)`);
   gameCall('#p-btn-store-now', `(typeof window.runAutoStorageDeposit === 'function' && window.runAutoStorageDeposit({ manual: true }), true)`);
-  gameCall('#p-btn-test-shop', `(typeof window.executeAutoShopRoutine === 'function' && window.executeAutoShopRoutine(), true)`,
+  gameCall('#p-btn-test-shop', `(typeof window.executeAutoShopRoutine === 'function' && window.executeAutoShopRoutine(true), true)`,
     'ส่งตัวละครกลับเมืองไปขาย/ซื้อของตามตั้งค่าตอนนี้เลยใช่ไหม?');
   ['#p-btn-sniff-equip', '#p-btn-mk-open-modal', '#p-btn-mk-copy-json', '#p-btn-dump-map', '#p-btn-dump-item', '#p-btn-dump-packets',
     '#p-btn-dump-state', '#p-btn-dump-market', '#p-btn-dump-weight', '#p-btn-dump-npc', '#p-btn-copy-out'].forEach(sel => {

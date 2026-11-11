@@ -2530,7 +2530,7 @@ function buildClientActionEvalCode(payload) {
   } else if (payload.type === 'sort-inventory') {
     return `if (typeof window.refreshInventoryAndWeight === 'function') window.refreshInventoryAndWeight(null, true);`;
   } else if (payload.type === 'test-sell') {
-    return `if (typeof window.executeSellTrashAtNpc === 'function') window.executeSellTrashAtNpc(true);`;
+    return `if (typeof window.testSellTrash === 'function') window.testSellTrash(); else if (typeof window.executeSellTrashAtNpc === 'function') window.executeSellTrashAtNpc(true);`;
   } else if (payload.type === 'update-auth') {
     const cfg = payload.config || {};
     return `(() => {

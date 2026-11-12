@@ -255,13 +255,24 @@ const ACTIONS = {
     if (typeof window.moveToChannel !== 'function') return { success: false, error: 'บอทจอนี้ไม่มีระบบย้าย CH' };
     let r = null;
     try { r = await window.moveToChannel(${Number(ch)}, ${Number(waitMs)}); } catch (e) { r = { success: false, error: String(e && e.message || e) }; }
-    await new Promise(x => setTimeout(x, 1500));
+    const fastFail = Boolean(r && (r.blockedBusy || r.blockedShut || r.noSuchChannel || r.blockedPk));
+    await new Promise(x => setTimeout(x, fastFail ? 250 : 1500));
     const room = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
     const cur = room && room.state && typeof room.state.channel === 'number' ? room.state.channel : (typeof window.getCurrentChannel === 'function' ? window.getCurrentChannel() : null);
-    if (cur === ${Number(ch)} && window.__isBotRunning && !window.__isShopping && !window.__isNavigating) {
-      setTimeout(() => { try { if (window.__isBotRunning && typeof window.activateInGameAuto === 'function') window.activateInGameAuto(); } catch (_) {} }, 600);
+    const nowPk = typeof window.isCurrentChannelPk === 'function' && window.isCurrentChannelPk();
+    const inCity = typeof isCharacterInCity === 'function' && isCharacterInCity();
+    if (!nowPk && !inCity && window.__isBotRunning && !window.__isShopping && !window.__isNavigating && !window.__isConsolidating) {
+      setTimeout(() => { try { if (window.__isBotRunning && !window.__isShopping && !window.__isNavigating && typeof window.activateInGameAuto === 'function') window.activateInGameAuto(); } catch (_) {} }, 500);
     }
-    return { success: cur === ${Number(ch)}, channel: cur, blockedShut: Boolean(r && r.blockedShut), error: cur === ${Number(ch)} ? null : ((r && r.error) || 'ย้าย CH ไม่สำเร็จ') };
+    return {
+      success: cur === ${Number(ch)},
+      channel: cur,
+      blockedShut: Boolean(r && r.blockedShut),
+      blockedBusy: Boolean(r && r.blockedBusy),
+      noSuchChannel: Boolean(r && r.noSuchChannel),
+      blockedPk: Boolean(r && r.blockedPk),
+      error: cur === ${Number(ch)} ? null : ((r && r.error) || 'ย้าย CH ไม่สำเร็จ')
+    };
   })()`,
   leastChannel: (avoidChannels) => `(async () => {
     if (typeof window.findLeastPopulatedChannel !== 'function') return { success: false, error: 'no-helper' };
@@ -1188,7 +1199,18 @@ function createPartyService(opts) {
         if (S && S.channel === ch) continue;
         rt.gatherNote = nm + ' กำลังย้ายไป CH ' + ch + ' (รอคูลดาวน์/ที่ว่างให้เอง)';
         const r = await act(profiles.get(id), ACTIONS.moveChannelWait(ch, T.memberMoveWaitMs), 'move-ch', T.memberMoveWaitMs + 10000);
-        if (!(r.ok && r.result && r.result.success)) return { ok: false, who: nm, whoId: id, blockedShut: Boolean(r.result && r.result.blockedShut), error: (r.result && r.result.error) || r.error };
+        if (!(r.ok && r.result && r.result.success)) {
+          return {
+            ok: false,
+            who: nm,
+            whoId: id,
+            blockedShut: Boolean(r.result && r.result.blockedShut),
+            blockedBusy: Boolean(r.result && r.result.blockedBusy),
+            noSuchChannel: Boolean(r.result && r.result.noSuchChannel),
+            blockedPk: Boolean(r.result && r.result.blockedPk),
+            error: (r.result && r.result.error) || r.error
+          };
+        }
       }
       return { ok: true };
     };
@@ -1200,30 +1222,42 @@ function createPartyService(opts) {
       // Step 1: Least-crowded & non-overlapping channel selection upon entering a farm map (or when overlapping another party)
       if (needsInitialChannelCheck && anchorP && anchorSnap && anchorSnap.mapId) {
         rt.gatherNote = anchorLabel + ' กำลังสแกนหา CH ที่คนน้อยสุด (และไม่ทับ CH ปาร์ตี้อื่น)';
-        let wantCh = null;
-        if (anchorSnap.helpers && anchorSnap.helpers.evaluateAnchorChannel) {
-          const ev = await act(anchorP, ACTIONS.evaluateAnchorChannel(1 + party.memberIds.length, allPartyNames || [], avoidList), 'eval-anchor-ch', 12000);
-          if (ev.ok && ev.result && ev.result.shouldSwitch && typeof ev.result.channel === 'number' && (ev.result.channel !== anchorSnap.channel || anchorSnap.pkChannel) && !avoidList.includes(ev.result.channel)) {
-            wantCh = ev.result.channel;
+        const localAvoid = avoidList.slice();
+        const onlyForOverlap = Boolean(!anchorSnap.pkChannel && rt.settledMapId === anchorSnap.mapId);
+        for (let attempt = 0; attempt < 2; attempt++) {
+          let wantCh = null;
+          if (anchorSnap.helpers && anchorSnap.helpers.evaluateAnchorChannel) {
+            const ev = await act(anchorP, ACTIONS.evaluateAnchorChannel(1 + party.memberIds.length, allPartyNames || [], localAvoid), 'eval-anchor-ch', 12000);
+            if (onlyForOverlap && ev.ok && ev.result && ev.result.currentIsOverlapped === false && !ev.result.currentIsPk && !ev.result.currentIsShut) {
+              wantCh = null;
+            } else if (ev.ok && ev.result && ev.result.shouldSwitch && typeof ev.result.channel === 'number' && (ev.result.channel !== anchorSnap.channel || anchorSnap.pkChannel) && !localAvoid.includes(ev.result.channel)) {
+              wantCh = ev.result.channel;
+            }
           }
-        }
-        if (wantCh == null && (avoidList.includes(anchorSnap.channel) || anchorSnap.pkChannel) && anchorSnap.helpers && anchorSnap.helpers.findLeast) {
-          const least = await act(anchorP, ACTIONS.leastChannel(avoidList), 'least-ch-avoid-overlap', 15000);
-          const lch = least.ok && least.result ? least.result.channel : null;
-          if (typeof lch === 'number' && (lch !== anchorSnap.channel || anchorSnap.pkChannel) && !avoidList.includes(lch)) {
-            wantCh = lch;
+          if (wantCh == null && !onlyForOverlap && (localAvoid.includes(anchorSnap.channel) || anchorSnap.pkChannel) && anchorSnap.helpers && anchorSnap.helpers.findLeast) {
+            const least = await act(anchorP, ACTIONS.leastChannel(localAvoid), 'least-ch-avoid-overlap', 15000);
+            const lch = least.ok && least.result ? least.result.channel : null;
+            if (typeof lch === 'number' && (lch !== anchorSnap.channel || anchorSnap.pkChannel) && !localAvoid.includes(lch)) {
+              wantCh = lch;
+            }
           }
-        }
-        if (typeof wantCh === 'number' && (wantCh !== anchorSnap.channel || anchorSnap.pkChannel)) {
-          rt.pendingChannel = wantCh;
-          rt.gatherNote = anchorLabel + ' กำลังย้ายไป CH ' + wantCh + ' (คนน้อยสุด / ไม่ทับตี้อื่น)';
-          const am = await act(anchorP, ACTIONS.moveChannelWait(wantCh, T.leaderMoveWaitMs), 'anchor-move-ch', T.leaderMoveWaitMs + 10000);
-          const realCh = (am.result && typeof am.result.channel === 'number') ? am.result.channel : anchorSnap.channel;
-          targetCh = realCh;
-          anchorSnap.channel = realCh;
-          anchorSnap.pkChannel = false;
-        } else {
-          targetCh = anchorSnap.channel;
+          if (typeof wantCh === 'number' && (wantCh !== anchorSnap.channel || anchorSnap.pkChannel)) {
+            rt.pendingChannel = wantCh;
+            rt.gatherNote = anchorLabel + ' กำลังย้ายไป CH ' + wantCh + ' (คนน้อยสุด / ไม่ทับตี้อื่น)';
+            const am = await act(anchorP, ACTIONS.moveChannelWait(wantCh, T.leaderMoveWaitMs), 'anchor-move-ch', T.leaderMoveWaitMs + 10000);
+            const realCh = (am.result && typeof am.result.channel === 'number') ? am.result.channel : anchorSnap.channel;
+            targetCh = realCh;
+            anchorSnap.channel = realCh;
+            if (realCh === wantCh) anchorSnap.pkChannel = false;
+            const moveBlocked = Boolean(am.result && (am.result.blockedBusy || am.result.blockedShut || am.result.noSuchChannel || am.result.blockedPk));
+            if (realCh !== wantCh && moveBlocked) {
+              if (!localAvoid.includes(wantCh)) localAvoid.push(wantCh);
+              continue;
+            }
+          } else {
+            targetCh = anchorSnap.channel;
+          }
+          break;
         }
         rt.settledMapId = anchorSnap.mapId;
         rt.settledChannel = targetCh;
@@ -1258,20 +1292,30 @@ function createPartyService(opts) {
       }
       rt.fallbackAt = now();
       rt.gatherNote = first.who + ' เข้า CH ' + targetCh + ' ไม่ได้ — ' + anchorLabel + ' กำลังหา CH ที่คนน้อยสุด';
-      const fallbackAvoid = (first.blockedShut && !avoidList.includes(targetCh)) ? avoidList.concat([targetCh]) : avoidList;
+      const isBlockedTarget = Boolean(first.blockedShut || first.blockedBusy || first.noSuchChannel || first.blockedPk);
+      const fallbackAvoid = (isBlockedTarget && !avoidList.includes(targetCh)) ? avoidList.concat([targetCh]) : avoidList.slice();
       const probeP = (first.blockedShut && first.whoId && profiles.get(first.whoId)) ? profiles.get(first.whoId) : anchorP;
-      const least = await act(probeP, ACTIONS.leastChannel(fallbackAvoid), 'least-ch', 15000);
-      const ch = least.ok && least.result ? least.result.channel : null;
-      if (typeof ch !== 'number' || ch === targetCh) {
-        rt.channelNote = first.who + ' เข้า CH ' + targetCh + ' ไม่ได้ และหา CH ที่ว่างกว่าไม่ได้';
-        return;
-      }
-      rt.gatherNote = anchorLabel + ' กำลังย้ายไป CH ' + ch + ' (คนน้อยสุด)';
-      const lm = await act(anchorP, ACTIONS.moveChannelWait(ch, T.leaderMoveWaitMs), 'leader-move-ch', T.leaderMoveWaitMs + 10000);
-      const real = lm.result && typeof lm.result.channel === 'number' ? lm.result.channel : null;
-      if (real == null || real === targetCh) {
-        rt.channelNote = anchorLabel + ' ย้ายไป CH ' + ch + ' ไม่ได้ — จะลองใหม่ภายหลัง';
-        return;
+      let real = null;
+      for (let fbAttempt = 0; fbAttempt < 2; fbAttempt++) {
+        const least = await act(probeP, ACTIONS.leastChannel(fallbackAvoid), 'least-ch', 15000);
+        const ch = least.ok && least.result ? least.result.channel : null;
+        if (typeof ch !== 'number' || ch === targetCh) {
+          rt.channelNote = first.who + ' เข้า CH ' + targetCh + ' ไม่ได้ และหา CH ที่ว่างกว่าไม่ได้';
+          return;
+        }
+        rt.gatherNote = anchorLabel + ' กำลังย้ายไป CH ' + ch + ' (คนน้อยสุด)';
+        const lm = await act(anchorP, ACTIONS.moveChannelWait(ch, T.leaderMoveWaitMs), 'leader-move-ch', T.leaderMoveWaitMs + 10000);
+        real = lm.result && typeof lm.result.channel === 'number' ? lm.result.channel : null;
+        const lmBlocked = Boolean(lm.result && (lm.result.blockedBusy || lm.result.blockedShut || lm.result.noSuchChannel || lm.result.blockedPk));
+        if ((real == null || real === targetCh) && lmBlocked && !fallbackAvoid.includes(ch)) {
+          fallbackAvoid.push(ch);
+          continue;
+        }
+        if (real == null || real === targetCh) {
+          rt.channelNote = anchorLabel + ' ย้ายไป CH ' + ch + ' ไม่ได้ — จะลองใหม่ภายหลัง';
+          return;
+        }
+        break;
       }
       rt.settledMapId = anchorSnap.mapId;
       rt.settledChannel = real;
@@ -1301,28 +1345,40 @@ function createPartyService(opts) {
     rt.moving = true;
     rt.gatherAt = now();
     const avoidList = Array.isArray(avoidChannels) ? avoidChannels : [];
+    const localAvoid = avoidList.slice();
+    const onlyForOverlap = Boolean(!S.pkChannel && rt.settledMapId === S.mapId);
     const prevCh = S.channel;
     try {
-      let wantCh = null;
-      if (S.helpers && S.helpers.evaluateAnchorChannel) {
-        const ev = await act(P, ACTIONS.evaluateAnchorChannel(1, S.name ? [S.name] : [], avoidList), 'eval-solo-ch', 12000);
-        if (ev.ok && ev.result && ev.result.shouldSwitch && typeof ev.result.channel === 'number' && (ev.result.channel !== S.channel || S.pkChannel) && !avoidList.includes(ev.result.channel)) {
-          wantCh = ev.result.channel;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        let wantCh = null;
+        if (S.helpers && S.helpers.evaluateAnchorChannel) {
+          const ev = await act(P, ACTIONS.evaluateAnchorChannel(1, S.name ? [S.name] : [], localAvoid), 'eval-solo-ch', 12000);
+          if (onlyForOverlap && ev.ok && ev.result && ev.result.currentIsOverlapped === false && !ev.result.currentIsPk && !ev.result.currentIsShut) {
+            wantCh = null;
+          } else if (ev.ok && ev.result && ev.result.shouldSwitch && typeof ev.result.channel === 'number' && (ev.result.channel !== S.channel || S.pkChannel) && !localAvoid.includes(ev.result.channel)) {
+            wantCh = ev.result.channel;
+          }
         }
-      }
-      if (wantCh == null && (avoidList.includes(S.channel) || S.pkChannel) && S.helpers && S.helpers.findLeast) {
-        const least = await act(P, ACTIONS.leastChannel(avoidList), 'least-ch-solo-avoid', 15000);
-        const lch = least.ok && least.result ? least.result.channel : null;
-        if (typeof lch === 'number' && (lch !== S.channel || S.pkChannel) && !avoidList.includes(lch)) {
-          wantCh = lch;
+        if (wantCh == null && !onlyForOverlap && (localAvoid.includes(S.channel) || S.pkChannel) && S.helpers && S.helpers.findLeast) {
+          const least = await act(P, ACTIONS.leastChannel(localAvoid), 'least-ch-solo-avoid', 15000);
+          const lch = least.ok && least.result ? least.result.channel : null;
+          if (typeof lch === 'number' && (lch !== S.channel || S.pkChannel) && !localAvoid.includes(lch)) {
+            wantCh = lch;
+          }
         }
-      }
-      if (typeof wantCh === 'number' && (wantCh !== S.channel || S.pkChannel)) {
-        rt.pendingChannel = wantCh;
-        const am = await act(P, ACTIONS.moveChannelWait(wantCh, T.leaderMoveWaitMs), 'solo-move-ch', T.leaderMoveWaitMs + 10000);
-        const realCh = (am.result && typeof am.result.channel === 'number') ? am.result.channel : S.channel;
-        S.channel = realCh;
-        S.pkChannel = false;
+        if (typeof wantCh === 'number' && (wantCh !== S.channel || S.pkChannel)) {
+          rt.pendingChannel = wantCh;
+          const am = await act(P, ACTIONS.moveChannelWait(wantCh, T.leaderMoveWaitMs), 'solo-move-ch', T.leaderMoveWaitMs + 10000);
+          const realCh = (am.result && typeof am.result.channel === 'number') ? am.result.channel : S.channel;
+          S.channel = realCh;
+          if (realCh === wantCh) S.pkChannel = false;
+          const moveBlocked = Boolean(am.result && (am.result.blockedBusy || am.result.blockedShut || am.result.noSuchChannel || am.result.blockedPk));
+          if (realCh !== wantCh && moveBlocked) {
+            if (!localAvoid.includes(wantCh)) localAvoid.push(wantCh);
+            continue;
+          }
+        }
+        break;
       }
       if (S.mapId && typeof S.channel === 'number' && !S.pkChannel) {
         rt.settledMapId = S.mapId;

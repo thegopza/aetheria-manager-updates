@@ -18,14 +18,60 @@
     const day = Math.floor(d / 86400000), h = Math.floor((d % 86400000) / 3600000), m = Math.floor((d % 3600000) / 60000);
     return day ? `เหลือ ${day} วัน ${h} ชม.` : h ? `เหลือ ${h} ชม. ${m} นาที` : `เหลือ ${m} นาที`;
   };
+  const fmtExpShort = ms => {
+    if (!ms) return '';
+    const dt = new Date(ms);
+    if (isNaN(dt.getTime())) return '';
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    const hh = String(dt.getHours()).padStart(2, '0');
+    const mi = String(dt.getMinutes()).padStart(2, '0');
+    return `${dd}/${mm} ${hh}:${mi}`;
+  };
+
+  const STORAGE_SORT_KEY = 'pelican_pm_sort';
+  const STORAGE_CFG_COLLAPSED_KEY = 'pelican_pm_cfg_collapsed';
+  const VALID_SORTS = new Set(['exp_asc', 'exp_desc', 'novip_first', 'zeny_desc', 'tokens_desc', 'default']);
+  const loadSavedSort = () => {
+    try {
+      const s = localStorage.getItem(STORAGE_SORT_KEY);
+      if (s && VALID_SORTS.has(s)) return s;
+    } catch (_) {}
+    return 'exp_asc';
+  };
+  const loadSavedCfgCollapsed = () => {
+    try {
+      const v = localStorage.getItem(STORAGE_CFG_COLLAPSED_KEY);
+      if (v === '0') return false;
+      if (v === '1') return true;
+    } catch (_) {}
+    return true;
+  };
 
   let data = { settings: {}, market: null, clients: [] };
   let open = false, pollTimer = null, busy = false, filter = 'all', pointerDown = false, pendingRender = false;
+  let sortMode = loadSavedSort();
+  let cfgCollapsed = loadSavedCfgCollapsed();
+  let searchQuery = '';
   let lastPlansSig = '';
   let openForceId = null;
   let openSellId = null;
   let openSellAll = false;
   let scannedOnOpen = false;
+
+  function getPremiumUntilMs(c) {
+    if (!c) return 0;
+    const direct = Number(c.premiumUntil) || 0;
+    if (direct > 0) return direct;
+    if (typeof currentProfiles !== 'undefined' && Array.isArray(currentProfiles)) {
+      const cp = currentProfiles.find(x => x && String(x.id) === String(c.id));
+      if (cp) {
+        const fb = Number((cp.liveState && cp.liveState.premiumUntil) || cp.premiumUntil || cp.lastPremiumUntil) || 0;
+        if (fb > 0) return fb;
+      }
+    }
+    return 0;
+  }
 
   function build() {
     const tab = document.createElement('button');
@@ -38,10 +84,22 @@
     drawer.innerHTML = `
       <header class="pm-head">
         <div class="pm-head-icon">${GEM}</div>
-        <div><h2>Premium อัตโนมัติ</h2><p>ซื้อ/ขาย Token และปลดล็อค Premium อัตโนมัติ</p></div>
+        <div class="pm-head-titles"><h2>Premium อัตโนมัติ</h2><p>ซื้อ/ขาย Token และปลดล็อค Premium อัตโนมัติ</p></div>
         <button class="pm-sell-all-top-btn" id="pm-sell-all-open" type="button" title="ตั้งขาย Token ของทุกตัวละครในราคาตั้งขายที่ถูกสุด">💰 ขายทุกตัว</button>
         <button class="pm-close" id="pm-close" type="button" aria-label="ปิด">✕</button>
       </header>
+      <div class="pm-summary-bar" id="pm-summary-bar">
+        <div class="pm-sum-chips" id="pm-sum-chips" title="คลิกปุ่ม ตั้งค่าเงื่อนไข ด้านขวาเพื่อปรับแพ็กเกจ เงินสำรอง หรือการรวมเงินต่อ VIP">
+          <span class="pm-sum-chip">💎 <b id="pm-sum-ask">—</b><small>/Token</small></span>
+          <span class="pm-sum-chip">📦 <b id="pm-sum-plan">7 วัน · 1,000</b> <small id="pm-sum-est"></small></span>
+          <span class="pm-sum-chip cons" id="pm-sum-cons" hidden></span>
+        </div>
+        <div class="pm-sum-actions">
+          <button type="button" class="pm-cons-now-btn ghost pm-sum-cons-btn" id="pm-sum-cons-btn" hidden title="ตรวจสอบและรวมเงินซื้อต่อ VIP ทันที">🤝 เช็ก/รวม</button>
+          <button type="button" class="pm-cfg-toggle-btn" id="pm-cfg-toggle" title="เปิด/ซ่อนแผงตั้งค่าเงื่อนไขเพื่อเพิ่มพื้นที่แสดงรายชื่อตัวละคร">⚙️ ตั้งค่า ▾</button>
+        </div>
+      </div>
+      <div class="pm-quick-cons-banner" id="pm-quick-cons-banner" hidden></div>
       <div class="pm-sell-all-box" id="pm-sell-all-box" hidden>
         <div class="pm-s-head">
           <span>💰 ตั้งขาย Token ทุกตัวละคร (ราคาตั้งขายที่ถูกสุด)</span>
@@ -64,7 +122,7 @@
         </div>
         <div class="pm-f-est ok" id="pm-sa-est"></div>
       </div>
-      <section class="pm-settings" id="pm-settings">
+      <section class="pm-settings" id="pm-settings" ${cfgCollapsed ? 'hidden' : ''}>
         <div class="pm-market">
           <div><span>ราคาขายต่ำสุด</span><b id="pm-ask-val">—</b><small>/ Token</small></div>
           <div><span id="pm-plan-lbl">Premium 7 วัน</span><b id="pm-plan-tokens">1,000</b><small>Token</small></div>
@@ -121,19 +179,33 @@
           </div>
         </div>
       </section>
-      <nav class="pm-filter" id="pm-filter">
-        <button type="button" data-f="all" class="on">ทุกจอ</button>
-        <button type="button" data-f="on">เปิดอยู่</button>
-        <button type="button" data-f="active">มี Premium</button>
-        <button type="button" data-f="inactive">ไม่มี Premium</button>
-        <span class="pm-filter-sp"></span>
-        <button type="button" class="pm-mini" id="pm-all-on">เปิดทุกจอ</button>
-        <button type="button" class="pm-mini" id="pm-all-off">ปิดทุกจอ</button>
-      </nav>
+      <div class="pm-toolbar">
+        <nav class="pm-filter" id="pm-filter">
+          <button type="button" data-f="all" class="on">ทุกจอ</button>
+          <button type="button" data-f="on">เปิดอยู่</button>
+          <button type="button" data-f="active">มี VIP</button>
+          <button type="button" data-f="inactive">ไม่มี VIP</button>
+          <span class="pm-filter-sp"></span>
+          <button type="button" class="pm-mini" id="pm-all-on">เปิดทุกจอ</button>
+          <button type="button" class="pm-mini" id="pm-all-off">ปิดทุกจอ</button>
+        </nav>
+        <div class="pm-sort-bar" id="pm-sort-bar">
+          <label class="pm-sort-lbl" for="pm-sort">เรียง:</label>
+          <select id="pm-sort" class="pm-sort-sel" title="เลือกรูปแบบการเรียงลำดับตัวละคร">
+            <option value="exp_asc">⏳ วันหมดอายุ VIP: ใกล้หมด → เหลือเยอะ</option>
+            <option value="exp_desc">🛡️ วันหมดอายุ VIP: เหลือเยอะ → ใกล้หมด</option>
+            <option value="novip_first">⚠️ ไม่มี VIP ก่อน → ใกล้หมดอายุ</option>
+            <option value="zeny_desc">💰 เงิน Zeny: มาก → น้อย</option>
+            <option value="tokens_desc">💎 เหรียญ Token: มาก → น้อย</option>
+            <option value="default">📋 ชื่อจอ (Client 1 → N)</option>
+          </select>
+          <button type="button" class="pm-sort-flip" id="pm-sort-exp-flip" title="คลิกสลับเรียงวันหมดอายุ: ใกล้หมดก่อน ↔ เหลือเยอะก่อน">⏳ ใกล้หมด ↑</button>
+          <input type="search" id="pm-search" class="pm-search-inp" placeholder="🔍 ค้นหาชื่อ..." autocomplete="off">
+        </div>
+      </div>
       <div class="pm-body" id="pm-body"></div>
       <footer class="pm-foot">
-        <span id="pm-gate-hint">เริ่มทำงานเมื่อ Plan Script ผ่านครบทุกเงื่อนไข (เลเวล ใส่เซ็ต เงิน) · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที</span><br>
-        ยังไม่มี Premium → ซื้อ Token ราคาขายต่ำสุดจนครบแล้วปลดล็อค · <span id="pm-prebuy-hint">มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด</span> <b id="pm-lead-hint"></b>
+        <span id="pm-gate-hint">เริ่มทำงานเมื่อ Plan Script ผ่านครบทุกเงื่อนไข · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที</span> · <span id="pm-prebuy-hint">มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด</span> <b id="pm-lead-hint"></b>
       </footer>`;
     document.body.append(tab, scrim, drawer);
 
@@ -157,12 +229,53 @@
     drawer.querySelector('#pm-body').addEventListener('click', onBodyClick);
     drawer.querySelector('#pm-settings').addEventListener('change', onSetting);
     drawer.querySelector('#pm-settings').addEventListener('click', onSettingsClick);
+    drawer.querySelector('#pm-summary-bar').addEventListener('click', e => {
+      if (e.target.closest('#pm-sum-cons-btn')) {
+        onSettingsClick(e);
+        return;
+      }
+      if (e.target.closest('#pm-cfg-toggle') || e.target.closest('#pm-sum-chips')) {
+        cfgCollapsed = !cfgCollapsed;
+        try { localStorage.setItem(STORAGE_CFG_COLLAPSED_KEY, cfgCollapsed ? '1' : '0'); } catch (_) {}
+        syncCfgCollapsedUI();
+      }
+    });
+    drawer.querySelector('#pm-quick-cons-banner').addEventListener('click', onSettingsClick);
     drawer.querySelector('#pm-filter').addEventListener('click', e => {
       const b = e.target.closest('[data-f]'); if (!b) return;
       filter = b.dataset.f;
       drawer.querySelectorAll('#pm-filter [data-f]').forEach(x => x.classList.toggle('on', x === b));
       renderList();
     });
+    const sortSelEl = drawer.querySelector('#pm-sort');
+    if (sortSelEl) {
+      sortSelEl.value = sortMode;
+      sortSelEl.addEventListener('change', () => {
+        const next = String(sortSelEl.value || 'exp_asc');
+        sortMode = VALID_SORTS.has(next) ? next : 'exp_asc';
+        try { localStorage.setItem(STORAGE_SORT_KEY, sortMode); } catch (_) {}
+        syncSortControlsUI();
+        renderList();
+      });
+    }
+    const sortFlipBtn = drawer.querySelector('#pm-sort-exp-flip');
+    if (sortFlipBtn) {
+      sortFlipBtn.addEventListener('click', () => {
+        sortMode = sortMode === 'exp_asc' ? 'exp_desc' : 'exp_asc';
+        try { localStorage.setItem(STORAGE_SORT_KEY, sortMode); } catch (_) {}
+        syncSortControlsUI();
+        renderList();
+      });
+    }
+    const searchInp = drawer.querySelector('#pm-search');
+    if (searchInp) {
+      searchInp.addEventListener('input', () => {
+        searchQuery = String(searchInp.value || '').trim().toLowerCase();
+        renderList();
+      });
+    }
+    syncCfgCollapsedUI();
+    syncSortControlsUI();
     drawer.querySelector('#pm-all-on').addEventListener('click', () => toggle('*', true));
     drawer.querySelector('#pm-all-off').addEventListener('click', () => toggle('*', false));
     drawer.querySelector('#pm-sell-all-open').addEventListener('click', () => {
@@ -235,6 +348,42 @@
     return cur ? cur.tokens : 1000;
   }
 
+  function syncCfgCollapsedUI() {
+    const el = document.getElementById('pm-settings');
+    if (el) el.hidden = Boolean(cfgCollapsed);
+    const btn = document.getElementById('pm-cfg-toggle');
+    if (btn) {
+      btn.classList.toggle('active', !cfgCollapsed);
+      setText(btn, cfgCollapsed ? '⚙️ ตั้งค่า ▾' : '⚙️ ซ่อนตั้งค่า ▴');
+    }
+    const quickBanner = document.getElementById('pm-quick-cons-banner');
+    if (quickBanner && !cfgCollapsed) quickBanner.hidden = true;
+    const sumConsBtn = document.getElementById('pm-sum-cons-btn');
+    if (sumConsBtn) {
+      const s = data.settings || {};
+      const liveCons = data.consolidation;
+      const consOn = Boolean(s.consolidateBeforeExpire);
+      const urgentCount = consOn ? data.clients.filter(c => c.enabled && c.inConsolidateWindow && c.needsConsolidation).length : 0;
+      sumConsBtn.hidden = !(consOn && cfgCollapsed && !(liveCons && liveCons.running) && urgentCount === 0);
+    }
+  }
+
+  function syncSortControlsUI() {
+    const sortSel = document.getElementById('pm-sort');
+    if (sortSel) {
+      const busySel = window.PmUiGuard && window.PmUiGuard.isSelectBusy(sortSel);
+      if (!busySel && document.activeElement !== sortSel && sortSel.value !== sortMode) {
+        sortSel.value = sortMode;
+      }
+    }
+    const flipBtn = document.getElementById('pm-sort-exp-flip');
+    if (flipBtn) {
+      const isExpSort = sortMode === 'exp_asc' || sortMode === 'exp_desc';
+      flipBtn.classList.toggle('on', isExpSort);
+      setText(flipBtn, sortMode === 'exp_desc' ? '🛡️ เหลือเยอะ ↓' : '⏳ ใกล้หมด ↑');
+    }
+  }
+
   function renderSettings() {
     const el = document.getElementById('pm-settings'); if (!el) return;
     const s = data.settings || {}, m = data.market;
@@ -246,6 +395,11 @@
     setText(document.getElementById('pm-plan-lbl'), `Premium ${cur.days} วัน`);
     setText(document.getElementById('pm-plan-tokens'), fmt(cur.tokens));
     setText(document.getElementById('pm-est-val'), est ? (est / 1e6).toFixed(1) + 'M' : '—');
+
+    // Update always-visible compact summary bar
+    setText(document.getElementById('pm-sum-ask'), m && m.bestAsk ? fmt(m.bestAsk) + ' z' : '—');
+    setText(document.getElementById('pm-sum-plan'), `${cur.days} วัน (${fmt(cur.tokens)})`);
+    setText(document.getElementById('pm-sum-est'), est ? `~${(est / 1e6).toFixed(1)}M` : '');
 
     const planSel = document.getElementById('pm-plan');
     if (planSel) {
@@ -310,10 +464,53 @@
       if (consKeepInp.value !== nextKeep) consKeepInp.value = nextKeep;
     }
 
+    const sumConsChip = document.getElementById('pm-sum-cons');
+    if (sumConsChip) {
+      sumConsChip.hidden = !consOn;
+      if (consOn) setText(sumConsChip, `🤝 รวมเงิน < ${underHoursVal} ชม.`);
+    }
+    const sumConsBtn = document.getElementById('pm-sum-cons-btn');
+    const quickConsBanner = document.getElementById('pm-quick-cons-banner');
+    const liveCons = data.consolidation;
+    const urgentClients = consOn ? data.clients.filter(c => c.enabled && c.inConsolidateWindow && c.needsConsolidation) : [];
+
+    if (sumConsBtn) {
+      const showQuickBtn = Boolean(consOn && cfgCollapsed && !(liveCons && liveCons.running) && urgentClients.length === 0);
+      sumConsBtn.hidden = !showQuickBtn;
+    }
+
+    if (quickConsBanner) {
+      if (cfgCollapsed && consOn && ((liveCons && liveCons.running) || urgentClients.length > 0)) {
+        quickConsBanner.hidden = false;
+        if (liveCons && liveCons.running) {
+          const recvName = (liveCons.receiver && liveCons.receiver.name) || 'ตัวหลัก';
+          const movedTxt = fmt(liveCons.totalTransferredZeny || 0);
+          setHtml(
+            quickConsBanner,
+            `<div class="pm-cons-live">
+              <span class="pm-cons-live-txt">🔄 กำลังรวมเงินให้ <b>${esc(recvName)}</b>: ${esc(liveCons.step || 'กำลังดำเนินการ...')} · โอนแล้ว <b>${movedTxt} z</b></span>
+              <button type="button" class="pm-cons-stop-btn" data-cons-action="stop">⏹️ หยุดรวมเงิน</button>
+            </div>`
+          );
+        } else {
+          const firstUrg = urgentClients[0];
+          const uName = firstUrg.charName || firstUrg.name;
+          const sfTxt = firstUrg.shortfallZeny ? ` (ขาดอีก ~${fmt(firstUrg.shortfallZeny)} z)` : '';
+          setHtml(
+            quickConsBanner,
+            `<div class="pm-cons-ready">
+              <span>⚡ พบ <b>${urgentClients.length}</b> ตัวละครที่ VIP เหลือ &lt; ${esc(underHoursVal)} ชม. · คิวถัดไป: <b>${esc(uName)}</b>${sfTxt}</span>
+              <button type="button" class="pm-cons-now-btn" data-cons-action="now" data-profile-id="${esc(firstUrg.id)}">🤝 รวมเงินซื้อทันที</button>
+            </div>`
+          );
+        }
+      } else {
+        quickConsBanner.hidden = true;
+      }
+    }
+
     const consStatusEl = document.getElementById('pm-consolidate-status');
     if (consStatusEl && consOn) {
-      const liveCons = data.consolidation;
-      const urgentClients = data.clients.filter(c => c.enabled && c.inConsolidateWindow && c.needsConsolidation);
       if (liveCons && liveCons.running) {
         const recvName = (liveCons.receiver && liveCons.receiver.name) || 'ตัวหลัก';
         const movedTxt = fmt(liveCons.totalTransferredZeny || 0);
@@ -321,7 +518,7 @@
           consStatusEl,
           `<div class="pm-cons-live">
             <span class="pm-cons-live-txt">🔄 กำลังรวมเงินให้ <b>${esc(recvName)}</b>: ${esc(liveCons.step || 'กำลังดำเนินการ...')} · โอนแล้ว <b>${movedTxt} z</b></span>
-            <button type="button" class="pm-cons-stop-btn" id="pm-consolidate-stop-btn">⏹️ หยุดรวมเงิน</button>
+            <button type="button" class="pm-cons-stop-btn" id="pm-consolidate-stop-btn" data-cons-action="stop">⏹️ หยุดรวมเงิน</button>
           </div>`
         );
       } else if (urgentClients.length > 0) {
@@ -332,7 +529,7 @@
           consStatusEl,
           `<div class="pm-cons-ready">
             <span>⚡ พบ <b>${urgentClients.length}</b> ตัวละครที่ VIP เหลือ &lt; ${esc(underHoursVal)} ชม. · คิวถัดไป: <b>${esc(uName)}</b>${sfTxt}</span>
-            <button type="button" class="pm-cons-now-btn" id="pm-consolidate-now-btn" data-profile-id="${esc(firstUrg.id)}">🤝 รวมเงินซื้อทันที</button>
+            <button type="button" class="pm-cons-now-btn" id="pm-consolidate-now-btn" data-cons-action="now" data-profile-id="${esc(firstUrg.id)}">🤝 รวมเงินซื้อทันที</button>
           </div>`
         );
       } else {
@@ -340,7 +537,7 @@
           consStatusEl,
           `<div class="pm-cons-hint">
             <span>💡 เมื่อตัวที่เปิดไว้เหลือ VIP <b>&lt; ${esc(underHoursVal)} ชั่วโมง</b> ระบบจะดึงเงินจากจออื่นที่มี VIP (เหลือเงินติดตัว <b>${fmt(keepZenyVal)} z</b>) มาซื้อ Token จนต่อ VIP สำเร็จแล้วหยุดรวมเงินทันที</span>
-            <button type="button" class="pm-cons-now-btn ghost" id="pm-consolidate-now-btn" title="สั่งตรวจสอบและรวมเงินซื้อ VIP ทันที">🤝 เช็ก/รวมทันที</button>
+            <button type="button" class="pm-cons-now-btn ghost" id="pm-consolidate-now-btn" data-cons-action="now" title="สั่งตรวจสอบและรวมเงินซื้อ VIP ทันที">🤝 เช็ก/รวมทันที</button>
           </div>`
         );
       }
@@ -355,8 +552,8 @@
       setText(
         gateHint,
         reqGearOn
-          ? 'เริ่มทำงานเมื่อ Plan Script ผ่านครบทุกเงื่อนไข (เลเวล ใส่เซ็ต เงิน) · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที'
-          : 'เริ่มทำงานเมื่อผ่านเงื่อนไขเลเวล/เงินในแผน (ไม่ต้องรอซื้อเซ็ตครบ) · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที'
+          ? 'เริ่มเมื่อผ่านเงื่อนไขเลเวล/ใส่เซ็ต/เงินในแผน'
+          : 'เริ่มเมื่อผ่านเงื่อนไขเลเวล/เงินในแผน (ไม่รอเซ็ตครบ)'
       );
     }
 
@@ -365,8 +562,8 @@
       setText(
         prebuyHint,
         prebuyOn
-          ? 'มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด'
-          : (consOn ? `มี Premium แล้ว → รวมเงินซื้อเมื่อเหลือ < ${underHoursVal} ชม.` : 'มี Premium แล้ว → หยุดซื้อเผื่อรอบถัดไป')
+          ? 'มี VIP แล้ว → ทยอยซื้อให้ครบก่อนหมด'
+          : (consOn ? `มี VIP แล้ว → รวมเงินซื้อเมื่อเหลือ < ${underHoursVal} ชม.` : 'มี VIP แล้ว → หยุดซื้อเผื่อรอบถัดไป')
       );
     }
 
@@ -380,10 +577,14 @@
       );
     }
 
+    syncCfgCollapsedUI();
+    syncSortControlsUI();
+
     // Update counts on filter buttons
+    const nowMs = Date.now();
     const allCount = data.clients.length;
     const onCount = data.clients.filter(c => c.enabled).length;
-    const vipCount = data.clients.filter(c => c.premiumUntil && c.premiumUntil > Date.now()).length;
+    const vipCount = data.clients.filter(c => getPremiumUntilMs(c) > nowMs).length;
     const noVipCount = allCount - vipCount;
     const filterEl = document.getElementById('pm-filter');
     if (filterEl) {
@@ -549,20 +750,32 @@
     row.innerHTML = `
       <div class="pm-ava"></div>
       <div class="pm-who">
-        <div class="pm-name">
-          <span class="pm-name-txt"></span>
-          <span class="pm-lv" hidden></span>
-          <span class="pm-vip" hidden></span>
+        <div class="pm-top-line">
+          <div class="pm-name">
+            <span class="pm-name-txt"></span>
+            <span class="pm-lv" hidden></span>
+            <span class="pm-vip" hidden></span>
+            <span class="pm-exp-date" hidden></span>
+          </div>
+          <div class="pm-side-actions">
+            <button type="button" class="pm-force-btn" data-force-toggle="${esc(c.id)}" title="บังคับซื้อ Token / Premium ทันที">⚡ ซื้อ</button>
+            <button type="button" class="pm-sell-btn" data-sell-toggle="${esc(c.id)}" title="ตั้งขาย Token ในราคาตั้งขายที่ถูกสุด">💰 ขาย</button>
+            <label class="pm-switch"><input type="checkbox" data-id="${esc(c.id)}"><span></span></label>
+          </div>
         </div>
-        <div class="pm-sub"></div>
-        <div class="pm-bar" hidden>
-          <i></i>
-          <em hidden></em>
-          <span></span>
+        <div class="pm-mid-line">
+          <div class="pm-sub"></div>
+          <div class="pm-bar" hidden>
+            <i></i>
+            <em hidden></em>
+            <span></span>
+          </div>
         </div>
-        <div class="pm-state" hidden></div>
-        <div class="pm-ask-badge" hidden></div>
-        <div class="pm-last" hidden></div>
+        <div class="pm-bot-line" hidden>
+          <div class="pm-state" hidden></div>
+          <div class="pm-ask-badge" hidden></div>
+          <div class="pm-last" hidden></div>
+        </div>
         <div class="pm-force-box" hidden>
           <div class="pm-f-head">
             <span>⚡ บังคับซื้อ Token ทันที (ถ้าเงินไม่พอจะซื้อเท่าที่พอ)</span>
@@ -617,26 +830,24 @@
           </div>
           <div class="pm-s-est pm-f-est"></div>
         </div>
-      </div>
-      <div class="pm-side-actions">
-        <label class="pm-switch"><input type="checkbox" data-id="${esc(c.id)}"><span></span></label>
-        <button type="button" class="pm-force-btn" data-force-toggle="${esc(c.id)}" title="บังคับซื้อ Token / Premium ทันที">⚡ ซื้อ</button>
-        <button type="button" class="pm-sell-btn" data-sell-toggle="${esc(c.id)}" title="ตั้งขาย Token ในราคาตั้งขายที่ถูกสุด">💰 ขาย</button>
       </div>`;
     patchRowEl(row, c);
     return row;
   }
 
   function patchRowEl(row, c) {
+    const nowMs = Date.now();
+    const untilMs = getPremiumUntilMs(c);
     const cost = c.cost || getSelectedPlanCost();
     const pct = c.tokens == null ? 0 : Math.min(100, Math.round(c.tokens / cost * 100));
     const tgtPct = c.target == null ? null : Math.min(100, Math.round(c.target / cost * 100));
-    const active = Boolean(c.premiumUntil && c.premiumUntil > Date.now());
+    const active = Boolean(untilMs && untilMs > nowMs);
+    const remMs = active ? untilMs - nowMs : 0;
     const sub = [c.name, c.online ? (c.zeny != null ? fmt(c.zeny) + ' z' : null) : 'ออฟไลน์', c.planName ? 'แผน ' + c.planName : null].filter(Boolean).join(' · ');
     const last = c.history && c.history[0];
     const displayName = c.charName || c.name || '?';
 
-    const nextRowCls = 'pm-row' + (c.enabled ? ' on' : '');
+    const nextRowCls = 'pm-row' + (c.enabled ? ' on' : '') + (active && remMs < 86400000 ? ' urgent' : '');
     if (row.className !== nextRowCls) row.className = nextRowCls;
 
     const ava = row.querySelector('.pm-ava');
@@ -661,18 +872,27 @@
     }
 
     const vipEl = row.querySelector('.pm-vip');
+    const expDateEl = row.querySelector('.pm-exp-date');
     if (vipEl) {
       if (active) {
         vipEl.hidden = false;
-        vipEl.className = 'pm-vip';
-        const vipTitle = new Date(c.premiumUntil).toLocaleString('th-TH');
+        const urgencyCls = remMs < 86400000 ? ' urgent' : (remMs < 3 * 86400000 ? ' soon' : '');
+        const nextVipCls = 'pm-vip' + urgencyCls;
+        if (vipEl.className !== nextVipCls) vipEl.className = nextVipCls;
+        const vipTitle = 'หมดอายุ: ' + new Date(untilMs).toLocaleString('th-TH');
         if (vipEl.title !== vipTitle) vipEl.title = vipTitle;
-        setText(vipEl, 'Premium · ' + left(c.premiumUntil));
+        setText(vipEl, left(untilMs));
+        if (expDateEl) {
+          expDateEl.hidden = false;
+          if (expDateEl.title !== vipTitle) expDateEl.title = vipTitle;
+          setText(expDateEl, 'ถึง ' + fmtExpShort(untilMs));
+        }
       } else {
         vipEl.hidden = false;
-        vipEl.className = 'pm-vip no-vip';
-        vipEl.title = 'ตัวละครนี้ยังไม่มีสถานะ Premium';
-        setText(vipEl, 'ไม่มี Premium');
+        if (vipEl.className !== 'pm-vip no-vip') vipEl.className = 'pm-vip no-vip';
+        vipEl.title = untilMs > 0 ? ('หมดอายุเมื่อ ' + new Date(untilMs).toLocaleString('th-TH')) : 'ตัวละครนี้ยังไม่มีสถานะ Premium';
+        setText(vipEl, untilMs > 0 ? 'VIP หมดแล้ว' : 'ไม่มี VIP');
+        if (expDateEl) expDateEl.hidden = true;
       }
     }
 
@@ -702,8 +922,10 @@
     }
 
     const stEl = row.querySelector('.pm-state');
+    let showState = false;
     if (stEl) {
       if (c.enabled) {
+        showState = true;
         stEl.hidden = false;
         const nextStCls = 'pm-state ' + (c.status || '');
         if (stEl.className !== nextStCls) stEl.className = nextStCls;
@@ -714,30 +936,38 @@
     }
 
     const askBadgeEl = row.querySelector('.pm-ask-badge');
+    let showAskBadge = false;
     if (askBadgeEl) {
       const askOrders = Array.isArray(c.askOrders) ? c.askOrders : [];
       if (askOrders.length > 0) {
+        showAskBadge = true;
         const rem = askOrders.reduce((s, o) => s + (Number(o.remaining) || Number(o.qty) || 0), 0);
         const pr = askOrders[0].price || (data.market && data.market.bestAsk) || 0;
         askBadgeEl.hidden = false;
-        setText(askBadgeEl, `⏳ กำลังตั้งขาย ${fmt(rem)} Token @ ${fmt(pr)} z`);
+        setText(askBadgeEl, `⏳ ตั้งขาย ${fmt(rem)} Token @ ${fmt(pr)} z`);
       } else {
         askBadgeEl.hidden = true;
       }
     }
 
     const lastEl = row.querySelector('.pm-last');
+    let showLast = false;
     if (lastEl) {
       if ((c.enabled || last) && last) {
+        showLast = true;
         lastEl.hidden = false;
         const nextLastCls = 'pm-last' + (last.ok ? '' : ' bad');
         if (lastEl.className !== nextLastCls) lastEl.className = nextLastCls;
         const tStr = new Date(last.at).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }) + ' · ' + last.text;
+        if (lastEl.title !== tStr) lastEl.title = tStr;
         setText(lastEl, tStr);
       } else {
         lastEl.hidden = true;
       }
     }
+
+    const botLine = row.querySelector('.pm-bot-line');
+    if (botLine) botLine.hidden = !(showState || showAskBadge || showLast);
 
     const swLbl = row.querySelector('.pm-switch');
     const swTitle = (c.enabled ? 'ปิด' : 'เปิด') + ' Premium อัตโนมัติ';
@@ -784,17 +1014,68 @@
     }
   }
 
+  function compareClients(a, b, nowMs) {
+    const fallbackCmp = () =>
+      (Number(Boolean(b.enabled)) - Number(Boolean(a.enabled))) ||
+      (Number(Boolean(b.online)) - Number(Boolean(a.online))) ||
+      String(a.name || '').localeCompare(String(b.name || ''), 'th', { numeric: true });
+
+    const ua = getPremiumUntilMs(a);
+    const ub = getPremiumUntilMs(b);
+    const actA = ua > nowMs;
+    const actB = ub > nowMs;
+
+    if (sortMode === 'exp_asc') {
+      if (actA && actB) return (ua - ub) || fallbackCmp();
+      if (actA !== actB) return actA ? -1 : 1;
+      return fallbackCmp();
+    }
+    if (sortMode === 'exp_desc') {
+      if (actA && actB) return (ub - ua) || fallbackCmp();
+      if (actA !== actB) return actA ? -1 : 1;
+      return fallbackCmp();
+    }
+    if (sortMode === 'novip_first') {
+      if (actA !== actB) return actA ? 1 : -1;
+      if (actA && actB) return (ua - ub) || fallbackCmp();
+      return fallbackCmp();
+    }
+    if (sortMode === 'zeny_desc') {
+      const za = a.zeny != null ? Number(a.zeny) : -1;
+      const zb = b.zeny != null ? Number(b.zeny) : -1;
+      if (zb !== za) return zb - za;
+      return fallbackCmp();
+    }
+    if (sortMode === 'tokens_desc') {
+      const ta = a.tokens != null ? Number(a.tokens) : -1;
+      const tb = b.tokens != null ? Number(b.tokens) : -1;
+      if (tb !== ta) return tb - ta;
+      return fallbackCmp();
+    }
+    return fallbackCmp();
+  }
+
   function renderList() {
     const body = document.getElementById('pm-body'); if (!body) return;
+    const nowMs = Date.now();
     let list = data.clients.slice();
     if (filter === 'on') list = list.filter(c => c.enabled);
-    if (filter === 'active') list = list.filter(c => c.premiumUntil && c.premiumUntil > Date.now());
-    if (filter === 'inactive') list = list.filter(c => !(c.premiumUntil && c.premiumUntil > Date.now()));
-    list.sort((a, b) => (b.enabled - a.enabled) || (b.online - a.online) || String(a.name).localeCompare(String(b.name), 'th', { numeric: true }));
+    if (filter === 'active') list = list.filter(c => getPremiumUntilMs(c) > nowMs);
+    if (filter === 'inactive') list = list.filter(c => !(getPremiumUntilMs(c) > nowMs));
+    if (searchQuery) {
+      list = list.filter(c => {
+        const hay = `${c.charName || ''} ${c.name || ''} ${c.planName || ''}`.toLowerCase();
+        return hay.includes(searchQuery);
+      });
+    }
+    list.sort((a, b) => compareClients(a, b, nowMs));
 
     if (!list.length) {
+      body.querySelectorAll('.pm-row').forEach(r => r.remove());
       if (!body.querySelector('.pm-empty')) {
-        body.innerHTML = `<div class="pm-empty">ไม่มีจอในหมวดนี้</div>`;
+        body.innerHTML = `<div class="pm-empty">${searchQuery ? 'ไม่พบตัวละครที่ตรงกับคำค้นหา' : 'ไม่มีจอในหมวดนี้'}</div>`;
+      } else {
+        setText(body.querySelector('.pm-empty'), searchQuery ? 'ไม่พบตัวละครที่ตรงกับคำค้นหา' : 'ไม่มีจอในหมวดนี้');
       }
       return;
     }
@@ -1079,7 +1360,7 @@
   }
 
   async function onSettingsClick(e) {
-    const nowBtn = e.target.closest('#pm-consolidate-now-btn');
+    const nowBtn = e.target.closest('#pm-consolidate-now-btn, #pm-sum-cons-btn, [data-cons-action="now"]');
     if (nowBtn) {
       if (busy) return;
       const profileId = nowBtn.dataset.profileId || null;
@@ -1102,7 +1383,7 @@
       }
       return;
     }
-    const stopBtn = e.target.closest('#pm-consolidate-stop-btn');
+    const stopBtn = e.target.closest('#pm-consolidate-stop-btn, [data-cons-action="stop"]');
     if (stopBtn) {
       if (busy) return;
       busy = true;

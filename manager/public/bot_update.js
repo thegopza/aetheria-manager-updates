@@ -63,17 +63,18 @@
       ]);
       if (b && b.success) status = b;
       if (m && m.success) { mgr = m; watchForNewBuild(); }
-      render();
+      render(false);
     } catch (e) {}
   }
 
   // Reload the page when the Manager was updated (new web files or a restarted server),
-  // but never while the user is typing or has a dialog open.
+  // but never while the user is typing or has a dialog/dropdown open.
   function userBusy() {
+    if (window.PmUiGuard && window.PmUiGuard.isInteracting(document.body)) return true;
     const a = document.activeElement;
     if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return true;
-    if (document.body.classList.contains('pt-open') || document.body.classList.contains('pm-open')) return true;
-    if (document.querySelector('.modal-overlay.active, .im-market')) return true;
+    if (document.body.classList.contains('pt-open') || document.body.classList.contains('pm-open') || document.body.classList.contains('cd-open') || document.body.classList.contains('gd-open') || document.body.classList.contains('jl-open') || document.body.classList.contains('dv-open')) return true;
+    if (document.querySelector('.modal-overlay.active, .im-market, .im-hw-drawer.open')) return true;
     const ch = document.getElementById('char-detail-modal');
     return Boolean(ch && ch.style.display && ch.style.display !== 'none');
   }
@@ -92,7 +93,7 @@
     if (filterBtn) {
       e.stopPropagation();
       activeFilter = filterBtn.dataset.buFilter || 'all';
-      render();
+      render(true);
       return;
     }
 
@@ -183,7 +184,7 @@
       </div>`;
   }
 
-  function render() {
+  function render(force = true) {
     if (!pill || !status) return;
     if (reloadPending && !userBusy() && !document.querySelector('.bu-reload-toast')) watchForNewBuild();
     const clientEntries = Object.entries(status.clients || {}).map(([id, c]) => ({ id: c.id || id, ...c }));
@@ -204,6 +205,9 @@
               : 'Auto-update';
 
     if (panel.hidden) return;
+    if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('bu-panel', panel, () => render(false))) {
+      return;
+    }
     const l = status.latest;
     const filteredClients = activeFilter === 'pending'
       ? pendingList
@@ -213,7 +217,7 @@
           ? errList
           : clientEntries;
 
-    panel.innerHTML = `
+    const panelHtml = `
       <!-- Top Sticky Header with Immediate Check & Update Button -->
       <div class="bu-top-bar">
         <div class="bu-top-title">
@@ -298,6 +302,8 @@
         <small>💡 กดปุ่ม 🔄 ท้ายรายชื่อจอเพื่อสั่งรีเฟรชเฉพาะจอนั้นได้ทันที</small>
         <button type="button" class="btn btn-ghost btn-sm" data-bu="check">เช็กตอนนี้</button>
       </div>`;
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(panel, panelHtml);
+    else panel.innerHTML = panelHtml;
   }
 
   mount();

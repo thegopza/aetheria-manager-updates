@@ -189,7 +189,7 @@
     }
   }
 
-  function renderDrawerList() {
+  function renderDrawerList(force = true) {
     mountShell();
     const jailed = getJailedProfiles();
     const count = jailed.length;
@@ -213,10 +213,13 @@
     if (clearAllBtn) {
       clearAllBtn.style.display = count > 0 ? 'inline-flex' : 'none';
     }
-    if (!bodyEl) return;
+    if (!bodyEl || (!isOpen && !force)) return;
+    if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('jl-list-body', bodyEl, () => renderDrawerList(false))) {
+      return;
+    }
 
     if (count === 0) {
-      bodyEl.innerHTML = `
+      const emptyHtml = `
         <div class="jl-empty">
           <div class="jl-empty-icon">🛡️</div>
           <div class="jl-empty-title">ไม่มีจอที่ติดคุกในขณะนี้</div>
@@ -227,10 +230,12 @@
           </div>
         </div>
       `;
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(bodyEl, emptyHtml);
+      else bodyEl.innerHTML = emptyHtml;
       return;
     }
 
-    bodyEl.innerHTML = jailed.map(p => {
+    const listHtml = jailed.map(p => {
       const state = p.isRunning ? p.liveState : null;
       const charName = state?.charName || p.lastCharName || p.account || 'ไม่ทราบชื่อตัวละคร';
       const curClass = state?.charClass || p.lastCharClass || p.charClass || 'Archer';
@@ -267,6 +272,8 @@
         </div>
       `;
     }).join('');
+    const changed = window.PmUiGuard ? window.PmUiGuard.setHtmlIfChanged(bodyEl, listHtml) : (bodyEl.innerHTML = listHtml, true);
+    if (!changed) return;
 
     bodyEl.querySelectorAll('.jl-item-card').forEach(card => {
       card.addEventListener('click', (e) => {
@@ -289,7 +296,7 @@
     if (Array.isArray(profiles)) {
       cachedProfiles = profiles;
     }
-    renderDrawerList();
+    renderDrawerList(false);
   }
 
   window.clearProfileJail = clearSingleProfileJail;

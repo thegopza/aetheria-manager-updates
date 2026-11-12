@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "c5faead990b113bb63c845ce242a90f02a0204eb",
+  "sourceCommit": "34507fcd57204543a50fd1062a0714fa907eeb07",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -132,7 +132,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "10f71d1a4f9ae4331e7cf394a18222b0011f0c1b6cd8608c74ec3f01201aafe7"
+      "sha256": "fe47804492c4a863d78d43a23bc672fffa9d1ef780136cedbc45d782f965b32e"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -140,7 +140,7 @@
     },
     {
       "path": "manager/public/bot_update.js",
-      "sha256": "c3745560439e1ceddc8f394ad515f70a1c41453189ca1c08f01257c3161bed42"
+      "sha256": "35b00d3b3509035eb2e16ae544060600696387b7f067fd485675823f0b83a690"
     },
     {
       "path": "manager/public/builder_module.js",
@@ -152,7 +152,7 @@
     },
     {
       "path": "manager/public/card_manager.js",
-      "sha256": "4fa3e47d61e30dd0fddd500d262d86f9f5dcd17b274b1e70e5f1dd2a0478b857"
+      "sha256": "11fd54c0a0ebdd9f01414396b31930fc9d9e26e734522b1d73cb9707f2ad5c23"
     },
     {
       "path": "manager/public/config_copy.js",
@@ -164,7 +164,7 @@
     },
     {
       "path": "manager/public/device_manager.js",
-      "sha256": "eb4972be5a6b1b5286d876aeec3da6f8629c5f4dbdfac5fb58840e6d640046b3"
+      "sha256": "1d1ecae161638504a2d9445bda475782a3c2c8ef807c8c3623bc9d5038b4b608"
     },
     {
       "path": "manager/public/game-classes.json",
@@ -180,7 +180,7 @@
     },
     {
       "path": "manager/public/guild_manager.js",
-      "sha256": "63fb6d54a76a5ba2130d2c3135ff90cc311ab598ab589c4cd63a3def25b55b56"
+      "sha256": "225baff9c7bc7dc3345e623460241ad286c4338e754a160082114aa9c22dc309"
     },
     {
       "path": "manager/public/image_board_solver.js",
@@ -188,7 +188,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "80014bcb9f6401015a548dce2e51664cc5d287febccb4a5e468f2b6fcfa72ca4"
+      "sha256": "e96822a38fa131d5576b54efff5bf52e5e791f4cf1115279bb6b001d9c429f18"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/inventory_market.js",
-      "sha256": "55391eccb86314227c49faefc1be73b0904af7b18a9f07858029d158c7919ffc"
+      "sha256": "1469aaafbc13405c805401ad20df7f5205d62ea2ca902a1e2c2c0e1ca52e2aa0"
     },
     {
       "path": "manager/public/jail_manager.css",
@@ -204,7 +204,7 @@
     },
     {
       "path": "manager/public/jail_manager.js",
-      "sha256": "8a1c4f169c0beb9f341e4c59e7a1795677bc4fa32231dced1375f7735f1c2a2e"
+      "sha256": "58733282b46220bd7186408f5a037fec4a69c9cb4708f8fed1991ea6585aea59"
     },
     {
       "path": "manager/public/market_overview.css",
@@ -212,11 +212,11 @@
     },
     {
       "path": "manager/public/market_overview.js",
-      "sha256": "9b8a063a814554e59d68ccad1cd9158e1dbefb50258a93014589d1b35d29ab27"
+      "sha256": "8bf34c5a45d66cfb3c47021aa6a6d6523ffcfd8ac6206c539cdb7c67631a60c5"
     },
     {
       "path": "manager/public/market_sniper.js",
-      "sha256": "4d24276c598e059398a8117e51980a9f753ba907df2b313ea7a38ceaec7b5226"
+      "sha256": "4af012f035b3b74781f0a3ec4f32b5dc084ab18d90f8aba7cf76ac3c5d20caf3"
     },
     {
       "path": "manager/public/party_manager.css",
@@ -224,7 +224,7 @@
     },
     {
       "path": "manager/public/party_manager.js",
-      "sha256": "a553a5dee77c531071fb729f8c4e61a8f4deb89a56f057f1f21e287a57dbf07c"
+      "sha256": "0c8ff43afb298289815f4653d9b4d8343a3aca0d8a7897452024d1d955555756"
     },
     {
       "path": "manager/public/patcher_module.js",
@@ -240,7 +240,7 @@
     },
     {
       "path": "manager/public/premium_manager.js",
-      "sha256": "ef2d31a099cc64f9dfb9eecc5cc6f7f19ab4bdd882c1cc4c5d83f93df14de325"
+      "sha256": "5e55489233f9e0682499f563b504a2f61dcbe93d8c336f88e958201e567086a5"
     },
     {
       "path": "manager/public/script_status.html",
@@ -256,7 +256,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "f33e86ecbad66f336a451576596c77cbe23fab918ad06cedd96611665face41b"
+      "sha256": "21c12b6f940976b19acd44c6cca9c914e1543c2a5ed5098d67704c99983adf54"
     },
     {
       "path": "manager/screen_proxy_manager.js",

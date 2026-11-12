@@ -107,7 +107,7 @@
   async function fetchOverview(forceRefresh = false, singleProfileId = '') {
     if (state.loading && !forceRefresh && !singleProfileId) return;
     state.loading = true;
-    renderHeaderOnly();
+    if (isMarketTabVisible()) renderHeaderOnly(Boolean(forceRefresh));
     try {
       const qs = new URLSearchParams();
       if (forceRefresh) qs.set('refresh', '1');
@@ -138,7 +138,7 @@
     } finally {
       state.loading = false;
       updateMainTabBadges();
-      renderAll();
+      if (isMarketTabVisible()) renderAll(Boolean(forceRefresh || singleProfileId));
     }
   }
 
@@ -308,11 +308,14 @@
     return pane;
   }
 
-  function renderHeaderOnly() {
+  function renderHeaderOnly(force = true) {
     const grid = document.getElementById('mko-summary-grid');
     if (!grid) return;
     const activeElId = document.activeElement && document.activeElement.id;
     if (activeElId === 'mko-cancel-under-hours' || activeElId === 'mko-global-duration') {
+      return;
+    }
+    if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('mko-summary-grid', grid, () => renderHeaderOnly(false))) {
       return;
     }
     const s = computeSummary();
@@ -321,7 +324,7 @@
     const underH = Math.max(1, Math.min(47, Number(gs.cancelUnderHours) || 6));
     const autoCancelOn = Boolean(gs.autoCancelEnabled);
 
-    grid.innerHTML = `
+    const gridHtml = `
       <div class="mko-stat-card">
         <div class="mko-stat-head">
           <span>📦 กำลังวางขายรวมทุกจอ</span>
@@ -407,9 +410,11 @@
         </div>
       </div>
     `;
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(grid, gridHtml);
+    else grid.innerHTML = gridHtml;
 
     const pillsEl = document.getElementById('mko-filter-pills');
-    if (pillsEl) {
+    if (pillsEl && (force || !(window.PmUiGuard && window.PmUiGuard.isPointerDownIn(pillsEl)))) {
       const counts = {
         all: state.clients.length,
         online: state.clients.filter(c => c.online).length,
@@ -428,9 +433,11 @@
         ['autosell', `🤖 เปิด Auto-Sell (${counts.autosell})`],
         ['full', `🔴 ช่องขายเต็ม (${counts.full})`]
       ];
-      pillsEl.innerHTML = defs
+      const pillsHtml = defs
         .map(([k, lbl]) => `<button type="button" class="mko-pill ${state.filterMode === k ? 'active' : ''}" data-mko-filter="${k}">${lbl}</button>`)
         .join('');
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(pillsEl, pillsHtml);
+      else pillsEl.innerHTML = pillsHtml;
     }
 
     document.querySelectorAll('[data-mko-view]').forEach(btn => {
@@ -876,28 +883,31 @@
     `;
   }
 
-  function renderBodyOnly() {
+  function renderBodyOnly(force = true) {
     const bodyEl = document.getElementById('mko-body-container');
     if (!bodyEl) return;
-
-    const filtered = filterClients();
-    const bannerHtml = renderSearchActionBannerHtml(filtered);
-    if (filtered.length === 0) {
-      bodyEl.innerHTML = bannerHtml + `<div class="mko-char-card"><div class="mko-empty-inline" style="text-align:center; padding:24px;">🔍 ไม่พบตัวละครหรือรายการตลาดที่ตรงกับเงื่อนไขการค้นหา</div></div>`;
+    if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('mko-body-container', bodyEl, () => renderBodyOnly(false))) {
       return;
     }
 
-    if (state.viewMode === 'listings') {
-      bodyEl.innerHTML = bannerHtml + renderAllListingsTableHtml(filtered);
+    const filtered = filterClients();
+    const bannerHtml = renderSearchActionBannerHtml(filtered);
+    let bodyHtml = '';
+    if (filtered.length === 0) {
+      bodyHtml = bannerHtml + `<div class="mko-char-card"><div class="mko-empty-inline" style="text-align:center; padding:24px;">🔍 ไม่พบตัวละครหรือรายการตลาดที่ตรงกับเงื่อนไขการค้นหา</div></div>`;
+    } else if (state.viewMode === 'listings') {
+      bodyHtml = bannerHtml + renderAllListingsTableHtml(filtered);
     } else {
-      bodyEl.innerHTML = bannerHtml + `<div class="mko-char-list">${filtered.map(renderCharacterCardHtml).join('')}</div>`;
+      bodyHtml = bannerHtml + `<div class="mko-char-list">${filtered.map(renderCharacterCardHtml).join('')}</div>`;
     }
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(bodyEl, bodyHtml);
+    else bodyEl.innerHTML = bodyHtml;
   }
 
-  function renderAll() {
+  function renderAll(force = true) {
     if (!ensureSkeleton()) return;
-    renderHeaderOnly();
-    renderBodyOnly();
+    renderHeaderOnly(force);
+    renderBodyOnly(force);
   }
 
   async function onPaneClick(e) {

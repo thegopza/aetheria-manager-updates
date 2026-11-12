@@ -304,7 +304,7 @@
     }
     document.body.classList.toggle('dv-open', isOpen);
     if (isOpen) {
-      renderDrawerList();
+      renderDrawerList(true);
     }
   }
 
@@ -437,7 +437,7 @@
     }
   }
 
-  function renderDrawerList() {
+  function renderDrawerList(force = true) {
     mountShell();
     const list = typeof currentProfiles !== 'undefined' && Array.isArray(currentProfiles) ? currentProfiles : cachedProfiles;
     const groups = buildGroupsFromProfiles(list, cachedGroups);
@@ -498,9 +498,12 @@
       rotateAllBtn.textContent = rotatingAll ? '⏳ กำลังสุ่ม...' : '🎲 Random ทุกกลุ่ม';
     }
     if (!bodyEl) return;
+    if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('dv-list-body', bodyEl, () => renderDrawerList(false))) {
+      return;
+    }
 
     if (totalGroups === 0) {
-      bodyEl.innerHTML = `
+      const emptyHtml = `
         <div class="dv-empty">
           <div class="dv-empty-icon">⚙️</div>
           <div class="dv-empty-title">ยังไม่มีโปรไฟล์ในระบบ</div>
@@ -510,6 +513,8 @@
           </div>
         </div>
       `;
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(bodyEl, emptyHtml);
+      else bodyEl.innerHTML = emptyHtml;
       return;
     }
 
@@ -647,7 +652,8 @@
       `;
     }).join('');
 
-    bodyEl.innerHTML = ipBlocksHtml;
+    const changed = window.PmUiGuard ? window.PmUiGuard.setHtmlIfChanged(bodyEl, ipBlocksHtml) : (bodyEl.innerHTML = ipBlocksHtml, true);
+    if (!changed) return;
 
     bodyEl.querySelectorAll('[data-rotate-group]').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -695,7 +701,7 @@
     const tabCount = document.getElementById('dv-tab-count');
     if (tabCount) tabCount.textContent = String(groups.length);
     if (isOpen) {
-      renderDrawerList();
+      renderDrawerList(false);
     }
   }
 

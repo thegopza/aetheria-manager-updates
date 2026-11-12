@@ -1,5 +1,221 @@
 
 // ==========================================
+// GLOBAL UI INTERACTION GUARD (PREVENT POLLING DROPDOWN / INPUT COLLAPSE)
+// ==========================================
+window.PmUiGuard = (function () {
+  let openSelectEl = null;
+  let openSelectAt = 0;
+  let pointerDownTarget = null;
+  let pointerDownAt = 0;
+  const deferredTasks = new Map();
+  let flushTimer = null;
+
+  function isEditableElement(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    if (tag === 'SELECT' || tag === 'TEXTAREA') return true;
+    if (el.isContentEditable) return true;
+    if (tag === 'INPUT') {
+      const type = String(el.type || 'text').toLowerCase();
+      return !['checkbox', 'radio', 'button', 'submit', 'reset', 'file', 'hidden'].includes(type);
+    }
+    return false;
+  }
+
+  function isSelectBusy(selectEl) {
+    if (!selectEl) return false;
+    if (openSelectEl === selectEl && (Date.now() - openSelectAt) < 45000) return true;
+    if (document.activeElement === selectEl) return true;
+    if (pointerDownTarget && (pointerDownTarget === selectEl || selectEl.contains(pointerDownTarget)) && (Date.now() - pointerDownAt) < 5000) {
+      return true;
+    }
+    return false;
+  }
+
+  function isPointerDownIn(containerEl) {
+    if (!containerEl || !pointerDownTarget) return false;
+    if ((Date.now() - pointerDownAt) >= 5000) return false;
+    return pointerDownTarget === containerEl || (typeof containerEl.contains === 'function' && containerEl.contains(pointerDownTarget));
+  }
+
+  function isInteracting(containerEl) {
+    if (!containerEl) return false;
+    if (openSelectEl && (openSelectEl === containerEl || (typeof containerEl.contains === 'function' && containerEl.contains(openSelectEl))) && (Date.now() - openSelectAt) < 45000) {
+      return true;
+    }
+    const active = document.activeElement;
+    if (active && (active === containerEl || (typeof containerEl.contains === 'function' && containerEl.contains(active))) && isEditableElement(active)) {
+      return true;
+    }
+    if (isPointerDownIn(containerEl)) {
+      return true;
+    }
+    if (typeof containerEl.querySelector === 'function' && containerEl.querySelector('.card-top-menu.is-open, .dropdown.open')) {
+      return true;
+    }
+    return false;
+  }
+
+  function scheduleFlush(delayMs = 70) {
+    if (flushTimer) clearTimeout(flushTimer);
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      if (deferredTasks.size === 0) return;
+      const entries = Array.from(deferredTasks.entries());
+      deferredTasks.clear();
+      for (const [key, item] of entries) {
+        if (item.container && item.container.isConnected && isInteracting(item.container)) {
+          deferredTasks.set(key, item);
+          continue;
+        }
+        try {
+          item.fn();
+        } catch (err) {
+          console.warn('[PmUiGuard] deferred render error:', err);
+        }
+      }
+    }, delayMs);
+  }
+
+  function deferIfInteracting(key, containerEl, fn) {
+    if (!containerEl || !isInteracting(containerEl)) {
+      if (key) deferredTasks.delete(key);
+      return false;
+    }
+    if (key && typeof fn === 'function') {
+      deferredTasks.set(key, { container: containerEl, fn });
+    }
+    return true;
+  }
+
+  function syncSelect(selectEl, options, selectedValue, disabled) {
+    if (!selectEl || !Array.isArray(options)) return false;
+    if (isSelectBusy(selectEl)) {
+      return false;
+    }
+    if (typeof disabled === 'boolean' && selectEl.disabled !== disabled) {
+      selectEl.disabled = disabled;
+    }
+    const curOpts = selectEl.options;
+    let sameKeys = curOpts.length === options.length;
+    if (sameKeys) {
+      for (let i = 0; i < options.length; i++) {
+        if (curOpts[i].value !== String(options[i].value ?? '')) {
+          sameKeys = false;
+          break;
+        }
+      }
+    }
+    const getOptLabel = (o) => String(o && o.label !== undefined ? o.label : (o && o.text !== undefined ? o.text : ''));
+    if (sameKeys) {
+      for (let i = 0; i < options.length; i++) {
+        const nextText = getOptLabel(options[i]);
+        const nextDis = Boolean(options[i].disabled);
+        if (curOpts[i].textContent !== nextText) curOpts[i].textContent = nextText;
+        if (curOpts[i].disabled !== nextDis) curOpts[i].disabled = nextDis;
+      }
+    } else {
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < options.length; i++) {
+        const opt = document.createElement('option');
+        opt.value = String(options[i].value ?? '');
+        opt.textContent = getOptLabel(options[i]);
+        if (options[i].disabled) opt.disabled = true;
+        frag.appendChild(opt);
+      }
+      selectEl.replaceChildren(frag);
+    }
+    if (selectedValue !== undefined && selectedValue !== null) {
+      const targetVal = String(selectedValue);
+      if (selectEl.value !== targetVal) {
+        selectEl.value = targetVal;
+      }
+    }
+    return true;
+  }
+
+  function setHtmlIfChanged(el, html) {
+    if (!el) return false;
+    const next = String(html ?? '');
+    if (el.__pmLastHtml === next && el.childNodes.length > 0) return false;
+    el.__pmLastHtml = next;
+    el.innerHTML = next;
+    return true;
+  }
+
+  const onPointerStart = (e) => {
+    const t = e.target;
+    pointerDownTarget = t || null;
+    pointerDownAt = Date.now();
+    const sel = t && typeof t.closest === 'function' ? t.closest('select') : null;
+    if (sel) {
+      openSelectEl = sel;
+      openSelectAt = Date.now();
+    } else if (openSelectEl) {
+      openSelectEl = null;
+      openSelectAt = 0;
+      scheduleFlush(80);
+    }
+  };
+
+  const onPointerEnd = () => {
+    if (!pointerDownTarget) return;
+    pointerDownTarget = null;
+    pointerDownAt = 0;
+    scheduleFlush(60);
+  };
+
+  document.addEventListener('pointerdown', onPointerStart, true);
+  document.addEventListener('mousedown', onPointerStart, true);
+  window.addEventListener('pointerup', onPointerEnd, true);
+  window.addEventListener('mouseup', onPointerEnd, true);
+  window.addEventListener('pointercancel', onPointerEnd, true);
+
+  document.addEventListener('keydown', (e) => {
+    const sel = e.target && typeof e.target.closest === 'function' ? e.target.closest('select') : null;
+    if (e.key === 'Escape' || e.key === 'Tab') {
+      if (openSelectEl) {
+        openSelectEl = null;
+        openSelectAt = 0;
+        scheduleFlush(60);
+      }
+      return;
+    }
+    if (sel) {
+      openSelectEl = sel;
+      openSelectAt = Date.now();
+    }
+  }, true);
+
+  document.addEventListener('change', (e) => {
+    const sel = e.target && typeof e.target.closest === 'function' ? e.target.closest('select') : null;
+    if (sel && openSelectEl === sel) {
+      openSelectEl = null;
+      openSelectAt = 0;
+      scheduleFlush(100);
+    }
+  }, true);
+
+  document.addEventListener('focusout', (e) => {
+    if (openSelectEl && e.target === openSelectEl) {
+      openSelectEl = null;
+      openSelectAt = 0;
+    }
+    scheduleFlush(80);
+  }, true);
+
+  return {
+    isEditableElement,
+    isSelectBusy,
+    isPointerDownIn,
+    isInteracting,
+    deferIfInteracting,
+    syncSelect,
+    setHtmlIfChanged
+  };
+})();
+
+// ==========================================
 // WEB CONFIG MODAL (EXPORT & IMPORT FOR WEB HUD)
 // ==========================================
 function openWebConfigModal(profileId, mode, preloadedJson = '') {
@@ -1794,7 +2010,9 @@ function syncViewModeControls() {
   const sortSel = document.getElementById('card-sort-select');
   if (btnDefault) btnDefault.classList.toggle('active', cardViewMode !== 'party');
   if (btnParty) btnParty.classList.toggle('active', cardViewMode === 'party');
-  if (sortSel && sortSel.value !== cardSortMode) sortSel.value = cardSortMode;
+  if (sortSel && !(window.PmUiGuard && window.PmUiGuard.isSelectBusy(sortSel)) && sortSel.value !== cardSortMode) {
+    sortSel.value = cardSortMode;
+  }
   if (typeof syncChannelCheckModeUI === 'function') syncChannelCheckModeUI(currentChannelCheckMode);
 }
 
@@ -1826,7 +2044,7 @@ function syncChannelCheckModeUI(mode) {
   currentChannelCheckMode = norm;
   try { localStorage.setItem('pelican_channel_check_mode', norm); } catch (_) {}
   const selMain = document.getElementById('channel-check-mode-select');
-  if (selMain && document.activeElement !== selMain && selMain.value !== norm) {
+  if (selMain && !(window.PmUiGuard && window.PmUiGuard.isSelectBusy(selMain)) && selMain.value !== norm) {
     selMain.value = norm;
   }
 }
@@ -2467,6 +2685,21 @@ function renderProfiles() {
     });
 
   if (!sameLayout) {
+    if (window.PmUiGuard && window.PmUiGuard.deferIfInteracting('profiles-grid', gridEl, renderProfiles)) {
+      const newByKey = new Map();
+      newCards.forEach(nc => {
+        const k = nc.dataset.profileId || nc.dataset.groupId || '';
+        if (k) newByKey.set(k, nc);
+      });
+      oldCards.forEach(oc => {
+        const k = oc.dataset.profileId || oc.dataset.groupId || '';
+        const nc = k ? newByKey.get(k) : null;
+        if (nc && !(window.PmUiGuard && window.PmUiGuard.isInteracting(oc))) {
+          morphNode(oc, nc);
+        }
+      });
+      return;
+    }
     gridEl.replaceChildren(...newCards);
     return;
   }
@@ -4836,6 +5069,122 @@ function getConsolidationKeepZeny() {
   el.addEventListener("blur", () => { el.value = getConsolidationKeepZeny().toLocaleString(); });
 })();
 
+function createZenyIpGroupCardEl(ip) {
+  const card = document.createElement("div");
+  card.dataset.ipGroupCard = String(ip);
+  card.style.cssText = "border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px; border: 1.5px solid rgba(255, 255, 255, 0.1); background: rgba(9, 13, 22, 0.65);";
+  const ipLabel = ip === "LOCAL" ? "LOCAL (เน็ตบ้าน)" : String(ip);
+  card.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap;">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <span class="js-ip-chip" style="font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 6px; background: rgba(168, 85, 247, 0.22); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.45); font-family: monospace;"></span>
+        <span class="js-ip-running-badge" style="display: none; font-size: 10px; padding: 1px 6px; border-radius: 99px; background: rgba(16, 185, 129, 0.22); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.45); font-weight: 700;">🔄 กำลังรวมวงนี้</span>
+      </div>
+      <span class="js-ip-counts" style="font-size: 11px; color: #cbd5e1;"></span>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; background: rgba(15, 23, 42, 0.6); padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
+      <span class="js-ip-senders-lbl" style="color: #94a3b8;"></span>
+      <b class="js-ip-transfer-val" style="font-family: var(--font-mono);"></b>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <label style="font-size: 10.5px; color: #94a3b8;">👑 ตัวรับเงินประจำวง IP นี้:</label>
+      <select class="zeny-select ip-group-receiver-select" style="font-size: 11.5px; padding: 4px 8px; height: 30px;"></select>
+    </div>
+
+    <div style="display: flex; gap: 6px; margin-top: 2px;">
+      <button type="button" class="btn btn-secondary btn-sm btn-select-ip-group" style="flex: 1; font-size: 11px; padding: 4px 8px;" title="เลือกตัวรับและติ๊กเฉพาะจอในวง IP นี้ในตารางด้านล่าง"></button>
+      <button type="button" class="btn btn-primary btn-sm btn-start-single-ip-group" style="flex: 1; font-size: 11px; padding: 4px 8px; background: #7c3aed; border-color: #a855f7; font-weight: 700;" title="เริ่มรวมเงินเฉพาะในวง IP นี้ทันที">🚀 รวมวงนี้ทันที</button>
+    </div>
+  `;
+  const chipEl = card.querySelector(".js-ip-chip");
+  if (chipEl) chipEl.textContent = `🛡️ ${ipLabel}`;
+  const selEl = card.querySelector(".ip-group-receiver-select");
+  if (selEl) selEl.dataset.ip = String(ip);
+  const btnSel = card.querySelector(".btn-select-ip-group");
+  if (btnSel) btnSel.dataset.ip = String(ip);
+  const btnRun = card.querySelector(".btn-start-single-ip-group");
+  if (btnRun) btnRun.dataset.ip = String(ip);
+  return card;
+}
+
+function patchZenyIpGroupCardEl(card, g, runningIp, sameIpOnly, activeReceiverIp) {
+  const isCurrentRunningIp = Boolean(runningIp && runningIp === g.ip);
+  const isSelectedIp = Boolean(sameIpOnly && activeReceiverIp === g.ip);
+  const borderCol = isCurrentRunningIp
+    ? "rgba(52, 211, 153, 0.75)"
+    : (isSelectedIp ? "rgba(168, 85, 247, 0.75)" : "rgba(255, 255, 255, 0.1)");
+  const bgCol = isCurrentRunningIp
+    ? "rgba(6, 78, 59, 0.35)"
+    : (isSelectedIp ? "rgba(88, 28, 135, 0.28)" : "rgba(9, 13, 22, 0.65)");
+
+  if (card.style.background !== bgCol) card.style.background = bgCol;
+  if (card.style.borderColor !== borderCol) card.style.borderColor = borderCol;
+
+  const runBadge = card.querySelector(".js-ip-running-badge");
+  if (runBadge) {
+    const nextDisp = isCurrentRunningIp ? "" : "none";
+    if (runBadge.style.display !== nextDisp) runBadge.style.display = nextDisp;
+  }
+
+  const countsEl = card.querySelector(".js-ip-counts");
+  if (countsEl) {
+    const nextCountsHtml = `🟢 <b>${g.onlineProfiles.length}</b>/${g.profiles.length} จอ · 👑 <b>${g.onlinePremiumProfiles.length}</b> VIP`;
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(countsEl, nextCountsHtml);
+    else if (countsEl.innerHTML !== nextCountsHtml) countsEl.innerHTML = nextCountsHtml;
+  }
+
+  const sendersLbl = card.querySelector(".js-ip-senders-lbl");
+  if (sendersLbl) {
+    const nextLbl = `ยอดโอนในวงนี้ (${g.senders.length} จอส่ง):`;
+    if (sendersLbl.textContent !== nextLbl) sendersLbl.textContent = nextLbl;
+  }
+
+  const transferValEl = card.querySelector(".js-ip-transfer-val");
+  if (transferValEl) {
+    const nextTxt = `${g.transferableZeny.toLocaleString()} z`;
+    const nextColor = g.transferableZeny > 0 ? "#facc15" : "#94a3b8";
+    if (transferValEl.textContent !== nextTxt) transferValEl.textContent = nextTxt;
+    if (transferValEl.style.color !== nextColor) transferValEl.style.color = nextColor;
+  }
+
+  const selEl = card.querySelector(".ip-group-receiver-select");
+  if (selEl) {
+    const recOpts = g.premiumProfiles.length > 0
+      ? g.premiumProfiles.map(p => {
+          const cName = p.liveState?.charName || p.lastCharName || p.name;
+          const zVal = typeof p.liveState?.zeny === "number" ? `${p.liveState.zeny.toLocaleString()} z` : "--";
+          const onTag = p.isRunning ? "🟢" : "⚪";
+          return {
+            value: p.id,
+            label: `${onTag} 👑 ${p.name} [${cName}] (${zVal})`,
+            disabled: false
+          };
+        })
+      : [{ value: "", label: "🔒 ไม่มีตัวละครที่มี Premium ในวงนี้", disabled: false }];
+    const selectedId = (g.receiver && g.premiumProfiles.length > 0) ? g.receiver.id : "";
+    const isSelDisabled = g.premiumProfiles.length === 0 || isConsolidationRunning;
+    if (window.PmUiGuard) {
+      window.PmUiGuard.syncSelect(selEl, recOpts, selectedId, isSelDisabled);
+    }
+  }
+
+  const btnSel = card.querySelector(".btn-select-ip-group");
+  if (btnSel) {
+    const nextDis = !g.receiver || isConsolidationRunning;
+    const nextBtnTxt = `🎯 เลือกวงนี้ (${g.senders.length} จอ)`;
+    if (btnSel.disabled !== nextDis) btnSel.disabled = nextDis;
+    if (btnSel.textContent !== nextBtnTxt) btnSel.textContent = nextBtnTxt;
+  }
+
+  const btnRun = card.querySelector(".btn-start-single-ip-group");
+  if (btnRun) {
+    const nextRunDis = !g.canConsolidate || isConsolidationRunning;
+    if (btnRun.disabled !== nextRunDis) btnRun.disabled = nextRunDis;
+  }
+}
+
 function updateZenyConsolidationView() {
   const onlineProfiles = currentProfiles.filter(p => p.isRunning);
   const premiumProfiles = currentProfiles.filter(p => isProfilePremium(p));
@@ -4859,25 +5208,38 @@ function updateZenyConsolidationView() {
   const sendersBadge = document.getElementById("zeny-senders-count-badge");
   if (sendersBadge) sendersBadge.innerText = `${currentProfiles.length} จอ (${onlinePremiumProfiles.length} จอมี 👑 Premium ออนไลน์)`;
 
-  // 2. Populate Receiver Select (Only Premium profiles are selectable)
+  const curRecProfile = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+  if (!selectedReceiverProfileId || !curRecProfile || !isProfilePremium(curRecProfile)) {
+    const defaultRec = onlinePremiumProfiles.find(p => p.isMain) || onlinePremiumProfiles[0] || premiumProfiles.find(p => p.isMain) || premiumProfiles[0] || null;
+    selectedReceiverProfileId = defaultRec ? defaultRec.id : "";
+  }
+
+  // Skip heavy DOM reconciliation if Zeny tab pane is hidden
+  const zenyPane = document.querySelector('.tab-pane[data-pane="zeny"]');
+  if (zenyPane && !zenyPane.classList.contains("active")) {
+    return;
+  }
+
+  // 2. Populate Receiver Select in-place (never closes open dropdown)
   const receiverSelect = document.getElementById("zeny-receiver-select");
   if (receiverSelect) {
-    const curRecProfile = currentProfiles.find(p => p.id === selectedReceiverProfileId);
-    if (!selectedReceiverProfileId || !curRecProfile || !isProfilePremium(curRecProfile)) {
-      const defaultRec = onlinePremiumProfiles.find(p => p.isMain) || onlinePremiumProfiles[0] || premiumProfiles.find(p => p.isMain) || premiumProfiles[0] || null;
-      selectedReceiverProfileId = defaultRec ? defaultRec.id : "";
-    }
-
     const currentVal = selectedReceiverProfileId || "";
+    let receiverOpts = [];
     if (premiumProfiles.length === 0) {
-      receiverSelect.innerHTML = `<option value="" disabled selected>⚠️ ไม่มีตัวละครที่มีสถานะ 👑 Premium (การเทรดต้องมี Premium)</option>` +
-        currentProfiles.map(p => {
+      receiverOpts = [
+        { value: "", label: "⚠️ ไม่มีตัวละครที่มีสถานะ 👑 Premium (การเทรดต้องมี Premium)", disabled: true },
+        ...currentProfiles.map(p => {
           const charName = p.liveState?.charName || p.lastCharName || p.name;
           const ipKey = getProfileIpGroupKey(p);
-          return `<option value="${p.id}" disabled>🔒 [ไม่มี Premium] ${escapeHTML(p.name)} [${escapeHTML(charName)}] — IP: ${escapeHTML(ipKey)}</option>`;
-        }).join("");
+          return {
+            value: p.id,
+            label: `🔒 [ไม่มี Premium] ${p.name} [${charName}] — IP: ${ipKey}`,
+            disabled: true
+          };
+        })
+      ];
     } else {
-      receiverSelect.innerHTML = currentProfiles.map(p => {
+      receiverOpts = currentProfiles.map(p => {
         const hasPrem = isProfilePremium(p);
         const charName = p.liveState?.charName || p.lastCharName || p.name;
         const isOnline = p.isRunning ? "🟢 ออนไลน์" : "⚪ ออฟไลน์";
@@ -4885,8 +5247,15 @@ function updateZenyConsolidationView() {
         const mainStar = p.isMain ? "⭐ " : "";
         const premPrefix = hasPrem ? "👑 " : "🔒 [ไม่มี Premium] ";
         const ipKey = getProfileIpGroupKey(p);
-        return `<option value="${p.id}" ${p.id === currentVal && hasPrem ? "selected" : ""} ${!hasPrem ? "disabled" : ""}>${premPrefix}${mainStar}${escapeHTML(p.name)} [${escapeHTML(charName)}] — ${zeny} · 🛡️ IP: ${escapeHTML(ipKey)} (${isOnline})</option>`;
-      }).join("");
+        return {
+          value: p.id,
+          label: `${premPrefix}${mainStar}${p.name} [${charName}] — ${zeny} · 🛡️ IP: ${ipKey} (${isOnline})`,
+          disabled: !hasPrem
+        };
+      });
+    }
+    if (window.PmUiGuard) {
+      window.PmUiGuard.syncSelect(receiverSelect, receiverOpts, premiumProfiles.length === 0 ? "" : currentVal, false);
     }
   }
 
@@ -4897,7 +5266,7 @@ function updateZenyConsolidationView() {
     receiverIpBadge.textContent = activeReceiverIp ? `🛡️ IP ตัวรับ: ${activeReceiverIp}` : "IP: -";
   }
 
-  // 2.5 Render IP-Group Consolidation Cards (#zeny-ip-groups-list)
+  // 2.5 Render IP-Group Consolidation Cards in-place (#zeny-ip-groups-list)
   const ipGroupsListEl = document.getElementById("zeny-ip-groups-list");
   const ipGroupsBadgeEl = document.getElementById("zeny-ip-groups-summary-badge");
   const btnStartAllIpGroups = document.getElementById("btn-start-ip-groups-consolidation");
@@ -4909,70 +5278,55 @@ function updateZenyConsolidationView() {
   if (btnStartAllIpGroups) {
     btnStartAllIpGroups.disabled = isConsolidationRunning || readyIpGroups.length === 0;
     const totalIpTransferZeny = readyIpGroups.reduce((sum, g) => sum + g.transferableZeny, 0);
-    btnStartAllIpGroups.innerHTML = readyIpGroups.length > 0
+    const nextBtnAllTxt = readyIpGroups.length > 0
       ? `🌐 รวมเงินทุกวง IP อัตโนมัติ (${readyIpGroups.length} วง · ${totalIpTransferZeny.toLocaleString()} z)`
       : `🌐 รวมเงินทุกวง IP อัตโนมัติ (0 วง)`;
+    if (btnStartAllIpGroups.textContent !== nextBtnAllTxt) {
+      btnStartAllIpGroups.textContent = nextBtnAllTxt;
+    }
   }
   if (ipGroupsListEl) {
     if (ipGroups.length === 0) {
-      ipGroupsListEl.innerHTML = `<div style="grid-column: 1 / -1; text-align: center; color: #94a3b8; font-size: 12px; padding: 14px;">ยังไม่มีโปรไฟล์ในระบบ</div>`;
+      const emptyHtml = `<div data-ip-empty="1" style="grid-column: 1 / -1; text-align: center; color: #94a3b8; font-size: 12px; padding: 14px;">ยังไม่มีโปรไฟล์ในระบบ</div>`;
+      if (!ipGroupsListEl.querySelector('[data-ip-empty="1"]')) {
+        ipGroupsListEl.innerHTML = emptyHtml;
+      }
     } else {
+      const emptyNode = ipGroupsListEl.querySelector('[data-ip-empty="1"]');
+      if (emptyNode) emptyNode.remove();
       const runningIp = (lastConsolidationState && lastConsolidationState.running) ? lastConsolidationState.currentIpGroup : null;
-      ipGroupsListEl.innerHTML = ipGroups.map((g, idx) => {
-        const isCurrentRunningIp = runningIp && runningIp === g.ip;
-        const isSelectedIp = sameIpOnly && activeReceiverIp === g.ip;
-        const borderCol = isCurrentRunningIp
-          ? "rgba(52, 211, 153, 0.75)"
-          : (isSelectedIp ? "rgba(168, 85, 247, 0.75)" : "rgba(255, 255, 255, 0.1)");
-        const bgCol = isCurrentRunningIp
-          ? "rgba(6, 78, 59, 0.35)"
-          : (isSelectedIp ? "rgba(88, 28, 135, 0.28)" : "rgba(9, 13, 22, 0.65)");
-        const recOptionsHtml = g.premiumProfiles.length > 0
-          ? g.premiumProfiles.map(p => {
-              const cName = p.liveState?.charName || p.lastCharName || p.name;
-              const zVal = typeof p.liveState?.zeny === "number" ? `${p.liveState.zeny.toLocaleString()} z` : "--";
-              const onTag = p.isRunning ? "🟢" : "⚪";
-              return `<option value="${p.id}" ${g.receiver && g.receiver.id === p.id ? "selected" : ""}>${onTag} 👑 ${escapeHTML(p.name)} [${escapeHTML(cName)}] (${zVal})</option>`;
-            }).join("")
-          : `<option value="">🔒 ไม่มีตัวละครที่มี Premium ในวงนี้</option>`;
-
-        return `
-          <div style="background: ${bgCol}; border: 1.5px solid ${borderCol}; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 7px;">
-            <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap;">
-              <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="font-size: 11px; font-weight: 800; padding: 2px 7px; border-radius: 6px; background: rgba(168, 85, 247, 0.22); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.45); font-family: monospace;">
-                  🛡️ ${g.ip === 'LOCAL' ? 'LOCAL (เน็ตบ้าน)' : escapeHTML(g.ip)}
-                </span>
-                ${isCurrentRunningIp ? `<span style="font-size: 10px; padding: 1px 6px; border-radius: 99px; background: rgba(16, 185, 129, 0.22); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.45); font-weight: 700;">🔄 กำลังรวมวงนี้</span>` : ''}
-              </div>
-              <span style="font-size: 11px; color: #cbd5e1;">
-                🟢 <b>${g.onlineProfiles.length}</b>/${g.profiles.length} จอ · 👑 <b>${g.onlinePremiumProfiles.length}</b> VIP
-              </span>
-            </div>
-
-            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; background: rgba(15, 23, 42, 0.6); padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05);">
-              <span style="color: #94a3b8;">ยอดโอนในวงนี้ (${g.senders.length} จอส่ง):</span>
-              <b style="color: ${g.transferableZeny > 0 ? '#facc15' : '#94a3b8'}; font-family: var(--font-mono);">${g.transferableZeny.toLocaleString()} z</b>
-            </div>
-
-            <div style="display: flex; flex-direction: column; gap: 3px;">
-              <label style="font-size: 10.5px; color: #94a3b8;">👑 ตัวรับเงินประจำวง IP นี้:</label>
-              <select class="zeny-select ip-group-receiver-select" data-ip="${escapeHTML(g.ip)}" style="font-size: 11.5px; padding: 4px 8px; height: 30px;" ${g.premiumProfiles.length === 0 || isConsolidationRunning ? "disabled" : ""}>
-                ${recOptionsHtml}
-              </select>
-            </div>
-
-            <div style="display: flex; gap: 6px; margin-top: 2px;">
-              <button type="button" class="btn btn-secondary btn-sm btn-select-ip-group" data-ip="${escapeHTML(g.ip)}" style="flex: 1; font-size: 11px; padding: 4px 8px;" ${!g.receiver || isConsolidationRunning ? "disabled" : ""} title="เลือกตัวรับและติ๊กเฉพาะจอในวง IP นี้ในตารางด้านล่าง">
-                🎯 เลือกวงนี้ (${g.senders.length} จอ)
-              </button>
-              <button type="button" class="btn btn-primary btn-sm btn-start-single-ip-group" data-ip="${escapeHTML(g.ip)}" style="flex: 1; font-size: 11px; padding: 4px 8px; background: #7c3aed; border-color: #a855f7; font-weight: 700;" ${!g.canConsolidate || isConsolidationRunning ? "disabled" : ""} title="เริ่มรวมเงินเฉพาะในวง IP นี้ทันที">
-                🚀 รวมวงนี้ทันที
-              </button>
-            </div>
-          </div>
-        `;
-      }).join("");
+      const existingByIp = new Map();
+      Array.from(ipGroupsListEl.children).forEach(ch => {
+        if (ch.dataset && ch.dataset.ipGroupCard !== undefined) {
+          existingByIp.set(ch.dataset.ipGroupCard, ch);
+        }
+      });
+      const desiredCards = ipGroups.map(g => {
+        const key = String(g.ip);
+        let card = existingByIp.get(key);
+        if (card) {
+          existingByIp.delete(key);
+        } else {
+          card = createZenyIpGroupCardEl(g.ip);
+        }
+        patchZenyIpGroupCardEl(card, g, runningIp, sameIpOnly, activeReceiverIp);
+        return card;
+      });
+      existingByIp.forEach(stale => {
+        if (window.PmUiGuard && window.PmUiGuard.isInteracting(stale)) return;
+        stale.remove();
+      });
+      if (!(window.PmUiGuard && window.PmUiGuard.isInteracting(ipGroupsListEl))) {
+        desiredCards.forEach((node, idx) => {
+          if (ipGroupsListEl.children[idx] !== node) {
+            ipGroupsListEl.insertBefore(node, ipGroupsListEl.children[idx] || null);
+          }
+        });
+      } else {
+        desiredCards.forEach(node => {
+          if (!node.parentNode) ipGroupsListEl.appendChild(node);
+        });
+      }
     }
   }
 
@@ -4980,7 +5334,9 @@ function updateZenyConsolidationView() {
   const tbody = document.getElementById("zeny-senders-tbody");
   if (tbody) {
     if (currentProfiles.length === 0) {
-      tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 24px;">ไม่พบรายการโปรไฟล์ในระบบ</td></tr>`;
+      const emptyRowHtml = `<tr><td colspan="6" style="text-align: center; color: #64748b; padding: 24px;">ไม่พบรายการโปรไฟล์ในระบบ</td></tr>`;
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(tbody, emptyRowHtml);
+      else tbody.innerHTML = emptyRowHtml;
       return;
     }
 
@@ -4990,7 +5346,7 @@ function updateZenyConsolidationView() {
     const completedSet = new Set((lastConsolidationState && Array.isArray(lastConsolidationState.completedSenders)) ? lastConsolidationState.completedSenders : []);
     const activeSenderName = (lastConsolidationState && lastConsolidationState.running) ? lastConsolidationState.currentSender : null;
 
-    tbody.innerHTML = currentProfiles.map(p => {
+    const rowsHtml = currentProfiles.map(p => {
       const isReceiver = Boolean(selectedReceiverProfileId && p.id === selectedReceiverProfileId);
       const isOnline = !!p.isRunning;
       const hasPrem = isProfilePremium(p);
@@ -5084,6 +5440,11 @@ function updateZenyConsolidationView() {
         </tr>
       `;
     }).join("");
+
+    if (!(window.PmUiGuard && window.PmUiGuard.deferIfInteracting("zeny-senders-tbody", tbody, updateZenyConsolidationView))) {
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(tbody, rowsHtml);
+      else tbody.innerHTML = rowsHtml;
+    }
 
     const selectAllCb = document.getElementById("zeny-select-all-checkbox");
     if (selectAllCb && eligibleCount > 0) {
@@ -7775,7 +8136,7 @@ function renderWebAutoSellRules(profileId, force) {
   const hud = activeWebHuds[profileId]?.el;
   const box = hud && hud.querySelector('#p-autosell-hud-rules-container');
   if (!box) return;
-  if (!force && box.contains(document.activeElement)) return;   // don't redraw under the user's cursor
+  if (!force && ((window.PmUiGuard && window.PmUiGuard.isInteracting(box)) || box.contains(document.activeElement))) return;   // don't redraw under the user's cursor or open select
   const rules = webAutoSellRules(profileId);
   const sig = JSON.stringify(rules);
   if (!force && box.dataset.sig === sig) return;
@@ -7972,11 +8333,21 @@ function populateWebHudData(profileId, data) {
   }
 
   // Farm Map Select & Travel Config
+  const isCtrlBusy = (el) => {
+    if (!el) return true;
+    if (el.tagName === 'SELECT') return window.PmUiGuard ? window.PmUiGuard.isSelectBusy(el) : (document.activeElement === el);
+    return document.activeElement === el;
+  };
+  const isBoxBusy = (el) => {
+    if (!el) return false;
+    return window.PmUiGuard ? window.PmUiGuard.isInteracting(el) : el.contains(document.activeElement);
+  };
+
   const mapSelect = hud.querySelector('#p-target-map-select');
-  if (mapSelect && data.targetFarmMap && document.activeElement !== mapSelect) mapSelect.value = data.targetFarmMap;
+  if (mapSelect && data.targetFarmMap && !isCtrlBusy(mapSelect)) mapSelect.value = data.targetFarmMap;
 
   const warpMinZenyInp = hud.querySelector('#p-warp-min-zeny');
-  if (warpMinZenyInp && data.travelConfig && document.activeElement !== warpMinZenyInp) {
+  if (warpMinZenyInp && data.travelConfig && !isCtrlBusy(warpMinZenyInp)) {
     warpMinZenyInp.value = Number(data.travelConfig.minZenyForWarp) || 0;
   }
 
@@ -8024,7 +8395,7 @@ function populateWebHudData(profileId, data) {
       revRow.style.display = ig.autoRevive ? 'flex' : 'none';
     }
     const revMax = hud.querySelector('#p-ig-auto-revive-max');
-    if (revMax && ig.autoReviveMax !== undefined && document.activeElement !== revMax) {
+    if (revMax && ig.autoReviveMax !== undefined && !isCtrlBusy(revMax)) {
       revMax.value = String(Number(ig.autoReviveMax) || 10);
     }
     if (Array.isArray(ig.targetOrder) && ig.targetOrder.length > 0) {
@@ -8032,7 +8403,10 @@ function populateWebHudData(profileId, data) {
       const sumEl = hud.querySelector('#p-ig-auto-priority-summary-text');
       if (sumEl) sumEl.innerHTML = prio.summaryHtml;
       const rowsEl = hud.querySelector('#p-ig-auto-priority-rows');
-      if (rowsEl && !rowsEl.contains(document.activeElement)) rowsEl.innerHTML = prio.rowsHtml;
+      if (rowsEl && !isBoxBusy(rowsEl)) {
+        if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(rowsEl, prio.rowsHtml);
+        else rowsEl.innerHTML = prio.rowsHtml;
+      }
     }
   }
 
@@ -8054,7 +8428,7 @@ function populateWebHudData(profileId, data) {
   syncCb('#p-humanize-enabled', humanize.enabled);
   const humChance = hud.querySelector('#p-humanize-chance');
   const humChanceVal = humanize.chancePercent !== undefined ? humanize.chancePercent : humanize.chance;
-  if (humChance && humChanceVal !== undefined && document.activeElement !== humChance) {
+  if (humChance && humChanceVal !== undefined && !isCtrlBusy(humChance)) {
     humChance.value = humChanceVal;
   }
   syncCb('#p-humanize-blacksmith', humanize.visitBlacksmith !== undefined ? humanize.visitBlacksmith : humanize.buyBlacksmith);
@@ -8081,19 +8455,19 @@ function populateWebHudData(profileId, data) {
   }
 
   const arrowType = hud.querySelector('#p-archer-type');
-  if (arrowType && archer.arrowType && document.activeElement !== arrowType) arrowType.value = String(archer.arrowType);
+  if (arrowType && archer.arrowType && !isCtrlBusy(arrowType)) arrowType.value = String(archer.arrowType);
 
   const arrowQty = hud.querySelector('#p-archer-qty');
-  if (arrowQty && document.activeElement !== arrowQty) arrowQty.value = archer.arrowBuyQty || 5000;
+  if (arrowQty && !isCtrlBusy(arrowQty)) arrowQty.value = archer.arrowBuyQty || 5000;
 
   const arrowThresh = hud.querySelector('#p-archer-threshold');
-  if (arrowThresh && document.activeElement !== arrowThresh) arrowThresh.value = archer.ammoThreshold || 50;
+  if (arrowThresh && !isCtrlBusy(arrowThresh)) arrowThresh.value = archer.ammoThreshold || 50;
 
   const bwing = hud.querySelector('#p-archer-bwing');
   if (bwing && document.activeElement !== bwing) bwing.checked = !!archer.useBwing;
 
   const bwingQty = hud.querySelector('#p-archer-bwing-qty');
-  if (bwingQty && document.activeElement !== bwingQty) bwingQty.value = archer.bwingBuyQty || 2;
+  if (bwingQty && !isCtrlBusy(bwingQty)) bwingQty.value = archer.bwingBuyQty || 2;
 
   const bwingCountEl = hud.querySelector('#p-bwing-count');
   if (bwingCountEl && data.bwingCount !== undefined) {
@@ -8109,7 +8483,7 @@ function populateWebHudData(profileId, data) {
       const cb = hud.querySelector(`#p-potion-enable-${id}`);
       if (cb && document.activeElement !== cb) cb.checked = !!pCfg.enabled;
       const qty = hud.querySelector(`#p-potion-qty-${id}`);
-      if (qty && document.activeElement !== qty && pCfg.targetQty !== undefined) qty.value = pCfg.targetQty;
+      if (qty && !isCtrlBusy(qty) && pCfg.targetQty !== undefined) qty.value = pCfg.targetQty;
     }
     const cntEl = hud.querySelector(`#p-potion-count-${id}`);
     if (cntEl && potionCounts[id] !== undefined) {
@@ -8126,7 +8500,7 @@ function populateWebHudData(profileId, data) {
   if (weightCheckEn && document.activeElement !== weightCheckEn) weightCheckEn.checked = sell.weightCheckEnabled !== false;
 
   const weightThresh = hud.querySelector('#p-weight-threshold');
-  if (weightThresh && document.activeElement !== weightThresh) weightThresh.value = sell.weightThreshold || 80;
+  if (weightThresh && !isCtrlBusy(weightThresh)) weightThresh.value = sell.weightThreshold || 80;
 
   const curWeightVal = hud.querySelector('#p-cur-weight-val');
   if (curWeightVal) {
@@ -8146,7 +8520,7 @@ function populateWebHudData(profileId, data) {
 
   const syncSel = (id, val) => {
     const el = hud.querySelector(id);
-    if (el && val !== undefined && document.activeElement !== el) el.value = val;
+    if (el && val !== undefined && !isCtrlBusy(el)) el.value = val;
   };
   syncSel('#p-sell-rarity-weap', sell.weaponRarity);
   syncSel('#p-sell-rarity-armor', sell.armorRarity);
@@ -8165,9 +8539,9 @@ function populateWebHudData(profileId, data) {
   if (keepSock && document.activeElement !== keepSock) keepSock.checked = !!sell.keepSockets;
 
   const sellWl = hud.querySelector('#p-sell-whitelist');
-  if (sellWl && document.activeElement !== sellWl) sellWl.value = sell.whitelist || '';
+  if (sellWl && !isCtrlBusy(sellWl)) sellWl.value = sell.whitelist || '';
   const sellFs = hud.querySelector('#p-sell-force-list');
-  if (sellFs && document.activeElement !== sellFs) sellFs.value = sell.forceSellList || '';
+  if (sellFs && !isCtrlBusy(sellFs)) sellFs.value = sell.forceSellList || '';
   [['#p-store-enabled', !!sell.storeEnabled], ['#p-store-weapon', sell.storeWeapon !== false], ['#p-store-armor', sell.storeArmor !== false],
    ['#p-store-acc', sell.storeAcc !== false], ['#p-store-refine', sell.storeRefine !== false], ['#p-store-skip-locked', sell.storeSkipLocked !== false]].forEach(([id, v]) => {
     const el = hud.querySelector(id);
@@ -8177,7 +8551,7 @@ function populateWebHudData(profileId, data) {
   // Stat Filter sync
   const activeHud = activeWebHuds[profileId];
   const sfCard = hud.querySelector('#p-sell-stats-filter-card');
-  if (sell.statsFilter && activeHud && sfCard && !sfCard.contains(document.activeElement)) {
+  if (sell.statsFilter && activeHud && sfCard && !isBoxBusy(sfCard)) {
     const incStr = JSON.stringify(sell.statsFilter);
     if (JSON.stringify(activeHud.currentStatsFilter) !== incStr) {
       activeHud.currentStatsFilter = Object.assign({}, sell.statsFilter);
@@ -8203,7 +8577,7 @@ function populateWebHudData(profileId, data) {
   ].forEach(([sel, val, kind]) => {
     if (val === undefined) return;
     const el = hud.querySelector(sel);
-    if (!el || document.activeElement === el) return;
+    if (!el || isCtrlBusy(el)) return;
     if (kind === 'bool') el.checked = !!val;
     else el.value = String(val ?? '');
   });
@@ -8212,7 +8586,7 @@ function populateWebHudData(profileId, data) {
   const shop = data.shopConfig || {};
   syncCb('#p-shop-enabled', shop.enabled);
   const shopKeyEl = hud.querySelector('#p-shop-npckey');
-  if (shopKeyEl && shop.npcKey !== undefined && document.activeElement !== shopKeyEl) shopKeyEl.value = shop.npcKey || 'tools';
+  if (shopKeyEl && shop.npcKey !== undefined && !isCtrlBusy(shopKeyEl)) shopKeyEl.value = shop.npcKey || 'tools';
 
   syncCb('#p-ultra-low-spec', data.ultraLowSpecEnabled !== false);
   syncCb('#p-auto-config-char', data.autoConfigCharEnabled !== false);
@@ -9617,8 +9991,11 @@ async function refreshPlanLiveStatus() {
     const res = await fetch(`${API_BASE}/api/profiles/${encodeURIComponent(activePlanClientProfileId)}/plan-state`);
     st = await res.json();
   } catch (e) {}
+  if (window.PmUiGuard && window.PmUiGuard.deferIfInteracting('plan-live-status', box, refreshPlanLiveStatus)) return;
   if (!st || !st.success) {
-    box.innerHTML = `<span class="pl-muted">⚪ จอนี้ออฟไลน์ — แผนที่ผูกไว้จะถูกส่งและเปิดใช้งานให้เองเมื่อเปิดจอ</span>`;
+    const offlineHtml = `<span class="pl-muted">⚪ จอนี้ออฟไลน์ — แผนที่ผูกไว้จะถูกส่งและเปิดใช้งานให้เองเมื่อเปิดจอ</span>`;
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(box, offlineHtml);
+    else box.innerHTML = offlineHtml;
     return;
   }
   const assignedId = currentPlanAssignments[activePlanClientProfileId];
@@ -9626,7 +10003,7 @@ async function refreshPlanLiveStatus() {
   const total = assigned && Array.isArray(assigned.triggers) ? assigned.triggers.length : 0;
   const syncing = assigned && st.planId !== assigned.id;
   const pending = (st.pending || []).map(p => p.type === 'zeny' ? `เงิน ≥ ${Number(p.level).toLocaleString()} z` : `${p.type === 'job_level' ? `Job${p.cls ? ' ' + planClassLabel(p.cls).split(' ')[0] : ''}` : 'Base'} Lv.${p.level}`).join(', ');
-  box.innerHTML = `
+  const html = `
     <label class="pl-switch" title="เปิด/ปิด Plan Script ของจอนี้">
       <input type="checkbox" ${st.enabled ? 'checked' : ''} onchange="togglePlanScriptEnabled(this.checked)">
       <span></span>
@@ -9637,6 +10014,8 @@ async function refreshPlanLiveStatus() {
     ${syncing ? '<span class="pl-warn">⏳ กำลังส่งแผนล่าสุดไปที่จอ...</span>' : ''}
     ${st.planId && !syncing && total ? `<span>✅ ทำแล้ว <b>${Math.min((st.done || []).length, total)}/${total}</b> เงื่อนไข</span>` : ''}
     ${pending ? `<span class="pl-warn">⏳ กำลังรอทำ: ${escapeHTML(pending)}</span>` : ''}`;
+  if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(box, html);
+  else box.innerHTML = html;
 }
 
 async function togglePlanScriptEnabled(enabled) {
@@ -10094,30 +10473,38 @@ function updateBulkDeleteModalIfOpen() {
   if (modal && modal.style.display && modal.style.display !== "none") {
     const sig = (Array.isArray(currentProfiles) ? currentProfiles : []).map(p => `${p.id}:${p.isAlive ? 1 : 0}`).join("|");
     if (sig !== bdpLastRenderedSig) {
-      renderBulkDeleteProfileList();
+      renderBulkDeleteProfileList(false);
     } else {
       updateBulkDeleteCounters();
     }
   }
 }
 
-function renderBulkDeleteProfileList() {
+function renderBulkDeleteProfileList(force = true) {
   const listEl = document.getElementById("bdp-profile-list");
   if (!listEl) return;
+  if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('bdp-profile-list', listEl, () => renderBulkDeleteProfileList(false))) {
+    updateBulkDeleteCounters();
+    return;
+  }
   bdpLastRenderedSig = (Array.isArray(currentProfiles) ? currentProfiles : []).map(p => `${p.id}:${p.isAlive ? 1 : 0}`).join("|");
   updateBulkDeleteCounters();
   const filtered = getFilteredBulkDeleteProfiles();
 
   if (!Array.isArray(currentProfiles) || currentProfiles.length === 0) {
-    listEl.innerHTML = `<div style="text-align: center; color: #64748b; padding: 36px 12px; font-size: 13px;">ไม่มีโปรไฟล์ในระบบ</div>`;
+    const emptyHtml = `<div style="text-align: center; color: #64748b; padding: 36px 12px; font-size: 13px;">ไม่มีโปรไฟล์ในระบบ</div>`;
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(listEl, emptyHtml);
+    else listEl.innerHTML = emptyHtml;
     return;
   }
   if (filtered.length === 0) {
-    listEl.innerHTML = `<div style="text-align: center; color: #64748b; padding: 36px 12px; font-size: 13px;">ไม่พบโปรไฟล์ที่ตรงกับคำค้นหา</div>`;
+    const noMatchHtml = `<div style="text-align: center; color: #64748b; padding: 36px 12px; font-size: 13px;">ไม่พบโปรไฟล์ที่ตรงกับคำค้นหา</div>`;
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(listEl, noMatchHtml);
+    else listEl.innerHTML = noMatchHtml;
     return;
   }
 
-  listEl.innerHTML = filtered.map((p, idx) => {
+  const listHtml = filtered.map((p, idx) => {
     const pid = String(p.id);
     const checked = bdpSelectedIds.has(pid);
     const state = p.liveState || {};
@@ -10161,6 +10548,12 @@ function renderBulkDeleteProfileList() {
       </label>
     `;
   }).join("");
+
+  if (window.PmUiGuard) {
+    if (!window.PmUiGuard.setHtmlIfChanged(listEl, listHtml)) return;
+  } else {
+    listEl.innerHTML = listHtml;
+  }
 
   listEl.querySelectorAll(".bdp-checkbox").forEach(cb => {
     cb.addEventListener("click", (e) => {

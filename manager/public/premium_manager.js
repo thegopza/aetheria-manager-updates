@@ -249,13 +249,18 @@
 
     const planSel = document.getElementById('pm-plan');
     if (planSel) {
-      const sig = plans.map(p => `${p.id}:${p.days}:${p.tokens}`).join('|');
-      if (sig !== lastPlansSig) {
-        lastPlansSig = sig;
-        planSel.innerHTML = plans.map(p => `<option value="${esc(p.id)}">${esc(p.days)} วัน · ${fmt(p.tokens)} Token</option>`).join('');
-      }
-      if (document.activeElement !== planSel && planSel.value !== String(cur.id)) {
-        planSel.value = String(cur.id);
+      if (window.PmUiGuard) {
+        const optDefs = plans.map(p => ({ value: String(p.id), text: `${p.days} วัน · ${fmt(p.tokens)} Token` }));
+        window.PmUiGuard.syncSelect(planSel, optDefs, String(cur.id));
+      } else {
+        const sig = plans.map(p => `${p.id}:${p.days}:${p.tokens}`).join('|');
+        if (sig !== lastPlansSig && document.activeElement !== planSel) {
+          lastPlansSig = sig;
+          planSel.innerHTML = plans.map(p => `<option value="${esc(p.id)}">${esc(p.days)} วัน · ${fmt(p.tokens)} Token</option>`).join('');
+        }
+        if (document.activeElement !== planSel && planSel.value !== String(cur.id)) {
+          planSel.value = String(cur.id);
+        }
       }
     }
 

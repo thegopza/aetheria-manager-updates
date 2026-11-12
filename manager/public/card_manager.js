@@ -794,7 +794,7 @@
       });
       if (!pollTimer) {
         pollTimer = setInterval(() => {
-          if (isOpen) fetchCardsData();
+          if (isOpen) fetchCardsData(true);
         }, 6000);
       }
     } else {
@@ -811,7 +811,7 @@
     }
   }
 
-  async function fetchCardsData() {
+  async function fetchCardsData(isBackground = false) {
     try {
       const res = await fetch(API);
       const j = await res.json();
@@ -822,7 +822,11 @@
       state.overrides = j.overrides && typeof j.overrides === 'object' ? j.overrides : {};
       state.scanning = !!j.scanning;
       state.lastFullSweepAt = Number(j.lastFullSweepAt) || 0;
-      renderAll();
+      if (!isOpen && isBackground) {
+        renderSummaryAndBadge();
+      } else {
+        renderAll(!isBackground);
+      }
     } catch (err) {
       console.warn('[CardMarket] fetch error:', err);
     }
@@ -941,11 +945,11 @@
     return count;
   }
 
-  function renderAll() {
+  function renderAll(force = true) {
     updateHeaderButtons();
     renderSummaryAndBadge();
-    renderList();
-    renderFarmPanel();
+    renderList(force);
+    renderFarmPanel(force);
   }
 
   function renderSummaryAndBadge() {
@@ -1061,9 +1065,12 @@
     }
   }
 
-  function renderList() {
+  function renderList(force = true) {
     const listEl = document.getElementById('cd-list');
     if (!listEl) return;
+    if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('cd-list', listEl, () => renderList(false))) {
+      return;
+    }
 
     let filtered = state.cards.slice();
 
@@ -1180,7 +1187,9 @@
     });
 
     if (filtered.length === 0) {
-      listEl.innerHTML = `<div style="text-align:center;color:#64748b;padding:34px 16px;font-size:12.5px;">ไม่พบการ์ดที่ตรงกับเงื่อนไขการค้นหา</div>`;
+      const emptyHtml = `<div style="text-align:center;color:#64748b;padding:34px 16px;font-size:12.5px;">ไม่พบการ์ดที่ตรงกับเงื่อนไขการค้นหา</div>`;
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(listEl, emptyHtml);
+      else listEl.innerHTML = emptyHtml;
       return;
     }
 
@@ -1295,10 +1304,11 @@
       })
       .join('');
 
-    listEl.innerHTML = html;
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(listEl, html);
+    else listEl.innerHTML = html;
   }
 
-  function renderFarmPanel() {
+  function renderFarmPanel(force = true) {
     const panel = document.getElementById('cd-farm-panel');
     if (!panel) return;
     const shouldShow = Boolean(isOpen && farmPanelOpen && selectedCardIds.size > 0);
@@ -1313,6 +1323,7 @@
 
     const titleEl = document.getElementById('cd-fp-title');
     if (titleEl) {
+      let titleHtml = '';
       if (M === 1) {
         const card = buckets[0].card;
         const m = card.market || {};
@@ -1321,7 +1332,7 @@
         const vel = Number(m.avgSoldPerHour) || 0;
         const priceStr = lowest > 0 ? `วางขายต่ำสุด ${fmt(lowest)} z` : 'ไม่มีวางขาย';
         const avgStr = avgPrice > 0 ? `💰 ราคาเฉลี่ย ${fmt(avgPrice)} z` : 'ราคาเฉลี่ย —';
-        titleEl.innerHTML = `
+        titleHtml = `
           ${card.icon ? `<img src="${esc(card.icon)}" alt="">` : '🃏'}
           <div>
             <b>${esc(card.name)}</b>
@@ -1329,7 +1340,7 @@
           </div>
         `;
       } else {
-        titleEl.innerHTML = `
+        titleHtml = `
           <span style="font-size:20px;">⚖️</span>
           <div>
             <b>เลือก ${M} การ์ด — เฉลี่ยกระจาย ${N} จอไปฟาร์มอัตโนมัติ</b>
@@ -1337,50 +1348,97 @@
           </div>
         `;
       }
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(titleEl, titleHtml);
+      else titleEl.innerHTML = titleHtml;
     }
 
     const cardsListEl = document.getElementById('cd-fp-cards-list');
     if (cardsListEl) {
-      cardsListEl.innerHTML = buckets
-        .map(b => {
-          const c = b.card;
-          const cardMaps = Array.isArray(c.maps) ? c.maps : [];
-          const mapOpts =
-            cardMaps.length > 0
-              ? cardMaps
-                  .map(mp => {
-                    const lvLabel = mp.mapLevel || getMapLevelLabel(mp.map, mp.monsterLevel);
-                    return `<option value="${esc(mp.map)}"${mp.map === b.mapName ? ' selected' : ''}>🗺️ ${esc(mp.map)}${lvLabel ? ' ' + esc(lvLabel) : ''} (${mp.count} ตัว)</option>`;
-                  })
-                  .join('')
-              : `<option value="">— ไม่มีแมพมอนสเตอร์ประจำ —</option>`;
+      // Reconcile .cd-fp-card-row in-place so <select class="cd-fp-map-sel"> never closes on 6s poll
+      const existingRows = new Map();
+      Array.from(cardsListEl.children).forEach(ch => {
+        if (ch.dataset && ch.dataset.cardRow) existingRows.set(ch.dataset.cardRow, ch);
+      });
+      const desiredNodes = [];
+      buckets.forEach(b => {
+        const c = b.card;
+        const rowKey = String(c.id);
+        const cardMaps = Array.isArray(c.maps) ? c.maps : [];
+        const mapOptDefs = cardMaps.length > 0
+          ? cardMaps.map(mp => {
+              const lvLabel = mp.mapLevel || getMapLevelLabel(mp.map, mp.monsterLevel);
+              return {
+                value: String(mp.map),
+                text: `🗺️ ${mp.map}${lvLabel ? ' ' + lvLabel : ''} (${mp.count} ตัว)`
+              };
+            })
+          : [{ value: '', text: '— ไม่มีแมพมอนสเตอร์ประจำ —' }];
 
-          const namesPreview =
-            b.clientNames.length > 0
-              ? ` (${b.clientNames.slice(0, 3).join(', ')}${b.clientNames.length > 3 ? '…' : ''})`
-              : '';
+        const namesPreview =
+          b.clientNames.length > 0
+            ? ` (${b.clientNames.slice(0, 3).join(', ')}${b.clientNames.length > 3 ? '…' : ''})`
+            : '';
 
-          return `
-            <div class="cd-fp-card-row">
-              <div class="cd-fp-cr-name" title="${esc(c.name)}">
-                ${c.icon ? `<img src="${esc(c.icon)}" alt="">` : '🃏'}
-                <span>${esc(c.name.replace(/ Card$/i, ''))}</span>
-              </div>
-              <select class="cd-fp-map-sel" data-card-map="${c.id}" ${cardMaps.length === 0 ? 'disabled' : ''}>
-                ${mapOpts}
-              </select>
-              <span class="cd-fp-cr-quota" title="จอที่ถูกแบ่งให้การ์ดใบนี้: ${esc(b.clientNames.join(', ') || 'ยังไม่ได้เลือกจอ')}">
-                🎯 แบ่ง ${b.profileIds.length} จอ${esc(namesPreview)}
-              </span>
-              <button type="button" class="cd-fp-cr-rm" data-rm-card="${c.id}" title="เอาการ์ดใบนี้ออกจากที่เลือก">✕</button>
-            </div>
+        let rowEl = existingRows.get(rowKey);
+        if (!rowEl) {
+          rowEl = document.createElement('div');
+          rowEl.className = 'cd-fp-card-row';
+          rowEl.dataset.cardRow = rowKey;
+          rowEl.innerHTML = `
+            <div class="cd-fp-cr-name"></div>
+            <select class="cd-fp-map-sel" data-card-map="${esc(rowKey)}"></select>
+            <span class="cd-fp-cr-quota"></span>
+            <button type="button" class="cd-fp-cr-rm" data-rm-card="${esc(rowKey)}" title="เอาการ์ดใบนี้ออกจากที่เลือก">✕</button>
           `;
-        })
-        .join('');
+        }
+
+        const nameEl = rowEl.querySelector('.cd-fp-cr-name');
+        if (nameEl) {
+          nameEl.title = c.name || '';
+          const nameHtml = `${c.icon ? `<img src="${esc(c.icon)}" alt="">` : '🃏'}<span>${esc((c.name || '').replace(/ Card$/i, ''))}</span>`;
+          if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(nameEl, nameHtml);
+          else nameEl.innerHTML = nameHtml;
+        }
+
+        const selEl = rowEl.querySelector('.cd-fp-map-sel');
+        if (selEl) {
+          if (window.PmUiGuard) {
+            window.PmUiGuard.syncSelect(selEl, mapOptDefs, b.mapName || '', cardMaps.length === 0);
+          } else if (document.activeElement !== selEl) {
+            selEl.disabled = cardMaps.length === 0;
+            selEl.innerHTML = mapOptDefs.map(o => `<option value="${esc(o.value)}"${o.value === (b.mapName || '') ? ' selected' : ''}>${esc(o.text)}</option>`).join('');
+          }
+        }
+
+        const quotaEl = rowEl.querySelector('.cd-fp-cr-quota');
+        if (quotaEl) {
+          quotaEl.title = `จอที่ถูกแบ่งให้การ์ดใบนี้: ${b.clientNames.join(', ') || 'ยังไม่ได้เลือกจอ'}`;
+          quotaEl.textContent = `🎯 แบ่ง ${b.profileIds.length} จอ${namesPreview}`;
+        }
+
+        desiredNodes.push(rowEl);
+      });
+
+      const anySelectBusy = desiredNodes.some(n => {
+        const s = n.querySelector('.cd-fp-map-sel');
+        return s && window.PmUiGuard && window.PmUiGuard.isSelectBusy(s);
+      });
+      if (!anySelectBusy) {
+        let sameOrder = cardsListEl.children.length === desiredNodes.length;
+        if (sameOrder) {
+          for (let i = 0; i < desiredNodes.length; i++) {
+            if (cardsListEl.children[i] !== desiredNodes[i]) {
+              sameOrder = false;
+              break;
+            }
+          }
+        }
+        if (!sameOrder) cardsListEl.replaceChildren(...desiredNodes);
+      }
     }
 
     const clientsBox = document.getElementById('cd-fp-clients');
-    if (clientsBox) {
+    if (clientsBox && (force || !(window.PmUiGuard && window.PmUiGuard.deferIfInteracting('cd-fp-clients', clientsBox, () => renderFarmPanel(false))))) {
       if (!state.clients || state.clients.length === 0) {
         clientsBox.classList.remove('is-grouped');
         clientsBox.innerHTML = `<div style="color:#64748b;font-size:11.5px;padding:8px;">ยังไม่มีโปรไฟล์ในระบบ</div>`;
@@ -1528,7 +1586,9 @@
             </section>
           `;
 
-          clientsBox.innerHTML = partySectionsHtml + soloSectionHtml;
+          const fullClientsHtml = partySectionsHtml + soloSectionHtml;
+          if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(clientsBox, fullClientsHtml);
+          else clientsBox.innerHTML = fullClientsHtml;
 
           // Update indeterminate state for group checkboxes
           partyGroups.forEach(g => {
@@ -1539,7 +1599,9 @@
           if (soloCb) soloCb.indeterminate = soloSelected > 0 && soloSelected < soloClients.length;
         } else {
           clientsBox.classList.remove('is-grouped');
-          clientsBox.innerHTML = state.clients.map(renderClientCard).join('');
+          const flatHtml = state.clients.map(renderClientCard).join('');
+          if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(clientsBox, flatHtml);
+          else clientsBox.innerHTML = flatHtml;
         }
       }
     }
@@ -1688,9 +1750,9 @@
         }, 250);
       }
     } catch (_) {}
-    setTimeout(() => fetchCardsData(), 1800);
+    setTimeout(() => fetchCardsData(true), 1800);
     setInterval(() => {
-      if (!isOpen) fetchCardsData();
+      if (!isOpen) fetchCardsData(true);
     }, 30000);
   }
 

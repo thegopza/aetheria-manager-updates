@@ -507,7 +507,7 @@
       btn.addEventListener('click', () => {
         activeSubTab = btn.getAttribute('data-ms-tab') || 'active';
         overlay.querySelectorAll('.ms-subtab-btn').forEach(b => b.classList.toggle('active', b === btn));
-        renderTables();
+        renderTables(true);
       });
     });
   }
@@ -538,22 +538,24 @@
 
   function populateConfigToUi(cfg) {
     if (!cfg) return;
+    const isSelBusy = el => window.PmUiGuard ? window.PmUiGuard.isSelectBusy(el) : (document.activeElement === el);
     const en = document.getElementById('ms-enable-toggle');
-    if (en) en.checked = Boolean(cfg.enabled);
+    if (en && document.activeElement !== en) en.checked = Boolean(cfg.enabled);
     const modeSel = document.getElementById('ms-mode-select');
-    if (modeSel && cfg.mode) modeSel.value = cfg.mode;
+    if (modeSel && cfg.mode && !isSelBusy(modeSel)) modeSel.value = cfg.mode;
 
     const cats = cfg.categories || {};
     document.querySelectorAll('#modal-market-sniper [data-ms-cat]').forEach(cb => {
+      if (document.activeElement === cb) return;
       const k = cb.getAttribute('data-ms-cat');
       cb.checked = Boolean(cats[k]);
     });
 
     const setVal = (id, v) => {
       const el = document.getElementById(id);
-      if (el && document.activeElement !== el && v !== undefined && v !== null) {
-        el.value = String(v);
-      }
+      if (!el || v === undefined || v === null) return;
+      if (el.tagName === 'SELECT' ? isSelBusy(el) : (document.activeElement === el)) return;
+      el.value = String(v);
     };
     setVal('ms-inp-buy-ratio', cfg.maxBuyRatioPercent);
     setVal('ms-inp-bid-ratio', cfg.maxBidRatioPercent);
@@ -703,7 +705,7 @@
     const cScr = document.getElementById('ms-count-screens');
     if (cScr) cScr.innerText = String(screens.length);
 
-    renderTables();
+    renderTables(false);
   }
 
   function renderStatusBadgeHtml(status, row) {
@@ -752,9 +754,13 @@
     }
   }
 
-  function renderTables() {
+  function renderTables(force = false) {
     const box = document.getElementById('ms-table-container');
     if (!box || !sniperStatus) return;
+    if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('ms-table-container', box, () => renderTables(false))) {
+      return;
+    }
+    const setBoxHtml = html => window.PmUiGuard ? window.PmUiGuard.setHtmlIfChanged(box, html) : (box.innerHTML = html, true);
 
     if (activeSubTab === 'stock') {
       const sb = sniperStatus.stockBreakdown || {};
@@ -763,7 +769,7 @@
       const bidSum = sb.biddingSummary || { lotsCount: 0, tiedUpBidZeny: 0 };
       const byItem = Array.isArray(sb.byItem) ? sb.byItem : [];
 
-      box.innerHTML = `
+      const stockHtml = `
         <div style="padding: 12px; display: flex; flex-direction: column; gap: 12px;">
           <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px;">
             <div style="background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.45); border-radius: 10px; padding: 11px 14px;">
@@ -887,6 +893,7 @@
           </table>
         </div>
       `;
+      if (!setBoxHtml(stockHtml)) return;
 
       const allBtn = document.getElementById('btn-ms-reprice-all');
       if (allBtn) {
@@ -904,10 +911,10 @@
     if (activeSubTab === 'active') {
       const list = sniperStatus.activeBids || [];
       if (!list.length) {
-        box.innerHTML = `<div style="padding: 36px 16px; text-align: center; color: #64748b; font-size: 12.5px;">ยังไม่มีรายการที่กำลังประมูลหรือช้อนในขณะนี้ — เปิดสวิตช์ <b>เปิดทำงาน Sniper</b> หรือกดปุ่ม <b>⚡ สแกนทันที</b></div>`;
+        setBoxHtml(`<div style="padding: 36px 16px; text-align: center; color: #64748b; font-size: 12.5px;">ยังไม่มีรายการที่กำลังประมูลหรือช้อนในขณะนี้ — เปิดสวิตช์ <b>เปิดทำงาน Sniper</b> หรือกดปุ่ม <b>⚡ สแกนทันที</b></div>`);
         return;
       }
-      box.innerHTML = `
+      setBoxHtml(`
         <table class="ms-table">
           <thead>
             <tr>
@@ -966,17 +973,17 @@
             }).join('')}
           </tbody>
         </table>
-      `;
+      `);
       return;
     }
 
     if (activeSubTab === 'history') {
       const list = sniperStatus.history || [];
       if (!list.length) {
-        box.innerHTML = `<div style="padding: 36px 16px; text-align: center; color: #64748b; font-size: 12.5px;">ยังไม่มีประวัติการช้อนหรือตั้งขายทำกำไร</div>`;
+        setBoxHtml(`<div style="padding: 36px 16px; text-align: center; color: #64748b; font-size: 12.5px;">ยังไม่มีประวัติการช้อนหรือตั้งขายทำกำไร</div>`);
         return;
       }
-      box.innerHTML = `
+      setBoxHtml(`
         <table class="ms-table">
           <thead>
             <tr>
@@ -1028,17 +1035,17 @@
             }).join('')}
           </tbody>
         </table>
-      `;
+      `);
       return;
     }
 
     if (activeSubTab === 'screens') {
       const screens = (sniperStatus.onlineScreens || []).slice().sort((a, b) => (Number(b.zeny) || 0) - (Number(a.zeny) || 0));
       if (!screens.length) {
-        box.innerHTML = `<div style="padding: 36px 16px; text-align: center; color: #64748b; font-size: 12.5px;">ไม่มีจอที่ออนไลน์อยู่ในขณะนี้</div>`;
+        setBoxHtml(`<div style="padding: 36px 16px; text-align: center; color: #64748b; font-size: 12.5px;">ไม่มีจอที่ออนไลน์อยู่ในขณะนี้</div>`);
         return;
       }
-      box.innerHTML = `
+      setBoxHtml(`
         <table class="ms-table">
           <thead>
             <tr>
@@ -1072,7 +1079,7 @@
             `).join('')}
           </tbody>
         </table>
-      `;
+      `);
     }
   }
 

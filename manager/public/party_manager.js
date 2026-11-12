@@ -173,13 +173,17 @@
       if (followSel.dataset.member !== String(m.id)) followSel.dataset.member = String(m.id);
       const opts = buildFollowOptions(m, p);
       const curMode = opts.some(o => o.value === m.followMode) ? m.followMode : 'none';
-      const sig = opts.map(o => o.value + ':' + o.label).join('|');
-      if (document.activeElement !== followSel) {
-        if (followSel.dataset.optSig !== sig) {
-          followSel.dataset.optSig = sig;
-          followSel.innerHTML = opts.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+      if (window.PmUiGuard) {
+        window.PmUiGuard.syncSelect(followSel, opts.map(o => ({ value: o.value, text: o.label })), curMode);
+      } else {
+        const sig = opts.map(o => o.value + ':' + o.label).join('|');
+        if (document.activeElement !== followSel) {
+          if (followSel.dataset.optSig !== sig) {
+            followSel.dataset.optSig = sig;
+            followSel.innerHTML = opts.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+          }
+          if (followSel.value !== curMode) followSel.value = curMode;
         }
-        if (followSel.value !== curMode) followSel.value = curMode;
       }
       followSel.classList.toggle('is-following', curMode !== 'none');
     }
@@ -330,11 +334,12 @@
       }
     }
 
-    // Update selects and checkboxes only if not actively focused
+    // Update selects and checkboxes only if not actively focused/open
+    const isSelBusy = el => window.PmUiGuard ? window.PmUiGuard.isSelectBusy(el) : (document.activeElement === el);
     const expSel = cardEl.querySelector('select[data-set="expMode"]');
-    if (expSel && document.activeElement !== expSel && expSel.value !== p.expMode) expSel.value = p.expMode;
+    if (expSel && !isSelBusy(expSel) && expSel.value !== p.expMode) expSel.value = p.expMode;
     const lootSel = cardEl.querySelector('select[data-set="lootMode"]');
-    if (lootSel && document.activeElement !== lootSel && lootSel.value !== p.lootMode) lootSel.value = p.lootMode;
+    if (lootSel && !isSelBusy(lootSel) && lootSel.value !== p.lootMode) lootSel.value = p.lootMode;
 
     const syncCb = cardEl.querySelector('input[data-set="syncMap"]');
     if (syncCb && syncCb.checked !== Boolean(p.syncMap)) syncCb.checked = Boolean(p.syncMap);

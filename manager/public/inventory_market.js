@@ -497,7 +497,7 @@
     }
   }
 
-  function renderHalloweenPanel() {
+  function renderHalloweenPanel(force = false) {
     const el = hw.el;
     if (!el) return;
     syncHwDisplayedStats();
@@ -512,19 +512,23 @@
     if (kboxLbl) kboxLbl.classList.toggle('on', Boolean(hw.autoOpenKrathongBox));
 
     const selectEl = el.querySelector('[data-hw="client-select"]');
-    if (selectEl && document.activeElement !== selectEl) {
+    if (selectEl) {
       const onlineCount = (hw.clients || []).filter(c => c && c.online).length;
-      const opts = [
-        `<option value="all" ${hw.profileId === 'all' ? 'selected' : ''}>🌐 ทุกจอออนไลน์ (${onlineCount} จอ)</option>`
+      const optDefs = [
+        { value: 'all', text: `🌐 ทุกจอออนไลน์ (${onlineCount} จอ)` }
       ];
       (hw.clients || []).forEach(c => {
         const label = c.charName ? `${c.name} (${c.charName})` : c.name;
         const statusTxt = c.online
           ? `🕯️ ${(c.candy || 0).toLocaleString()} · 📦 ${(c.pumpkin || 0).toLocaleString()}`
           : 'ออฟไลน์';
-        opts.push(`<option value="${esc(c.id)}" ${hw.profileId === c.id ? 'selected' : ''}>${esc(label)} — ${esc(statusTxt)}</option>`);
+        optDefs.push({ value: String(c.id), text: `${label} — ${statusTxt}` });
       });
-      selectEl.innerHTML = opts.join('');
+      if (window.PmUiGuard) {
+        window.PmUiGuard.syncSelect(selectEl, optDefs, hw.profileId || 'all');
+      } else if (document.activeElement !== selectEl) {
+        selectEl.innerHTML = optDefs.map(o => `<option value="${esc(o.value)}" ${String(hw.profileId || 'all') === o.value ? 'selected' : ''}>${esc(o.text)}</option>`).join('');
+      }
     }
 
     const candyEl = el.querySelector('[data-role="hw-candy"]');
@@ -546,15 +550,17 @@
     });
 
     const tabsEl = el.querySelector('[data-role="hw-tabs"]');
-    if (tabsEl) {
+    if (tabsEl && (force || !(window.PmUiGuard && window.PmUiGuard.isPointerDownIn(tabsEl)))) {
       const tabs = [
         ['all', `ทั้งหมด (${items.length})`],
         ['selected', `เลือกแลก (${selectedCount})`],
         ['ready', `ของพอแลก (${readyCount})`]
       ];
-      tabsEl.innerHTML = tabs.map(([k, lbl]) =>
+      const tabsHtml = tabs.map(([k, lbl]) =>
         `<button type="button" class="im-hw-tab ${hw.filter === k ? 'active' : ''}" data-hw-tab="${k}">${lbl}</button>`
       ).join('');
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(tabsEl, tabsHtml);
+      else tabsEl.innerHTML = tabsHtml;
     }
 
     const visible = items.filter(it => {
@@ -568,13 +574,18 @@
 
     const listEl = el.querySelector('[data-role="hw-list"]');
     if (!listEl) return;
-
-    if (visible.length === 0) {
-      listEl.innerHTML = `<div class="im-empty">${hw.filter === 'selected' ? '🪷 ยังไม่ได้ติ๊กเลือกไอเทมที่จะแลก — คลิกติ๊กหน้าไอเทมที่ต้องการด้านล่างได้เลย' : '🔍 ไม่มีรายการในหมวดนี้'}</div>`;
+    if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('hw-list', listEl, () => renderHalloweenPanel(false))) {
       return;
     }
 
-    listEl.innerHTML = visible.map(it => {
+    if (visible.length === 0) {
+      const emptyHtml = `<div class="im-empty">${hw.filter === 'selected' ? '🪷 ยังไม่ได้ติ๊กเลือกไอเทมที่จะแลก — คลิกติ๊กหน้าไอเทมที่ต้องการด้านล่างได้เลย' : '🔍 ไม่มีรายการในหมวดนี้'}</div>`;
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(listEl, emptyHtml);
+      else listEl.innerHTML = emptyHtml;
+      return;
+    }
+
+    const listHtml = visible.map(it => {
       const rule = hw.rules[it.itemId] || { enabled: false, minQty: 1, autoUse: false };
       const isSelected = Boolean(rule.enabled);
       const isAutoUse = Boolean(rule.autoUse);
@@ -680,6 +691,8 @@
           </div>
         </div>`;
     }).join('');
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(listEl, listHtml);
+    else listEl.innerHTML = listHtml;
   }
 
   function ensureHwRule(itemId) {
@@ -691,7 +704,7 @@
     const tabBtn = e.target.closest('[data-hw-tab]');
     if (tabBtn) {
       hw.filter = tabBtn.dataset.hwTab;
-      renderHalloweenPanel();
+      renderHalloweenPanel(true);
       return;
     }
 
@@ -701,7 +714,7 @@
       const r = ensureHwRule(id);
       r.enabled = !r.enabled;
       if (r.enabled && (!r.minQty || r.minQty < 1)) r.minQty = 1;
-      renderHalloweenPanel();
+      renderHalloweenPanel(true);
       scheduleSaveHalloween(true);
       const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
       if (it) {
@@ -721,7 +734,7 @@
       const r = ensureHwRule(id);
       r.minQty = Math.max(1, Math.min(maxLim, (Number(r.minQty) || 1) + delta));
       r.enabled = true; // stepping quantity automatically enables the item
-      renderHalloweenPanel();
+      renderHalloweenPanel(true);
       scheduleSaveHalloween();
       return;
     }
@@ -840,7 +853,7 @@
   function onHwChange(e) {
     if (e.target.dataset.hw === 'client-select') {
       hw.profileId = e.target.value || 'all';
-      renderHalloweenPanel();
+      renderHalloweenPanel(true);
       return;
     }
     if (e.target.dataset.hw === 'master-toggle') {
@@ -851,7 +864,7 @@
     }
     if (e.target.dataset.hw === 'auto-open-kbox') {
       hw.autoOpenKrathongBox = Boolean(e.target.checked);
-      renderHalloweenPanel();
+      renderHalloweenPanel(true);
       scheduleSaveHalloween(true);
       toast(hw.autoOpenKrathongBox
         ? '🎁 เปิด Auto Open กล่อง Krathong Box อัตโนมัติแล้ว (จะทยอยเปิดกล่องในกระเป๋าให้ทันที)'
@@ -862,7 +875,7 @@
       const id = Number(e.target.dataset.hwAutouse);
       const r = ensureHwRule(id);
       r.autoUse = Boolean(e.target.checked);
-      renderHalloweenPanel();
+      renderHalloweenPanel(true);
       scheduleSaveHalloween(true);
       const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
       if (it) {
@@ -882,7 +895,7 @@
       const r = ensureHwRule(id);
       r.enabled = Boolean(e.target.checked);
       if (r.enabled && (!r.minQty || r.minQty < 1)) r.minQty = 1;
-      renderHalloweenPanel();
+      renderHalloweenPanel(true);
       scheduleSaveHalloween(true);
       const it = (hw.catalog || DEFAULT_WITCH_HAZEL_ITEMS).find(x => x.itemId === id);
       if (it) {
@@ -900,7 +913,7 @@
       r.minQty = Math.max(1, Math.min(maxLim, parseInt(e.target.value, 10) || 1));
       r.enabled = true;
       e.target.value = r.minQty;
-      renderHalloweenPanel();
+      renderHalloweenPanel(true);
       scheduleSaveHalloween(true);
     }
   }
@@ -1018,34 +1031,46 @@
     items.forEach(i => { const c = bagCategory(i); counts[c] = (counts[c] || 0) + 1; });
 
     el.querySelector('.im-bag-count').textContent = `${items.length}/${d.slots || 100}`;
-    el.querySelector('[data-role="tabs"]').innerHTML = BAG_TABS.map(([key, label]) =>
-      `<button type="button" class="im-tab ${bag.tab === key ? 'active' : ''} ${counts[key] ? '' : 'empty'}" data-tab="${key}">${label} <small>${counts[key] || 0}</small></button>`
-    ).join('');
+    const bagTabsEl = el.querySelector('[data-role="tabs"]');
+    if (bagTabsEl && !(window.PmUiGuard && window.PmUiGuard.isPointerDownIn(bagTabsEl))) {
+      const bagTabsHtml = BAG_TABS.map(([key, label]) =>
+        `<button type="button" class="im-tab ${bag.tab === key ? 'active' : ''} ${counts[key] ? '' : 'empty'}" data-tab="${key}">${label} <small>${counts[key] || 0}</small></button>`
+      ).join('');
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(bagTabsEl, bagTabsHtml);
+      else bagTabsEl.innerHTML = bagTabsHtml;
+    }
 
     const hint = el.querySelector('[data-role="hint"]');
     if (parsed.terms.length || parsed.names.length) {
-      hint.innerHTML = [
+      const hintHtml = [
         ...parsed.terms.map(t => `<span class="im-qchip opt">✓ ${esc(describeTerm(t))}</span>`),
         ...parsed.names.map(n => `<span class="im-qchip name">ชื่อ: ${esc(n)}</span>`)
       ].join('');
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(hint, hintHtml);
+      else hint.innerHTML = hintHtml;
     } else {
-      hint.innerHTML = '';
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(hint, '');
+      else hint.innerHTML = '';
     }
 
     const visible = items.filter(i => (bag.tab === 'all' || bagCategory(i) === bag.tab) && itemMatchesOptionQuery(i, parsed, 'all'));
     const sel = selectedBagItem();
     const grid = el.querySelector('[data-role="grid"]');
-    grid.innerHTML = visible.length === 0
-      ? `<div class="im-empty">${items.length ? '🔍 ไม่พบไอเทมตามที่ค้นหา' : 'กระเป๋าว่าง'}</div>`
-      : visible.map(i => `
-        <button type="button" class="im-cell ${sel && sel.slot === i.slot ? 'selected' : ''}" data-slot="${i.slot}" data-item="${i.itemId}"
-          title="${esc(formatItemDisplayName(i))}" style="--rc: ${getRarityColor(i.rarity)};">
-          ${i.icon ? `<img src="${esc(gameAssetUrl(i.icon))}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : ''}
-          ${i.qty > 1 ? `<span class="im-cell-qty">${i.qty.toLocaleString()}</span>` : ''}
-          ${i.refine ? `<span class="im-cell-ref">+${i.refine}</span>` : ''}
-          ${i.locked ? '<span class="im-cell-lock">🔒</span>' : ''}
-          ${parsed.terms.length && i.affixes && i.affixes.length ? '<span class="im-cell-hit"></span>' : ''}
-        </button>`).join('');
+    if (grid && !(window.PmUiGuard && window.PmUiGuard.isPointerDownIn(grid))) {
+      const gridHtml = visible.length === 0
+        ? `<div class="im-empty">${items.length ? '🔍 ไม่พบไอเทมตามที่ค้นหา' : 'กระเป๋าว่าง'}</div>`
+        : visible.map(i => `
+          <button type="button" class="im-cell ${sel && sel.slot === i.slot ? 'selected' : ''}" data-slot="${i.slot}" data-item="${i.itemId}"
+            title="${esc(formatItemDisplayName(i))}" style="--rc: ${getRarityColor(i.rarity)};">
+            ${i.icon ? `<img src="${esc(gameAssetUrl(i.icon))}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : ''}
+            ${i.qty > 1 ? `<span class="im-cell-qty">${i.qty.toLocaleString()}</span>` : ''}
+            ${i.refine ? `<span class="im-cell-ref">+${i.refine}</span>` : ''}
+            ${i.locked ? '<span class="im-cell-lock">🔒</span>' : ''}
+            ${parsed.terms.length && i.affixes && i.affixes.length ? '<span class="im-cell-hit"></span>' : ''}
+          </button>`).join('');
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(grid, gridHtml);
+      else grid.innerHTML = gridHtml;
+    }
 
     el.querySelector('[data-role="zeny"]').textContent = typeof d.zeny === 'number' ? d.zeny.toLocaleString() : '--';
     const w = Number(d.weight), wl = Number(d.weightLimit);
@@ -1058,14 +1083,17 @@
     renderBagDetail(sel, parsed);
     if ((market.open || isMarketTabActive()) && sel && market.item && market.item.slot === sel.slot && market.item.itemId === sel.itemId) {
       market.item = sel;
-      renderMarketSellForm();
+      renderMarketSellForm(false);
     }
   }
 
   function renderBagDetail(item, parsed) {
     const box = bag.el.querySelector('[data-role="detail"]');
+    if (!box || (window.PmUiGuard && window.PmUiGuard.isPointerDownIn(box))) return;
     if (!item) {
-      box.innerHTML = `<div class="im-detail-hint">คลิกไอเทมเพื่อดูรายละเอียด · สวมใส่ / ใช้ / ล็อค / ทิ้ง / ขายลงตลาด</div>`;
+      const hintHtml = `<div class="im-detail-hint">คลิกไอเทมเพื่อดูรายละเอียด · สวมใส่ / ใช้ / ล็อค / ทิ้ง / ขายลงตลาด</div>`;
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(box, hintHtml);
+      else box.innerHTML = hintHtml;
       return;
     }
     const isEquip = Boolean(item.equipType) && !item.usable;
@@ -1078,7 +1106,7 @@
       item.sellPrice != null ? `ขาย NPC ${fmtZ(item.sellPrice)}` : null,
       item.levelReq ? `ต้อง Lv.${item.levelReq}` : null
     ].filter(Boolean).join(' · ');
-    box.innerHTML = `
+    const detailHtml = `
       <div class="im-detail-top">
         ${item.icon ? `<img src="${esc(gameAssetUrl(item.icon))}" class="im-detail-icon" alt="">` : ''}
         <div class="im-detail-name-wrap">
@@ -1098,6 +1126,8 @@
         <button type="button" class="im-btn ghost" data-act="autosell" title="เพิ่มเข้ารายการ Auto Sell — บอทจะลงขายตลาดกลางให้เอง (ราคาถูกกว่าคนอื่น 1 z)">🏷️ เพิ่ม Auto Sell</button>
         <button type="button" class="im-btn market" data-act="market">🏪 ขายลงตลาด</button>
       </div>`;
+    if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(box, detailHtml);
+    else box.innerHTML = detailHtml;
   }
 
   async function bagAction(op, extra = {}) {
@@ -1750,7 +1780,7 @@
       }
     } finally {
       hub.autoSell.saving = false;
-      renderAutoSellRulesOnly();
+      renderAutoSellRulesOnly(false);
       renderAutoSellBagSuggestionsOnly();
     }
   }
@@ -1985,10 +2015,18 @@
     }).join('')}</div>`;
   }
 
-  function renderAutoSellRulesOnly() {
+  function renderAutoSellRulesOnly(force = true) {
     if (!hub.el) return;
     const box = hub.el.querySelector('[data-role="as-rules-list"]');
-    if (box) box.innerHTML = renderAutoSellRulesListHtml();
+    if (box) {
+      if (!force && window.PmUiGuard && window.PmUiGuard.deferIfInteracting('im-as-rules', box, () => renderAutoSellRulesOnly(false))) {
+        updateMarketBadges();
+        return;
+      }
+      const rulesHtml = renderAutoSellRulesListHtml();
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(box, rulesHtml);
+      else box.innerHTML = rulesHtml;
+    }
     updateMarketBadges();
   }
 
@@ -3080,18 +3118,21 @@
     const q = quickPrices();
     if (!q[kind]) return;
     market.form.unit = String(q[kind]);
-    renderMarketSellForm();
+    renderMarketSellForm(true);
     renderHistory();
   }
 
-  function renderMarketSellForm() {
+  function renderMarketSellForm(force = true) {
     const host = marketHostEl();
     if (!host) return;
     const form = host.querySelector('[data-role="sell"]');
     if (!form) return;
     const it = market.item;
     if (!it) {
-      form.innerHTML = `<div class="im-muted" style="text-align:center; padding:6px;">คลิกเลือกไอเทมจากกระเป๋าด้านขวา หรือแถบด้านบนเพื่อตั้งราคาขาย</div>`;
+      delete form.dataset.sellItemKey;
+      const emptyHtml = `<div class="im-muted" style="text-align:center; padding:6px;">คลิกเลือกไอเทมจากกระเป๋าด้านขวา หรือแถบด้านบนเพื่อตั้งราคาขาย</div>`;
+      if (window.PmUiGuard) window.PmUiGuard.setHtmlIfChanged(form, emptyHtml);
+      else form.innerHTML = emptyHtml;
       return;
     }
     const q = quickPrices();
@@ -3101,6 +3142,50 @@
       : it.locked
       ? 'ไอเทมถูกล็อคอยู่ — ปลดล็อคในกระเป๋าก่อนลงขาย'
       : '';
+    const sellKey = `${it.slot}:${it.itemId}:${stackable ? 1 : 0}:${blocked}`;
+    const existingHoursSel = form.querySelector('[data-form="hours"]');
+    if (form.dataset.sellItemKey === sellKey && existingHoursSel) {
+      const qtyInp = form.querySelector('[data-form="qty"]');
+      if (qtyInp) {
+        qtyInp.disabled = !stackable;
+        if (force || document.activeElement !== qtyInp) qtyInp.value = String(market.form.qty ?? '');
+      }
+      const qtyCap = form.querySelector('.im-inline small');
+      if (qtyCap) qtyCap.textContent = `/ ${it.qty}`;
+
+      const unitInp = form.querySelector('[data-form="unit"]');
+      if (unitInp && (force || document.activeElement !== unitInp)) {
+        unitInp.value = String(market.form.unit ?? '');
+      }
+
+      const hourOpts = MARKET_RULES.durations.map(h => ({ value: String(h), text: `${h} ชั่วโมง` }));
+      if (window.PmUiGuard) {
+        window.PmUiGuard.syncSelect(existingHoursSel, hourOpts, String(market.form.hours));
+      } else if (document.activeElement !== existingHoursSel) {
+        existingHoursSel.value = String(market.form.hours);
+      }
+
+      const quickDefs = [
+        ['undercut', q.undercut, '⚡ ถูกกว่าคนอื่น 1z'],
+        ['cheapest', q.cheapest, '🏷️ เท่าถูกสุด'],
+        ['median', q.median, '📊 ราคากลาง'],
+        ['similar', q.similar, '✨ เท่าออฟใกล้เคียง']
+      ];
+      quickDefs.forEach(([k, val, label]) => {
+        const btn = form.querySelector(`[data-quick="${k}"]`);
+        if (btn) {
+          btn.disabled = !val;
+          btn.textContent = `${label}${val ? ` (${fmtZ(val)})` : ''}`;
+        }
+      });
+
+      const subBtn = form.querySelector('button[type="submit"]');
+      if (subBtn) subBtn.disabled = Boolean(blocked);
+      renderSellSummary();
+      return;
+    }
+
+    form.dataset.sellItemKey = sellKey;
     const active = document.activeElement && form.contains(document.activeElement) ? document.activeElement.dataset.form : null;
     form.innerHTML = `
       <div class="im-sell-grid">

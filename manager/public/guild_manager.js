@@ -618,13 +618,18 @@
     const body = document.getElementById('gd-body');
     if (!body) return;
 
-    // Avoid clobbering focused input fields inside #gd-body during background polling
-    if (!forceDom && body.contains(document.activeElement) && document.activeElement && document.activeElement.tagName === 'INPUT') {
-      return;
+    // Avoid clobbering focused inputs, open selects, or active pointer clicks inside #gd-body during background polling
+    if (!forceDom) {
+      if (window.PmUiGuard && window.PmUiGuard.deferIfInteracting('gd-body', body, () => render(false))) {
+        return;
+      }
+      if (body.contains(document.activeElement) && document.activeElement && document.activeElement.tagName === 'INPUT') {
+        return;
+      }
     }
 
     if (guilds.length === 0 && externalProfiles.length === 0) {
-      body.innerHTML = `
+      const emptyHtml = `
         <div class="gd-empty">
           <div class="gd-empty-icon">🏰</div>
           <h3>ยังไม่ได้ตั้งค่ากิลด์</h3>
@@ -633,7 +638,8 @@
           <button type="button" class="gd-btn gd-btn-primary" id="gd-empty-create">+ สร้าง / ตั้งกิลด์แรก</button>
         </div>
       `;
-      body.querySelector('#gd-empty-create')?.addEventListener('click', () => openCreateGuildModal());
+      const changed = window.PmUiGuard ? window.PmUiGuard.setHtmlIfChanged(body, emptyHtml) : (body.innerHTML = emptyHtml, true);
+      if (changed) body.querySelector('#gd-empty-create')?.addEventListener('click', () => openCreateGuildModal());
       return;
     }
 
@@ -724,9 +730,11 @@
       `;
     }
 
-    body.innerHTML = guildsHtml + externalHtml;
-
-    bindCardEvents(body);
+    const nextHtml = guildsHtml + externalHtml;
+    const changed = (!forceDom && window.PmUiGuard)
+      ? window.PmUiGuard.setHtmlIfChanged(body, nextHtml)
+      : (body.innerHTML = nextHtml, body.__pmLastHtml = nextHtml, true);
+    if (changed) bindCardEvents(body);
   }
 
   function bindCardEvents(root) {

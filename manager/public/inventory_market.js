@@ -1512,6 +1512,9 @@
         const rule = (hub.autoSell.config.rules || []).find(r => r.id === rid);
         if (rule) {
           rule.minQty = Math.max(1, parseInt(e.target.value, 10) || 1);
+          const card = e.target.closest('.im-as-card');
+          const minOpt = card && card.querySelector('.im-as-mode-select option[value="min"]');
+          if (minOpt) minOpt.textContent = `ขายทีละ ${rule.minQty} ชิ้น`;
           scheduleSaveAutoSellHub();
         }
       }

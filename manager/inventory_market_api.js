@@ -2220,16 +2220,29 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
             a => a && String((a.item && a.item.name) || '').trim().toLowerCase() === entry.normName
           ).length;
 
-          const maxConcurrent = isSingle ? 2 : 3;
+          const userRule = (window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules))
+            ? window.__autoMarketSellConfig.rules.find(r => {
+                if (!r || r.enabled === false) return false;
+                const rid = String(r.id || '');
+                if (rid.startsWith('rule_sniper_') || rid.startsWith('rule_relist_')) return false;
+                return String(r.itemName || r.name || '').trim().toLowerCase() === entry.normName;
+              })
+            : null;
+
+          const maxConcurrent = isSingle ? 2 : (userRule ? 20 : 3);
           // If Sniper already manages this flipped item and at least 1 active batch is up, or if activeSameCount >= maxConcurrent,
           // do NOT post duplicate batches from the cancelled-relist queue (Sniper's 3b drip-restock handles remaining stock).
-          if (activeSameCount >= maxConcurrent || (!isSingle && sniperRef > 0 && activeSameCount >= 1)) {
+          if (!userRule && (activeSameCount >= maxConcurrent || (!isSingle && sniperRef > 0 && activeSameCount >= 1))) {
             continue;
           }
 
           const smartBatchCap = isSingle
             ? 1
-            : (unitPrice >= 20000 ? 10 : (unitPrice >= 8000 ? 25 : (unitPrice >= 1800 ? 50 : 100)));
+            : (userRule
+                ? (userRule.sellMode === 'min' ? Math.max(1, Number(userRule.minQty) || 1) : sellableTotal)
+                : (sniperRef > 0
+                    ? (unitPrice >= 20000 ? 10 : (unitPrice >= 8000 ? 25 : (unitPrice >= 1800 ? 50 : 100)))
+                    : Math.max(1, Number(entry.qty) || sellableTotal)));
 
           const postsWanted = isSingle
             ? Math.min(Math.max(0, maxConcurrent - activeSameCount), sellableTotal)
@@ -2241,7 +2254,7 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
 
           const firstSlotQty = Math.min(Number(sampleItem.qty) || 1, sellableTotal, smartBatchCap);
           const estTotalValue = unitPrice * (isSingle ? 1 : firstSlotQty);
-          if (estTotalValue <= 50000 && (window.__pmSniperBlockCheapAutoSell || !entry.listingId)) {
+          if (!userRule && estTotalValue <= 50000 && (window.__pmSniperBlockCheapAutoSell || !entry.listingId)) {
             if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
             window.__pmSniperKnownCheapItems.add(entry.normName);
             window.__pmAutoRelistCooldownUntil[entry.normName] = Date.now() + 1800000;
@@ -2276,18 +2289,18 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
           }
 
           let postedAnyForEntry = false;
-          let postedCountForEntry = 0;
           for (let pIdx = 0; pIdx < postsWanted; pIdx++) {
             if (activeList.length >= activeLimit) break;
             const freshBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-            const freshSlot = freshBag.find(b => {
+            const matchingSlots = freshBag.filter(b => {
               if (!b || b.locked || b.equipped) return false;
               const bId = Number((b.raw && b.raw.itemId) ?? b.id) || 0;
               const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
               const bNorm = String(b.name || '').trim().toLowerCase();
               if (entry.itemId > 0 && bId === entry.itemId && bRef === Number(entry.refine || 0)) return true;
               return bNorm === entry.normName && bRef === Number(entry.refine || 0);
-            });
+            }).sort((a, b) => (Number(b.qty) || 1) - (Number(a.qty) || 1));
+            const freshSlot = matchingSlots[0];
             if (!freshSlot) break;
             const beforeQty = Number(freshSlot.qty) || 1;
             const qtyThisPost = isSingle ? 1 : Math.min(beforeQty, sellableTotal, smartBatchCap);
@@ -2316,7 +2329,6 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
               if (leftQty <= beforeQty - qtyThisPost) {
                 postedOne = true;
                 postedAnyForEntry = true;
-                postedCountForEntry += 1;
                 relistedCount += 1;
                 activeList.push({
                   listingId: -Date.now(),
@@ -2343,19 +2355,8 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
           if (!postedAnyForEntry) {
             window.__pmAutoRelistCooldownUntil[entry.normName] = Date.now() + 60000;
             remainingQueue.push(entry);
-          } else {
-            // Only keep non-single entry in relist queue if it is NOT a Sniper-managed item AND has fewer than maxConcurrent active batches
-            if (!isSingle && !(sniperRef > 0) && (activeSameCount + postedCountForEntry) < maxConcurrent) {
-              const afterBag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
-              const leftTotal = afterBag
-                .filter(b => b && !b.locked && !b.equipped && String(b.name || '').trim().toLowerCase() === entry.normName && Number(b.refine || (b.raw && b.raw.refine) || 0) === Number(entry.refine || 0))
-                .reduce((s, x) => s + (Number(x.qty) || 1), 0);
-              if (leftTotal - reserveQty > 0) {
-                remainingQueue.push(entry);
-              } else if (window.__pmSniperProtectedItems) {
-                window.__pmSniperProtectedItems.delete(entry.normName);
-              }
-            }
+          } else if (window.__pmSniperProtectedItems && !sniperRef) {
+            window.__pmSniperProtectedItems.delete(entry.normName);
           }
         }
 
@@ -2380,9 +2381,9 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
       return { relistedCount };
     };
 
-    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 8) {
+    if (!window.__pmMarketGlobalTimer || window.__pmMarketGlobalTimerVer !== 9) {
       if (window.__pmMarketGlobalTimer) { try { clearInterval(window.__pmMarketGlobalTimer); } catch (_) {} }
-      window.__pmMarketGlobalTimerVer = 8;
+      window.__pmMarketGlobalTimerVer = 9;
       setTimeout(() => {
         try {
           const rmInit = ${ROOM_JS};

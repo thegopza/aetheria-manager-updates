@@ -8187,11 +8187,21 @@ function wireWebAutoSell(profileId, hudEl) {
   const saveNow = () => saveWebAutoSellRules(profileId, readWebAutoSellRules(box));
   box.addEventListener('input', e => {
     if (!e.target.matches('.ws-name, .ws-min')) return;
+    if (e.target.matches('.ws-min')) {
+      const row = e.target.closest('.ws-rule');
+      const minOpt = row && row.querySelector('.ws-mode option[value="min"]');
+      if (minOpt) minOpt.textContent = `ทีละ ${Math.max(1, parseInt(e.target.value, 10) || 1)} ชิ้น`;
+    }
     clearTimeout(typing);
     typing = setTimeout(saveNow, 700);
   });
   box.addEventListener('change', e => {
     if (!e.target.matches('.ws-mode, .ws-en, .ws-name, .ws-min')) return;
+    if (e.target.matches('.ws-min')) {
+      const row = e.target.closest('.ws-rule');
+      const minOpt = row && row.querySelector('.ws-mode option[value="min"]');
+      if (minOpt) minOpt.textContent = `ทีละ ${Math.max(1, parseInt(e.target.value, 10) || 1)} ชิ้น`;
+    }
     clearTimeout(typing);
     saveNow();
     if (e.target.matches('.ws-en')) e.target.closest('.ws-rule').style.opacity = e.target.checked ? '' : '.55';

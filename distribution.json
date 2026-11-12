@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "b732ce99270b3e43f32d5c1c4a47c281fdbebd19",
+  "sourceCommit": "b95a8c29c69027e99d6e30ab26948a8b7ec6cf2e",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -72,7 +72,7 @@
     },
     {
       "path": "manager/inventory_market_api.js",
-      "sha256": "52d7d6ebb226611efe0d6320cd41f8f5bb5c3e01f0ed70107d3b351a15a0d632"
+      "sha256": "374b1e89ca79d4906ad5ee2ee73b4e4cacad10a093092d24f18e35c3b7ac56ab"
     },
     {
       "path": "manager/local_human_check.js",
@@ -88,7 +88,7 @@
     },
     {
       "path": "manager/market_sniper_api.js",
-      "sha256": "644f966c6e9c2e01c2092dff27763d914c375e9b48fb3d76426e3b2b9d7f361b"
+      "sha256": "1f17104f5ca1c8bb9fe97e4e1cf6445c7ce5d166c8360bcdd8802a4faee04fb8"
     },
     {
       "path": "manager/offline_coordinator.js",
@@ -132,7 +132,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "fe47804492c4a863d78d43a23bc672fffa9d1ef780136cedbc45d782f965b32e"
+      "sha256": "b1c0b0ab87b1ecc7dcf44bdab2d3d0e90c1894c631175f0de95e6abfd5922cf4"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -188,7 +188,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "8d2c1cfdefd73a8138bf0fae8e9b8eef83e9b53b3137e1108d99f36ac5cfae40"
+      "sha256": "c7ebd3f645e872db76f9faacf353b3032eb1f0db65facc4a9e64958da3799ebc"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/inventory_market.js",
-      "sha256": "1469aaafbc13405c805401ad20df7f5205d62ea2ca902a1e2c2c0e1ca52e2aa0"
+      "sha256": "49381f552b5eee3f9a42e0a00b54140a39c5c74b1f77bbff86870df83e1379e5"
     },
     {
       "path": "manager/public/jail_manager.css",
@@ -256,7 +256,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "69875c0f29303ff29b69e21c0b69661655b4f70d67eb50e7edc7e45469183179"
+      "sha256": "8b0ad77bece581874d3f2acb40ea7db11d7b51b535d78e68f454a2820c40972c"
     },
     {
       "path": "manager/screen_proxy_manager.js",

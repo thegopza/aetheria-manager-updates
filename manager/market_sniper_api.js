@@ -982,9 +982,24 @@ function createMarketSniperService({
         };
         window.__pmSniperWlHooked = true;
       }
-      window.__pmGetSmartFlipBatchConfig = function (itemName, unitPrice, isSingle) {
+      window.__pmHasUserAutoSellRule = function (itemName) {
+        const norm = String(itemName || '').trim().toLowerCase();
+        if (!norm || !window.__autoMarketSellConfig || !Array.isArray(window.__autoMarketSellConfig.rules)) return false;
+        return window.__autoMarketSellConfig.rules.some(r => {
+          if (!r || r.enabled === false) return false;
+          const rid = String(r.id || '');
+          if (rid.startsWith('rule_sniper_') || rid.startsWith('rule_relist_')) return false;
+          return String(r.itemName || r.name || '').trim().toLowerCase() === norm;
+        });
+      };
+      window.__pmGetSmartFlipBatchConfig = function (itemName, unitPrice, isSingle, fromSniperFlip) {
         const norm = String(itemName || '').trim().toLowerCase();
         const single = Boolean(isSingle || /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(norm));
+        if (!single && !fromSniperFlip) {
+          if (!window.__pmSniperAutoFlipEnabled || (typeof window.__pmHasUserAutoSellRule === 'function' && window.__pmHasUserAutoSellRule(norm))) {
+            return { batchQty: 999999, maxConcurrent: 20, isSingle: false };
+          }
+        }
         const u = Math.max(1, Number(unitPrice) || 1);
         if (single || u >= 100000) return { batchQty: 1, maxConcurrent: 2, isSingle: true };
         if (u >= 20000) return { batchQty: 10, maxConcurrent: 3, isSingle: false };
@@ -992,8 +1007,8 @@ function createMarketSniperService({
         if (u >= 1800) return { batchQty: 50, maxConcurrent: 3, isSingle: false };
         return { batchQty: 100, maxConcurrent: 3, isSingle: false };
       };
-      if (window.__pmSniperRuntimeVer !== 3 || typeof window.__pmSniperClaimAndFlip !== 'function') {
-        window.__pmSniperRuntimeVer = 3;
+      if (window.__pmSniperRuntimeVer !== 4 || typeof window.__pmSniperClaimAndFlip !== 'function') {
+        window.__pmSniperRuntimeVer = 4;
         window.__pmSniperClaimAndFlip = async function (targetInfo, paidTotal, waitBeforeCollectMs = 750) {
           const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
           if (!room || !room.connection || !room.connection.isOpen) {
@@ -1061,7 +1076,7 @@ function createMarketSniperService({
               } catch (_) {}
             }
 
-            const batchCfg = window.__pmGetSmartFlipBatchConfig(normName, unitPrice, isSingle);
+            const batchCfg = window.__pmGetSmartFlipBatchConfig(normName, unitPrice, isSingle, true);
             const batchQty = Math.max(1, Number(targetInfo.batchQty) || batchCfg.batchQty);
             const maxConcurrent = Math.max(1, Number(targetInfo.maxConcurrent) || batchCfg.maxConcurrent);
 
@@ -1224,36 +1239,34 @@ function createMarketSniperService({
         const sniperAutoFlip = Boolean(config.enabled && config.mode === 'auto_flip');
         const reserveSlots = sniperAutoFlip ? 2 : 0;
 
-        // Build map ONLY of items actually bought/relisted by Sniper (never all scanned items in state.priceCache!)
-        // and enforce break-even floor (buyUnit / 0.96) from the newest lot of each item so background hooks never reprice below cost.
-        const sniperFlippedMap = Object.assign({}, VERIFIED_STABLE_REF_BY_NAME);
-        const sniperMinFloorMap = {};
+        // Build per-profile map ONLY of items actually bought/relisted by Sniper on THAT profile
+        // (NEVER seed from VERIFIED_STABLE_REF_BY_NAME, so non-Sniper screens and Auto Market Sell rules are never hijacked!)
+        const sniperFlippedByProfile = new Map();
+        const sniperMinFloorByProfile = new Map();
+        const recordAcquiredForProfile = (pid, itemName, itemId, refine, qty, paidTot, fallbackRef) => {
+          const pKey = String(pid || '').trim();
+          const nm = String(itemName || '').trim().toLowerCase();
+          if (!pKey || !nm) return;
+          if (!sniperFlippedByProfile.has(pKey)) sniperFlippedByProfile.set(pKey, {});
+          if (!sniperMinFloorByProfile.has(pKey)) sniperMinFloorByProfile.set(pKey, {});
+          const q = Math.max(1, Number(qty) || 1);
+          const buyU = Math.round((Number(paidTot) || 0) / q);
+          const floorU = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
+          if (floorU > 0) sniperMinFloorByProfile.get(pKey)[nm] = floorU;
+          const refP = getTrueRefUnitPrice(itemId, refine || 0, itemName, fallbackRef);
+          const safeRef = Math.max(refP, floorU);
+          if (safeRef > 0) sniperFlippedByProfile.get(pKey)[nm] = safeRef;
+        };
         for (const h of (state.history || []).slice().reverse()) {
-          if (!h || !h.itemName) continue;
+          if (!h || !h.itemName || !h.buyerProfileId) continue;
           if (h.action === 'relisted' || h.action === 'buy' || h.action === 'won') {
-            const nm = String(h.itemName).trim().toLowerCase();
-            if (!nm) continue;
-            const q = Math.max(1, Number(h.qty) || 1);
-            const buyU = Math.round((Number(h.buyPriceTotal) || 0) / q);
-            const floorU = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
-            if (floorU > 0) sniperMinFloorMap[nm] = floorU;
-            const refP = getTrueRefUnitPrice(h.itemId, h.refine || 0, h.itemName, h.cleanRefUnitPrice);
-            const safeRef = Math.max(refP, floorU);
-            if (safeRef > 0) sniperFlippedMap[nm] = safeRef;
+            recordAcquiredForProfile(h.buyerProfileId, h.itemName, h.itemId, h.refine || 0, h.qty, h.buyPriceTotal, h.cleanRefUnitPrice);
           }
         }
         for (const b of (state.activeBids || [])) {
-          if (!b || !b.itemName) continue;
+          if (!b || !b.itemName || !b.buyerProfileId) continue;
           if (b.status === 'relisted' || b.status === 'queued_flip' || b.status === 'won' || b.status === 'bought') {
-            const nm = String(b.itemName).trim().toLowerCase();
-            if (!nm) continue;
-            const q = Math.max(1, Number(b.qty) || 1);
-            const buyU = Math.round((Number(b.currentBid) || 0) / q);
-            const floorU = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
-            if (floorU > 0) sniperMinFloorMap[nm] = floorU;
-            const refP = getTrueRefUnitPrice(b.itemId, b.refine || 0, b.itemName, b.cleanRefUnitPrice);
-            const safeRef = Math.max(refP, floorU);
-            if (safeRef > 0) sniperFlippedMap[nm] = safeRef;
+            recordAcquiredForProfile(b.buyerProfileId, b.itemName, b.itemId, b.refine || 0, b.qty, b.currentBid, b.cleanRefUnitPrice);
           }
         }
 
@@ -1316,8 +1329,8 @@ function createMarketSniperService({
                   }
                 });
               }
-              if (room !== window.__pmSniperSendGuardRoomV2 && typeof room.send === 'function') {
-                window.__pmSniperSendGuardRoomV2 = room;
+              if (room !== window.__pmSniperSendGuardRoomV3 && typeof room.send === 'function') {
+                window.__pmSniperSendGuardRoomV3 = room;
                 const origRoomSend = room.send.bind(room);
                 room.send = function (type, data) {
                   if (type === 'market' && data && data.op === 'list') {
@@ -1325,20 +1338,10 @@ function createMarketSniperService({
                     const slotItem = bag.find(b => b && Number(b.slot) === Number(data.slot));
                     const itemName = String((slotItem && slotItem.name) || '').trim();
                     const norm = itemName.toLowerCase();
+                    const hasUserRule = typeof window.__pmHasUserAutoSellRule === 'function' && window.__pmHasUserAutoSellRule(norm);
                     const isCardOrStone = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(itemName);
-                    const isFlippedItem = Boolean(norm && window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[norm]);
-                    const unitP = Math.max(1, Math.round((Number(data.price) || 0) / Math.max(1, Number(data.qty) || 1)));
-                    const bCfg = (typeof window.__pmGetSmartFlipBatchConfig === 'function')
-                      ? window.__pmGetSmartFlipBatchConfig(norm, unitP, isCardOrStone)
-                      : { batchQty: isCardOrStone ? 1 : 100, maxConcurrent: isCardOrStone ? 2 : 3 };
-                    if (isCardOrStone && Number(data.qty) > 1) {
-                      data.qty = 1;
-                      data.price = unitP;
-                    } else if (isFlippedItem && Number(data.qty) > Math.ceil(bCfg.batchQty * 1.20)) {
-                      data.qty = bCfg.batchQty;
-                      data.price = unitP * bCfg.batchQty;
-                    }
-                    if (window.__isAutoSellingNow && window.__pmSniperBlockCheapAutoSell) {
+                    const isFlippedItem = Boolean(!hasUserRule && window.__pmSniperAutoFlipEnabled && norm && window.__pmSniperFlippedItems && window.__pmSniperFlippedItems[norm]);
+                    if (window.__isAutoSellingNow && window.__pmSniperBlockCheapAutoSell && !hasUserRule) {
                       if ((Number(data.price) || 0) > 0 && (Number(data.price) || 0) <= 50000) {
                         if (!window.__pmSniperKnownCheapItems) window.__pmSniperKnownCheapItems = new Set();
                         if (norm) window.__pmSniperKnownCheapItems.add(norm);
@@ -1348,6 +1351,10 @@ function createMarketSniperService({
                         return;
                       }
                       if ((isCardOrStone || isFlippedItem) && norm) {
+                        const unitP = Math.max(1, Math.round((Number(data.price) || 0) / Math.max(1, Number(data.qty) || 1)));
+                        const bCfg = (typeof window.__pmGetSmartFlipBatchConfig === 'function')
+                          ? window.__pmGetSmartFlipBatchConfig(norm, unitP, isCardOrStone, true)
+                          : { batchQty: isCardOrStone ? 1 : 100, maxConcurrent: isCardOrStone ? 2 : 3 };
                         const curSame = (window.__myMarketActiveNameCounts && window.__myMarketActiveNameCounts[norm]) || 0;
                         if (curSame >= bCfg.maxConcurrent) {
                           return;
@@ -1366,27 +1373,49 @@ function createMarketSniperService({
           return cachedFullSetupCode;
         };
 
-        const fastProbeCode = `(() => {
+        const buildFastProbeCode = (profileId) => {
+          const profKey = String(profileId || '');
+          const profileFlipMap = sniperFlippedByProfile.get(profKey) || {};
+          const profileMinFloorMap = sniperMinFloorByProfile.get(profKey) || {};
+          return `(() => {
           const room = (typeof window.getGameRoom === 'function') ? window.getGameRoom() : window.__gameRoom;
           if (!room || !room.connection || !room.connection.isOpen) return { connected: false };
-          const verifiedFlipMap = ${JSON.stringify(sniperFlippedMap)};
-          const minFloorMap = ${JSON.stringify(sniperMinFloorMap)};
-          window.__pmSniperFlippedItems = verifiedFlipMap;
-          window.__pmSniperMinFloorItems = minFloorMap;
+          const rawProfileFlipMap = ${JSON.stringify(profileFlipMap)};
+          const minFloorMap = ${JSON.stringify(profileMinFloorMap)};
+          const sniperAutoFlipOn = ${sniperAutoFlip ? 'true' : 'false'};
+          window.__pmSniperAutoFlipEnabled = sniperAutoFlipOn;
+          const userAutoSellSet = new Set();
+          if (window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
+            for (const r of window.__autoMarketSellConfig.rules) {
+              if (!r || r.enabled === false) continue;
+              const rid = String(r.id || '');
+              if (rid.startsWith('rule_sniper_') || rid.startsWith('rule_relist_')) continue;
+              const rn = String(r.itemName || r.name || '').trim().toLowerCase();
+              if (rn) userAutoSellSet.add(rn);
+            }
+          }
+          const activeFlipMap = {};
+          if (sniperAutoFlipOn) {
+            for (const [k, v] of Object.entries(rawProfileFlipMap)) {
+              if (!userAutoSellSet.has(k)) activeFlipMap[k] = v;
+            }
+          }
+          window.__pmSniperFlippedItems = activeFlipMap;
+          window.__pmSniperMinFloorItems = sniperAutoFlipOn ? minFloorMap : {};
           if (window.__pmKnownMyMarketItems && typeof window.__pmKnownMyMarketItems === 'object') {
             for (const [k, v] of Object.entries(window.__pmKnownMyMarketItems)) {
-              const refCap = verifiedFlipMap[k];
+              const refCap = activeFlipMap[k];
               if (refCap && v && Number(v.unitPrice) > Math.round(refCap * 1.30)) {
                 v.unitPrice = Math.max(refCap, Number(minFloorMap[k]) || 0);
               }
             }
           }
           const runtimeInstalled = Boolean(
-            window.__pmMarketGlobalTimerVer === 8 &&
-            window.__pmSniperRuntimeVer === 3 &&
+            window.__pmMarketGlobalTimerVer === 9 &&
+            window.__pmSniperRuntimeVer === 4 &&
             typeof window.__pmSniperClaimAndFlip === 'function' &&
             window.__pmSniperMineHookedRoomV3 === room &&
-            window.__pmSniperSendGuardRoomV2 === room
+            (window.__pmSniperSendGuardRoomV3 === room || window.__pmSniperSendGuardRoomV2 === room)
           );
           const ch = (typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null) || window.__latestCharacterData || {};
           const live = (typeof window.__getClientLiveState === 'function' ? window.__getClientLiveState() : null) || {};
@@ -1396,10 +1425,10 @@ function createMarketSniperService({
           );
           const zeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : (typeof ch.zeny === 'number' ? ch.zeny : (typeof live.zeny === 'number' ? live.zeny : 0));
 
-          window.__pmSniperReservedSlots = (zeny >= 300000) ? ${reserveSlots} : 0;
-          window.__pmSniperBlockCheapAutoSell = Boolean(${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000);
+          window.__pmSniperReservedSlots = (sniperAutoFlipOn && zeny >= 300000) ? ${reserveSlots} : 0;
+          window.__pmSniperBlockCheapAutoSell = Boolean(sniperAutoFlipOn && zeny >= 300000);
 
-          if (${sniperAutoFlip ? 'true' : 'false'} && zeny >= 300000 && (!window.__pmLastSniperRuleSyncAt || (Date.now() - window.__pmLastSniperRuleSyncAt > 30000)) && window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
+          if (sniperAutoFlipOn && zeny >= 300000 && (!window.__pmLastSniperRuleSyncAt || (Date.now() - window.__pmLastSniperRuleSyncAt > 30000)) && window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) {
             window.__pmLastSniperRuleSyncAt = Date.now();
             if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
             let changedCardRule = false;
@@ -1409,7 +1438,7 @@ function createMarketSniperService({
               if (!r) return false;
               const rid = String(r.id || '');
               const rNorm = String(r.itemName || r.name || '').trim().toLowerCase();
-              if ((rid.startsWith('rule_sniper_') || rid.startsWith('rule_relist_')) && !verifiedFlipMap[rNorm]) {
+              if ((rid.startsWith('rule_sniper_') || rid.startsWith('rule_relist_')) && !activeFlipMap[rNorm]) {
                 return false;
               }
               return true;
@@ -1486,51 +1515,59 @@ function createMarketSniperService({
               };
             });
 
-          // Detect both stacked Cards/Stones (qty > 1) and oversized Sniper-flipped stacks (qty > batchQty * 1.35)
+          // Detect stacked Cards/Stones (qty > 1) and oversized Sniper-flipped stacks ONLY when Sniper auto_flip is active and NOT governed by a user Auto Market Sell rule
           const nowTs = Date.now();
           const nonAuctionActive = rawActive.filter(a => a && !(a.auctionEndsAt && Number(a.auctionEndsAt) > nowTs));
           const stackedCards = [];
-          for (const a of nonAuctionActive) {
-            const nm = String((a.item && a.item.name) || '').trim();
-            const nmLower = nm.toLowerCase();
-            const q = Math.max(1, Number(a.qty) || 1);
-            const p = Number(a.price) || 0;
-            const unitP = Math.max(1, Math.round(p / q));
-            const isCardOrStone = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(nm);
-            const isFlippedItem = Boolean(nmLower && verifiedFlipMap[nmLower]);
-            if (!isCardOrStone && !isFlippedItem) continue;
-            const refUnit = verifiedFlipMap[nmLower] || unitP;
-            const bCfg = (typeof window.__pmGetSmartFlipBatchConfig === 'function')
-              ? window.__pmGetSmartFlipBatchConfig(nmLower, refUnit, isCardOrStone)
-              : { batchQty: isCardOrStone ? 1 : (refUnit >= 20000 ? 10 : (refUnit >= 8000 ? 25 : (refUnit >= 1800 ? 50 : 100))), maxConcurrent: isCardOrStone ? 2 : 3 };
-            if ((isCardOrStone && q > 1) || (isFlippedItem && q > Math.ceil(bCfg.batchQty * 1.35))) {
-              const safeUnitP = (verifiedFlipMap[nmLower] && unitP > Math.round(verifiedFlipMap[nmLower] * 1.25))
-                ? Math.max(verifiedFlipMap[nmLower], Number(minFloorMap[nmLower]) || 0)
-                : unitP;
-              stackedCards.push({
-                listingId: Number(a.listingId) || 0,
-                itemId: Number(a.item && (a.item.itemId ?? a.item.id)) || 0,
-                refine: Number(a.item && a.item.refine) || 0,
-                name: nm,
-                qty: q,
-                price: p,
-                unitPrice: safeUnitP,
-                batchQty: bCfg.batchQty,
-                maxConcurrent: bCfg.maxConcurrent
-              });
+          if (sniperAutoFlipOn) {
+            for (const a of nonAuctionActive) {
+              const nm = String((a.item && a.item.name) || '').trim();
+              const nmLower = nm.toLowerCase();
+              if (nmLower && userAutoSellSet.has(nmLower)) continue;
+              const q = Math.max(1, Number(a.qty) || 1);
+              const p = Number(a.price) || 0;
+              const unitP = Math.max(1, Math.round(p / q));
+              const isCardOrStone = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(nm);
+              const isFlippedItem = Boolean(nmLower && activeFlipMap[nmLower]);
+              if (!isCardOrStone && !isFlippedItem) continue;
+              const refUnit = activeFlipMap[nmLower] || unitP;
+              const bCfg = (typeof window.__pmGetSmartFlipBatchConfig === 'function')
+                ? window.__pmGetSmartFlipBatchConfig(nmLower, refUnit, isCardOrStone, true)
+                : { batchQty: isCardOrStone ? 1 : (refUnit >= 20000 ? 10 : (refUnit >= 8000 ? 25 : (refUnit >= 1800 ? 50 : 100))), maxConcurrent: isCardOrStone ? 2 : 3 };
+              if ((isCardOrStone && q > 1) || (isFlippedItem && q > Math.ceil(bCfg.batchQty * 1.35))) {
+                const safeUnitP = (activeFlipMap[nmLower] && unitP > Math.round(activeFlipMap[nmLower] * 1.25))
+                  ? Math.max(activeFlipMap[nmLower], Number(minFloorMap[nmLower]) || 0)
+                  : unitP;
+                stackedCards.push({
+                  listingId: Number(a.listingId) || 0,
+                  itemId: Number(a.item && (a.item.itemId ?? a.item.id)) || 0,
+                  refine: Number(a.item && a.item.refine) || 0,
+                  name: nm,
+                  qty: q,
+                  price: p,
+                  unitPrice: safeUnitP,
+                  batchQty: bCfg.batchQty,
+                  maxConcurrent: bCfg.maxConcurrent
+                });
+              }
             }
           }
           window.__myMarketStackedCards = stackedCards;
 
-          // Collect bag items that match Sniper-flipped items so remaining split batches are protected & drip-restocked
+          // Collect bag items that match Sniper-flipped items on this profile (excluding user Auto Market Sell rules when drip-restocking)
           const bagByNorm = new Map();
           const bagItemsArr = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
           if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
+          for (const prevProt of Array.from(window.__pmSniperProtectedItems)) {
+            if (!activeFlipMap[prevProt] && !(window.__pmKnownMyMarketItems && window.__pmKnownMyMarketItems[prevProt])) {
+              window.__pmSniperProtectedItems.delete(prevProt);
+            }
+          }
           for (const b of bagItemsArr) {
             if (!b) continue;
             const nm = String(b.name || '').trim();
             const nmLower = nm.toLowerCase();
-            if (!nmLower || !verifiedFlipMap[nmLower]) continue;
+            if (!nmLower || !rawProfileFlipMap[nmLower] || userAutoSellSet.has(nmLower)) continue;
             const q = Math.max(1, Number(b.qty) || 1);
             const bId = Number((b.raw && b.raw.itemId) ?? b.id) || 0;
             const bRef = Number(b.refine || (b.raw && b.raw.refine) || 0);
@@ -1542,15 +1579,16 @@ function createMarketSniperService({
                 refine: bRef,
                 qty: 0,
                 unlockedQty: 0,
-                unitPrice: Number(verifiedFlipMap[nmLower]) || 0
+                unitPrice: Number(rawProfileFlipMap[nmLower]) || 0
               });
             }
             const entry = bagByNorm.get(nmLower);
             entry.qty += q;
             if (!b.locked) entry.unlockedQty += q;
-            window.__pmSniperProtectedItems.add(nmLower);
+            if (sniperAutoFlipOn) window.__pmSniperProtectedItems.add(nmLower);
           }
           const bagFlippedItems = Array.from(bagByNorm.values());
+          const userAutoSellNames = Array.from(userAutoSellSet);
 
           const baseLevel = Number(ch.baseLevel ?? ch.level ?? live.level) || 0;
           const charName = ch.name || live.charName || window.__characterName || '';
@@ -1578,6 +1616,7 @@ function createMarketSniperService({
             activeIdCounts,
             stackedCards,
             bagFlippedItems,
+            userAutoSellNames,
             myActiveListings,
             mySoldListings,
             maxListings,
@@ -1587,6 +1626,7 @@ function createMarketSniperService({
             sniperEvents
           };
         })()`;
+        };
 
         const results = new Array(running.length).fill(null);
         let nextIdx = 0;
@@ -1596,7 +1636,7 @@ function createMarketSniperService({
             const curIdx = nextIdx++;
             const p = running[curIdx];
             try {
-              const r = await evalProfilePort(p.debugPort, fastProbeCode, 2500);
+              const r = await evalProfilePort(p.debugPort, buildFastProbeCode(p.id), 2500);
               if (r && (r.success || r.ok) && r.result && r.result.connected) {
                 const rtMeta = runtimeInstalledByPort.get(p.debugPort);
                 const needSetup = !r.result.runtimeInstalled || !rtMeta || rtMeta.settingsUpdatedAt !== globalSettings.updatedAt || (Date.now() - rtMeta.installedAt > 180000);
@@ -3112,10 +3152,11 @@ function createMarketSniperService({
 
           // 3b) Drip-restock remaining split batches from bag when existing batches sell (curActiveSame < maxConcurrent)
           const profFlippedMap = flippedByProfile.get(String(scr.profileId || ''));
+          const scrUserAutoSellSet = new Set(Array.isArray(scr.userAutoSellNames) ? scr.userAutoSellNames : []);
           if (profFlippedMap && Array.isArray(scr.bagFlippedItems) && scr.bagFlippedItems.length > 0) {
             let didRestock = false;
             for (const bagItem of scr.bagFlippedItems) {
-              if (!bagItem || !bagItem.nameLower) continue;
+              if (!bagItem || !bagItem.nameLower || scrUserAutoSellSet.has(bagItem.nameLower)) continue;
               const flipUnit = profFlippedMap.get(bagItem.nameLower);
               if (!flipUnit || flipUnit <= 0) continue;
               const bCfg = getSmartFlipBatchConfig(bagItem.nameLower, flipUnit, isSingleUnitFlipItem(bagItem.name));
@@ -3939,6 +3980,10 @@ function createMarketSniperService({
     maintenanceTimer = setInterval(() => {
       runMaintenanceCycle().catch(() => {});
     }, 10000);
+    // Sync updated runtime & clear any stale __pmSniperFlippedItems on already-open game screens immediately after Manager start
+    setTimeout(() => {
+      getOnlineScreenStates(true).catch(() => {});
+    }, 2500);
   }
 
   async function handleRoute(req, res, pathname, sendJSON) {

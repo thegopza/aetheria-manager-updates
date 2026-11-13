@@ -10439,6 +10439,29 @@ async function deleteProfile(id) {
 const bdpSelectedIds = new Set();
 let bdpLastClickedIdx = -1;
 
+function isProfileOnlineForBdp(p) {
+  return Boolean(p && (p.isRunning || p.isAlive));
+}
+
+function isProfileJailedForBdp(p) {
+  if (!p) return false;
+  const state = p.liveState || {};
+  return Boolean(p.isJailed || (typeof state.map === 'string' && /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(state.map)));
+}
+
+function isProfileBannedForBdp(p) {
+  if (!p) return false;
+  const state = p.liveState || {};
+  return Boolean(p.isBanned || state.accountBanned || state.screenPhase === 'account_banned');
+}
+
+function getBulkDeleteRenderSig(list) {
+  return (Array.isArray(list) ? list : []).map(p => {
+    const st = p.liveState || {};
+    return `${p.id}:${isProfileOnlineForBdp(p) ? 1 : 0}:${isProfileJailedForBdp(p) ? 1 : 0}:${isProfileBannedForBdp(p) ? 1 : 0}:${st.charName || p.lastCharName || ''}:${p.account || ''}`;
+  }).join("|");
+}
+
 function getFilteredBulkDeleteProfiles() {
   const q = ((document.getElementById("bdp-search-input") || {}).value || "").trim().toLowerCase();
   const list = Array.isArray(currentProfiles) ? currentProfiles : [];
@@ -10448,7 +10471,13 @@ function getFilteredBulkDeleteProfiles() {
     const charName = String(state.charName || p.lastCharName || "").toLowerCase();
     const acc = String(p.account || (state.authConfig && state.authConfig.username) || "").toLowerCase();
     const name = String(p.name || "").toLowerCase();
-    return name.includes(q) || charName.includes(q) || acc.includes(q);
+    if (q === "คุก" || q === "ติดคุก" || q === "jail") return isProfileJailedForBdp(p);
+    if (q === "แบน" || q === "โดนแบน" || q === "ban") return isProfileBannedForBdp(p);
+    if (q === "ออนไลน์" || q === "online") return isProfileOnlineForBdp(p);
+    if (q === "ออฟไลน์" || q === "offline") return !isProfileOnlineForBdp(p);
+    return name.includes(q) || charName.includes(q) || acc.includes(q)
+      || (isProfileJailedForBdp(p) && ("ติดคุก jail").includes(q))
+      || (isProfileBannedForBdp(p) && ("โดนแบน ban").includes(q));
   });
 }
 
@@ -10460,9 +10489,11 @@ function updateBulkDeleteCounters() {
   }
   const selCount = bdpSelectedIds.size;
   const totalCount = all.length;
+  const jailBanCount = all.filter(p => isProfileJailedForBdp(p) || isProfileBannedForBdp(p)).length;
 
   const selEl = document.getElementById("bdp-selected-count");
   const totEl = document.getElementById("bdp-total-count");
+  const jailBanCountEl = document.getElementById("bdp-jail-ban-count");
   const confCountEl = document.getElementById("bdp-confirm-count");
   const allCountEl = document.getElementById("bdp-delete-all-count");
   const confBtn = document.getElementById("btn-bdp-confirm-selected");
@@ -10470,6 +10501,7 @@ function updateBulkDeleteCounters() {
 
   if (selEl) selEl.textContent = String(selCount);
   if (totEl) totEl.textContent = String(totalCount);
+  if (jailBanCountEl) jailBanCountEl.textContent = String(jailBanCount);
   if (confCountEl) confCountEl.textContent = String(selCount);
   if (allCountEl) allCountEl.textContent = String(totalCount);
   if (confBtn) confBtn.disabled = selCount === 0;
@@ -10481,7 +10513,7 @@ let bdpLastRenderedSig = "";
 function updateBulkDeleteModalIfOpen() {
   const modal = document.getElementById("modal-bulk-delete-profiles");
   if (modal && modal.style.display && modal.style.display !== "none") {
-    const sig = (Array.isArray(currentProfiles) ? currentProfiles : []).map(p => `${p.id}:${p.isAlive ? 1 : 0}`).join("|");
+    const sig = getBulkDeleteRenderSig(currentProfiles);
     if (sig !== bdpLastRenderedSig) {
       renderBulkDeleteProfileList(false);
     } else {
@@ -10497,7 +10529,7 @@ function renderBulkDeleteProfileList(force = true) {
     updateBulkDeleteCounters();
     return;
   }
-  bdpLastRenderedSig = (Array.isArray(currentProfiles) ? currentProfiles : []).map(p => `${p.id}:${p.isAlive ? 1 : 0}`).join("|");
+  bdpLastRenderedSig = getBulkDeleteRenderSig(currentProfiles);
   updateBulkDeleteCounters();
   const filtered = getFilteredBulkDeleteProfiles();
 
@@ -10518,7 +10550,9 @@ function renderBulkDeleteProfileList(force = true) {
     const pid = String(p.id);
     const checked = bdpSelectedIds.has(pid);
     const state = p.liveState || {};
-    const isOnline = !!p.isAlive;
+    const isOnline = isProfileOnlineForBdp(p);
+    const isJailed = isProfileJailedForBdp(p);
+    const isBanned = isProfileBannedForBdp(p);
     const charName = state.charName || p.lastCharName || "";
     const jobClass = state.jobClass || p.lastJobClass || "";
     const level = state.level || p.lastLevel || "";
@@ -10533,6 +10567,12 @@ function renderBulkDeleteProfileList(force = true) {
       ? `<span style="color: #cbd5e1; font-family: 'JetBrains Mono', monospace; font-size: 11px;">🔑 ${escapeHTML(account)}</span>`
       : (p.autoRegister ? `<span style="color: #facc15; font-size: 11px;">📝 รอสมัครอัตโนมัติ</span>` : `<span style="color: #64748b; font-size: 11px;">ไม่มี ID</span>`);
 
+    const penaltyBadge = isBanned
+      ? `<span style="font-size: 10.5px; padding: 2px 7px; border-radius: 99px; background: rgba(239, 68, 68, 0.22); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.55); font-weight: 700;">🚫 โดนแบน</span>`
+      : (isJailed
+          ? `<span style="font-size: 10.5px; padding: 2px 7px; border-radius: 99px; background: rgba(245, 158, 11, 0.22); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.55); font-weight: 700;">🚨 ติดคุก</span>`
+          : '');
+
     const statusBadge = isOnline
       ? `<span style="font-size: 10.5px; padding: 2px 7px; border-radius: 99px; background: rgba(16, 185, 129, 0.18); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);">🟢 ออนไลน์</span>`
       : `<span style="font-size: 10.5px; padding: 2px 7px; border-radius: 99px; background: rgba(148, 163, 184, 0.12); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.22);">⚫ ออฟไลน์</span>`;
@@ -10542,7 +10582,7 @@ function renderBulkDeleteProfileList(force = true) {
       : '';
 
     return `
-      <label class="bdp-row" data-pid="${escapeHTML(pid)}" data-idx="${idx}" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 11px; border-radius: 8px; cursor: pointer; user-select: none; background: ${checked ? 'rgba(239, 68, 68, 0.16)' : 'rgba(15, 23, 42, 0.7)'}; border: 1px solid ${checked ? 'rgba(239, 68, 68, 0.5)' : 'rgba(255, 255, 255, 0.06)'}; transition: background 0.12s, border-color 0.12s;">
+      <label class="bdp-row" data-pid="${escapeHTML(pid)}" data-idx="${idx}" style="display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 11px; border-radius: 8px; cursor: pointer; user-select: none; background: ${checked ? 'rgba(239, 68, 68, 0.16)' : ((isBanned || isJailed) ? 'rgba(127, 29, 29, 0.18)' : 'rgba(15, 23, 42, 0.7)')}; border: 1px solid ${checked ? 'rgba(239, 68, 68, 0.5)' : ((isBanned || isJailed) ? 'rgba(239, 68, 68, 0.32)' : 'rgba(255, 255, 255, 0.06)')}; transition: background 0.12s, border-color 0.12s;">
         <div style="display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1;">
           <input type="checkbox" class="bdp-checkbox" data-pid="${escapeHTML(pid)}" data-idx="${idx}" ${checked ? 'checked' : ''} style="width: 16px; height: 16px; accent-color: #ef4444; cursor: pointer; flex-shrink: 0;">
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0;">
@@ -10551,8 +10591,9 @@ function renderBulkDeleteProfileList(force = true) {
             ${accBadge}
           </div>
         </div>
-        <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+        <div style="display: flex; align-items: center; gap: 6px; flex-shrink: 0;">
           ${zenyBadge}
+          ${penaltyBadge}
           ${statusBadge}
         </div>
       </label>
@@ -10615,6 +10656,7 @@ function bindBulkDeleteModalEvents() {
   const selAllBtn = document.getElementById("btn-bdp-select-all");
   const clearAllBtn = document.getElementById("btn-bdp-clear-all");
   const selOfflineBtn = document.getElementById("btn-bdp-select-offline");
+  const selJailBanBtn = document.getElementById("btn-bdp-select-jail-ban");
   const selNoCharBtn = document.getElementById("btn-bdp-select-nochar");
   const confirmSelBtn = document.getElementById("btn-bdp-confirm-selected");
   const deleteAllBtn = document.getElementById("btn-bdp-delete-all");
@@ -10653,9 +10695,29 @@ function bindBulkDeleteModalEvents() {
     selOfflineBtn.onclick = () => {
       bdpSelectedIds.clear();
       (currentProfiles || []).forEach(p => {
-        if (!p.isAlive) bdpSelectedIds.add(String(p.id));
+        if (!isProfileOnlineForBdp(p)) bdpSelectedIds.add(String(p.id));
       });
       renderBulkDeleteProfileList();
+    };
+  }
+  if (selJailBanBtn) {
+    selJailBanBtn.onclick = () => {
+      bdpSelectedIds.clear();
+      let picked = 0;
+      (currentProfiles || []).forEach(p => {
+        if (isProfileJailedForBdp(p) || isProfileBannedForBdp(p)) {
+          bdpSelectedIds.add(String(p.id));
+          picked++;
+        }
+      });
+      renderBulkDeleteProfileList();
+      if (typeof showToast === "function") {
+        if (picked > 0) {
+          showToast(`🚨 เลือกโปรไฟล์ที่ติดคุก / โดนแบนแล้ว ${picked} รายการ`, "info");
+        } else {
+          showToast("✨ ไม่พบโปรไฟล์ที่ติดคุกหรือโดนแบนในขณะนี้", "info");
+        }
+      }
     };
   }
   if (selNoCharBtn) {
@@ -10675,7 +10737,7 @@ function bindBulkDeleteModalEvents() {
     confirmSelBtn.onclick = async () => {
       const ids = Array.from(bdpSelectedIds);
       if (ids.length === 0) return;
-      const onlineSelected = (currentProfiles || []).filter(p => bdpSelectedIds.has(String(p.id)) && p.isAlive).length;
+      const onlineSelected = (currentProfiles || []).filter(p => bdpSelectedIds.has(String(p.id)) && isProfileOnlineForBdp(p)).length;
       const warnOnline = onlineSelected > 0 ? `\n(มี ${onlineSelected} จอที่กำลังออนไลน์อยู่ ระบบจะปิดหน้าต่างเกมของโปรไฟล์เหล่านั้นให้อัตโนมัติ)` : '';
       if (!confirm(`ยืนยันการลบโปรไฟล์ที่เลือกจำนวน ${ids.length} โปรไฟล์ ใช่หรือไม่?${warnOnline}`)) return;
 

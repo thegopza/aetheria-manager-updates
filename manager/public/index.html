@@ -1303,7 +1303,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4.53.35"></script>
-  <script src="app.js?v=4.56.4"></script>
+  <script src="app.js?v=4.56.6"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.54.0"></script>
@@ -1318,7 +1318,7 @@
   <script src="guild_manager.js?v=4.56.1"></script>
   <script src="jail_manager.js?v=4.56.1"></script>
   <script src="device_manager.js?v=4.56.1"></script>
-  <script src="update_log.js?v=4.56.5"></script>
+  <script src="update_log.js?v=4.56.6"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 
@@ -2261,11 +2261,11 @@
           </div>
         </div>
 
-        <!-- Auto-Blocked Banned / Jailed Proxy IP Blacklist -->
+        <!-- Auto-Blocked Banned Proxy IP Blacklist -->
         <div style="background: rgba(28, 12, 24, 0.65); border: 1px solid rgba(239, 68, 68, 0.4); border-radius: 9px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px;">
           <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;">
             <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-              <span style="font-size: 12px; font-weight: 700; color: #fca5a5;">🚫 รายการ Proxy IP ที่ถูกบล็อคอัตโนมัติ (โดนแบน / เข้าคุก)</span>
+              <span style="font-size: 12px; font-weight: 700; color: #fca5a5;">🚫 รายการ Proxy IP ที่ถูกบล็อคอัตโนมัติ (เฉพาะโดนแบน)</span>
               <span id="sp-blocked-count-badge" style="font-size: 10.5px; padding: 1px 8px; border-radius: 99px; background: rgba(239, 68, 68, 0.2); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.45); font-weight: 700;">บล็อคแล้ว 0 IP</span>
             </div>
             <div style="display: flex; gap: 5px; flex-wrap: wrap;">
@@ -2278,10 +2278,10 @@
             </div>
           </div>
           <div style="font-size: 10.5px; color: #fda4af; line-height: 1.4;">
-            เมื่อตรวจพบบัญชีขึ้นข้อความสีแดง <b>"บัญชีถูกระงับถึง..."</b> ในหน้าเลือกตัวละคร หรือตัวละครถูกดึงเข้าแมพ <b>"คุก"</b> ระบบจะหยุดบอททันที บล็อค IP นั้นเข้าบัญชีดำอัตโนมัติ และสลับจออื่นที่ใช้ IP เดียวกันไปใช้ IP ใหม่ทันทีเพื่อป้องกันการโดนแบนยกวง
+            เมื่อตรวจพบบัญชีขึ้นข้อความสีแดง <b>"บัญชีถูกระงับถึง..."</b> ระบบจะหยุดบอททันที บล็อค IP นั้นเข้าบัญชีดำอัตโนมัติ และสลับจออื่นที่ใช้ IP เดียวกันไปใช้ IP ใหม่ทันทีเพื่อป้องกันการโดนแบนยกวง (กรณีตัวละครถูกดึงเข้าแมพ <b>"คุก"</b> จะหยุดบอทแต่<b>ไม่บล็อค IP</b>)
           </div>
           <div id="sp-blocked-ips-list" style="max-height: 155px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; font-size: 11px;">
-            <div style="text-align: center; color: #64748b; padding: 10px;">ยังไม่มี Proxy IP ที่ถูกบล็อค (ระบบเฝ้าระวังหน้าเลือกตัวละครและแมพคุกให้อัตโนมัติ)</div>
+            <div style="text-align: center; color: #64748b; padding: 10px;">ยังไม่มี Proxy IP ที่ถูกบล็อค (ระบบบล็อคอัตโนมัติเฉพาะกรณีบัญชีโดนแบนเท่านั้น)</div>
           </div>
         </div>
 

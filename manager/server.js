@@ -5947,21 +5947,7 @@ async function recordProfileJailedAndStop(profile, state) {
   if (newlyJailed && !jailStoppingInFlight.has(pid)) {
     jailStoppingInFlight.add(pid);
     try {
-      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — บล็อค Proxy IP อัตโนมัติ, สุ่ม Device/Machine ID ใหม่ และหยุดบอทในเกม!`);
-      if (typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.blockProxyForProfile === 'function') {
-        screenProxy.blockProxyForProfile(pid, {
-          reason: `ตัวละครถูกดึงเข้าคุก (${mapName})`,
-          trigger: 'jailed',
-          stopBannedProfile: false,
-          profileName: profile.name || pid,
-          charName: (state && state.charName) || profile.lastCharName || '',
-          account: profile.account || ''
-        }).then(blockRes => {
-          if (blockRes && blockRes.blocked && blockRes.entry) {
-            console.warn(`[Proxy Blacklist] 🚫 บล็อค IP ${blockRes.entry.ip}:${blockRes.entry.port || ''} ถาวร (สาเหตุ: ติดคุกจากจอ ${profile.name || pid})`);
-          }
-        }).catch(() => {});
-      }
+      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — หยุดบอทในเกมและสุ่ม Device/Machine ID ใหม่ (ไม่บล็อค Proxy IP)`);
       if (typeof browserMode !== 'undefined' && browserMode && typeof browserMode.rotateDeviceGroup === 'function') {
         browserMode.rotateDeviceGroup(pid).then(grp => {
           if (grp && Array.isArray(grp.profileIds)) {

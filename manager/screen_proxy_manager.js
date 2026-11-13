@@ -364,17 +364,15 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   const currentMachineHwid = getMachineHwid();
   let cloneDetectedOnBoot = false;
 
-  // Load persisted blocked proxies (Banned / Jailed IP Blacklist)
-  try {
-    const savedBlocked = readJson(blockedFile, { items: [] });
-    const list = Array.isArray(savedBlocked?.items) ? savedBlocked.items : [];
-    for (const item of list) {
-      if (item && typeof item === 'object' && (item.proxyId || item.ip)) {
-        const key = item.proxyId || (`ip:${item.ip}`);
-        blockedProxies.set(key, item);
-      }
-    }
-  } catch (_) {}
+  function isJailOnlyBlockRecord(obj) {
+    if (!obj || typeof obj !== 'object') return false;
+    const trig = String(obj.trigger || obj.triggerType || '').trim().toLowerCase();
+    const rsn = String(obj.reason || obj.banMessage || '').trim();
+    const hasRealBan = /บัญชีถูกระงับ|ถูกระงับ|ระงับการใช้งาน|โดนแบน|ถูกแบน|\bbanned\b|\bsuspended\b/i.test(rsn);
+    if (trig === 'jailed' || trig === 'jail' || trig === 'jail_map') return !hasRealBan;
+    if (!hasRealBan && /ถูกดึงเข้าคุก|ติดคุก|เข้าแมพคุก|อยู่ในแมพคุก/.test(rsn)) return true;
+    return false;
+  }
 
   function saveBlockedProxies() {
     try {
@@ -384,6 +382,24 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       });
     } catch (_) {}
   }
+
+  // Load persisted blocked proxies (Banned IP Blacklist — auto-purge any legacy jail-only entries)
+  try {
+    const savedBlocked = readJson(blockedFile, { items: [] });
+    const list = Array.isArray(savedBlocked?.items) ? savedBlocked.items : [];
+    let purgedJailBlocks = false;
+    for (const item of list) {
+      if (item && typeof item === 'object' && (item.proxyId || item.ip)) {
+        if (isJailOnlyBlockRecord(item)) {
+          purgedJailBlocks = true;
+          continue;
+        }
+        const key = item.proxyId || (`ip:${item.ip}`);
+        blockedProxies.set(key, item);
+      }
+    }
+    if (purgedJailBlocks) saveBlockedProxies();
+  } catch (_) {}
 
   function getProxyBlockInfo(proxyOrLease) {
     if (!proxyOrLease || blockedProxies.size === 0) return null;
@@ -1073,6 +1089,16 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   }
 
   async function blockProxyForProfile(profileId, meta = {}) {
+    if (isJailOnlyBlockRecord(meta)) {
+      return {
+        success: true,
+        blocked: false,
+        skipped: true,
+        reason: 'JAIL_DOES_NOT_BLOCK_IP',
+        evictedProfileIds: [],
+        blockedCount: blockedProxies.size
+      };
+    }
     const pid = String(profileId || '').trim();
     const { proxies } = loadPool();
     const settings = loadSettings();
@@ -1172,14 +1198,18 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
     // Notify owner-host backend to disable this banned IP in owner_screen_proxy_pool
     if (typeof solver?.serviceRequest === 'function') {
-      solver.serviceRequest('/v1/aetheria/proxy/screen-block', {
+      await solver.serviceRequest('/v1/aetheria/proxy/screen-block', {
         machineId: getMachineId(),
         proxyId: blockEntry.proxyId,
         ip: blockEntry.ip,
+        labelIp: blockEntry.ip,
         host: blockEntry.host,
+        proxyHost: blockEntry.host,
         port: blockEntry.port,
+        proxyPort: blockEntry.port,
         reason: blockEntry.reason,
         trigger: blockEntry.trigger,
+        triggerType: blockEntry.trigger,
         profileId: blockEntry.profileId,
         charName: blockEntry.charName
       }).catch(() => {});
@@ -1188,8 +1218,13 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     // Re-allocate clean IPs for other profiles that were sharing this IP (excluding the banned profile itself if requested)
     const profilesToReassign = evictedProfileIds.filter(id => id !== pid || !meta.stopBannedProfile);
     if (settings.enabled && profilesToReassign.length > 0) {
-      allocateFromLocalPool(profilesToReassign.map(id => ({ profileId: id })));
+      if (settings.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
+        await acquireLeasesForProfiles(profilesToReassign);
+      } else {
+        allocateFromLocalPool(profilesToReassign.map(id => ({ profileId: id })));
+      }
     }
+    syncDaemonState().catch(() => {});
     for (const evictedId of evictedProfileIds) {
       resetProfileSockets(evictedId);
     }
@@ -1224,7 +1259,10 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         removed++;
       }
     }
-    if (removed > 0) saveBlockedProxies();
+    if (removed > 0) {
+      saveBlockedProxies();
+      syncDaemonState().catch(() => {});
+    }
     return {
       success: true,
       removed,
@@ -1237,6 +1275,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const count = blockedProxies.size;
     blockedProxies.clear();
     saveBlockedProxies();
+    if (count > 0) syncDaemonState().catch(() => {});
     return {
       success: true,
       removed: count,
@@ -1425,10 +1464,10 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     return results;
   }
 
-  // If proxy is enabled on boot and we have local pool IPs, pre-allocate leases for known profiles immediately
+  // If proxy is enabled in local-pool mode on boot, pre-allocate leases for known profiles immediately
   try {
     const bootSettings = loadSettings();
-    if (bootSettings.enabled && typeof loadProfiles === 'function') {
+    if (bootSettings.enabled && bootSettings.mode === 'local-pool' && typeof loadProfiles === 'function') {
       const bootProfiles = loadProfiles() || [];
       const missingBoot = bootProfiles.filter(p => p && p.id && !activeLeases.has(p.id)).map(p => ({ profileId: p.id }));
       if (missingBoot.length > 0 && loadPool().proxies.length > 0) {
@@ -1614,8 +1653,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         if (res?.success && Array.isArray(res.leases)) {
           const validLeases = res.leases.filter(l => !l.assigned || !isProxyBlocked(l));
           const hasAnyAssigned = validLeases.some(l => l.assigned);
-          const allEmpty = res.leases.every(l => l.code === 'IP_POOL_EMPTY');
-          if (hasAnyAssigned || (!allEmpty && loadPool().proxies.length === 0)) {
+          const allEmpty = res.leases.length > 0 && res.leases.every(l => l.code === 'IP_POOL_EMPTY');
+          if (hasAnyAssigned || !allEmpty) {
             for (const l of validLeases) {
               if (l.assigned) {
                 const prev = activeLeases.get(l.profileId);
@@ -1629,21 +1668,19 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
             saveStickyHistory();
             syncDaemonState().catch(() => {});
             syncProxyBillingToServer().catch(() => {});
-            const unblockedIds = new Set(validLeases.filter(l => l.assigned).map(l => l.profileId));
-            const fallbackNeeded = reqProfiles.filter(r => !unblockedIds.has(r.profileId));
-            if (fallbackNeeded.length > 0 && loadPool().proxies.length > 0) {
-              const localFallback = allocateFromLocalPool(fallbackNeeded);
-              return [...validLeases.filter(l => l.assigned), ...localFallback];
-            }
             return validLeases;
           }
         }
       } catch (_) {
-        // If owner-host has a brief hiccup, keep existing active leases alive rather than dropping to empty local pool
-        if (loadPool().proxies.length === 0) {
-          const cached = ids.map(pid => activeLeases.get(pid)).filter(l => l && !isProxyBlocked(l));
-          if (cached.length > 0) return cached;
-        }
+        // If owner-host has a brief hiccup, keep existing active leases alive rather than dropping to uncoordinated local pool
+        const cached = ids.map(pid => activeLeases.get(pid)).filter(l => l && !isProxyBlocked(l));
+        if (cached.length > 0) return cached;
+        return ids.map(profileId => ({
+          profileId,
+          assigned: false,
+          code: 'OWNER_QUEUE_UNAVAILABLE',
+          error: 'ติดต่อเซิร์ฟเวอร์คิว Proxy ไม่ได้ชั่วคราว'
+        }));
       }
     }
 
@@ -2015,7 +2052,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     if (prevSettings.maxScreensPerIp !== updated.maxScreensPerIp && activeLeases.size > 0) {
       const currentActivePids = Array.from(activeLeases.keys());
       activeLeases.clear();
-      allocateFromLocalPool(currentActivePids.map(profileId => ({ profileId })));
+      if (updated.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
+        await acquireLeasesForProfiles(currentActivePids);
+      } else {
+        allocateFromLocalPool(currentActivePids.map(profileId => ({ profileId })));
+      }
     }
     return {
       success: true,

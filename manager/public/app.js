@@ -3582,11 +3582,11 @@ function renderScreenProxyModal(statusData) {
   const blockedListEl = document.getElementById("sp-blocked-ips-list");
   if (blockedListEl) {
     if (blockedList.length === 0) {
-      blockedListEl.innerHTML = `<div style="text-align: center; color: #64748b; padding: 10px;">ยังไม่มี IP ที่ถูกบล็อค (เมื่อบอทพบข้อความสีแดง "บัญชีถูกระงับ..." หรือตัวละครติดคุก จะบล็อค IP ให้อัตโนมัติ)</div>`;
+      blockedListEl.innerHTML = `<div style="text-align: center; color: #64748b; padding: 10px;">ยังไม่มี IP ที่ถูกบล็อค (เมื่อตรวจพบบัญชีขึ้นข้อความสีแดง "บัญชีถูกระงับ..." จะบล็อค IP ให้อัตโนมัติ — กรณีติดคุกจะไม่บล็อค IP)</div>`;
     } else {
       blockedListEl.innerHTML = blockedList.map(b => {
         const hostPort = b.host ? `${b.host}${b.port ? ':' + b.port : ''}` : b.key;
-        const reasonStr = b.banMessage || b.reason || "ถูกระงับ / ติดคุก";
+        const reasonStr = b.banMessage || b.reason || "บัญชีถูกระงับการใช้งาน";
         const charInfo = b.charName ? `ตัวละคร ${b.charName}` : (b.profileName || b.profileId || "");
         const timeStr = b.blockedAt ? new Date(b.blockedAt).toLocaleString("th-TH", { hour12: false }) : "";
         return `

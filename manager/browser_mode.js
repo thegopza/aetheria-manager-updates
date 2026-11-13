@@ -2917,19 +2917,27 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     let browserContextId = null;
     let tunnelInfo = null;
     if (screenProxy && screenProxy.isEnabled()) {
+      tunnelInfo = await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort });
+      if (!tunnelInfo || !tunnelInfo.proxyServerUrl || !tunnelInfo.lease || !tunnelInfo.lease.assigned) {
+        throw new Error(tunnelInfo?.error || 'ไม่สามารถจอง Proxy IP สำหรับจอนี้ได้ ระบบบล็อคการเปิดจอผ่านเน็ตบ้านอัตโนมัติ');
+      }
       try {
-        tunnelInfo = await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort });
-        if (tunnelInfo && tunnelInfo.proxyServerUrl) {
-          const ctxRes = await send('Target.createBrowserContext', {
-            disposeOnDetach: false,
-            proxyServer: tunnelInfo.proxyServerUrl,
-            proxyBypassList: 'localhost,127.0.0.1'
-          });
-          browserContextId = ctxRes?.browserContextId || null;
-        }
+        const ctxRes = await send('Target.createBrowserContext', {
+          disposeOnDetach: false,
+          proxyServer: tunnelInfo.proxyServerUrl,
+          proxyBypassList: 'localhost,127.0.0.1'
+        });
+        browserContextId = ctxRes?.browserContextId || null;
       } catch (e) {
         console.warn(`[BrowserMode] createBrowserContext proxy failed for ${profile.id}: ${e.message}`);
+        throw new Error(`สร้างช่องทางแยก Proxy IP ไม่สำเร็จ (${e.message}) — บล็อคการเปิดจอผ่านเน็ตบ้านอัตโนมัติ`);
       }
+      if (!browserContextId) {
+        throw new Error('สร้าง BrowserContext สำหรับแยก Proxy IP ไม่สำเร็จ — บล็อคการเปิดจอผ่านเน็ตบ้านอัตโนมัติ');
+      }
+    }
+    if (tunnelInfo?.lease?.proxyHost || tunnelInfo?.lease?.ip) {
+      await waitSameProxyIpLaunchStagger(tunnelInfo.lease.proxyHost || tunnelInfo.lease.ip);
     }
     const createParams = browserContextId
       ? { url: 'about:blank', newWindow: true, browserContextId }
@@ -2940,7 +2948,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     startProxy(c, profile.debugPort);
     await send('Page.navigate', { url: gameUrl }, c.sessionId);
     for (const targetId of startupPages.splice(0)) await send('Target.closeTarget', { targetId }).catch(() => {});
-    const proxyTag = tunnelInfo?.lease?.proxyHost ? ` (IP: ${tunnelInfo.lease.proxyHost} [${tunnelInfo.lease.slot || 1}/${tunnelInfo.lease.maxSlots || 3}])` : '';
+    const proxyTag = tunnelInfo?.lease?.proxyHost
+      ? ` (IP: ${tunnelInfo.lease.ip || tunnelInfo.lease.proxyHost} [${tunnelInfo.lease.slotNo || tunnelInfo.lease.slot || 1}/${tunnelInfo.lease.maxScreens || tunnelInfo.lease.maxSlots || 6}])`
+      : '';
     return { success: true, message: `เปิดหน้าต่างเบราว์เซอร์แล้ว${proxyTag}` };
   }
   async function stop(profileId) {
@@ -3054,6 +3064,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 }).catch(() => {});
               } catch (_) {}
             }
+            if (tunnelInfo?.lease?.proxyHost || tunnelInfo?.lease?.ip) {
+              await waitSameProxyIpLaunchStagger(tunnelInfo.lease.proxyHost || tunnelInfo.lease.ip);
+            }
             await send('Page.navigate', { url: gameUrl }, newClient.sessionId);
             await send('Target.closeTarget', { targetId: oldTargetId }).catch(() => {});
             switched++;
@@ -3157,6 +3170,21 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
 
   let proxyMigrationInFlight = false;
+  const nextNavigateAtByProxyIp = new Map();
+
+  async function waitSameProxyIpLaunchStagger(proxyHost) {
+    if (!isRealSession || !proxyHost) return;
+    const key = String(proxyHost).trim().toLowerCase();
+    if (!key) return;
+    const nowMs = Date.now();
+    const prevReadyAt = nextNavigateAtByProxyIp.get(key) || 0;
+    const waitMs = Math.max(0, prevReadyAt - nowMs);
+    const gapMs = 6800 + Math.floor(Math.random() * 2400);
+    nextNavigateAtByProxyIp.set(key, Math.max(nowMs, prevReadyAt) + gapMs);
+    if (waitMs > 0) {
+      await new Promise(r => setTimeout(r, Math.min(waitMs, 60000)));
+    }
+  }
   function start() {
     if(started)return;started=true;
     try {

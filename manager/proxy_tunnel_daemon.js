@@ -9,8 +9,18 @@ const fs = require('fs');
 const path = require('path');
 const { createAssetCache } = require('./asset_cache');
 
-const DAEMON_VERSION = 1;
+const DAEMON_VERSION = 2;
 const DEFAULT_CONTROL_PORT = Number(process.env.PELICAN_TUNNEL_DAEMON_PORT) || 18989;
+
+function isJailOnlyBlockRecord(obj) {
+  if (!obj || typeof obj !== 'object') return false;
+  const trig = String(obj.trigger || obj.triggerType || '').trim().toLowerCase();
+  const rsn = String(obj.reason || obj.banMessage || '').trim();
+  const hasRealBan = /บัญชีถูกระงับ|ถูกระงับ|ระงับการใช้งาน|โดนแบน|ถูกแบน|\bbanned\b|\bsuspended\b/i.test(rsn);
+  if (trig === 'jailed' || trig === 'jail' || trig === 'jail_map') return !hasRealBan;
+  if (!hasRealBan && /ถูกดึงเข้าคุก|ติดคุก|เข้าแมพคุก|อยู่ในแมพคุก/.test(rsn)) return true;
+  return false;
+}
 
 function parseArgs(argv) {
   const out = {
@@ -268,6 +278,7 @@ function startDaemon() {
         blockedProxies.clear();
         for (const item of rawBlocked.items) {
           if (item && typeof item === 'object' && (item.proxyId || item.ip)) {
+            if (isJailOnlyBlockRecord(item)) continue;
             const key = item.proxyId || (`ip:${item.ip}`);
             blockedProxies.set(key, item);
           }
@@ -387,13 +398,58 @@ function startDaemon() {
       }
       const targetHost = parsed.hostname;
       const targetPort = Number(parsed.port) || 80;
-      const lease = cachedSettings.enabled ? getLeaseForProfile(profileId) : null;
-      const useProxy = Boolean(
+      const requiresProxy = Boolean(
         cachedSettings.enabled &&
-        lease?.assigned &&
-        !isProxyBlocked(lease) &&
         (!cachedSettings.onlyGameTraffic || isGameOrIpCheckHost(targetHost))
       );
+      let lease = cachedSettings.enabled ? getLeaseForProfile(profileId) : null;
+      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+        reloadFromDisk();
+        lease = activeLeases.get(profileId) || null;
+      }
+      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+        res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Proxy lease unavailable (Fail-Closed)');
+      }
+      const useProxy = Boolean(
+        requiresProxy &&
+        lease?.assigned &&
+        !isProxyBlocked(lease)
+      );
+
+      if (useProxy && lease.scheme === 'socks5') {
+        try {
+          const { socket: upstream } = await connectUpstream({
+            lease,
+            targetHost,
+            targetPort,
+            timeoutMs: 12000,
+            maxAttempts: 2
+          });
+          trackSocket(upstream);
+          const headerLines = [`${req.method} ${parsed.pathname + parsed.search} HTTP/1.1`];
+          for (const [hk, hv] of Object.entries(req.headers)) {
+            if (hk.toLowerCase() === 'proxy-connection' || hv === undefined) continue;
+            if (Array.isArray(hv)) {
+              for (const v of hv) headerLines.push(`${hk}: ${v}`);
+            } else {
+              headerLines.push(`${hk}: ${hv}`);
+            }
+          }
+          const rawReqHead = Buffer.from(headerLines.join('\r\n') + '\r\n\r\n', 'utf8');
+          addTraffic(profileId, 0, rawReqHead.length, true);
+          upstream.write(rawReqHead);
+          req.on('data', chunk => addTraffic(profileId, 0, chunk.length, true));
+          upstream.on('data', chunk => addTraffic(profileId, chunk.length, 0, true));
+          req.pipe(upstream);
+          upstream.pipe(res.socket || upstream);
+          upstream.on('error', () => { try { res.destroy(); } catch (_) {} });
+          return;
+        } catch (_) {
+          if (!res.headersSent) res.writeHead(502);
+          return res.end('Bad Gateway');
+        }
+      }
 
       const headers = { ...req.headers };
       delete headers['proxy-connection'];
@@ -402,10 +458,10 @@ function startDaemon() {
       }
 
       const proxyReq = http.request({
-        host: useProxy && lease.scheme !== 'socks5' ? lease.proxyHost : targetHost,
-        port: useProxy && lease.scheme !== 'socks5' ? lease.proxyPort : targetPort,
+        host: useProxy ? lease.proxyHost : targetHost,
+        port: useProxy ? lease.proxyPort : targetPort,
         method: req.method,
-        path: useProxy && lease.scheme !== 'socks5' ? req.url : (parsed.pathname + parsed.search),
+        path: useProxy ? req.url : (parsed.pathname + parsed.search),
         headers,
         timeout: 15000
       }, proxyRes => {
@@ -437,12 +493,25 @@ function startDaemon() {
         return;
       }
 
-      const lease = cachedSettings.enabled ? getLeaseForProfile(profileId) : null;
-      const shouldRouteViaProxy = Boolean(
+      const requiresProxy = Boolean(
         cachedSettings.enabled &&
-        lease?.assigned &&
-        !isProxyBlocked(lease) &&
         (!cachedSettings.onlyGameTraffic || isGameOrIpCheckHost(targetHost))
+      );
+      let lease = cachedSettings.enabled ? getLeaseForProfile(profileId) : null;
+      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+        reloadFromDisk();
+        lease = activeLeases.get(profileId) || null;
+      }
+      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+        // Fail-Closed: never fall back to Direct Home IP when Proxy Mode is ON
+        clientSocket.destroy();
+        return;
+      }
+
+      const shouldRouteViaProxy = Boolean(
+        requiresProxy &&
+        lease?.assigned &&
+        !isProxyBlocked(lease)
       );
 
       if (!shouldRouteViaProxy) {
@@ -552,6 +621,7 @@ function startDaemon() {
       blockedProxies.clear();
       for (const item of body.blockedProxies) {
         if (item && typeof item === 'object' && (item.proxyId || item.ip)) {
+          if (isJailOnlyBlockRecord(item)) continue;
           const key = item.proxyId || (`ip:${item.ip}`);
           blockedProxies.set(key, item);
         }

@@ -5947,7 +5947,15 @@ async function recordProfileJailedAndStop(profile, state) {
   if (newlyJailed && !jailStoppingInFlight.has(pid)) {
     jailStoppingInFlight.add(pid);
     try {
-      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — หยุดบอทในเกมและสุ่ม Device/Machine ID ใหม่ (ไม่บล็อค Proxy IP)`);
+      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — หยุดบอทในเกม, พักคิวเปิดจอใหม่บน IP นี้ชั่วคราว 30 นาที (ไม่บล็อค IP ถาวร และไม่ตัดจอเดิม) และสุ่ม Device/Machine ID ใหม่`);
+      if (typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.markProxyJailCooldownForProfile === 'function') {
+        screenProxy.markProxyJailCooldownForProfile(pid, {
+          reason: `ตัวละครถูกดึงเข้าคุก (${mapName})`,
+          profileName: profile.name || pid,
+          charName: (state && state.charName) || profile.lastCharName || '',
+          account: profile.account || ''
+        }).catch(() => {});
+      }
       if (typeof browserMode !== 'undefined' && browserMode && typeof browserMode.rotateDeviceGroup === 'function') {
         browserMode.rotateDeviceGroup(pid).then(grp => {
           if (grp && Array.isArray(grp.profileIds)) {
@@ -8557,6 +8565,7 @@ const server = http.createServer(async (req, res) => {
           accountChanged
         );
         const changesIdentity = accountChanged || !!nextPassword || wantsNewAutoRegister;
+        const wasJailedOrBanned = Boolean(profiles[idx].isJailed || profiles[idx].isBanned);
         if (changesIdentity) await scriptCoordinator.prepareCredentialChange(profiles[idx]);
 
         const nextAutoRegister = nextPassword
@@ -8594,6 +8603,13 @@ const server = http.createServer(async (req, res) => {
         }
         saveProfiles(profiles);
         if (nextPassword) credentials.setPassword(id, nextPassword);
+        if (changesIdentity && wasJailedOrBanned && typeof screenProxy !== 'undefined' && screenProxy && screenProxy.isEnabled()) {
+          await screenProxy.releaseProfile(id).catch(() => {});
+          const isOpenNow = await clientAlreadyOpen(profiles[idx]).catch(() => false);
+          if (isOpenNow) {
+            await screenProxy.acquireForProfile(id, { debugPort: profiles[idx].debugPort }).catch(() => {});
+          }
+        }
         if (profiles[idx].debugPort) {
           setImmediate(() => authSync.syncOne(profiles[idx]).catch(() => {}));
         }
@@ -9009,15 +9025,22 @@ const server = http.createServer(async (req, res) => {
     if(protectedPilot&&!installer.checkStatus().protectedScriptCapable)return sendJSON({success:false,code:'PROTECTED_LOADER_UPDATE_REQUIRED',error:'จอทดลอง Electron ต้องอัปเดตผ่านปุ่ม สคริปต์เกม ก่อน (loader 1.0.7) จากนั้นเปิดเฉพาะจอทดลองใหม่ จออื่นไม่ต้องปิด'},409);
     let proxyArgs = [];
     if (screenProxy.isEnabled()) {
+      let tunnelInfo = null;
       try {
-        const tunnelInfo = await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort });
-        if (tunnelInfo && tunnelInfo.proxyServerUrl) {
-          proxyArgs = [
-            `--proxy-server=${tunnelInfo.proxyServerUrl}`,
-            "--proxy-bypass-list=127.0.0.1;localhost"
-          ];
-        }
-      } catch (_) {}
+        tunnelInfo = await screenProxy.acquireForProfile(profile.id, { debugPort: profile.debugPort });
+      } catch (e) {
+        return sendJSON({ success: false, error: `ไม่สามารถจอง Proxy IP ได้ (${e.message}) — บล็อคการเปิดจอผ่านเน็ตบ้านอัตโนมัติ` }, 503);
+      }
+      if (!tunnelInfo || !tunnelInfo.proxyServerUrl || !tunnelInfo.lease || !tunnelInfo.lease.assigned) {
+        return sendJSON({
+          success: false,
+          error: tunnelInfo?.error || 'ไม่สามารถจอง Proxy IP สำหรับจอนี้ได้ ระบบบล็อคการเปิดจอผ่านเน็ตบ้านอัตโนมัติ'
+        }, 503);
+      }
+      proxyArgs = [
+        `--proxy-server=${tunnelInfo.proxyServerUrl}`,
+        "--proxy-bypass-list=127.0.0.1;localhost"
+      ];
     }
     const args = [
       ...(protectedPilot?['--pmhee-protected-script']:[]),
@@ -9066,10 +9089,48 @@ const server = http.createServer(async (req, res) => {
     const openFlags = await Promise.all(allProfiles.map(p => clientAlreadyOpen(p)));
     const skipped = allProfiles.filter((p, i) => openFlags[i]).map(p => p.name);
     const toOpen = allProfiles.filter((p, i) => !openFlags[i]);
+
+    const interleaveProfilesByProxyIp = list => {
+      if (!Array.isArray(list) || list.length <= 1 || !screenProxy.isEnabled()) return list;
+      const groups = new Map();
+      for (const p of list) {
+        const snap = screenProxy.getProfileLeaseSnapshot(p.id);
+        const key = (snap && snap.active && (snap.ip || snap.proxyHost))
+          ? String(snap.ip || snap.proxyHost).toLowerCase()
+          : `__unassigned_${p.id}`;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(p);
+      }
+      if (groups.size <= 1) return list;
+      const buckets = Array.from(groups.values());
+      const out = [];
+      let round = 0;
+      while (out.length < list.length) {
+        let added = false;
+        for (const b of buckets) {
+          if (round < b.length) {
+            out.push(b[round]);
+            added = true;
+          }
+        }
+        if (!added) break;
+        round++;
+      }
+      return out;
+    };
+
     if (isBrowserMode()) {
       (async () => {
+        if (screenProxy.isEnabled() && toOpen.length > 0) {
+          await screenProxy.acquireLeasesForProfiles(toOpen.map(p => p.id)).catch(() => {});
+        }
+        const orderedToOpen = interleaveProfilesByProxyIp(toOpen);
         const launched = [], failed = [];
-        for (const p0 of toOpen) {
+        for (let i = 0; i < orderedToOpen.length; i++) {
+          const p0 = orderedToOpen[i];
+          if (!TEST_INSTANCE && i > 0) {
+            await new Promise(r => setTimeout(r, 1300 + Math.floor(Math.random() * 600)));
+          }
           const p = (await ensureUsableDebugPort(p0.id)) || p0;
           try {
             const r = await browserMode.launch(p);
@@ -9097,8 +9158,17 @@ const server = http.createServer(async (req, res) => {
     }
     const launchProblem = gameLaunchProblem();
     if (launchProblem) return sendJSON({ success: false, error: launchProblem }, 500);
+    if (screenProxy.isEnabled() && toOpen.length > 0) {
+      await screenProxy.acquireLeasesForProfiles(toOpen.map(p => p.id)).catch(() => {});
+    }
+    const orderedToOpen = interleaveProfilesByProxyIp(toOpen);
+    const electronNextSpawnByIp = new Map();
     const launched = [], failed = [];
-    for (const p0 of toOpen) {
+    for (let i = 0; i < orderedToOpen.length; i++) {
+      const p0 = orderedToOpen[i];
+      if (!TEST_INSTANCE && i > 0) {
+        await new Promise(r => setTimeout(r, 1300 + Math.floor(Math.random() * 600)));
+      }
       const p = (await ensureUsableDebugPort(p0.id)) || p0;
       const sessionDir = path.join(SESSIONS_DIR, p.id);
       if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
@@ -9106,16 +9176,31 @@ const server = http.createServer(async (req, res) => {
       const protectedPilot=!!scriptCoordinator.profileScriptSource(p.id);
       if(protectedPilot&&!installer.checkStatus().protectedScriptCapable){failed.push(p.name+': ต้องอัปเดต สคริปต์เกม เป็น loader 1.0.7 ก่อนเปิดจอทดลอง');continue;}
       let proxyArgs = [];
+      let assignedIpKey = '';
       if (screenProxy.isEnabled()) {
+        let tunnelInfo = null;
         try {
-          const tunnelInfo = await screenProxy.acquireForProfile(p.id, { debugPort: p.debugPort });
-          if (tunnelInfo && tunnelInfo.proxyServerUrl) {
-            proxyArgs = [
-              `--proxy-server=${tunnelInfo.proxyServerUrl}`,
-              "--proxy-bypass-list=127.0.0.1;localhost"
-            ];
-          }
-        } catch (_) {}
+          tunnelInfo = await screenProxy.acquireForProfile(p.id, { debugPort: p.debugPort });
+        } catch (e) {
+          failed.push(`${p.name}: จอง Proxy IP ไม่สำเร็จ (${e.message})`);
+          continue;
+        }
+        if (!tunnelInfo || !tunnelInfo.proxyServerUrl || !tunnelInfo.lease || !tunnelInfo.lease.assigned) {
+          failed.push(`${p.name}: ${tunnelInfo?.error || 'ไม่มี Proxy IP ว่างในคิว (บล็อคการเปิดผ่านเน็ตบ้าน)'}`);
+          continue;
+        }
+        assignedIpKey = String(tunnelInfo.lease.ip || tunnelInfo.lease.proxyHost || '').toLowerCase();
+        proxyArgs = [
+          `--proxy-server=${tunnelInfo.proxyServerUrl}`,
+          "--proxy-bypass-list=127.0.0.1;localhost"
+        ];
+      }
+      if (!TEST_INSTANCE && assignedIpKey) {
+        const nowMs = Date.now();
+        const readyAt = electronNextSpawnByIp.get(assignedIpKey) || 0;
+        const waitMs = Math.max(0, readyAt - nowMs);
+        electronNextSpawnByIp.set(assignedIpKey, Math.max(nowMs, readyAt) + 6800 + Math.floor(Math.random() * 2400));
+        if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
       }
       const args = [
         ...(protectedPilot?['--pmhee-protected-script']:[]),

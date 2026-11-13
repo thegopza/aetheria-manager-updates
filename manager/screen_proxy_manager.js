@@ -316,6 +316,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   const activeLeases = new Map();  // profileId -> lease object
   const stickyHistory = new Map(); // profileId -> proxyId
   const blockedProxies = new Map(); // key (proxyId or ip:x.x.x.x) -> block record
+  const jailCooldowns = new Map(); // key (proxyId or ip:x.x.x.x) -> cooldownUntilMs
+  const JAIL_IP_COOLDOWN_MS = 30 * 60 * 1000;
 
   function getThaiDateKey(ts = now()) {
     return new Date(ts + 7 * 3600000).toISOString().slice(0, 10);
@@ -422,6 +424,43 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
   function isProxyBlocked(proxyOrLease) {
     return Boolean(getProxyBlockInfo(proxyOrLease));
+  }
+
+  function isProxyOnJailCooldown(proxyOrLease) {
+    if (!proxyOrLease || jailCooldowns.size === 0) return false;
+    const nowMs = now();
+    for (const [k, untilMs] of Array.from(jailCooldowns.entries())) {
+      if (!untilMs || untilMs <= nowMs) jailCooldowns.delete(k);
+    }
+    if (jailCooldowns.size === 0) return false;
+    const proxyId = String(proxyOrLease.proxyId || '').trim();
+    const ip = String(proxyOrLease.labelIp || proxyOrLease.ip || proxyOrLease.host || proxyOrLease.proxyHost || '').trim().toLowerCase();
+    const host = String(proxyOrLease.host || proxyOrLease.proxyHost || ip).trim().toLowerCase();
+    if (proxyId && (jailCooldowns.get(proxyId) || 0) > nowMs) return true;
+    if (ip && (jailCooldowns.get(`ip:${ip}`) || 0) > nowMs) return true;
+    if (host && (jailCooldowns.get(`ip:${host}`) || 0) > nowMs) return true;
+    return false;
+  }
+
+  function getExcludedProxyFilters() {
+    if (blockedProxies.size === 0) return {};
+    const excludeProxyIds = [];
+    const excludeHosts = [];
+    for (const b of blockedProxies.values()) {
+      if (!b || isJailOnlyBlockRecord(b)) continue;
+      if (b.proxyId && /^[A-Za-z0-9_-]{1,128}$/.test(String(b.proxyId))) {
+        excludeProxyIds.push(String(b.proxyId));
+      }
+      const host = String(b.host || b.ip || '').trim().toLowerCase();
+      const ip = String(b.ip || '').trim().toLowerCase();
+      const port = Number(b.port) || 0;
+      if (host) excludeHosts.push(port ? `${host}:${port}` : host);
+      if (ip && ip !== host) excludeHosts.push(ip);
+    }
+    const out = {};
+    if (excludeProxyIds.length > 0) out.excludeProxyIds = Array.from(new Set(excludeProxyIds));
+    if (excludeHosts.length > 0) out.excludeHosts = Array.from(new Set(excludeHosts));
+    return out;
   }
 
   // Load persisted sticky history and active leases (with Anti-Clone HWID check)
@@ -1088,12 +1127,99 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     return Array.from(blockedProxies.values()).sort((a, b) => (Number(b.blockedAt) || 0) - (Number(a.blockedAt) || 0));
   }
 
+  async function markProxyJailCooldownForProfile(profileId, meta = {}) {
+    const pid = String(profileId || '').trim();
+    const activeLease = pid ? activeLeases.get(pid) : null;
+    const { proxies } = loadPool();
+    let targetProxy = null;
+
+    if (activeLease && (activeLease.proxyId || activeLease.ip || activeLease.proxyHost)) {
+      targetProxy = {
+        proxyId: activeLease.proxyId || '',
+        labelIp: activeLease.ip || activeLease.proxyHost || '',
+        host: activeLease.proxyHost || activeLease.ip || '',
+        port: Number(activeLease.proxyPort) || 0
+      };
+    } else if (pid && stickyHistory.has(pid)) {
+      const sId = stickyHistory.get(pid);
+      const found = proxies.find(p => p.proxyId === sId);
+      if (found) {
+        targetProxy = {
+          proxyId: found.proxyId,
+          labelIp: found.labelIp || found.host || '',
+          host: found.host || found.labelIp || '',
+          port: Number(found.port) || 0
+        };
+      }
+    } else if (meta && (meta.proxyId || meta.ip || meta.host)) {
+      targetProxy = {
+        proxyId: String(meta.proxyId || '').trim(),
+        labelIp: String(meta.ip || meta.host || '').trim(),
+        host: String(meta.host || meta.ip || '').trim(),
+        port: Number(meta.port) || 0
+      };
+    }
+
+    if (pid && stickyHistory.has(pid)) {
+      stickyHistory.delete(pid);
+      saveStickyHistory();
+    }
+
+    if (!targetProxy || (!targetProxy.proxyId && !targetProxy.labelIp && !targetProxy.host)) {
+      return {
+        success: true,
+        blocked: false,
+        cooldown: false,
+        reason: 'NO_ACTIVE_PROXY_FOR_PROFILE',
+        blockedCount: blockedProxies.size
+      };
+    }
+
+    const cooldownUntilMs = now() + JAIL_IP_COOLDOWN_MS;
+    if (targetProxy.proxyId) jailCooldowns.set(targetProxy.proxyId, cooldownUntilMs);
+    if (targetProxy.labelIp) jailCooldowns.set(`ip:${String(targetProxy.labelIp).toLowerCase()}`, cooldownUntilMs);
+    if (targetProxy.host) jailCooldowns.set(`ip:${String(targetProxy.host).toLowerCase()}`, cooldownUntilMs);
+
+    const reasonText = String(meta.reason || 'ตัวละครถูกดึงเข้าคุก').trim();
+    if (typeof solver?.serviceRequest === 'function') {
+      await solver.serviceRequest('/v1/aetheria/proxy/screen-block', {
+        machineId: getMachineId(),
+        proxyId: targetProxy.proxyId || undefined,
+        ip: targetProxy.labelIp || targetProxy.host,
+        labelIp: targetProxy.labelIp || targetProxy.host,
+        host: targetProxy.host || targetProxy.labelIp,
+        proxyHost: targetProxy.host || targetProxy.labelIp,
+        port: targetProxy.port || undefined,
+        proxyPort: targetProxy.port || undefined,
+        reason: reasonText,
+        trigger: 'jailed',
+        triggerType: 'jailed',
+        profileId: pid || undefined,
+        charName: String(meta.charName || '').trim() || undefined
+      }).catch(() => {});
+    }
+
+    return {
+      success: true,
+      blocked: false,
+      cooldown: true,
+      cooldownUntilMs,
+      proxyId: targetProxy.proxyId || null,
+      ip: targetProxy.labelIp || targetProxy.host || null,
+      port: targetProxy.port || 0,
+      blockedCount: blockedProxies.size
+    };
+  }
+
   async function blockProxyForProfile(profileId, meta = {}) {
     if (isJailOnlyBlockRecord(meta)) {
+      const cd = await markProxyJailCooldownForProfile(profileId, meta);
       return {
         success: true,
         blocked: false,
         skipped: true,
+        cooldown: Boolean(cd.cooldown),
+        cooldownUntilMs: cd.cooldownUntilMs || null,
         reason: 'JAIL_DOES_NOT_BLOCK_IP',
         evictedProfileIds: [],
         blockedCount: blockedProxies.size
@@ -1351,19 +1477,32 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
     const results = [];
     let stickyChanged = false;
+    const cleanEnabledPool = enabledPool.filter(p => !isProxyOnJailCooldown(p));
 
     for (const reqItem of requestedProfiles) {
       const pid = reqItem.profileId;
       let chosenProxy = null;
       let chosenSlotNo = 1;
+      const existingActive = activeLeases.get(pid);
+
+      // Keep already-active survivor screen on its IP even if that IP entered soft jail cooldown
+      if (existingActive && poolMap.has(existingActive.proxyId)) {
+        const cand = poolMap.get(existingActive.proxyId);
+        const usedMap = slotsByProxy.get(cand.proxyId);
+        const cap = maxPerIp;
+        if (usedMap.has(pid) && usedMap.size <= cap) {
+          chosenProxy = cand;
+          chosenSlotNo = usedMap.get(pid);
+        }
+      }
 
       const orderIdx = profileOrderMap.has(pid) ? profileOrderMap.get(pid) : -1;
-      const preferredBlockProxy = (orderIdx >= 0 && Math.floor(orderIdx / maxPerIp) < enabledPool.length)
+      const preferredBlockProxy = (!chosenProxy && orderIdx >= 0 && Math.floor(orderIdx / maxPerIp) < enabledPool.length)
         ? enabledPool[Math.floor(orderIdx / maxPerIp)]
         : null;
       const preferredSlotInBlock = orderIdx >= 0 ? ((orderIdx % maxPerIp) + 1) : 1;
 
-      if (preferredBlockProxy) {
+      if (!chosenProxy && preferredBlockProxy && (!isProxyOnJailCooldown(preferredBlockProxy) || cleanEnabledPool.length === 0)) {
         const usedMap = slotsByProxy.get(preferredBlockProxy.proxyId);
         const cap = maxPerIp;
         if (usedMap.has(pid) && usedMap.size <= cap) {
@@ -1384,26 +1523,28 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       }
 
       if (!chosenProxy) {
-        const existing = activeLeases.get(pid);
-        const stickyProxyId = existing?.proxyId || stickyHistory.get(pid);
+        const stickyProxyId = existingActive?.proxyId || stickyHistory.get(pid);
 
         if (stickyProxyId && poolMap.has(stickyProxyId)) {
           const cand = poolMap.get(stickyProxyId);
-          const usedMap = slotsByProxy.get(cand.proxyId);
-          const cap = maxPerIp;
-          if (usedMap.has(pid) && usedMap.size <= cap) {
-            chosenProxy = cand;
-            chosenSlotNo = usedMap.get(pid);
-          } else if (!usedMap.has(pid) && usedMap.size < cap) {
-            chosenProxy = cand;
-            chosenSlotNo = pickFreeSlotNo(usedMap, cap);
-            usedMap.set(pid, chosenSlotNo);
+          if (!isProxyOnJailCooldown(cand) || cleanEnabledPool.length === 0) {
+            const usedMap = slotsByProxy.get(cand.proxyId);
+            const cap = maxPerIp;
+            if (usedMap.has(pid) && usedMap.size <= cap) {
+              chosenProxy = cand;
+              chosenSlotNo = usedMap.get(pid);
+            } else if (!usedMap.has(pid) && usedMap.size < cap) {
+              chosenProxy = cand;
+              chosenSlotNo = pickFreeSlotNo(usedMap, cap);
+              usedMap.set(pid, chosenSlotNo);
+            }
           }
         }
       }
 
       if (!chosenProxy) {
-        for (const cand of enabledPool) {
+        const poolOrder = cleanEnabledPool.length > 0 ? [...cleanEnabledPool, ...enabledPool.filter(p => isProxyOnJailCooldown(p))] : enabledPool;
+        for (const cand of poolOrder) {
           const usedMap = slotsByProxy.get(cand.proxyId);
           const cap = maxPerIp;
           if (usedMap.has(pid)) usedMap.delete(pid);
@@ -1534,26 +1675,35 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     };
   }
 
+  const EXPECTED_DAEMON_VERSION = 2;
+
   async function ensureDaemonRunning() {
     if (!usePersistentDaemon) return false;
+    let prevTunnelsToRestore = [];
     try {
       const ping = await daemonRequest('GET', '/ping', null, 1200);
       if (ping && ping.ok) {
-        if (Array.isArray(ping.tunnels)) {
-          for (const dt of ping.tunnels) {
-            if (dt && dt.profileId && dt.port && !tunnels.has(dt.profileId)) {
-              tunnels.set(dt.profileId, {
-                profileId: dt.profileId,
-                port: dt.port,
-                proxyUrl: dt.proxyUrl || `http://127.0.0.1:${dt.port}`,
-                daemonManaged: true,
-                server: { listening: true, close: cb => cb && cb() },
-                sockets: new Set()
-              });
+        if ((Number(ping.version) || 1) >= EXPECTED_DAEMON_VERSION) {
+          if (Array.isArray(ping.tunnels)) {
+            for (const dt of ping.tunnels) {
+              if (dt && dt.profileId && dt.port && !tunnels.has(dt.profileId)) {
+                tunnels.set(dt.profileId, {
+                  profileId: dt.profileId,
+                  port: dt.port,
+                  proxyUrl: dt.proxyUrl || `http://127.0.0.1:${dt.port}`,
+                  daemonManaged: true,
+                  server: { listening: true, close: cb => cb && cb() },
+                  sockets: new Set()
+                });
+              }
             }
           }
+          return true;
         }
-        return true;
+        // Outdated daemon (e.g. v1 fail-open) -> gracefully upgrade to v2 fail-closed and restore tunnel ports
+        prevTunnelsToRestore = Array.isArray(ping.tunnels) ? ping.tunnels : [];
+        await daemonRequest('POST', '/shutdown', {}, 1200).catch(() => {});
+        await new Promise(r => setTimeout(r, 220));
       }
     } catch (_) {}
 
@@ -1580,6 +1730,18 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
             const ping = await daemonRequest('GET', '/ping', null, 1000);
             if (ping && ping.ok) {
               await daemonRequest('POST', '/sync', buildDaemonSyncPayload(), 2000).catch(() => {});
+              for (const dt of prevTunnelsToRestore) {
+                if (dt && dt.profileId && dt.port) {
+                  const inferredDebugPort = dt.port >= 51000 ? (49876 + (dt.port - 51000)) : 49876;
+                  await daemonRequest('POST', '/ensure-tunnel', {
+                    supervisorPid,
+                    profileId: dt.profileId,
+                    debugPort: inferredDebugPort,
+                    settings: loadSettings(),
+                    lease: activeLeases.get(dt.profileId) || null
+                  }, 2000).catch(() => {});
+                }
+              }
               return true;
             }
           } catch (_) {}
@@ -1645,10 +1807,12 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
     if (settings.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
       try {
+        const excludedFilters = getExcludedProxyFilters();
         const res = await solver.serviceRequest('/v1/aetheria/proxy/screen-lease', {
           machineId: getMachineId(),
           profiles: reqProfiles,
-          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined
+          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined,
+          ...excludedFilters
         });
         if (res?.success && Array.isArray(res.leases)) {
           const validLeases = res.leases.filter(l => !l.assigned || !isProxyBlocked(l));
@@ -1666,7 +1830,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
               }
             }
             saveStickyHistory();
-            syncDaemonState().catch(() => {});
+            await syncDaemonState().catch(() => {});
             syncProxyBillingToServer().catch(() => {});
             return validLeases;
           }
@@ -1765,8 +1929,53 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       const targetHost = parsed.hostname;
       const targetPort = Number(parsed.port) || 80;
       const settings = loadSettings();
-      const lease = settings.enabled ? activeLeases.get(profileId) : null;
-      const useProxy = Boolean(settings.enabled && lease?.assigned && (!settings.onlyGameTraffic || isGameOrIpCheckHost(targetHost)));
+      const requiresProxy = Boolean(settings.enabled && (!settings.onlyGameTraffic || isGameOrIpCheckHost(targetHost)));
+      let lease = settings.enabled ? activeLeases.get(profileId) : null;
+      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+        try {
+          await acquireLeasesForProfiles([profileId]);
+          lease = activeLeases.get(profileId) || null;
+        } catch (_) {}
+      }
+      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+        res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Proxy lease unavailable (Fail-Closed)');
+      }
+      const useProxy = Boolean(requiresProxy && lease?.assigned && !isProxyBlocked(lease));
+
+      if (useProxy && lease.scheme === 'socks5') {
+        try {
+          const { socket: upstream } = await connectUpstream({
+            lease,
+            targetHost,
+            targetPort,
+            timeoutMs: 12000,
+            maxAttempts: 2
+          });
+          trackSocket(upstream);
+          const headerLines = [`${req.method} ${parsed.pathname + parsed.search} HTTP/1.1`];
+          for (const [hk, hv] of Object.entries(req.headers)) {
+            if (hk.toLowerCase() === 'proxy-connection' || hv === undefined) continue;
+            if (Array.isArray(hv)) {
+              for (const v of hv) headerLines.push(`${hk}: ${v}`);
+            } else {
+              headerLines.push(`${hk}: ${hv}`);
+            }
+          }
+          const rawReqHead = Buffer.from(headerLines.join('\r\n') + '\r\n\r\n', 'utf8');
+          recordTraffic(profileId, 0, rawReqHead.length, true);
+          upstream.write(rawReqHead);
+          req.on('data', chunk => recordTraffic(profileId, 0, chunk.length, true));
+          upstream.on('data', chunk => recordTraffic(profileId, chunk.length, 0, true));
+          req.pipe(upstream);
+          upstream.pipe(res.socket || upstream);
+          upstream.on('error', () => { try { res.destroy(); } catch (_) {} });
+          return;
+        } catch (_) {
+          if (!res.headersSent) res.writeHead(502);
+          return res.end('Bad Gateway');
+        }
+      }
 
       const headers = { ...req.headers };
       delete headers['proxy-connection'];
@@ -1775,10 +1984,10 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       }
 
       const proxyReq = http.request({
-        host: useProxy && lease.scheme !== 'socks5' ? lease.proxyHost : targetHost,
-        port: useProxy && lease.scheme !== 'socks5' ? lease.proxyPort : targetPort,
+        host: useProxy ? lease.proxyHost : targetHost,
+        port: useProxy ? lease.proxyPort : targetPort,
         method: req.method,
-        path: useProxy && lease.scheme !== 'socks5' ? req.url : (parsed.pathname + parsed.search),
+        path: useProxy ? req.url : (parsed.pathname + parsed.search),
         headers,
         timeout: 15000
       }, proxyRes => {
@@ -1811,19 +2020,27 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       }
 
       const settings = loadSettings();
+      const requiresProxy = Boolean(
+        settings.enabled &&
+        (!settings.onlyGameTraffic || isGameOrIpCheckHost(targetHost))
+      );
       let lease = settings.enabled ? activeLeases.get(profileId) : null;
-      if (settings.enabled && (!lease || isProxyBlocked(lease)) && isGameOrIpCheckHost(targetHost)) {
+      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
         try {
           await acquireLeasesForProfiles([profileId]);
           lease = activeLeases.get(profileId);
         } catch (_) {}
       }
+      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+        // Fail-Closed: NEVER fall back to Direct Home IP when Proxy Mode is ON
+        clientSocket.destroy();
+        return;
+      }
 
       const shouldRouteViaProxy = Boolean(
-        settings.enabled &&
+        requiresProxy &&
         lease?.assigned &&
-        !isProxyBlocked(lease) &&
-        (!settings.onlyGameTraffic || isGameOrIpCheckHost(targetHost))
+        !isProxyBlocked(lease)
       );
 
       if (!shouldRouteViaProxy) {
@@ -1929,17 +2146,17 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       const res = await acquireLeasesForProfiles([profileId]);
       lease = res[0] || activeLeases.get(profileId) || null;
     }
-    const tunnel = await ensureProfileTunnel(profileId, debugPort);
-    if (!lease || !lease.assigned) {
+    if (!lease || !lease.assigned || isProxyBlocked(lease)) {
       return {
         enabled: true,
-        tunnelPort: tunnel.port,
-        proxyServer: tunnel.proxyUrl,
-        proxyServerUrl: tunnel.proxyUrl,
+        tunnelPort: null,
+        proxyServer: null,
+        proxyServerUrl: null,
         lease,
         error: lease?.error || 'ไม่มี IP ว่างในคิว'
       };
     }
+    const tunnel = await ensureProfileTunnel(profileId, debugPort);
     return {
       enabled: true,
       tunnelPort: tunnel.port,
@@ -2188,9 +2405,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     let remoteSummary = null;
     if (pub.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
       try {
+        const excludedFilters = getExcludedProxyFilters();
         const r = await solver.serviceRequest('/v1/aetheria/proxy/screen-status', {
           machineId: getMachineId(),
-          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined
+          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined,
+          ...excludedFilters
         });
         if (r?.success && r.totalIps > 0) {
           remoteSummary = r;
@@ -2406,6 +2625,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     updateBillingConfig,
     syncProxyBillingToServer,
     getBlockedProxies,
+    markProxyJailCooldownForProfile,
+    isProxyOnJailCooldown,
     blockProxyForProfile,
     blockProxyManual,
     unblockProxy,

@@ -368,9 +368,13 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
   function isJailOnlyBlockRecord(obj) {
     if (!obj || typeof obj !== 'object') return false;
+    if (obj.blockIpOnJail === true || obj.isNewCharJail === true) return false;
     const trig = String(obj.trigger || obj.triggerType || '').trim().toLowerCase();
+    if (trig === 'new_char_jailed' || trig === 'jailed_new_char' || trig === 'manual') {
+      return false;
+    }
     const rsn = String(obj.reason || obj.banMessage || '').trim();
-    const hasRealBan = /บัญชีถูกระงับ|ถูกระงับ|ระงับการใช้งาน|โดนแบน|ถูกแบน|\bbanned\b|\bsuspended\b/i.test(rsn);
+    const hasRealBan = /บัญชีถูกระงับ|ถูกระงับ|ระงับการใช้งาน|โดนแบน|ถูกแบน|\bbanned\b|\bsuspended\b|สร้างตัวใหม่.*เข้าคุก|เข้าคุกทันที|บล็อค\s*IP\s*ถาวร/i.test(rsn);
     if (trig === 'jailed' || trig === 'jail' || trig === 'jail_map') return !hasRealBan;
     if (!hasRealBan && /ถูกดึงเข้าคุก|ติดคุก|เข้าแมพคุก|อยู่ในแมพคุก/.test(rsn)) return true;
     return false;

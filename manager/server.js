@@ -1103,6 +1103,10 @@ const LIVE_STATE_EVAL = `(() => {
             const clsM = cSub.split('·')[0]?.trim();
             if (clsM) s.charClass = clsM;
           }
+          if (cSub && s.baseLv == null) {
+            const lvM = cSub.match(/(?:Lv\\.?|เลเวล)\\s*(\\d+)/i);
+            if (lvM) s.baseLv = Number(lvM[1]);
+          }
           if (cMap && /คุก|เรือนจำ|prison|jail/i.test(cMap) && !/คุกใต้ดิน/i.test(cMap)) {
             s.charSelectInJail = true;
             s.map = 'คุก';
@@ -1225,6 +1229,16 @@ const LIVE_STATE_EVAL = `(() => {
 
     s.screenPhase = screenPhase;
     s.screenError = errText || null;
+
+    if (screenPhase === 'char_create' || screenPhase === 'register' || screenPhase === 'register_queue' || createForm || (authCfg && (authCfg.autoCreateChar || authCfg.register))) {
+      window.__pmLastCharCreateAt = Date.now();
+      try { sessionStorage.setItem('__pm_last_char_create_at', String(window.__pmLastCharCreateAt)); } catch (_) {}
+    }
+    let lastCharCreateAt = Number(window.__pmLastCharCreateAt || 0);
+    if (!lastCharCreateAt) {
+      try { lastCharCreateAt = Number(sessionStorage.getItem('__pm_last_char_create_at') || 0); } catch (_) {}
+    }
+    s.lastCharCreateAt = lastCharCreateAt > 0 ? lastCharCreateAt : null;
 
     if (screenPhase !== 'in_game') {
       const now = Date.now();
@@ -5920,6 +5934,57 @@ function isConfirmedOutOfJailMap(state) {
 
 const jailStoppingInFlight = new Set();
 const banStoppingInFlight = new Set();
+const recentCharCreationByProfile = new Map();
+const NEW_CHAR_JAIL_WINDOW_MS = 20 * 60 * 1000;
+
+function noteProfileCharCreationActivity(profileId, state) {
+  if (!profileId || !state) return;
+  const pid = String(profileId);
+  const now = Date.now();
+  if (
+    state.screenPhase === 'char_create' ||
+    state.screenPhase === 'register' ||
+    state.screenPhase === 'register_queue'
+  ) {
+    recentCharCreationByProfile.set(pid, now);
+  } else if (Number(state.lastCharCreateAt) > 0 && (now - Number(state.lastCharCreateAt) <= NEW_CHAR_JAIL_WINDOW_MS)) {
+    const prev = recentCharCreationByProfile.get(pid) || 0;
+    if (Number(state.lastCharCreateAt) > prev) {
+      recentCharCreationByProfile.set(pid, Number(state.lastCharCreateAt));
+    }
+  }
+}
+
+function isNewCharacterSpawnJailed(profile, target, state, now = Date.now(), priorCharName = '') {
+  const pid = String((profile && profile.id) || (target && target.id) || '');
+  const lastCreateTs = Math.max(
+    Number(state && state.lastCharCreateAt) || 0,
+    Number(recentCharCreationByProfile.get(pid)) || 0,
+    Number(target && target.lastCharCreateAt) || 0,
+    Number(profile && profile.lastCharCreateAt) || 0,
+    Number(target && target.registeredAt) || 0,
+    Number(profile && profile.registeredAt) || 0,
+    Number(target && target.identityChangedAt) || 0,
+    Number(profile && profile.identityChangedAt) || 0,
+    Number(target && target.createdAt) || 0,
+    Number(profile && profile.createdAt) || 0
+  );
+  if (lastCreateTs > 0 && (now - lastCreateTs) <= NEW_CHAR_JAIL_WINDOW_MS) {
+    return true;
+  }
+  const cls = String((state && state.charClass) || (target && target.lastCharClass) || (profile && profile.lastCharClass) || '').trim().toLowerCase();
+  if (cls === 'novice') return true;
+  const baseLv = Number(state && state.baseLv);
+  if (Number.isFinite(baseLv) && baseLv >= 1 && baseLv <= 15) return true;
+  const curChar = String((state && state.charName) || '').trim();
+  const prevChar = String(priorCharName || '').trim();
+  const firstSeenAt = Number((target && target.charFirstSeenAt) || (profile && profile.charFirstSeenAt) || 0);
+  const charJustAppeared = (!prevChar && Boolean(curChar)) || (Boolean(prevChar) && Boolean(curChar) && prevChar !== curChar) || (firstSeenAt > 0 && (now - firstSeenAt) <= 15 * 60 * 1000);
+  if (charJustAppeared && (!Number.isFinite(baseLv) || baseLv <= 25)) {
+    return true;
+  }
+  return false;
+}
 
 async function recordProfileJailedAndStop(profile, state) {
   if (!profile || !profile.id) return false;
@@ -5927,34 +5992,77 @@ async function recordProfileJailedAndStop(profile, state) {
   const now = Date.now();
   const mapName = (state && typeof state.map === 'string' && state.map.trim()) ? state.map.trim() : 'คุก';
   let newlyJailed = false;
+  let priorCharName = String(profile.lastCharName || '').trim();
+  let newCharJailed = false;
+  let shouldBlockIpNow = false;
+  const proxyActive = Boolean(
+    typeof screenProxy !== 'undefined' &&
+    screenProxy &&
+    (
+      (typeof screenProxy.isEnabled === 'function' && screenProxy.isEnabled()) ||
+      (typeof screenProxy.getProfileLeaseSnapshot === 'function' && screenProxy.getProfileLeaseSnapshot(pid)?.active)
+    )
+  );
   try {
     const fresh = loadProfiles();
     const target = fresh.find(f => String(f.id) === pid);
     if (target) {
       if (target.jailDismissedAt) return false;
+      priorCharName = String(target.lastCharName || priorCharName || '').trim();
+      newCharJailed = isNewCharacterSpawnJailed(profile, target, state, now, priorCharName);
       newlyJailed = !target.isJailed;
-      const changed = !target.isJailed || target.jailedMap !== mapName || !target.jailedAt || Boolean(target.jailAutoStopped);
+      shouldBlockIpNow = Boolean(newCharJailed && proxyActive && !target.jailIpBlocked);
+      let changed = !target.isJailed || target.jailedMap !== mapName || !target.jailedAt || Boolean(target.jailAutoStopped);
       target.isJailed = true;
       target.jailedAt = target.jailedAt || now;
       target.jailedMap = mapName;
       delete target.jailAutoStopped;
-      if (state && state.charName) target.lastCharName = state.charName;
+      if (shouldBlockIpNow) {
+        target.jailIpBlocked = true;
+        changed = true;
+      }
+      if (state && state.charName) {
+        if (!target.charFirstSeenAt || (priorCharName && priorCharName !== String(state.charName).trim())) {
+          target.charFirstSeenAt = now;
+        }
+        target.lastCharName = state.charName;
+      }
       if (state && state.charClass) target.lastCharClass = state.charClass;
       if (changed) saveProfiles(fresh);
+    } else {
+      newCharJailed = isNewCharacterSpawnJailed(profile, null, state, now, priorCharName);
+      shouldBlockIpNow = Boolean(newCharJailed && proxyActive && !profile.jailIpBlocked);
     }
   } catch (_) {}
 
-  if (newlyJailed && !jailStoppingInFlight.has(pid)) {
+  if ((newlyJailed || shouldBlockIpNow) && !jailStoppingInFlight.has(pid)) {
     jailStoppingInFlight.add(pid);
     try {
-      console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — หยุดบอทในเกม, พักคิวเปิดจอใหม่บน IP นี้ชั่วคราว 30 นาที (ไม่บล็อค IP ถาวร และไม่ตัดจอเดิม) และสุ่ม Device/Machine ID ใหม่`);
-      if (typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.markProxyJailCooldownForProfile === 'function') {
-        screenProxy.markProxyJailCooldownForProfile(pid, {
-          reason: `ตัวละครถูกดึงเข้าคุก (${mapName})`,
+      if (shouldBlockIpNow && typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.blockProxyForProfile === 'function') {
+        console.warn(`[JAIL IP BLOCK] 🚫 ตรวจพบจอ "${profile.name || pid}" สร้างตัวใหม่แล้วเข้าคุกทันที (${mapName}) ขณะเปิด Proxy — บล็อค Proxy IP ถาวร, ย้ายจออื่นออกจาก IP นี้ และสุ่ม Device/Machine ID ใหม่!`);
+        screenProxy.blockProxyForProfile(pid, {
+          reason: `สร้างตัวใหม่แล้วเข้าคุกทันที (${mapName}) — บล็อค IP ถาวร`,
+          trigger: 'new_char_jailed',
+          blockIpOnJail: true,
+          stopBannedProfile: true,
           profileName: profile.name || pid,
           charName: (state && state.charName) || profile.lastCharName || '',
           account: profile.account || ''
+        }).then(blockRes => {
+          if (blockRes && blockRes.blocked && blockRes.entry) {
+            console.warn(`[Proxy Blacklist] 🚫 บล็อค IP ${blockRes.entry.ip}:${blockRes.entry.port || ''} ถาวร (สร้างตัวใหม่เข้าคุกทันที)`);
+          }
         }).catch(() => {});
+      } else {
+        console.warn(`[JAIL ALERT] 🚨 ตรวจพบจอ "${profile.name || pid}" อยู่ในแมพคุก (${mapName}) — หยุดบอทในเกม, พักคิวเปิดจอใหม่บน IP นี้ชั่วคราว 30 นาที (ไม่บล็อค IP ถาวร และไม่ตัดจอเดิม) และสุ่ม Device/Machine ID ใหม่`);
+        if (typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.markProxyJailCooldownForProfile === 'function') {
+          screenProxy.markProxyJailCooldownForProfile(pid, {
+            reason: `ตัวละครถูกดึงเข้าคุก (${mapName})`,
+            profileName: profile.name || pid,
+            charName: (state && state.charName) || profile.lastCharName || '',
+            account: profile.account || ''
+          }).catch(() => {});
+        }
       }
       if (typeof browserMode !== 'undefined' && browserMode && typeof browserMode.rotateDeviceGroup === 'function') {
         browserMode.rotateDeviceGroup(pid).then(grp => {
@@ -6153,6 +6261,7 @@ setInterval(async () => {
       await Promise.all(batch.map(async (p) => {
         try {
           const state = await queryClientState(p.debugPort);
+          noteProfileCharCreationActivity(p.id, state);
           const nowPoll = Date.now();
           if (state && ((state.humanCheck && state.humanCheck.active) || (nowPoll - (lastEmbeddedBridgePollAt.get(p.id) || 0) >= 15000))) {
             lastEmbeddedBridgePollAt.set(p.id, nowPoll);
@@ -8042,6 +8151,7 @@ const server = http.createServer(async (req, res) => {
         }
 
         if (alive && liveState && !liveState.error && !liveState._syntheticLoading) {
+          noteProfileCharCreationActivity(p.id, liveState);
           if (isAccountBannedState(liveState)) {
             if (!p.banDismissedAt) {
               if (!p.isBanned) {
@@ -8600,6 +8710,11 @@ const server = http.createServer(async (req, res) => {
           delete profiles[idx].jailedMap;
           delete profiles[idx].jailAutoStopped;
           delete profiles[idx].jailDismissedAt;
+          delete profiles[idx].jailIpBlocked;
+          delete profiles[idx].lastCharName;
+          delete profiles[idx].charFirstSeenAt;
+          profiles[idx].identityChangedAt = Date.now();
+          recentCharCreationByProfile.set(String(id), Date.now());
         }
         saveProfiles(profiles);
         if (nextPassword) credentials.setPassword(id, nextPassword);

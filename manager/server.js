@@ -7158,7 +7158,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.59.0'
+  managerVersion: '4.60.0'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7191,6 +7191,8 @@ const server = http.createServer(async (req, res) => {
     pathname === '/api/auth/register' ||
     pathname === '/api/fleet' ||
     pathname.startsWith('/api/fleet/') ||
+    pathname === '/api/support' ||
+    pathname.startsWith('/api/support/') ||
     pathname === '/api/game-install/browse' ||
     pathname === '/api/test' ||
     pathname.startsWith('/api/test/')
@@ -7399,6 +7401,85 @@ const server = http.createServer(async (req, res) => {
 
   // Multi-PC Fleet Card Dashboard & Remote Manager Relay — see remote_fleet.js
   if (await remoteFleet.handleRoute(req, res, pathname, parsedUrl, sendJSON)) return;
+
+  // Support Chat (Messenger synced by Username)
+  if (pathname === '/api/support/poll' && req.method === 'GET') {
+    try {
+      const afterId = Math.max(0, Number.parseInt(parsedUrl.searchParams.get('afterId') || '0', 10) || 0);
+      const result = await humanCheckSolver.supportRequest(`/v1/aetheria/machine/support/poll?afterId=${afterId}`, null);
+      return sendJSON(result);
+    } catch (e) {
+      return sendJSON({
+        success: false,
+        code: e?.code || 'SUPPORT_POLL_FAILED',
+        error: e?.message || 'โหลดประวัติแชทไม่สำเร็จ'
+      }, e?.status && e.status >= 400 ? e.status : 500);
+    }
+  }
+
+  if (pathname === '/api/support/send' && req.method === 'POST') {
+    let body = '';
+    let tooLarge = false;
+    req.on('data', c => {
+      if (tooLarge) return;
+      body += c;
+      if (Buffer.byteLength(body, 'utf8') > 750000) {
+        tooLarge = true;
+        sendJSON({ success: false, code: 'BODY_TOO_LARGE', error: 'รูปภาพหรือข้อความมีขนาดใหญ่เกินไป' }, 413);
+        req.destroy();
+      }
+    });
+    req.on('end', async () => {
+      if (tooLarge) return;
+      try {
+        const data = JSON.parse(body || '{}');
+        const result = await humanCheckSolver.supportRequest('/v1/aetheria/machine/support/send', {
+          body: typeof data.body === 'string' ? data.body : (typeof data.text === 'string' ? data.text : ''),
+          imageDataUrl: typeof data.imageDataUrl === 'string' ? data.imageDataUrl : '',
+          machineName: getEffectiveDeviceNickname(),
+          hwidCode: humanCheckSolver.getMachineHwidShort?.() || ''
+        });
+        return sendJSON(result);
+      } catch (e) {
+        return sendJSON({
+          success: false,
+          code: e?.code || 'SUPPORT_SEND_FAILED',
+          error: e?.message || 'ส่งข้อความไม่สำเร็จ'
+        }, e?.status && e.status >= 400 ? e.status : 400);
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/support/read' && req.method === 'POST') {
+    let body = '';
+    let tooLarge = false;
+    req.on('data', c => {
+      if (tooLarge) return;
+      body += c;
+      if (Buffer.byteLength(body, 'utf8') > 8192) {
+        tooLarge = true;
+        sendJSON({ success: false, code: 'BODY_TOO_LARGE', error: 'คำขอมีขนาดใหญ่เกินไป' }, 413);
+        req.destroy();
+      }
+    });
+    req.on('end', async () => {
+      if (tooLarge) return;
+      try {
+        const data = JSON.parse(body || '{}');
+        const upToId = Math.max(0, Number.parseInt(data.upToId ?? '0', 10) || 0);
+        const result = await humanCheckSolver.supportRequest('/v1/aetheria/machine/support/read', { upToId });
+        return sendJSON(result);
+      } catch (e) {
+        return sendJSON({
+          success: false,
+          code: e?.code || 'SUPPORT_READ_FAILED',
+          error: e?.message || 'อัปเดตสถานะการอ่านไม่สำเร็จ'
+        }, e?.status && e.status >= 400 ? e.status : 400);
+      }
+    });
+    return;
+  }
 
   // Gatekeeper: Block game launch & bot control routes if machine access is pending/revoked or logged out
   const currentAccessStateObj = typeof humanCheckSolver.getAccessState === 'function' ? humanCheckSolver.getAccessState() : {};

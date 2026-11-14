@@ -5036,6 +5036,9 @@ function initDeviceNickname() {
     }
     updateHeaderAuthUi();
     renderAccessLockOverlay();
+    window.dispatchEvent(new CustomEvent('pm-access-state-changed', {
+      detail: typeof window.__getAccessUiState === 'function' ? window.__getAccessUiState() : null
+    }));
     if (initialAccessHydrated && typeof window.__pmNotifyAccessHydrated === "function") {
       window.__pmNotifyAccessHydrated();
     }

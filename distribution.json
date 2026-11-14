@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "2c6a3861a153a627f4e6b9e91bc3cce0624ab9d1",
+  "sourceCommit": "7fdff9f9109d2175d2b95fd6b2400faa778baffc",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -60,7 +60,7 @@
     },
     {
       "path": "manager/human_check_solver.js",
-      "sha256": "0f0b24b720309beea578080956b4a70f4f4c529eed621c43fbf803f3afb1c49b"
+      "sha256": "b31e6b4473736cbc27262d2dbac8a2766946d70cee523ae4608587c5f6ffcf14"
     },
     {
       "path": "manager/image_board_solver.js",
@@ -132,7 +132,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "061a13fd9f3ca185c267db7c646879ac835eed0c684b4a320eeab931273dc8b2"
+      "sha256": "de4b6d57087e901a7e6a1bdcfde439b718a7693a70e079eb5e3d7748d623cf33"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "dc3d740aff4260df205166fbb78b002a2b7cadb0f7257abecdf1d8b5a29aa25d"
+      "sha256": "60c31c9b84e85d0623559e5a8dfa419a49ea4a3069e39d30663e01bb2205925b"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -263,12 +263,20 @@
       "sha256": "74926de3c3ce5d6b07abc271b93e0867564d7b3a55899c59ec92cc37110fdc2f"
     },
     {
+      "path": "manager/public/support_chat.css",
+      "sha256": "4e7f45d9daf5e029deff1acebf4f63d5329d9ba938e634cab7637ff4b5211570"
+    },
+    {
+      "path": "manager/public/support_chat.js",
+      "sha256": "ab4d90111b31ebf81514ff3ce26ee0df3211be2e560c677102595d04f56a104b"
+    },
+    {
       "path": "manager/public/update_log.js",
-      "sha256": "b7282f0021fbe172e552655d0be11c17a3769646500991ee1d98b48878181fdf"
+      "sha256": "241147e40d5e26088a9e2ca91b0d586b6448ade6c8fa99c81c77fe538de2b273"
     },
     {
       "path": "manager/remote_fleet.js",
-      "sha256": "2935b627cce3bdfc7532aa7714cbf5a1e9f596878345288ff5ea6c3073045713"
+      "sha256": "490c2764a4a386b946ebf0cb72219840bb1cf29b56e1da51528ca342c18e17bd"
     },
     {
       "path": "manager/screen_proxy_manager.js",
@@ -296,7 +304,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "0c88998b5bb6b66b3f4ff370b98969311b99edc179d7fb631e84a40e6f730ee8"
+      "sha256": "deed16ed1f834da1bb08b49a09a66c0017d7567751b654b020291782e9935830"
     },
     {
       "path": "manager/test_isolation.js",

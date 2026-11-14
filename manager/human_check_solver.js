@@ -309,7 +309,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   async function call(route, payload) {
     const credential = await ensureAccount();
     try {
-      const result = await requestJSON(route, payload, credential.token);
+      const result = await requestJSON(route, payload, credential.token, { machineHwid });
       serviceAvailable = true;
       if (result && typeof result === 'object') applyAccessMeta(result);
       return result;
@@ -344,7 +344,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
           if (fresh?.accountId && fresh.accountId !== prevAccountId) {
             emitAccountChanged(fresh.accountId, prevAccountId);
           }
-          const retried = await requestJSON(route, payload, fresh.token);
+          const retried = await requestJSON(route, payload, fresh.token, { machineHwid });
           serviceAvailable = true;
           if (retried && typeof retried === 'object') applyAccessMeta(retried);
           return retried;
@@ -509,8 +509,27 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       throw err;
     }
     const result = await requestJSON(route, payload, account.token, {
+      machineHwid,
       timeoutMs: Math.max(5000, Math.min(40000, Number(opts && opts.timeoutMs) || 25000)),
       responseLimit: Math.max(131072, Math.min(16 * 1024 * 1024, Number(opts && opts.responseLimit) || 8 * 1024 * 1024))
+    });
+    if (result && typeof result === 'object') applyAccessMeta(result);
+    return result;
+  }
+  async function supportRequest(route, payload = null, opts = {}) {
+    if (!/^\/v1\/aetheria\/machine\/support\/(?:poll|send|read)(?:\?.*)?$/.test(route)) {
+      throw new Error('Unsupported support route');
+    }
+    if (loggedOutExplicitly || !account?.token || !isUserAccount || !username) {
+      const err = new Error('กรุณาเข้าสู่ระบบด้วยบัญชี Username ก่อนใช้งานแชทแจ้งปัญหา');
+      err.status = 401;
+      err.code = 'USER_ACCOUNT_REQUIRED';
+      throw err;
+    }
+    const result = await requestJSON(route, payload, account.token, {
+      machineHwid,
+      timeoutMs: Math.max(5000, Math.min(30000, Number(opts && opts.timeoutMs) || 15000)),
+      responseLimit: Math.max(262144, Math.min(8 * 1024 * 1024, Number(opts && opts.responseLimit) || 4 * 1024 * 1024))
     });
     if (result && typeof result === 'object') applyAccessMeta(result);
     return result;
@@ -591,6 +610,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     loginUserAccount,
     logoutUserAccount,
     fleetRequest,
+    supportRequest,
     serviceRequest: (route, payload) => {
       if (route !== '/v1/aetheria/health' && !/^\/v1\/aetheria\/(?:script|usage|billing|proxy|offline|machine)\/[a-z-]+(?:\/[a-z-]+)?$/.test(route)) throw new Error('Unsupported coordinator route');
       return call(route, payload);

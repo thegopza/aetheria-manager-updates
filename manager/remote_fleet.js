@@ -70,7 +70,7 @@ function validateRelayedApiPath(rawPath) {
   if (p === "/api/auth/logout" || p === "/api/auth/login" || p === "/api/auth/register") {
     return { ok: false, status: 403, code: "REMOTE_AUTH_LOCKED", error: "ไม่สามารถออกจากระบบหรือสลับบัญชีระหว่างการควบคุมระยะไกลได้" };
   }
-  if (p === "/api/fleet" || p.startsWith("/api/fleet/") || p === "/api/game-install/browse" || p === "/api/test" || p.startsWith("/api/test/")) {
+  if (p === "/api/fleet" || p.startsWith("/api/fleet/") || p === "/api/support" || p.startsWith("/api/support/") || p === "/api/game-install/browse" || p === "/api/test" || p.startsWith("/api/test/")) {
     return { ok: false, status: 403, code: "REMOTE_ROUTE_BLOCKED", error: "ไม่อนุญาตให้เรียกใช้งานเส้นทางนี้จากระยะไกล" };
   }
   return { ok: true, fullPath: p + u.search };

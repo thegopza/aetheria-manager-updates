@@ -6003,6 +6003,7 @@ function switchMainTab(tabName) {
       window.FleetDashboard.onTabShown();
     }
   }
+  window.dispatchEvent(new CustomEvent("pm-main-tab-changed", { detail: { tabName } }));
 }
 window.switchMainTab = switchMainTab;
 

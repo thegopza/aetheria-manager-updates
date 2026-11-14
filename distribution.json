@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "7fdff9f9109d2175d2b95fd6b2400faa778baffc",
+  "sourceCommit": "9924ea9536a70cafc0a6b8b1b590c2d822d90590",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -132,7 +132,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "de4b6d57087e901a7e6a1bdcfde439b718a7693a70e079eb5e3d7748d623cf33"
+      "sha256": "ff652b6fb3c500e56471c0c9ab43f9d3daee2297d6bf79ed4230fc7eb802b099"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -168,11 +168,11 @@
     },
     {
       "path": "manager/public/fleet_dashboard.css",
-      "sha256": "561dda5cbf635d3ada97a455a9253421cfb015111116af22cc7347f184bd8b59"
+      "sha256": "e2505a89eb794c28b0511735c392f2794316137de70b4bd18b487f7b979ccb24"
     },
     {
       "path": "manager/public/fleet_dashboard.js",
-      "sha256": "9d8572b6901dea7a7b80feccf8adfa4ffd53f1e42039542d31598c1f86889007"
+      "sha256": "8dac34c3be2a4a7cec4a94c4b3f7940e4ad4330f138b2c15ddb0e60d66b9e2ab"
     },
     {
       "path": "manager/public/game-classes.json",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "60c31c9b84e85d0623559e5a8dfa419a49ea4a3069e39d30663e01bb2205925b"
+      "sha256": "9dfd18b78af94097ea916c89a76e187e1f78a57724793978c444b6425d4692b7"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -272,7 +272,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "241147e40d5e26088a9e2ca91b0d586b6448ade6c8fa99c81c77fe538de2b273"
+      "sha256": "5ef8bd179e3f9e20eada911f763938dd8dc2933de1b8432a3eae5e55b2042aed"
     },
     {
       "path": "manager/remote_fleet.js",

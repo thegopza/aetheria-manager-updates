@@ -60,6 +60,234 @@
     return Boolean(pane && pane.classList.contains("active"));
   }
 
+  function isProfilesTabActive() {
+    const pane = document.querySelector('.tab-pane[data-pane="profiles"]');
+    return Boolean(pane && pane.classList.contains("active"));
+  }
+
+  function getLocalFallbackInfo() {
+    const st = typeof window.__getAccessUiState === "function" ? window.__getAccessUiState() : null;
+    const nickEl = document.getElementById("device-nickname-input");
+    const hwidEl = document.getElementById("device-hwid-short");
+    const nickRaw = (nickEl && nickEl.value ? nickEl.value.trim() : "") || (st && st.nickname && st.nickname !== "-" ? st.nickname : "");
+    const hwidRaw = (hwidEl && hwidEl.textContent ? hwidEl.textContent.trim() : "") || (st && st.hwidShort ? st.hwidShort : "");
+    const hwidClean = (hwidRaw && hwidRaw !== "----" && hwidRaw !== "-") ? hwidRaw : "";
+    return {
+      username: (st && st.username) || fleetMeta.username || "",
+      isUserAccount: Boolean(st && st.isUserAccount),
+      requiresLogin: Boolean(st && st.requiresLogin),
+      deviceName: nickRaw || "เครื่องปัจจุบัน",
+      hwidCode: hwidClean,
+      machineKey: fleetMeta.currentMachineKey || hwidClean || "__local__"
+    };
+  }
+
+  function getSwitcherMachines() {
+    const localInfo = getLocalFallbackInfo();
+    const list = machines.map(m => ({ ...m }));
+    let hasCurrent = false;
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i];
+      if (m.isCurrentMachine || (localInfo.machineKey && m.machineKey === localInfo.machineKey)) {
+        hasCurrent = true;
+        list[i] = {
+          ...m,
+          isCurrentMachine: true,
+          isOnline: true,
+          remoteReady: true,
+          deviceName: m.deviceName || localInfo.deviceName,
+          hwidCode: m.hwidCode || localInfo.hwidCode || m.machineKey
+        };
+      }
+    }
+    if (!hasCurrent) {
+      list.unshift({
+        machineKey: localInfo.machineKey,
+        hwidCode: localInfo.hwidCode || (localInfo.machineKey !== "__local__" ? localInfo.machineKey : "----"),
+        deviceName: localInfo.deviceName,
+        isOnline: true,
+        remoteReady: true,
+        legacyOnly: false,
+        isCurrentMachine: true
+      });
+    }
+    list.sort((a, b) => {
+      if (Boolean(a.isCurrentMachine) !== Boolean(b.isCurrentMachine)) return a.isCurrentMachine ? -1 : 1;
+      const aReady = Boolean(a.isOnline && a.remoteReady);
+      const bReady = Boolean(b.isOnline && b.remoteReady);
+      if (aReady !== bReady) return aReady ? -1 : 1;
+      if (Boolean(a.isOnline) !== Boolean(b.isOnline)) return a.isOnline ? -1 : 1;
+      return String(a.deviceName || a.machineKey || "").localeCompare(String(b.deviceName || b.machineKey || ""));
+    });
+    return list;
+  }
+
+  function buildSwitcherOptionsHtml(selectedKey) {
+    const list = getSwitcherMachines();
+    if (!list.length) return "";
+    return list.map(m => {
+      const name = m.deviceName || m.hostname || m.machineKey || "เครื่อง";
+      const hwid = m.hwidCode && m.hwidCode !== "----" ? m.hwidCode : (m.machineKey && m.machineKey !== "__local__" ? m.machineKey : "");
+      const idSuffix = hwid ? ` (${hwid})` : "";
+      let label = "";
+      if (m.isCurrentMachine) {
+        label = `⭐ ${name}${idSuffix} — เครื่องปัจจุบัน`;
+      } else if (m.isOnline && m.remoteReady) {
+        label = `🛰️ ${name}${idSuffix}`;
+      } else if (m.legacyOnly) {
+        label = `📦 ${name}${idSuffix} — เวอร์ชันเก่า`;
+      } else {
+        label = `⚫ ${name}${idSuffix} — ออฟไลน์`;
+      }
+      const isSel = selectedKey ? (m.machineKey === selectedKey) : Boolean(m.isCurrentMachine);
+      const canSelect = Boolean(m.isCurrentMachine || (m.isOnline && m.remoteReady) || isSel);
+      return `<option value="${esc(m.machineKey)}"${isSel ? " selected" : ""}${!canSelect ? " disabled" : ""}>${esc(label)}</option>`;
+    }).join("");
+  }
+
+  function ensureGlobalTopbarMounted() {
+    if (window.__PM_REMOTE_MODE__) return null;
+    const bar = document.getElementById("fleet-global-topbar");
+    if (!bar) return null;
+    if (bar.dataset.mounted !== "1") {
+      bar.dataset.mounted = "1";
+      bar.innerHTML = `
+        <div class="fleet-remote-topbar-left">
+          <button type="button" class="btn btn-sm btn-secondary fleet-nav-fleet-btn" id="fleet-global-all-btn">🖥️ หน้าเครื่องทั้งหมด</button>
+          <button type="button" class="btn btn-sm fleet-home-btn" id="fleet-global-home-btn">⭐ เครื่องตัวเอง</button>
+          <select class="fleet-remote-select" id="fleet-global-switcher" aria-label="สลับเครื่องที่ควบคุม"></select>
+          <span class="fleet-hwid-chip" id="fleet-global-hwid" title="คลิกเพื่อคัดลอก HWID">----</span>
+          <span class="fleet-local-star-pill" id="fleet-global-status-pill">⭐ เครื่องปัจจุบัน (เครื่องนี้)</span>
+        </div>
+        <div class="fleet-remote-topbar-right">
+          <span class="fleet-online-summary-pill" id="fleet-global-online-pill" role="button" tabindex="0" title="คลิกเพื่อเปิดหน้าเครื่องทั้งหมด">🟢 ออนไลน์ 1/1 เครื่อง</span>
+          <button type="button" class="btn btn-sm btn-secondary" id="fleet-global-reload-btn">🔄 รีเฟรช</button>
+        </div>
+      `;
+
+      document.getElementById("fleet-global-all-btn")?.addEventListener("click", () => {
+        if (typeof window.switchMainTab === "function") window.switchMainTab("fleet");
+      });
+      document.getElementById("fleet-global-home-btn")?.addEventListener("click", () => {
+        if (typeof window.switchMainTab === "function") window.switchMainTab("profiles");
+      });
+      document.getElementById("fleet-global-reload-btn")?.addEventListener("click", () => {
+        fetchMachines(true);
+        if (isProfilesTabActive()) {
+          document.getElementById("btn-refresh")?.click();
+        }
+      });
+      const onlinePill = document.getElementById("fleet-global-online-pill");
+      if (onlinePill) {
+        const handlePillClick = () => {
+          const info = getLocalFallbackInfo();
+          const loggedIn = Boolean((info.isUserAccount && info.username && !info.requiresLogin) || fleetMeta.username);
+          if (!loggedIn) {
+            document.getElementById("btn-account-auth")?.click();
+          } else if (typeof window.switchMainTab === "function") {
+            window.switchMainTab("fleet");
+          }
+        };
+        onlinePill.addEventListener("click", handlePillClick);
+        onlinePill.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handlePillClick();
+          }
+        });
+      }
+      const hwidChip = document.getElementById("fleet-global-hwid");
+      if (hwidChip) {
+        hwidChip.addEventListener("click", () => {
+          const val = hwidChip.dataset.hwid || "";
+          if (!val || val === "----") return;
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(val).catch(() => {});
+          }
+          hwidChip.dataset.copiedUntil = String(Date.now() + 1200);
+          hwidChip.textContent = val + " ✓";
+          setTimeout(() => {
+            hwidChip.dataset.copiedUntil = "0";
+            hwidChip.textContent = hwidChip.dataset.hwid || "----";
+          }, 1200);
+        });
+      }
+      const switcher = document.getElementById("fleet-global-switcher");
+      if (switcher) {
+        switcher.addEventListener("change", function () {
+          const nextKey = this.value;
+          const list = getSwitcherMachines();
+          const nextTarget = list.find(x => x.machineKey === nextKey);
+          const curMachine = list.find(x => x.isCurrentMachine);
+          if (!nextKey || (nextTarget && nextTarget.isCurrentMachine)) {
+            if (typeof window.switchMainTab === "function") window.switchMainTab("profiles");
+            return;
+          }
+          if (curMachine) this.value = curMachine.machineKey;
+          openRemote(nextKey);
+        });
+      }
+    }
+    bar.style.display = "flex";
+    document.body && document.body.classList && document.body.classList.add("has-fleet-global-bar");
+    return bar;
+  }
+
+  function syncGlobalTopbar() {
+    if (window.__PM_REMOTE_MODE__) return;
+    const bar = ensureGlobalTopbarMounted();
+    if (!bar) return;
+
+    const allBtn = document.getElementById("fleet-global-all-btn");
+    const homeBtn = document.getElementById("fleet-global-home-btn");
+    const switcher = document.getElementById("fleet-global-switcher");
+    const hwidChip = document.getElementById("fleet-global-hwid");
+    const onlinePill = document.getElementById("fleet-global-online-pill");
+
+    const fleetActive = isFleetTabActive();
+    const profilesActive = isProfilesTabActive();
+    if (allBtn) allBtn.classList.toggle("is-active", fleetActive);
+    if (homeBtn) homeBtn.classList.toggle("is-active", profilesActive);
+
+    const list = getSwitcherMachines();
+    const cur = list.find(m => m.isCurrentMachine) || list[0] || null;
+    const targetVal = cur ? cur.machineKey : "__local__";
+    if (switcher && document.activeElement !== switcher) {
+      const optsHtml = buildSwitcherOptionsHtml(targetVal);
+      if (switcher.dataset.lastOpts !== optsHtml) {
+        switcher.innerHTML = optsHtml;
+        switcher.dataset.lastOpts = optsHtml;
+      }
+      if (targetVal && switcher.value !== targetVal) {
+        switcher.value = targetVal;
+      }
+    }
+
+    if (hwidChip) {
+      const hwidVal = (cur && cur.hwidCode && cur.hwidCode !== "----")
+        ? cur.hwidCode
+        : (cur && cur.machineKey && cur.machineKey !== "__local__" ? cur.machineKey : "----");
+      hwidChip.dataset.hwid = hwidVal;
+      if (!hwidChip.dataset.copiedUntil || Date.now() > Number(hwidChip.dataset.copiedUntil)) {
+        hwidChip.textContent = hwidVal;
+      }
+    }
+
+    if (onlinePill) {
+      const info = getLocalFallbackInfo();
+      const loggedIn = Boolean((info.isUserAccount && info.username && !info.requiresLogin) || fleetMeta.username);
+      if (!loggedIn) {
+        onlinePill.classList.add("is-guest");
+        onlinePill.textContent = "👤 เข้าสู่ระบบเพื่อเชื่อมหลายเครื่อง";
+      } else {
+        onlinePill.classList.remove("is-guest");
+        const total = Math.max(1, machines.length || list.length);
+        const online = Math.max(1, machines.filter(m => m.isOnline).length || list.filter(m => m.isOnline).length);
+        onlinePill.textContent = `🟢 ออนไลน์ ${online}/${total} เครื่อง`;
+      }
+    }
+  }
+
   function ensureShellMounted() {
     const pane = document.getElementById("fleet-dashboard-pane");
     if (!pane) return null;
@@ -195,7 +423,7 @@
           const cls = `fleet-merit-chip ${isDebt ? "is-debt" : "is-clean"} ${m.isCurrentMachine ? "is-current" : ""}`;
           const lbl = esc(m.deviceName || m.hwidCode || m.machineKey || "-");
           const val = isDebt ? `ติดลบ ${formatMerit(dMerit)} ส่วนบุญ` : "ไม่ติดลบ (0 บุญ)";
-          return `<span class="${cls}" title="HWID: ${esc(m.hwidCode || m.machineKey || "")}">💻 <b>${lbl}</b>: ${val}</span>`;
+          return `<span class="${cls}" title="HWID: ${esc(m.hwidCode || m.machineKey || "")}">${m.isCurrentMachine ? "⭐" : "💻"} <b>${lbl}${m.isCurrentMachine ? " (เครื่องนี้)" : ""}</b>: ${val}</span>`;
         });
         if (ws && Number(ws.unassignedDebtUnits || 0) < 0) {
           const unMerit = ws.unassignedDebtMerit != null ? ws.unassignedDebtMerit : (Number(ws.unassignedDebtUnits) / 100);
@@ -318,7 +546,7 @@
 
       let rolePill = "";
       if (m.isCurrentMachine) {
-        rolePill = '<span class="fleet-role-pill current">📍 เครื่องนี้</span>';
+        rolePill = '<span class="fleet-role-pill current">⭐ เครื่องปัจจุบัน</span>';
       } else if (m.remoteReady && m.isOnline) {
         rolePill = '<span class="fleet-role-pill remote-ready">🛰️ พร้อมรีโมท</span>';
       } else if (m.legacyOnly) {
@@ -337,7 +565,7 @@
              <button type="button" class="fleet-icon-btn" data-fleet-rename-cancel title="ยกเลิก">✕</button>
            </div>`
         : `<div class="fleet-name-row">
-             <span class="fleet-machine-name">${esc(m.deviceName || m.hostname || m.machineKey)}</span>
+             <span class="fleet-machine-name">${m.isCurrentMachine ? "⭐ " : ""}${esc(m.deviceName || m.hostname || m.machineKey)}</span>
              <button type="button" class="fleet-icon-btn" data-fleet-rename-start="${esc(m.machineKey)}" title="เปลี่ยนชื่อเครื่อง">✏️</button>
            </div>`;
 
@@ -349,7 +577,7 @@
       let actionHtml = "";
       if (m.isCurrentMachine) {
         actionHtml = `
-          <button type="button" class="fleet-btn-primary" data-fleet-go-local>🎮 กลับไปจัดการเครื่องนี้</button>
+          <button type="button" class="fleet-btn-primary" data-fleet-go-local>⭐ จัดการเครื่องปัจจุบัน (เครื่องนี้)</button>
         `;
       } else if (m.isOnline && m.remoteReady) {
         actionHtml = `
@@ -534,18 +762,14 @@
     if (!overlay) return;
     activeRemoteKey = machineKey;
     const target = machines.find(m => m.machineKey === machineKey);
-    const selectable = machines.filter(m => m.isOnline && (m.remoteReady || m.isCurrentMachine));
-    const optionsHtml = selectable.map(m => {
-      const label = `${m.isCurrentMachine ? "📍 " : "🛰️ "}${m.deviceName || m.machineKey} (${m.hwidCode || m.machineKey})`;
-      return `<option value="${esc(m.machineKey)}"${m.machineKey === machineKey ? " selected" : ""}>${esc(label)}</option>`;
-    }).join("");
+    const optionsHtml = buildSwitcherOptionsHtml(machineKey);
 
     overlay.style.display = "flex";
     overlay.innerHTML = `
       <div class="fleet-remote-topbar">
         <div class="fleet-remote-topbar-left">
           <button type="button" class="btn btn-sm btn-secondary" id="fleet-remote-back">⬅️ กลับหน้าเครื่องทั้งหมด</button>
-          <button type="button" class="btn btn-sm" id="fleet-remote-home" style="background:rgba(16,185,129,0.18);border:1px solid rgba(52,211,153,0.45);color:#6ee7b7;font-weight:700;">🏠 กลับเครื่องตัวเอง</button>
+          <button type="button" class="btn btn-sm fleet-home-btn" id="fleet-remote-home">⭐ กลับเครื่องตัวเอง</button>
           <select class="fleet-remote-select" id="fleet-remote-switcher">${optionsHtml || `<option value="${esc(machineKey)}">${esc(machineKey)}</option>`}</select>
           <span class="fleet-hwid-chip">${esc(target?.hwidCode || machineKey)}</span>
           <span class="fleet-remote-lock-pill">🔒 ล็อก Logout/สลับบัญชีระหว่างรีโมท</span>
@@ -564,6 +788,11 @@
       </div>
     `;
 
+    const remoteSwitcher = document.getElementById("fleet-remote-switcher");
+    if (remoteSwitcher && optionsHtml) {
+      remoteSwitcher.dataset.lastOpts = optionsHtml;
+    }
+
     const iframe = document.getElementById("fleet-remote-iframe");
     const loader = document.getElementById("fleet-remote-loading");
     if (iframe) {
@@ -572,7 +801,10 @@
       });
     }
 
-    document.getElementById("fleet-remote-back")?.addEventListener("click", closeRemote);
+    document.getElementById("fleet-remote-back")?.addEventListener("click", () => {
+      closeRemote();
+      if (typeof window.switchMainTab === "function") window.switchMainTab("fleet");
+    });
     document.getElementById("fleet-remote-close")?.addEventListener("click", closeRemote);
     document.getElementById("fleet-remote-home")?.addEventListener("click", () => {
       closeRemote();
@@ -587,10 +819,10 @@
     document.getElementById("fleet-remote-popout")?.addEventListener("click", () => {
       window.open(`/remote/${encodeURIComponent(activeRemoteKey)}/`, "_blank", "noopener");
     });
-    document.getElementById("fleet-remote-switcher")?.addEventListener("change", function () {
+    remoteSwitcher?.addEventListener("change", function () {
       const nextKey = this.value;
       if (!nextKey || nextKey === activeRemoteKey) return;
-      const nextTarget = machines.find(x => x.machineKey === nextKey);
+      const nextTarget = getSwitcherMachines().find(x => x.machineKey === nextKey);
       if (nextTarget && nextTarget.isCurrentMachine) {
         closeRemote();
         if (typeof window.switchMainTab === "function") window.switchMainTab("profiles");
@@ -607,13 +839,13 @@
       overlay.style.display = "none";
       overlay.innerHTML = "";
     }
+    syncGlobalTopbar();
     fetchMachines(true);
   }
 
   async function fetchMachines(force = false) {
     if (loading && !force) return;
     if (!force && editingMachineKey) return;
-    if (!force && activeRemoteKey) return;
     if (!force && window.PmUiGuard && typeof window.PmUiGuard.isInteractionBusy === "function" && window.PmUiGuard.isInteractionBusy()) {
       return;
     }
@@ -642,6 +874,18 @@
     } finally {
       loading = false;
       updateTabBadge();
+      syncGlobalTopbar();
+      if (activeRemoteKey) {
+        const remoteSwitcher = document.getElementById("fleet-remote-switcher");
+        if (remoteSwitcher && document.activeElement !== remoteSwitcher) {
+          const remoteOptsHtml = buildSwitcherOptionsHtml(activeRemoteKey);
+          if (remoteOptsHtml && remoteSwitcher.dataset.lastOpts !== remoteOptsHtml) {
+            remoteSwitcher.innerHTML = remoteOptsHtml;
+            remoteSwitcher.dataset.lastOpts = remoteOptsHtml;
+            remoteSwitcher.value = activeRemoteKey;
+          }
+        }
+      }
       if (isFleetTabActive() && !editingMachineKey) {
         renderCards();
       }
@@ -650,6 +894,7 @@
 
   function onTabShown() {
     ensureShellMounted();
+    syncGlobalTopbar();
     renderCards();
     fetchMachines(true);
   }
@@ -657,7 +902,7 @@
   function scheduleLoop() {
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => {
-      const intervalMs = isFleetTabActive() ? 4500 : 12000;
+      const intervalMs = activeRemoteKey ? 15000 : (isFleetTabActive() ? 4500 : 12000);
       if (Date.now() - lastUpdatedAt >= intervalMs - 200) {
         fetchMachines(false);
       }
@@ -666,7 +911,23 @@
 
   function init() {
     ensureShellMounted();
+    ensureGlobalTopbarMounted();
+    syncGlobalTopbar();
     scheduleLoop();
+
+    window.addEventListener("pm-access-state-changed", () => {
+      syncGlobalTopbar();
+      fetchMachines(true);
+    });
+    window.addEventListener("pm-main-tab-changed", () => {
+      syncGlobalTopbar();
+    });
+    const nickInp = document.getElementById("device-nickname-input");
+    if (nickInp) {
+      nickInp.addEventListener("input", syncGlobalTopbar);
+      nickInp.addEventListener("change", syncGlobalTopbar);
+    }
+
     const modalFleetBtn = document.getElementById("btn-auth-view-fleet");
     if (modalFleetBtn) {
       modalFleetBtn.addEventListener("click", () => {
@@ -678,7 +939,7 @@
     if (isFleetTabActive()) {
       onTabShown();
     } else {
-      setTimeout(() => fetchMachines(false), 1200);
+      setTimeout(() => fetchMachines(false), 350);
     }
   }
 
@@ -686,7 +947,8 @@
     onTabShown: onTabShown,
     refresh: () => fetchMachines(true),
     openRemote: openRemote,
-    closeRemote: closeRemote
+    closeRemote: closeRemote,
+    syncGlobalTopbar: syncGlobalTopbar
   };
 
   if (document.readyState === "loading") {

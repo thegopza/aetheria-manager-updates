@@ -60,7 +60,7 @@ const DEFAULT_CONFIG = {
   allowedBuyerProfileIds: []  // ว่าง = เลือกจากทุกจอที่ออนไลน์อัตโนมัติ
 };
 
-const PRICE_CACHE_TTL_MS = 15 * 60 * 1000; // 15 นาที
+const PRICE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 นาที
 
 function sanitizeConfig(raw) {
   const r = (raw && typeof raw === 'object') ? raw : {};
@@ -97,26 +97,26 @@ function sanitizeConfig(raw) {
   };
 }
 
-function loadConfig() {
+function loadConfig(configFile = CONFIG_FILE) {
   try {
-    if (fs.existsSync(CONFIG_FILE)) {
-      return sanitizeConfig(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')));
+    if (fs.existsSync(configFile)) {
+      return sanitizeConfig(JSON.parse(fs.readFileSync(configFile, 'utf8')));
     }
   } catch (_) {}
   return sanitizeConfig(DEFAULT_CONFIG);
 }
 
-function saveConfig(cfg) {
+function saveConfig(cfg, configFile = CONFIG_FILE) {
   const clean = sanitizeConfig(cfg);
   try {
-    fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
-    fs.writeFileSync(CONFIG_FILE, JSON.stringify(clean, null, 2), 'utf8');
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify(clean, null, 2), 'utf8');
   } catch (_) {}
   return clean;
 }
 
-function loadPersistedState() {
-  for (const candidate of [STATE_FILE, `${STATE_FILE}.bak`, `${STATE_FILE}.tmp`]) {
+function loadPersistedState(stateFile = STATE_FILE) {
+  for (const candidate of [stateFile, `${stateFile}.bak`, `${stateFile}.tmp`]) {
     try {
       if (fs.existsSync(candidate) && fs.statSync(candidate).size > 2) {
         const d = JSON.parse(fs.readFileSync(candidate, 'utf8'));
@@ -157,9 +157,9 @@ function loadPersistedState() {
   };
 }
 
-function savePersistedState(state) {
+function savePersistedState(state, stateFile = STATE_FILE) {
   try {
-    fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true });
     const raw = JSON.stringify({
       priceCache: state.priceCache || {},
       activeBids: (state.activeBids || []).slice(0, 100),
@@ -168,15 +168,15 @@ function savePersistedState(state) {
       stats: state.stats || {}
     }, null, 2);
     if (!raw || raw.length < 10) return;
-    const tmpFile = `${STATE_FILE}.tmp`;
+    const tmpFile = `${stateFile}.tmp`;
     fs.writeFileSync(tmpFile, raw, 'utf8');
     try {
-      fs.renameSync(tmpFile, STATE_FILE);
+      fs.renameSync(tmpFile, stateFile);
     } catch (_) {
-      fs.writeFileSync(STATE_FILE, raw, 'utf8');
+      fs.writeFileSync(stateFile, raw, 'utf8');
     }
     try {
-      fs.writeFileSync(`${STATE_FILE}.bak`, raw, 'utf8');
+      fs.writeFileSync(`${stateFile}.bak`, raw, 'utf8');
     } catch (_) {}
   } catch (_) {}
 }
@@ -288,11 +288,20 @@ function getSmartFlipBatchConfig(itemName, unitPrice, isSingle = false) {
   return { batchQty: 100, maxConcurrent: 3, isSingle: false };
 }
 
-const PRICE_CACHE_VER = 8;
+const PRICE_CACHE_VER = 9;
 
-// Find the Most-Stable Price Cluster from the last 10–20 individual trades (`recent` array).
-// Strips out minority 5-minute auction snipe wins (< 72% of main Buy-Now trade body when >= 50% of trades are normal Buy-Now sales)
-// so auction wins at 50–65% of market price never poison the item's true Buy-Now reference price!
+// Ascending percentile helper (index floor(len * q)) resistant to minority outliers
+function percentileAsc(values, q) {
+  const valid = (Array.isArray(values) ? values : []).map(Number).filter(n => Number.isFinite(n) && n > 0);
+  if (!valid.length) return 0;
+  const sorted = valid.sort((a, b) => a - b);
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * q)));
+  return sorted[idx];
+}
+
+// Find the Most-Stable Price Cluster from the last 10–20 individual trades (`recent` array, newest-first).
+// Strips out isolated minority 5-minute auction snipe wins (< 72% of main Buy-Now trade body) ONLY when
+// newest trades confirm buyers are still paying normal Buy-Now prices — never mistaking a real price drop for snipes!
 function findMostStableClusterAvg(samples) {
   if (!Array.isArray(samples) || samples.length === 0) {
     return { avg: 0, min: 0, max: 0, clusterCount: 0, totalCount: 0 };
@@ -308,13 +317,23 @@ function findMostStableClusterAvg(samples) {
   const rawSorted = valid.slice().sort((a, b) => a - b);
   let sorted = rawSorted;
 
-  // Strip minority 5-minute auction snipe wins when the majority (>= 50%) of trades are normal Buy-Now sales around p60
+  // Strip isolated minority 5-minute auction snipe wins only when recent trades confirm active Buy-Now demand
   if (rawSorted.length >= 5) {
     const p60 = rawSorted[Math.floor(rawSorted.length * 0.60)];
     if (p60 > 0) {
       const mainBodyCount = rawSorted.filter(v => v >= p60 * 0.78 && v <= p60 * 1.40).length;
       const auctionSnipeCount = rawSorted.filter(v => v < p60 * 0.72).length;
-      if (mainBodyCount >= Math.ceil(rawSorted.length * 0.50) && auctionSnipeCount > 0 && auctionSnipeCount <= Math.floor(rawSorted.length * 0.40)) {
+      const newestWindow = valid.slice(0, Math.min(6, valid.length));
+      const newest3 = valid.slice(0, Math.min(3, valid.length));
+      const normalInNewest = newestWindow.filter(v => v >= p60 * 0.80).length;
+      const allNewest3Low = newest3.length >= 3 && newest3.every(v => v < p60 * 0.80);
+      if (
+        mainBodyCount >= Math.ceil(rawSorted.length * 0.55) &&
+        auctionSnipeCount > 0 &&
+        auctionSnipeCount <= Math.floor(rawSorted.length * 0.25) &&
+        normalInNewest >= Math.ceil(newestWindow.length * 0.50) &&
+        !allNewest3Low
+      ) {
         const filtered = rawSorted.filter(v => v >= p60 * 0.72);
         if (filtered.length >= 4) {
           sorted = filtered;
@@ -551,32 +570,38 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
     }
   }
 
-  // Check the latest 10 trades specifically: ONLY lower cleanRefUnitPrice if a true majority of the newest 10 trades
-  // dropped AND buyers are no longer paying near the normal Buy-Now price (prevents 3-4 5-minute auction snipes from looking like a crash!)
+  // Order-statistic recency caps (`p60` of newest windows — immune to 1–2 low auction snipes AND 1–2 high outliers)
   if (latest20UnitPrices.length >= 6) {
-    const latest10 = latest20UnitPrices.slice(0, 10);
-    const stillHighIn10 = latest10.filter(u => u >= cleanRefUnitPrice * 0.88).length;
-    if (stillHighIn10 < Math.ceil(latest10.length * 0.40)) {
-      const cluster10 = findMostStableClusterAvg(latest10);
-      if (cluster10.clusterCount >= Math.max(4, Math.ceil(latest10.length * 0.50)) && cluster10.avg > 0 && cluster10.avg < cleanRefUnitPrice) {
-        cleanRefUnitPrice = cluster10.avg;
+    const latest10 = latest20UnitPrices.slice(0, Math.min(10, latest20UnitPrices.length));
+    const p60Ten = percentileAsc(latest10, 0.60);
+    if (p60Ten > 0 && p60Ten < cleanRefUnitPrice) {
+      cleanRefUnitPrice = p60Ten;
+    }
+    const latest6 = latest20UnitPrices.slice(0, 6);
+    const p60Six = percentileAsc(latest6, 0.60);
+    if (p60Six > 0 && p60Six < cleanRefUnitPrice) {
+      cleanRefUnitPrice = p60Six;
+    }
+  }
+  if (latest20UnitPrices.length >= 5) {
+    const latest5 = latest20UnitPrices.slice(0, 5);
+    const p60Five = percentileAsc(latest5, 0.60);
+    if (p60Five > 0 && p60Five < cleanRefUnitPrice) {
+      cleanRefUnitPrice = p60Five;
+    }
+  }
+  if (latest20UnitPrices.length >= 4) {
+    const latest4 = latest20UnitPrices.slice(0, 4);
+    if (latest4.every(u => u > 0 && u < cleanRefUnitPrice * 0.88)) {
+      const low4Avg = Math.round(latest4.reduce((s, v) => s + v, 0) / latest4.length);
+      if (low4Avg > 0 && low4Avg < cleanRefUnitPrice) {
+        cleanRefUnitPrice = low4Avg;
       }
     }
   }
 
-  // Latest-5 Crash Guard: if at least 4 of the newest 5 trades sold below 85% of cleanRefUnitPrice
-  // (with zero normal Buy-Now trades in the newest 5), cap immediately!
-  if (latest20UnitPrices.length >= 5) {
-    const latest5 = latest20UnitPrices.slice(0, 5);
-    const lowerRecent = latest5.filter(u => u > 0 && u < cleanRefUnitPrice * 0.85);
-    const normalRecent = latest5.filter(u => u >= cleanRefUnitPrice * 0.90);
-    if (lowerRecent.length >= 4 && normalRecent.length === 0) {
-      const recentLowAvg = Math.round(lowerRecent.reduce((s, v) => s + v, 0) / lowerRecent.length);
-      if (recentLowAvg > 0 && recentLowAvg < cleanRefUnitPrice) {
-        cleanRefUnitPrice = recentLowAvg;
-      }
-    }
-  }
+  const olderTrades = latest20UnitPrices.length > 6 ? latest20UnitPrices.slice(6) : [];
+  const olderP60 = olderTrades.length >= 4 ? percentileAsc(olderTrades, 0.60) : 0;
 
   if (!cleanRefUnitPrice || cleanRefUnitPrice <= 0) {
     return { valid: false, reason: 'invalid_cluster', totalSales, sales24h, sales7d };
@@ -595,7 +620,6 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
 
   const allActiveUnitPrices = [];
   const buyNowBySeller = new Map();
-  const normalActivePrices = [];
   if (Array.isArray(activeListingsForSameItem)) {
     for (const l of activeListingsForSameItem) {
       if (!l || isOurListing(l)) continue;
@@ -626,45 +650,63 @@ function computeCleanReferencePrice(history24h, history7d, activeListingsForSame
   }
 
   // Cap cleanRefUnitPrice by unique sellers' Buy-Now prices (NEVER by 5-minute auction starting bids in allActiveUnitPrices!)
-  // so 1 seller posting 3 stacks (e.g. panda1031 x3) only counts as 1 seller, and we never value an item above existing Buy-Now supply.
+  // Step 1: Unconditional 2-seller ceiling when >= 2 sellers undercut historical ref
   if (uniqueSellerBuyNowPrices.length >= 2) {
     const secondUniqueSeller = uniqueSellerBuyNowPrices[1];
     if (secondUniqueSeller > 0 && secondUniqueSeller < cleanRefUnitPrice) {
       cleanRefUnitPrice = secondUniqueSeller;
     }
-  } else if (uniqueSellerBuyNowPrices.length === 1) {
-    const onlyUniqueSeller = uniqueSellerBuyNowPrices[0];
-    // Only let a single seller cap cleanRefUnitPrice down to 85% of the trade cluster (prevents 1 cheap Buy-Now outlier from collapsing ref)
-    if (onlyUniqueSeller > 0 && onlyUniqueSeller < cleanRefUnitPrice) {
-      cleanRefUnitPrice = Math.max(Math.round(cleanRefUnitPrice * 0.85), onlyUniqueSeller);
-    }
   }
 
-  for (const u of uniqueSellerBuyNowPrices) {
-    if (u >= Math.round(cleanRefUnitPrice * 0.78) && u <= cleanRefUnitPrice) {
-      normalActivePrices.push(u);
+  // Step 2: Filter non-snipe competitor Buy-Now prices (>= 62% of ref) so genuine snipe targets (<= 60%)
+  // never poison their own resale valuation, while real unsold undercuts (e.g. Cronos @ 14M) cap flipUnitPrice.
+  const competitorBuyNowPrices = uniqueSellerBuyNowPrices.filter(u => u >= Math.round(cleanRefUnitPrice * 0.62));
+  if (competitorBuyNowPrices.length >= 2) {
+    const top2Avg = Math.round((competitorBuyNowPrices[0] + competitorBuyNowPrices[1]) / 2);
+    if (top2Avg > 0 && top2Avg < cleanRefUnitPrice) {
+      cleanRefUnitPrice = top2Avg;
+    }
+  } else if (competitorBuyNowPrices.length === 1) {
+    const onlyComp = competitorBuyNowPrices[0];
+    if (onlyComp > 0 && onlyComp < cleanRefUnitPrice) {
+      cleanRefUnitPrice = onlyComp;
     }
   }
-  normalActivePrices.sort((a, b) => a - b);
 
   let flipUnitPrice = cleanRefUnitPrice;
-  if (normalActivePrices.length > 0) {
-    const cheapestNormal = normalActivePrices[0];
+  if (competitorBuyNowPrices.length > 0) {
+    const cheapestCompetitor = competitorBuyNowPrices[0];
     flipUnitPrice = Math.min(
       cleanRefUnitPrice,
-      Math.max(
-        Math.round(cleanRefUnitPrice * 0.82),
-        cheapestNormal - Math.max(0, Number(undercutZeny) || 0)
-      )
+      Math.max(1, cheapestCompetitor - Math.max(0, Number(undercutZeny) || 0))
     );
   } else if (Number(undercutZeny) > 0) {
     flipUnitPrice = Math.max(1, cleanRefUnitPrice - Math.max(0, Number(undercutZeny) || 0));
+  }
+
+  // Downtrend / Falling-Knife Severity & Forward-Slippage Buffer
+  const effectiveNowUnit = Math.min(cleanRefUnitPrice, flipUnitPrice);
+  const refPeakAnchor = Math.max(olderP60 || 0, bucket7dMedian || 0);
+  const downtrendDropPct = (refPeakAnchor > 0 && effectiveNowUnit < refPeakAnchor)
+    ? Math.round((1 - (effectiveNowUnit / refPeakAnchor)) * 100)
+    : 0;
+
+  if (downtrendDropPct >= 22 && latest20UnitPrices.length >= 3) {
+    const newest3 = latest20UnitPrices.slice(0, 3);
+    const newest3Avg = newest3.reduce((s, v) => s + v, 0) / newest3.length;
+    const stillSliding = newest3Avg <= effectiveNowUnit * 1.03 && newest3.filter(u => u <= effectiveNowUnit * 1.05).length >= 2;
+    if (stillSliding) {
+      flipUnitPrice = Math.max(1, Math.round(flipUnitPrice * 0.92));
+      cleanRefUnitPrice = Math.min(cleanRefUnitPrice, flipUnitPrice);
+    }
   }
 
   return {
     valid: true,
     cleanRefUnitPrice,
     flipUnitPrice,
+    downtrendDropPct,
+    isDowntrend: downtrendDropPct >= 18,
     totalSales,
     sales24h,
     sales7d,
@@ -691,41 +733,37 @@ function readBody(req) {
 function createMarketSniperService({
   loadProfiles,
   evalProfilePort,
-  isBusy
+  isBusy,
+  configFile = CONFIG_FILE,
+  stateFile = STATE_FILE
 }) {
-  let config = loadConfig();
-  const state = loadPersistedState();
-
-  // Baseline Most-Stable Cluster reference prices for items before live cacheVer === 8 refresh completes
-  const VERIFIED_STABLE_REF_BY_NAME = {
-    'enchant rune': 15415,
-    'armor blueprint': 504167,
-    'gale feather': 16000,
-    'profound gem shard': 4875000,
-    'snowman card': 777220,
-    'tidemark seal card': 249997,
-    'magma titan card': 277770,
-    'hydra card': 1554848,
-    'controlled destruction stone (common)': 27000000,
-    'treant card': 2205926,
-    'wild boar card': 2400000,
-    'runic silk': 12778
-  };
+  let config = loadConfig(configFile);
+  const state = loadPersistedState(stateFile);
+  const persistConfig = (cfg) => saveConfig(cfg, configFile);
+  const persistState = () => savePersistedState(state, stateFile);
 
   function getTrueRefUnitPrice(itemId, refine, itemName, fallbackRef = 0) {
     const k = `${Number(itemId) || 0}:${Number(refine) || 0}`;
     const c = state.priceCache && state.priceCache[k];
-    if (c && c.cacheVer === PRICE_CACHE_VER && c.valid && Number(c.cleanRefUnitPrice) > 0) {
-      return Number(c.cleanRefUnitPrice);
-    }
-    const nm = String(itemName || '').trim().toLowerCase();
-    if (nm && VERIFIED_STABLE_REF_BY_NAME[nm]) {
-      return VERIFIED_STABLE_REF_BY_NAME[nm];
-    }
-    if (c && c.valid && Number(c.cleanRefUnitPrice) > 0) {
-      return Number(c.cleanRefUnitPrice);
+    if (c && c.valid) {
+      const cleanU = Number(c.cleanRefUnitPrice) || 0;
+      const flipU = Number(c.flipUnitPrice) || 0;
+      const best = (cleanU > 0 && flipU > 0) ? Math.min(cleanU, flipU) : (cleanU || flipU);
+      if (best > 0) return best;
     }
     return Number(fallbackRef) || 0;
+  }
+
+  function computeFlippedSafeUnit(itemId, refine, itemName, unitPrice, buyTotal = 0, lotQty = 1, manualRepriceUnit = 0) {
+    const manualU = Number(manualRepriceUnit) || 0;
+    if (manualU > 0) return manualU;
+    const buyU = buyTotal > 0 ? Math.round(Number(buyTotal) / Math.max(1, Number(lotQty) || 1)) : 0;
+    const minFloor = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
+    const trueRef = getTrueRefUnitPrice(itemId, refine || 0, itemName, unitPrice);
+    const rawSafeU = (trueRef > 0 && Number(unitPrice) > Math.round(trueRef * 1.12))
+      ? trueRef
+      : (Number(unitPrice) || trueRef);
+    return Math.max(rawSafeU, minFloor);
   }
 
   function extractOriginalListedUnitFromNote(note, qty = 1) {
@@ -749,8 +787,12 @@ function createMarketSniperService({
     const nowTs = Date.now();
     if (state.priceCache && typeof state.priceCache === 'object') {
       for (const [k, entry] of Object.entries(state.priceCache)) {
-        if (!entry || entry.cacheVer !== PRICE_CACHE_VER || isNpcVendorTrashItem(entry)) {
+        if (!entry || isNpcVendorTrashItem(entry)) {
           delete state.priceCache[k];
+          changed = true;
+        } else if (entry.cacheVer !== PRICE_CACHE_VER && entry.updatedAt !== 0) {
+          // Keep display valuation intact until next fresh scan overwrites it
+          entry.updatedAt = 0;
           changed = true;
         }
       }
@@ -819,7 +861,7 @@ function createMarketSniperService({
         const curRelistU = Number(rec.relistUnitPrice) || 0;
         const restoreTarget = origFromNote > 0 ? origFromNote : Math.max(curRelistU, minBreakEvenUnit, trueRef);
         const isOldLot = rec.at && (nowTs - Number(rec.at) > 12 * 3600 * 1000);
-        if (restoreTarget > 0 && ((minBreakEvenUnit > 0 && curRelistU > 0 && curRelistU < minBreakEvenUnit && restoreTarget >= minBreakEvenUnit) || (isOldLot && origFromNote > 0 && curRelistU !== origFromNote))) {
+        if (!rec.manualRepriceUnit && restoreTarget > 0 && ((minBreakEvenUnit > 0 && curRelistU > 0 && curRelistU < minBreakEvenUnit && restoreTarget >= minBreakEvenUnit) || (isOldLot && origFromNote > 0 && curRelistU !== origFromNote))) {
           rec.relistUnitPrice = restoreTarget;
           rec.listedUnitPrice = restoreTarget;
           rec.relistPriceTotal = restoreTarget * qty;
@@ -828,7 +870,7 @@ function createMarketSniperService({
       } else {
         const curFlipU = Number(rec.flipUnitPrice) || 0;
         const safeFloorU = Math.max(minBreakEvenUnit, trueRef);
-        if (minBreakEvenUnit > 0 && curFlipU > 0 && curFlipU < minBreakEvenUnit) {
+        if (!rec.manualRepriceUnit && minBreakEvenUnit > 0 && curFlipU > 0 && curFlipU < minBreakEvenUnit) {
           rec.flipUnitPrice = safeFloorU;
           rec.listedUnitPrice = safeFloorU;
           rec.relistedPrice = safeFloorU * qty;
@@ -846,7 +888,7 @@ function createMarketSniperService({
       rec.realisticUnitPrice = trueRef;
       rec.realisticNetProfit = realisticProfit;
 
-      if (oldRef > Math.round(trueRef * 1.25) || (oldRef > 0 && oldRef < Math.round(trueRef * 0.75))) {
+      if (oldRef > Math.round(trueRef * 1.12) || (oldRef > 0 && oldRef < Math.round(trueRef * 0.75))) {
         rec.cleanRefUnitPrice = trueRef;
         rec.expectedNetProfit = realisticProfit;
         if (!isHistory) {
@@ -867,7 +909,7 @@ function createMarketSniperService({
     if (Array.isArray(state.pendingFlips)) {
       for (const pf of state.pendingFlips) {
         const trueRef = getTrueRefUnitPrice(pf.itemId, pf.refine || 0, pf.itemName, pf.cleanRefUnitPrice);
-        if (trueRef > 0 && (Number(pf.flipUnitPrice) || 0) > Math.round(trueRef * 1.25)) {
+        if (trueRef > 0 && (Number(pf.flipUnitPrice) || 0) > Math.round(trueRef * 1.12)) {
           pf.cleanRefUnitPrice = trueRef;
           pf.flipUnitPrice = trueRef;
           pf.relistPriceTotal = trueRef * Math.max(1, Number(pf.qty) || 1);
@@ -891,7 +933,7 @@ function createMarketSniperService({
       changed = true;
     }
 
-    if (changed) savePersistedState(state);
+    if (changed) persistState();
   }
 
   sanitizeHistoricalState();
@@ -1240,10 +1282,9 @@ function createMarketSniperService({
         const reserveSlots = sniperAutoFlip ? 2 : 0;
 
         // Build per-profile map ONLY of items actually bought/relisted by Sniper on THAT profile
-        // (NEVER seed from VERIFIED_STABLE_REF_BY_NAME, so non-Sniper screens and Auto Market Sell rules are never hijacked!)
         const sniperFlippedByProfile = new Map();
         const sniperMinFloorByProfile = new Map();
-        const recordAcquiredForProfile = (pid, itemName, itemId, refine, qty, paidTot, fallbackRef) => {
+        const recordAcquiredForProfile = (pid, itemName, itemId, refine, qty, paidTot, fallbackRef, manualRepriceUnit = 0) => {
           const pKey = String(pid || '').trim();
           const nm = String(itemName || '').trim().toLowerCase();
           if (!pKey || !nm) return;
@@ -1251,22 +1292,21 @@ function createMarketSniperService({
           if (!sniperMinFloorByProfile.has(pKey)) sniperMinFloorByProfile.set(pKey, {});
           const q = Math.max(1, Number(qty) || 1);
           const buyU = Math.round((Number(paidTot) || 0) / q);
-          const floorU = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
+          const floorU = Number(manualRepriceUnit) > 0 ? Number(manualRepriceUnit) : (buyU > 0 ? Math.ceil(buyU / 0.96) : 0);
           if (floorU > 0) sniperMinFloorByProfile.get(pKey)[nm] = floorU;
-          const refP = getTrueRefUnitPrice(itemId, refine || 0, itemName, fallbackRef);
-          const safeRef = Math.max(refP, floorU);
+          const safeRef = computeFlippedSafeUnit(itemId, refine, itemName, fallbackRef, paidTot, q, manualRepriceUnit);
           if (safeRef > 0) sniperFlippedByProfile.get(pKey)[nm] = safeRef;
         };
         for (const h of (state.history || []).slice().reverse()) {
           if (!h || !h.itemName || !h.buyerProfileId) continue;
           if (h.action === 'relisted' || h.action === 'buy' || h.action === 'won') {
-            recordAcquiredForProfile(h.buyerProfileId, h.itemName, h.itemId, h.refine || 0, h.qty, h.buyPriceTotal, h.cleanRefUnitPrice);
+            recordAcquiredForProfile(h.buyerProfileId, h.itemName, h.itemId, h.refine || 0, h.qty, h.buyPriceTotal, h.relistUnitPrice || h.cleanRefUnitPrice, h.manualRepriceUnit);
           }
         }
         for (const b of (state.activeBids || [])) {
           if (!b || !b.itemName || !b.buyerProfileId) continue;
           if (b.status === 'relisted' || b.status === 'queued_flip' || b.status === 'won' || b.status === 'bought') {
-            recordAcquiredForProfile(b.buyerProfileId, b.itemName, b.itemId, b.refine || 0, b.qty, b.currentBid, b.cleanRefUnitPrice);
+            recordAcquiredForProfile(b.buyerProfileId, b.itemName, b.itemId, b.refine || 0, b.qty, b.currentBid, b.flipUnitPrice || b.cleanRefUnitPrice, b.manualRepriceUnit);
           }
         }
 
@@ -1535,7 +1575,7 @@ function createMarketSniperService({
                 ? window.__pmGetSmartFlipBatchConfig(nmLower, refUnit, isCardOrStone, true)
                 : { batchQty: isCardOrStone ? 1 : (refUnit >= 20000 ? 10 : (refUnit >= 8000 ? 25 : (refUnit >= 1800 ? 50 : 100))), maxConcurrent: isCardOrStone ? 2 : 3 };
               if ((isCardOrStone && q > 1) || (isFlippedItem && q > Math.ceil(bCfg.batchQty * 1.35))) {
-                const safeUnitP = (activeFlipMap[nmLower] && unitP > Math.round(activeFlipMap[nmLower] * 1.25))
+                const safeUnitP = (activeFlipMap[nmLower] && unitP > Math.round(activeFlipMap[nmLower] * 1.12))
                   ? Math.max(activeFlipMap[nmLower], Number(minFloorMap[nmLower]) || 0)
                   : unitP;
                 stackedCards.push({
@@ -1685,7 +1725,7 @@ function createMarketSniperService({
         state.history.splice(existingIdx, 1);
         state.history.unshift(updated);
         if (state.history.length > 300) state.history.length = 300;
-        savePersistedState(state);
+        persistState();
         return updated;
       }
     }
@@ -1695,7 +1735,7 @@ function createMarketSniperService({
     }, entry);
     state.history.unshift(item);
     if (state.history.length > 300) state.history.length = 300;
-    savePersistedState(state);
+    persistState();
     return item;
   }
 
@@ -1708,7 +1748,7 @@ function createMarketSniperService({
       state.activeBids.unshift(Object.assign({ createdAt: Date.now(), updatedAt: Date.now() }, bidData));
     }
     if (state.activeBids.length > 80) state.activeBids.length = 80;
-    savePersistedState(state);
+    persistState();
   }
 
   function enqueuePendingFlip(entry) {
@@ -1721,7 +1761,7 @@ function createMarketSniperService({
       state.pendingFlips.push(Object.assign({ queuedAt: Date.now(), updatedAt: Date.now() }, entry));
     }
     if (state.pendingFlips.length > 50) state.pendingFlips.length = 50;
-    savePersistedState(state);
+    persistState();
   }
 
   function handleClientSniperEvent(scr, ev) {
@@ -1923,7 +1963,7 @@ function createMarketSniperService({
   }
 
   // Fetch 24h & 7d market history + cheapest active listings for an item via an online screen
-  async function fetchItemReferencePrice(screen, item, activeListings, ourCharNamesSet = null) {
+  async function fetchItemReferencePrice(screen, item, activeListings, ourCharNamesSet = null, forceRefresh = false) {
     const itemId = Number(item.itemId ?? item.id);
     const refine = Number(item.refine) || 0;
     const itemName = String(item.name || '').trim();
@@ -1938,6 +1978,8 @@ function createMarketSniperService({
         reason: 'npc_trash_drop',
         cleanRefUnitPrice: 0,
         flipUnitPrice: 0,
+        downtrendDropPct: 0,
+        isDowntrend: false,
         totalSales: 0,
         sales24h: 0,
         sales7d: 0,
@@ -1950,27 +1992,45 @@ function createMarketSniperService({
       return rejectEntry;
     }
     const cached = state.priceCache[cacheKey];
-    if (cached && cached.cacheVer === PRICE_CACHE_VER && (Date.now() - (Number(cached.updatedAt) || 0)) < PRICE_CACHE_TTL_MS) {
-      // Re-adjust flipUnitPrice against latest normal active listings if available (never above cleanRefUnitPrice)
+    if (!forceRefresh && cached && cached.cacheVer === PRICE_CACHE_VER && (Date.now() - (Number(cached.updatedAt) || 0)) < PRICE_CACHE_TTL_MS) {
+      // Re-adjust cleanRefUnitPrice / flipUnitPrice against latest external Buy-Now listings on current scan page
       const sameItemListings = (Array.isArray(activeListings) ? activeListings : []).filter(
         l => l && l.item && Number(l.item.itemId ?? l.item.id) === itemId && (Number(l.item.refine) || 0) === refine
       );
       if (cached.valid && sameItemListings.length > 0) {
         const now = Date.now();
         const isOurs = (l) => Boolean(l.mine || (ourCharNamesSet && l.sellerName && ourCharNamesSet.has(String(l.sellerName).trim().toLowerCase())));
-        const normalActives = sameItemListings
-          .filter(l => !isOurs(l) && !(l.auctionEndsAt && Number(l.auctionEndsAt) > now))
-          .map(l => Math.round((Number(l.price) || 0) / Math.max(1, Number(l.qty) || 1)))
-          .filter(u => u >= Math.round(cached.cleanRefUnitPrice * 0.78) && u <= cached.cleanRefUnitPrice)
-          .sort((a, b) => a - b);
-        if (normalActives.length > 0) {
-          cached.flipUnitPrice = Math.min(
+        const buyNowBySeller = new Map();
+        for (const l of sameItemListings) {
+          if (!l || isOurs(l) || (l.auctionEndsAt && Number(l.auctionEndsAt) > now)) continue;
+          const u = Math.round((Number(l.price) || 0) / Math.max(1, Number(l.qty) || 1));
+          if (u <= 0) continue;
+          const sk = String(l.sellerName || `anon_${l.listingId}`).trim().toLowerCase();
+          const prev = buyNowBySeller.get(sk);
+          if (prev === undefined || u < prev) buyNowBySeller.set(sk, u);
+        }
+        const uniquePrices = Array.from(buyNowBySeller.values()).sort((a, b) => a - b);
+        if (uniquePrices.length >= 2 && uniquePrices[1] < cached.cleanRefUnitPrice) {
+          cached.cleanRefUnitPrice = uniquePrices[1];
+        }
+        const competitors = uniquePrices.filter(u => u >= Math.round(cached.cleanRefUnitPrice * 0.62));
+        if (competitors.length >= 2) {
+          const top2Avg = Math.round((competitors[0] + competitors[1]) / 2);
+          if (top2Avg > 0 && top2Avg < cached.cleanRefUnitPrice) cached.cleanRefUnitPrice = top2Avg;
+        } else if (competitors.length === 1 && competitors[0] < cached.cleanRefUnitPrice) {
+          cached.cleanRefUnitPrice = competitors[0];
+        }
+        if (competitors.length > 0) {
+          const candFlip = Math.min(
             cached.cleanRefUnitPrice,
-            Math.max(
-              Math.round(cached.cleanRefUnitPrice * 0.82),
-              normalActives[0] - Math.max(0, Number(config.relistUndercutZeny) || 0)
-            )
+            Math.max(1, competitors[0] - Math.max(0, Number(config.relistUndercutZeny) || 0))
           );
+          if (candFlip < cached.flipUnitPrice) {
+            cached.flipUnitPrice = candFlip;
+          }
+        }
+        if (cached.flipUnitPrice > cached.cleanRefUnitPrice) {
+          cached.flipUnitPrice = cached.cleanRefUnitPrice;
         }
       }
       return cached;
@@ -2000,7 +2060,9 @@ function createMarketSniperService({
           const qName = ${JSON.stringify(itemName)};
           if (!qName) return [];
           const collected = [];
-          for (let pg = 0; pg < 3; pg++) {
+          let buyNowCollected = 0;
+          const nowActTs = Date.now();
+          for (let pg = 0; pg < 4; pg++) {
             const pageMsg = await new Promise(resolve => {
               let unsub;
               const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2200);
@@ -2015,10 +2077,13 @@ function createMarketSniperService({
             for (const l of list) {
               if (l && l.item && Number(l.item.itemId ?? l.item.id) === ${itemId} && (Number(l.item.refine) || 0) === ${refine}) {
                 collected.push(l);
+                if (!(l.auctionEndsAt && Number(l.auctionEndsAt) > nowActTs)) {
+                  buyNowCollected += 1;
+                }
               }
             }
             const pageCount = Number(pageMsg && pageMsg.pageCount) || 0;
-            if (collected.length >= 6 || list.length < 20 || (pageCount > 0 && pg + 1 >= pageCount)) {
+            if (buyNowCollected >= 6 || list.length < 20 || (pageCount > 0 && pg + 1 >= pageCount)) {
               break;
             }
             await new Promise(r => setTimeout(r, 90));
@@ -2037,7 +2102,7 @@ function createMarketSniperService({
       }
     })()`;
 
-    const res = await evalProfilePort(screen.debugPort, code, 9000);
+    const res = await evalProfilePort(screen.debugPort, code, 11000);
     if (!res || !(res.success || res.ok) || !res.result || !res.result.ok) return null;
 
     const mergedMap = new Map();
@@ -2070,6 +2135,8 @@ function createMarketSniperService({
       reason: calc.reason || null,
       cleanRefUnitPrice: calc.cleanRefUnitPrice || 0,
       flipUnitPrice: calc.flipUnitPrice || 0,
+      downtrendDropPct: calc.downtrendDropPct || 0,
+      isDowntrend: Boolean(calc.isDowntrend),
       totalSales: calc.totalSales || 0,
       sales24h: calc.sales24h || 0,
       sales7d: calc.sales7d || 0,
@@ -2109,6 +2176,11 @@ function createMarketSniperService({
       auctionEndsAt: Number(listing.auctionEndsAt) || 0,
       actionAmount: valuation.acquireTotalCost,
       maxBidCapTotal: valuation.maxBidCapTotal,
+      maxBidRatioPct: valuation.effBidRatioPct || config.maxBidRatioPercent,
+      minNetProfitZeny: config.minNetProfitZeny,
+      minNetProfitPct: valuation.effMinProfitPct || config.minNetProfitPercent,
+      taxPercent: valuation.taxPercent || (buyerScreen && buyerScreen.premium ? 4 : 8),
+      ourCharNames: valuation.ourCharNames || [],
       cleanRefUnitPrice: valuation.cleanRefUnitPrice,
       flipUnitPrice: valuation.flipUnitPrice,
       relistPriceTotal: valuation.flipTotal,
@@ -2132,7 +2204,175 @@ function createMarketSniperService({
         window.__pmSniperProtectedItems.add(String(p.itemName).trim().toLowerCase());
       }
 
-      // Install real-time Colyseus listeners once per room (using market_badge + market_mine)
+      window.__pmSniperOnMarketMine = async function (targetRoom, msg) {
+        if (!msg) return;
+        if (Array.isArray(msg.active)) {
+          window.__myMarketActiveCount = msg.active.length;
+          window.__myMarketActiveCountUpdatedAt = Date.now();
+        }
+        const deliveries = Array.isArray(msg.deliveries) ? msg.deliveries.filter(d => d && !d.held) : [];
+        if (!deliveries.length) return;
+
+        // Collect all non-held deliveries (outbid refunds, won auctions, bought items) immediately
+        try {
+          targetRoom.send('market', { op: 'collect_all' });
+        } catch (_) {}
+
+        for (const d of deliveries) {
+          const did = d.deliveryId || (d.reason + ':' + (d.name || '') + ':' + (d.zeny || 0));
+          if (window.__pmSniperHandledDeliveries.has(did)) continue;
+          window.__pmSniperHandledDeliveries.add(did);
+
+          const activeAuctions = Object.values(window.__pmSniperAuctions || {});
+          if (!activeAuctions.length) continue;
+
+          if (d.reason === 'outbid') {
+            const dNameLower = String(d.name || '').trim().toLowerCase();
+            const tracked = activeAuctions.find(a => a && dNameLower.includes(String(a.itemName || '').trim().toLowerCase()));
+            if (!tracked) continue;
+            const lid = Number(tracked.listingId);
+            const refundZeny = Number(d.zeny) || tracked.lastBidAmount || 0;
+            console.log('%c[PmheeAether Sniper] 💰 โดนปาดประมูล ' + tracked.itemName + ' -> รับเงินประมูลคืน ' + refundZeny.toLocaleString() + ' z เข้ากระเป๋าทันที!', 'color: #f59e0b; font-weight: bold;');
+
+            if (tracked.auctionEndsAt && Date.now() >= tracked.auctionEndsAt) {
+              delete window.__pmSniperAuctions[lid];
+              continue;
+            }
+
+            // Query live listing + cheapest Buy-Now floor before deciding whether to re-bid
+            const searchRes = await new Promise(resolve => {
+              let unsub;
+              const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2500);
+              unsub = targetRoom.onMessage('market_results', m => { clearTimeout(t); if (unsub) unsub(); resolve(m); });
+              targetRoom.send('market', { op: 'search', filters: { q: tracked.itemName, sort: 'price_asc', page: 0 } });
+            });
+            const resListings = (searchRes && Array.isArray(searchRes.listings)) ? searchRes.listings : [];
+            const liveListing = resListings.find(x => x && Number(x.listingId) === lid) || null;
+            if (!liveListing) {
+              delete window.__pmSniperAuctions[lid];
+              continue;
+            }
+
+            // Dynamically lower maxBidCapTotal if external Buy-Now listings dropped below tracked.flipUnitPrice
+            const nowTs = Date.now();
+            const ourSet = new Set(Array.isArray(tracked.ourCharNames) ? tracked.ourCharNames.map(n => String(n).toLowerCase()) : []);
+            const liveSellerMap = new Map();
+            for (const x of resListings) {
+              if (!x || !x.item || x.mine) continue;
+              if (Number(x.item.itemId ?? x.item.id) !== Number(tracked.itemId) || (Number(x.item.refine) || 0) !== (Number(tracked.refine) || 0)) continue;
+              if (x.sellerName && ourSet.has(String(x.sellerName).trim().toLowerCase())) continue;
+              if (x.auctionEndsAt && Number(x.auctionEndsAt) > nowTs) continue;
+              const u = Math.round((Number(x.price) || 0) / Math.max(1, Number(x.qty) || 1));
+              if (u <= 0) continue;
+              const sKey = String(x.sellerName || ('anon_' + x.listingId)).trim().toLowerCase();
+              const prev = liveSellerMap.get(sKey);
+              if (prev === undefined || u < prev) liveSellerMap.set(sKey, u);
+            }
+            const uniqLivePrices = Array.from(liveSellerMap.values()).sort((a, b) => a - b);
+            let effLiveFlip = Number(tracked.flipUnitPrice) || 0;
+            if (uniqLivePrices.length >= 2 && uniqLivePrices[1] > 0 && uniqLivePrices[1] < effLiveFlip) {
+              effLiveFlip = uniqLivePrices[1];
+            }
+            const compLive = uniqLivePrices.filter(u => u >= Math.round(effLiveFlip * 0.62));
+            if (compLive.length > 0 && compLive[0] < effLiveFlip) {
+              effLiveFlip = compLive[0];
+            }
+
+            const tQty = Math.max(1, Number(tracked.qty) || 1);
+            const taxPct = Number(tracked.taxPercent) || 4;
+            if (effLiveFlip > 0 && effLiveFlip < tracked.flipUnitPrice) {
+              tracked.flipUnitPrice = effLiveFlip;
+              tracked.relistPriceTotal = effLiveFlip * tQty;
+              const liveNetRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * taxPct / 100);
+              const capByRatio = Math.floor(effLiveFlip * tQty * ((Number(tracked.maxBidRatioPct) || 65) / 100));
+              const capByProfitZ = liveNetRev - (Number(tracked.minNetProfitZeny) || 0);
+              const capByProfitP = Math.floor(liveNetRev / (1 + ((Number(tracked.minNetProfitPct) || 25) / 100)));
+              tracked.maxBidCapTotal = Math.min(tracked.maxBidCapTotal, capByRatio, capByProfitZ, capByProfitP);
+            }
+
+            const outbidAmount = Number(liveListing.topBid || liveListing.price) || refundZeny;
+            const nextBid = Number(liveListing.minBid) || Math.max(outbidAmount + 1, Math.ceil(outbidAmount * 1.01));
+
+            if (nextBid <= tracked.maxBidCapTotal) {
+              await new Promise(r => setTimeout(r, 450));
+              const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
+              if (curZeny === 0 || (curZeny - tracked.minReserveZeny) >= nextBid) {
+                try {
+                  targetRoom.send('market', { op: 'bid', listingId: lid, amount: nextBid });
+                  tracked.lastBidAmount = nextBid;
+                  const netRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * taxPct / 100);
+                  const newProfit = netRev - nextBid;
+                  console.log('%c[PmheeAether Sniper] 🔨 ประมูลสู้ต่อทันที! ' + tracked.itemName + ' ที่ ' + nextBid.toLocaleString() + ' z (เพดาน ' + tracked.maxBidCapTotal.toLocaleString() + ' z)', 'color: #38bdf8; font-weight: bold;');
+                  window.__pmSniperEvents.push({
+                    type: 'outbid_rebid',
+                    listingId: lid,
+                    itemId: tracked.itemId,
+                    itemName: tracked.itemName,
+                    refine: tracked.refine,
+                    qty: tracked.qty,
+                    icon: tracked.icon,
+                    outbidAmount,
+                    refund: refundZeny,
+                    newBid: nextBid,
+                    cleanRefUnitPrice: tracked.cleanRefUnitPrice,
+                    flipUnitPrice: tracked.flipUnitPrice,
+                    expectedNetProfit: newProfit
+                  });
+                } catch (_) {}
+              }
+            } else {
+              console.log('%c[PmheeAether Sniper] ⏹️ หยุดสู้ราคา ' + tracked.itemName + ' (ราคา ' + outbidAmount.toLocaleString() + ' z เกินเพดานกำไร ' + tracked.maxBidCapTotal.toLocaleString() + ' z) — รับเงินคืนเรียบร้อย', 'color: #f87171; font-weight: bold;');
+              delete window.__pmSniperAuctions[lid];
+              window.__pmSniperEvents.push({
+                type: 'outbid_stopped',
+                listingId: lid,
+                itemId: tracked.itemId,
+                itemName: tracked.itemName,
+                refine: tracked.refine,
+                qty: tracked.qty,
+                icon: tracked.icon,
+                outbidAmount,
+                refund: refundZeny,
+                maxBidCapTotal: tracked.maxBidCapTotal,
+                cleanRefUnitPrice: tracked.cleanRefUnitPrice,
+                flipUnitPrice: tracked.flipUnitPrice
+              });
+            }
+          } else if (d.reason === 'won') {
+            const dItemId = d.item ? Number(d.item.itemId ?? d.item.id) : 0;
+            const dNameLower = String((d.item && d.item.name) || d.name || '').trim().toLowerCase();
+            const tracked = activeAuctions.find(a => a && (Number(a.itemId) === dItemId || dNameLower.includes(String(a.itemName || '').trim().toLowerCase())));
+            if (!tracked) continue;
+            const lid = Number(tracked.listingId);
+            delete window.__pmSniperAuctions[lid];
+            const finalPrice = tracked.lastBidAmount || tracked.actionAmount;
+            console.log('%c[PmheeAether Sniper] 🏆 ชนะการประมูล! ' + tracked.itemName + ' ที่ราคา ' + finalPrice.toLocaleString() + ' z -> กำลังรับของและตั้งขายทำกำไร...', 'color: #10b981; font-weight: bold; font-size: 13px;');
+            const flipOut = await window.__pmSniperClaimAndFlip(tracked, finalPrice, 250);
+            const relisted = Boolean(flipOut && (flipOut.relisted || flipOut === true));
+            const taxPct = Number(tracked.taxPercent) || 4;
+            const netRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * taxPct / 100);
+            window.__pmSniperEvents.push({
+              type: relisted ? 'won_and_relisted' : 'won_claimed',
+              relisted,
+              evictedItemName: flipOut && flipOut.evictedItemName ? flipOut.evictedItemName : null,
+              evictedItemPrice: flipOut && flipOut.evictedItemPrice ? flipOut.evictedItemPrice : 0,
+              listingId: lid,
+              itemId: tracked.itemId,
+              itemName: tracked.itemName,
+              refine: tracked.refine,
+              qty: tracked.qty,
+              icon: tracked.icon,
+              buyPriceTotal: finalPrice,
+              cleanRefUnitPrice: tracked.cleanRefUnitPrice,
+              flipUnitPrice: tracked.flipUnitPrice,
+              relistPriceTotal: tracked.relistPriceTotal,
+              expectedNetProfit: netRev - finalPrice
+            });
+          }
+        }
+      };
+
+      // Install real-time Colyseus listeners once per room (delegating to hot-swappable __pmSniperOnMarketMine)
       if (room !== window.__pmSniperHookedRoom) {
         window.__pmSniperHookedRoom = room;
 
@@ -2142,133 +2382,9 @@ function createMarketSniperService({
           }
         });
 
-        room.onMessage('market_mine', async (msg) => {
-          if (!msg) return;
-          if (Array.isArray(msg.active)) {
-            window.__myMarketActiveCount = msg.active.length;
-            window.__myMarketActiveCountUpdatedAt = Date.now();
-          }
-          const deliveries = Array.isArray(msg.deliveries) ? msg.deliveries.filter(d => d && !d.held) : [];
-          if (!deliveries.length) return;
-
-          // Collect all non-held deliveries (outbid refunds, won auctions, bought items) immediately
-          try {
-            room.send('market', { op: 'collect_all' });
-          } catch (_) {}
-
-          for (const d of deliveries) {
-            const did = d.deliveryId || (d.reason + ':' + (d.name || '') + ':' + (d.zeny || 0));
-            if (window.__pmSniperHandledDeliveries.has(did)) continue;
-            window.__pmSniperHandledDeliveries.add(did);
-
-            const activeAuctions = Object.values(window.__pmSniperAuctions || {});
-            if (!activeAuctions.length) continue;
-
-            if (d.reason === 'outbid') {
-              const dNameLower = String(d.name || '').trim().toLowerCase();
-              const tracked = activeAuctions.find(a => a && dNameLower.includes(String(a.itemName || '').trim().toLowerCase()));
-              if (!tracked) continue;
-              const lid = Number(tracked.listingId);
-              const refundZeny = Number(d.zeny) || tracked.lastBidAmount || 0;
-              console.log('%c[PmheeAether Sniper] 💰 โดนปาดประมูล ' + tracked.itemName + ' -> รับเงินประมูลคืน ' + refundZeny.toLocaleString() + ' z เข้ากระเป๋าทันที!', 'color: #f59e0b; font-weight: bold;');
-
-              if (tracked.auctionEndsAt && Date.now() >= tracked.auctionEndsAt) {
-                delete window.__pmSniperAuctions[lid];
-                continue;
-              }
-
-              // Query live listing to check new minBid / topBid
-              const searchRes = await new Promise(resolve => {
-                let unsub;
-                const t = setTimeout(() => { if (unsub) unsub(); resolve(null); }, 2500);
-                unsub = room.onMessage('market_results', m => { clearTimeout(t); if (unsub) unsub(); resolve(m); });
-                room.send('market', { op: 'search', filters: { q: tracked.itemName, sort: 'price_asc', page: 0 } });
-              });
-              const liveListing = searchRes && Array.isArray(searchRes.listings)
-                ? searchRes.listings.find(x => x && Number(x.listingId) === lid)
-                : null;
-              if (!liveListing) {
-                delete window.__pmSniperAuctions[lid];
-                continue;
-              }
-              const outbidAmount = Number(liveListing.topBid || liveListing.price) || refundZeny;
-              const nextBid = Number(liveListing.minBid) || Math.max(outbidAmount + 1, Math.ceil(outbidAmount * 1.01));
-
-              if (nextBid <= tracked.maxBidCapTotal) {
-                await new Promise(r => setTimeout(r, 450));
-                const curZeny = (typeof window.__currentZeny === 'number') ? window.__currentZeny : 0;
-                if (curZeny === 0 || (curZeny - tracked.minReserveZeny) >= nextBid) {
-                  try {
-                    room.send('market', { op: 'bid', listingId: lid, amount: nextBid });
-                    tracked.lastBidAmount = nextBid;
-                    const netRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * 4 / 100);
-                    const newProfit = netRev - nextBid;
-                    console.log('%c[PmheeAether Sniper] 🔨 ประมูลสู้ต่อทันที! ' + tracked.itemName + ' ที่ ' + nextBid.toLocaleString() + ' z (เพดาน ' + tracked.maxBidCapTotal.toLocaleString() + ' z)', 'color: #38bdf8; font-weight: bold;');
-                    window.__pmSniperEvents.push({
-                      type: 'outbid_rebid',
-                      listingId: lid,
-                      itemId: tracked.itemId,
-                      itemName: tracked.itemName,
-                      refine: tracked.refine,
-                      qty: tracked.qty,
-                      icon: tracked.icon,
-                      outbidAmount,
-                      refund: refundZeny,
-                      newBid: nextBid,
-                      cleanRefUnitPrice: tracked.cleanRefUnitPrice,
-                      flipUnitPrice: tracked.flipUnitPrice,
-                      expectedNetProfit: newProfit
-                    });
-                  } catch (_) {}
-                }
-              } else {
-                console.log('%c[PmheeAether Sniper] ⏹️ หยุดสู้ราคา ' + tracked.itemName + ' (ราคา ' + outbidAmount.toLocaleString() + ' z เกินเพดานกำไร ' + tracked.maxBidCapTotal.toLocaleString() + ' z) — รับเงินคืนเรียบร้อย', 'color: #f87171; font-weight: bold;');
-                delete window.__pmSniperAuctions[lid];
-                window.__pmSniperEvents.push({
-                  type: 'outbid_stopped',
-                  listingId: lid,
-                  itemId: tracked.itemId,
-                  itemName: tracked.itemName,
-                  refine: tracked.refine,
-                  qty: tracked.qty,
-                  icon: tracked.icon,
-                  outbidAmount,
-                  refund: refundZeny,
-                  maxBidCapTotal: tracked.maxBidCapTotal,
-                  cleanRefUnitPrice: tracked.cleanRefUnitPrice,
-                  flipUnitPrice: tracked.flipUnitPrice
-                });
-              }
-            } else if (d.reason === 'won') {
-              const dItemId = d.item ? Number(d.item.itemId ?? d.item.id) : 0;
-              const dNameLower = String((d.item && d.item.name) || d.name || '').trim().toLowerCase();
-              const tracked = activeAuctions.find(a => a && (Number(a.itemId) === dItemId || dNameLower.includes(String(a.itemName || '').trim().toLowerCase())));
-              if (!tracked) continue;
-              const lid = Number(tracked.listingId);
-              delete window.__pmSniperAuctions[lid];
-              const finalPrice = tracked.lastBidAmount || tracked.actionAmount;
-              console.log('%c[PmheeAether Sniper] 🏆 ชนะการประมูล! ' + tracked.itemName + ' ที่ราคา ' + finalPrice.toLocaleString() + ' z -> กำลังรับของและตั้งขายทำกำไร...', 'color: #10b981; font-weight: bold; font-size: 13px;');
-              const flipOut = await window.__pmSniperClaimAndFlip(tracked, finalPrice, 250);
-              const relisted = Boolean(flipOut && (flipOut.relisted || flipOut === true));
-              const netRev = tracked.relistPriceTotal - Math.floor(tracked.relistPriceTotal * 4 / 100);
-              window.__pmSniperEvents.push({
-                type: relisted ? 'won_and_relisted' : 'won_claimed',
-                relisted,
-                evictedItemName: flipOut && flipOut.evictedItemName ? flipOut.evictedItemName : null,
-                evictedItemPrice: flipOut && flipOut.evictedItemPrice ? flipOut.evictedItemPrice : 0,
-                listingId: lid,
-                itemId: tracked.itemId,
-                itemName: tracked.itemName,
-                refine: tracked.refine,
-                qty: tracked.qty,
-                icon: tracked.icon,
-                buyPriceTotal: finalPrice,
-                cleanRefUnitPrice: tracked.cleanRefUnitPrice,
-                flipUnitPrice: tracked.flipUnitPrice,
-                relistPriceTotal: tracked.relistPriceTotal,
-                expectedNetProfit: netRev - finalPrice
-              });
-            }
+        room.onMessage('market_mine', (msg) => {
+          if (typeof window.__pmSniperOnMarketMine === 'function') {
+            return window.__pmSniperOnMarketMine(room, msg);
           }
         });
       }
@@ -2300,6 +2416,266 @@ function createMarketSniperService({
 
     const res = await evalProfilePort(buyerScreen.debugPort, execCode, 10500);
     return (res && (res.success || res.ok) && res.result) ? res.result : { success: false, error: 'คำสั่งไม่ตอบกลับ' };
+  }
+
+  // Build live per-item exposure snapshot across all online screens, leading bids, and pending flips
+  function buildExposureByNameMap(onlineScreens) {
+    const map = new Map();
+    const getOrInit = (nameLower) => {
+      if (!map.has(nameLower)) {
+        map.set(nameLower, {
+          activeUnits: 0,
+          activeListingsCount: 0,
+          maxActiveListedUnit: 0,
+          bagUnits: 0,
+          queuedUnits: 0,
+          leadingLots: 0,
+          leadingUnits: 0,
+          leadingZeny: 0,
+          recentUnsoldAvgBuyUnit: 0
+        });
+      }
+      return map.get(nameLower);
+    };
+
+    for (const scr of (onlineScreens || [])) {
+      if (!scr) continue;
+      if (Array.isArray(scr.myActiveListings)) {
+        for (const a of scr.myActiveListings) {
+          if (!a || !a.name) continue;
+          const nm = String(a.name).trim().toLowerCase();
+          if (!nm) continue;
+          const e = getOrInit(nm);
+          const q = Math.max(1, Number(a.qty) || 1);
+          const u = Number(a.unitPrice) || Math.round((Number(a.price) || 0) / q);
+          e.activeUnits += q;
+          e.activeListingsCount += 1;
+          if (u > e.maxActiveListedUnit) e.maxActiveListedUnit = u;
+        }
+      }
+      if (Array.isArray(scr.bagFlippedItems)) {
+        for (const bg of scr.bagFlippedItems) {
+          if (!bg || !bg.nameLower) continue;
+          const nm = String(bg.nameLower).trim().toLowerCase();
+          if (!nm) continue;
+          const e = getOrInit(nm);
+          e.bagUnits += Math.max(0, Number(bg.qty) || 0);
+        }
+      }
+    }
+
+    for (const b of (state.activeBids || [])) {
+      if (!b || !b.itemName || b.status !== 'leading') continue;
+      const nm = String(b.itemName).trim().toLowerCase();
+      if (!nm) continue;
+      const e = getOrInit(nm);
+      e.leadingLots += 1;
+      e.leadingUnits += Math.max(1, Number(b.qty) || 1);
+      e.leadingZeny += Number(b.currentBid) || 0;
+    }
+
+    for (const pf of (state.pendingFlips || [])) {
+      if (!pf || !pf.itemName) continue;
+      const nm = String(pf.itemName).trim().toLowerCase();
+      if (!nm) continue;
+      const e = getOrInit(nm);
+      e.queuedUnits += Math.max(1, Number(pf.qty) || 1);
+    }
+
+    // Estimate weighted average cost of currently held unsold units using newest lots matching held qty
+    const nowTs = Date.now();
+    const lotsByName = new Map();
+    const seenLotIdsByName = new Map();
+    const pushLot = (nm, lid, atTs, qty, buyTotal) => {
+      if (!nm || buyTotal <= 0) return;
+      if (!seenLotIdsByName.has(nm)) seenLotIdsByName.set(nm, new Set());
+      const s = seenLotIdsByName.get(nm);
+      if (lid && s.has(lid)) return;
+      if (lid) s.add(lid);
+      if (!lotsByName.has(nm)) lotsByName.set(nm, []);
+      lotsByName.get(nm).push({ at: atTs || 0, qty: Math.max(1, qty || 1), buyTotal });
+    };
+
+    for (const b of (state.activeBids || [])) {
+      if (!b || !b.itemName) continue;
+      if (b.status === 'relisted' || b.status === 'queued_flip' || b.status === 'won' || b.status === 'bought') {
+        const nm = String(b.itemName).trim().toLowerCase();
+        pushLot(nm, Number(b.listingId) || 0, Number(b.updatedAt || b.createdAt) || 0, Number(b.qty) || 1, Number(b.currentBid) || 0);
+      }
+    }
+    for (const h of (state.history || [])) {
+      if (!h || !h.itemName) continue;
+      if (h.at && (nowTs - Number(h.at)) > 48 * 3600 * 1000) continue;
+      if (h.action === 'relisted' || h.action === 'buy' || h.action === 'won') {
+        const nm = String(h.itemName).trim().toLowerCase();
+        pushLot(nm, Number(h.listingId) || 0, Number(h.at) || 0, Number(h.qty) || 1, Number(h.buyPriceTotal) || 0);
+      }
+    }
+
+    for (const [nm, e] of map.entries()) {
+      const heldUnits = e.activeUnits + Math.max(e.bagUnits, e.queuedUnits);
+      if (heldUnits <= 0) continue;
+      const lots = (lotsByName.get(nm) || []).sort((a, b) => b.at - a.at);
+      let remNeed = heldUnits;
+      let sumCost = 0;
+      let sumQty = 0;
+      for (const lot of lots) {
+        if (remNeed <= 0) break;
+        const take = Math.min(remNeed, lot.qty);
+        sumCost += (lot.buyTotal / lot.qty) * take;
+        sumQty += take;
+        remNeed -= take;
+      }
+      if (sumQty > 0) {
+        e.recentUnsoldAvgBuyUnit = Math.round(sumCost / sumQty);
+      }
+    }
+
+    return map;
+  }
+
+  function recordNewExposureInMap(exposureMap, itemNameLower, qty, acquireTotalCost, inAuction, singleUnit, flipUnitPrice) {
+    if (!itemNameLower) return;
+    if (!exposureMap.has(itemNameLower)) {
+      exposureMap.set(itemNameLower, {
+        activeUnits: 0,
+        activeListingsCount: 0,
+        maxActiveListedUnit: 0,
+        bagUnits: 0,
+        queuedUnits: 0,
+        leadingLots: 0,
+        leadingUnits: 0,
+        leadingZeny: 0,
+        recentUnsoldAvgBuyUnit: 0
+      });
+    }
+    const e = exposureMap.get(itemNameLower);
+    const q = Math.max(1, Number(qty) || 1);
+    const unitCost = Math.round((Number(acquireTotalCost) || 0) / q);
+    if (inAuction) {
+      e.leadingLots += 1;
+      e.leadingUnits += q;
+      e.leadingZeny += Number(acquireTotalCost) || 0;
+    } else {
+      const prevHeld = e.activeUnits + Math.max(e.bagUnits, e.queuedUnits);
+      e.activeUnits += q;
+      e.activeListingsCount += singleUnit ? Math.min(2, q) : 1;
+      if (flipUnitPrice > e.maxActiveListedUnit) e.maxActiveListedUnit = flipUnitPrice;
+      const prevTotal = prevHeld * (e.recentUnsoldAvgBuyUnit || 0);
+      e.recentUnsoldAvgBuyUnit = Math.round((prevTotal + unitCost * q) / Math.max(1, prevHeld + q));
+    }
+  }
+
+  function canAcquireWithExposureLimit(exp, itemNameLower, singleUnit, qty, realisticSellUnit, acquireUnitCost, acquireTotalCost) {
+    if (config.mode !== 'auto_flip') return true;
+    const heldStockUnits = exp ? (exp.activeUnits + Math.max(exp.bagUnits, exp.queuedUnits)) : 0;
+    const leadingUnits = exp ? exp.leadingUnits : 0;
+    const leadingLots = exp ? exp.leadingLots : 0;
+    const leadingZeny = exp ? exp.leadingZeny : 0;
+
+    // 1. Freeze buying more while existing stock of this item is underwater or sitting overpriced above current market
+    if (exp && heldStockUnits > 0) {
+      if (exp.recentUnsoldAvgBuyUnit > 0 && Math.floor(realisticSellUnit * 0.96) < Math.round(exp.recentUnsoldAvgBuyUnit * 1.05)) {
+        return false;
+      }
+      if (exp.maxActiveListedUnit > Math.round(realisticSellUnit * 1.15)) {
+        return false;
+      }
+    }
+
+    // 2. Per-item quantity / lot exposure caps
+    const totalCommittedUnits = heldStockUnits + leadingUnits;
+    if (singleUnit) {
+      if (realisticSellUnit >= 3000000 || acquireTotalCost >= 2000000) {
+        if (totalCommittedUnits >= 1 || qty > 1) return false;
+      } else {
+        if (totalCommittedUnits >= 2 || (totalCommittedUnits + qty) > 2) return false;
+      }
+    } else {
+      if (leadingLots >= 2) return false;
+      const bCfg = getSmartFlipBatchConfig(itemNameLower, realisticSellUnit, false);
+      if (totalCommittedUnits > 0 && (totalCommittedUnits >= bCfg.batchQty * 6 || (totalCommittedUnits + qty) > bCfg.batchQty * 10)) {
+        return false;
+      }
+    }
+
+    // 3. Per-item capital exposure cap
+    const existingTiedZeny = (heldStockUnits * ((exp && exp.recentUnsoldAvgBuyUnit) || acquireUnitCost)) + leadingZeny;
+    if (existingTiedZeny > 0 && (existingTiedZeny + acquireTotalCost) > config.maxSpendPerListing) {
+      return false;
+    }
+
+    return true;
+  }
+
+  function evaluateListingValuation(refInfo, qty, acquireTotalCost, acquireUnitCost, inAuction, buyerScreen) {
+    const cleanRefUnitPrice = Number(refInfo.cleanRefUnitPrice) || 0;
+    const rawFlipUnit = Number(refInfo.flipUnitPrice) || cleanRefUnitPrice;
+    const realisticSellUnit = (cleanRefUnitPrice > 0 && rawFlipUnit > 0)
+      ? Math.min(cleanRefUnitPrice, rawFlipUnit)
+      : (cleanRefUnitPrice || rawFlipUnit);
+    if (realisticSellUnit <= 0 || acquireTotalCost <= 0) {
+      return { ok: false, reason: 'invalid_ref' };
+    }
+
+    const downtrendDropPct = Number(refInfo.downtrendDropPct) || 0;
+    let effBuyRatioPct = config.maxBuyRatioPercent;
+    let effBidRatioPct = config.maxBidRatioPercent;
+    let effMinProfitPct = config.minNetProfitPercent;
+    if (downtrendDropPct >= 30) {
+      effBuyRatioPct = Math.min(effBuyRatioPct, 42);
+      effBidRatioPct = Math.min(effBidRatioPct, 45);
+      effMinProfitPct = Math.max(effMinProfitPct, 45);
+    } else if (downtrendDropPct >= 18) {
+      effBuyRatioPct = Math.min(effBuyRatioPct, 50);
+      effBidRatioPct = Math.min(effBidRatioPct, 52);
+      effMinProfitPct = Math.max(effMinProfitPct, 38);
+    }
+
+    const maxAllowedRatio = (inAuction ? effBidRatioPct : effBuyRatioPct) / 100;
+    const maxAllowedUnitCost = Math.floor(realisticSellUnit * maxAllowedRatio);
+    if (acquireUnitCost > maxAllowedUnitCost) {
+      return { ok: false, reason: 'ratio_exceeded' };
+    }
+
+    const taxPercent = (buyerScreen && buyerScreen.premium) ? 4 : 8;
+    const flipUnitPrice = realisticSellUnit;
+    const flipTotal = flipUnitPrice * qty;
+    const netRevenueTotal = flipTotal - Math.floor(flipTotal * taxPercent / 100);
+    const expectedNetProfit = netRevenueTotal - acquireTotalCost;
+    const expectedNetProfitPct = Math.round((expectedNetProfit / acquireTotalCost) * 100);
+
+    if (expectedNetProfit < config.minNetProfitZeny) {
+      return { ok: false, reason: 'profit_zeny_low' };
+    }
+    if (expectedNetProfitPct < effMinProfitPct) {
+      return { ok: false, reason: 'profit_pct_low' };
+    }
+
+    const maxBidByRatio = Math.floor(realisticSellUnit * qty * (effBidRatioPct / 100));
+    const maxBidByProfitZeny = netRevenueTotal - config.minNetProfitZeny;
+    const maxBidByProfitPct = Math.floor(netRevenueTotal / (1 + (effMinProfitPct / 100)));
+    const maxBidCapTotal = Math.min(config.maxSpendPerListing, maxBidByRatio, maxBidByProfitZeny, maxBidByProfitPct);
+
+    if (inAuction && acquireTotalCost > maxBidCapTotal) {
+      return { ok: false, reason: 'bid_cap_exceeded' };
+    }
+
+    return {
+      ok: true,
+      cleanRefUnitPrice,
+      flipUnitPrice,
+      realisticSellUnit,
+      flipTotal,
+      netRevenueTotal,
+      expectedNetProfit,
+      expectedNetProfitPct,
+      taxPercent,
+      effBidRatioPct,
+      effMinProfitPct,
+      maxBidCapTotal,
+      discountPct: Math.max(1, Math.round((1 - (acquireUnitCost / realisticSellUnit)) * 100))
+    };
   }
 
   // Main scan cycle
@@ -2422,6 +2798,7 @@ function createMarketSniperService({
       const watchlistLower = new Set(getWatchlistArray().map(s => s.toLowerCase()));
       const now = Date.now();
       let historyFetchesRemaining = 4; // Cap history RPCs per tick so scans stay fast
+      const exposureByName = buildExposureByNameMap(onlineScreens);
 
       // Build set of ALL our own characters' names and active listing IDs across all screens so we never snipe our own screens' listings
       const ourCharNamesSet = new Set();
@@ -2478,30 +2855,23 @@ function createMarketSniperService({
         // Never buy large card/stone stacks (> 3) because cards must be sold 1 by 1 and we must not hoard cards
         if (singleUnit && qty > 3) continue;
 
-        // Prevent hoarding the same Card/Stone: if we already have >= 2 active listings or leading bids of this Card/Stone across screens, skip until they sell
-        if (singleUnit && config.mode === 'auto_flip') {
-          let activeSameCardCount = 0;
-          for (const scr of onlineScreens) {
-            if (scr && scr.activeNameCounts && scr.activeNameCounts[itemNameLower]) {
-              activeSameCardCount += Number(scr.activeNameCounts[itemNameLower]) || 0;
-            }
-          }
-          for (const b of (state.activeBids || [])) {
-            if (b && b.status === 'leading' && Number(b.listingId) !== lid && String(b.itemName || '').trim().toLowerCase() === itemNameLower) {
-              activeSameCardCount += Math.max(1, Number(b.qty) || 1);
-            }
-          }
-          if (activeSameCardCount >= 2 || (activeSameCardCount + qty) > 3) {
-            continue;
-          }
-        }
-
         const inAuction = Boolean(l.auctionEndsAt && Number(l.auctionEndsAt) > now);
         const acquireTotalCost = inAuction
           ? (Number(l.minBid) || (l.topBid ? Math.ceil(Number(l.topBid) * 1.01) : Number(l.price)) || Number(l.price))
           : Number(l.price);
         if (!acquireTotalCost || acquireTotalCost <= 0) continue;
         if (acquireTotalCost > config.maxSpendPerListing) continue;
+
+        // Pre-RPC exposure fast-reject (avoids wasting history fetches when already capped)
+        const preExp = exposureByName.get(itemNameLower);
+        if (config.mode === 'auto_flip' && preExp) {
+          if (!singleUnit && preExp.leadingLots >= 2) continue;
+          const committedNow = preExp.activeUnits + Math.max(preExp.bagUnits, preExp.queuedUnits) + preExp.leadingUnits;
+          if (singleUnit) {
+            if (committedNow >= 2 || (committedNow + qty) > 2) continue;
+            if (committedNow >= 1 && acquireTotalCost >= 2000000) continue;
+          }
+        }
 
         const acquireUnitCost = Math.ceil(acquireTotalCost / qty);
 
@@ -2521,51 +2891,63 @@ function createMarketSniperService({
           refInfo = await fetchItemReferencePrice(scanner, it, listings, ourCharNamesSet);
         }
 
-        if (!refInfo || !refInfo.valid || refInfo.cleanRefUnitPrice <= 0) continue;
-        if (refInfo.totalSales < config.minSalesVolume) continue;
+        const passesRefGates = (r) => {
+          if (!r || !r.valid || r.cleanRefUnitPrice <= 0) return false;
+          if (r.totalSales < config.minSalesVolume) return false;
+          const minSales24h = singleUnit ? 3 : 8;
+          const minSales7d = singleUnit ? 12 : 25;
+          const minClusterCnt = singleUnit ? 4 : 6;
+          if ((Number(r.sales24h) || 0) < minSales24h) return false;
+          if ((Number(r.sales7d) || 0) < minSales7d) return false;
+          if ((Number(r.clusterCount) || 0) < minClusterCnt) return false;
+          // Cornered-market auction bait guard for stackables
+          if (inAuction && !singleUnit && (Number(r.sales24h) || 0) < 30 && (Number(r.uniqueBuyNowSellersCount) || 0) < 3) {
+            return false;
+          }
+          return true;
+        };
 
-        // Enforce strict anti-wash-trade liquidity minimums on stackables vs single-unit Cards/Stones
-        const minSales24h = singleUnit ? 3 : 8;
-        const minSales7d = singleUnit ? 12 : 25;
-        const minClusterCnt = singleUnit ? 4 : 6;
-        if ((Number(refInfo.sales24h) || 0) < minSales24h) continue;
-        if ((Number(refInfo.sales7d) || 0) < minSales7d) continue;
-        if ((Number(refInfo.clusterCount) || 0) < minClusterCnt) continue;
+        if (!passesRefGates(refInfo)) continue;
 
-        // Cornered-market auction bait guard:
-        // Scammers list 1-2 fake Buy-Now stacks at an inflated price and put a 3rd stack in a 5-min auction at 40% of that fake price.
-        // For stackable items in a 5-min auction, unless 24h trade volume is very high (>= 30 trades/day),
-        // require at least 3 distinct external Buy-Now sellers so a single scammer (or 2 accounts) cannot corner the book.
-        if (inAuction && !singleUnit && (Number(refInfo.sales24h) || 0) < 30 && (Number(refInfo.uniqueBuyNowSellersCount) || 0) < 3) {
+        const initialFlipU = Math.min(
+          Number(refInfo.cleanRefUnitPrice) || 0,
+          Number(refInfo.flipUnitPrice) || Number(refInfo.cleanRefUnitPrice) || 0
+        );
+        if (!canAcquireWithExposureLimit(exposureByName.get(itemNameLower), itemNameLower, singleUnit, qty, initialFlipU, acquireUnitCost, acquireTotalCost)) {
           continue;
         }
 
         lastScanSummary.evaluatedCount += 1;
 
-        const maxAllowedRatio = inAuction ? (config.maxBidRatioPercent / 100) : (config.maxBuyRatioPercent / 100);
-        const maxAllowedUnitCost = Math.floor(refInfo.cleanRefUnitPrice * maxAllowedRatio);
-        if (acquireUnitCost > maxAllowedUnitCost) continue;
-
-        // Calculate profit using richest candidate screen's tax rate (4% Premium, 8% Free)
         const buyerScreen = selectRichestBuyerProfile(onlineScreens, acquireTotalCost, lid, qty, config.mode === 'auto_flip', singleUnit);
-        const taxPercent = (buyerScreen && buyerScreen.premium) ? 4 : 8;
-        const flipUnitPrice = refInfo.flipUnitPrice;
-        const flipTotal = flipUnitPrice * qty;
-        const netRevenueTotal = flipTotal - Math.floor(flipTotal * taxPercent / 100);
-        const expectedNetProfit = netRevenueTotal - acquireTotalCost;
-        const expectedNetProfitPct = Math.round((expectedNetProfit / acquireTotalCost) * 100);
+        let valuation = evaluateListingValuation(refInfo, qty, acquireTotalCost, acquireUnitCost, inAuction, buyerScreen);
+        if (!valuation.ok) continue;
 
-        if (expectedNetProfit < config.minNetProfitZeny) continue;
-        if (expectedNetProfitPct < config.minNetProfitPercent) continue;
+        // Live Pre-Snipe Refresh: re-verify latest trades & active Buy-Now book before committing real Zeny on stale cached items
+        if (config.mode !== 'dry_run' && cacheFresh && (acquireTotalCost >= 1500000 || (inAuction && (now - (Number(refInfo.updatedAt) || 0)) > 90000))) {
+          const freshRef = await fetchItemReferencePrice(scanner, it, listings, ourCharNamesSet, true);
+          if (!freshRef) continue;
+          refInfo = freshRef;
+          if (!passesRefGates(refInfo)) continue;
+          const refreshedFlipU = Math.min(
+            Number(refInfo.cleanRefUnitPrice) || 0,
+            Number(refInfo.flipUnitPrice) || Number(refInfo.cleanRefUnitPrice) || 0
+          );
+          if (!canAcquireWithExposureLimit(exposureByName.get(itemNameLower), itemNameLower, singleUnit, qty, refreshedFlipU, acquireUnitCost, acquireTotalCost)) {
+            continue;
+          }
+          valuation = evaluateListingValuation(refInfo, qty, acquireTotalCost, acquireUnitCost, inAuction, buyerScreen);
+          if (!valuation.ok) continue;
+        }
 
-        // Compute Max Bid Cap for 5-minute auctions
-        const maxBidByRatio = Math.floor(refInfo.cleanRefUnitPrice * qty * (config.maxBidRatioPercent / 100));
-        const maxBidByProfit = netRevenueTotal - config.minNetProfitZeny;
-        const maxBidCapTotal = Math.min(config.maxSpendPerListing, maxBidByRatio, maxBidByProfit);
+        const {
+          flipUnitPrice,
+          flipTotal,
+          expectedNetProfit,
+          maxBidCapTotal,
+          discountPct
+        } = valuation;
 
-        if (inAuction && acquireTotalCost > maxBidCapTotal) continue;
-
-        const discountPct = Math.max(1, Math.round((1 - (acquireUnitCost / refInfo.cleanRefUnitPrice)) * 100));
         state.stats.totalOpportunitiesFound = (state.stats.totalOpportunitiesFound || 0) + 1;
 
         // Dry-run mode: log & show in UI without spending Zeny
@@ -2631,12 +3013,17 @@ function createMarketSniperService({
           cleanRefUnitPrice: refInfo.cleanRefUnitPrice,
           flipUnitPrice,
           flipTotal,
-          expectedNetProfit
+          expectedNetProfit,
+          effBidRatioPct: valuation.effBidRatioPct,
+          effMinProfitPct: valuation.effMinProfitPct,
+          taxPercent: valuation.taxPercent,
+          ourCharNames: Array.from(ourCharNamesSet)
         });
 
         if (execResult && execResult.success) {
-          // Deduct from local Zeny snapshot so next item in same tick knows updated balance
+          // Deduct from local Zeny snapshot & update live exposure map so same-tick duplicates obey caps
           buyerScreen.zeny = Math.max(0, (Number(buyerScreen.zeny) || 0) - acquireTotalCost);
+          recordNewExposureInMap(exposureByName, itemNameLower, qty, acquireTotalCost, inAuction, singleUnit, flipUnitPrice);
 
           if (inAuction) {
             state.stats.totalBidsPlaced = (state.stats.totalBidsPlaced || 0) + 1;
@@ -2760,7 +3147,7 @@ function createMarketSniperService({
         }
       }
 
-      savePersistedState(state);
+      persistState();
       return { ok: true, summary: lastScanSummary };
     } finally {
       isScanningTick = false;
@@ -3013,30 +3400,24 @@ function createMarketSniperService({
       if (config.mode === 'auto_flip') {
         const onlineScreens = await getOnlineScreenStates();
         const flippedByProfile = new Map();
-        const registerProfileFlip = (pid, itemName, itemId, refine, unitPrice, buyTotal = 0, lotQty = 1) => {
+        const registerProfileFlip = (pid, itemName, itemId, refine, unitPrice, buyTotal = 0, lotQty = 1, manualRepriceUnit = 0) => {
           const pKey = String(pid || '');
           const nm = String(itemName || '').trim().toLowerCase();
           if (!pKey || !nm) return;
           if (!flippedByProfile.has(pKey)) flippedByProfile.set(pKey, new Map());
-          const buyU = buyTotal > 0 ? Math.round(Number(buyTotal) / Math.max(1, Number(lotQty) || 1)) : 0;
-          const minFloor = buyU > 0 ? Math.ceil(buyU / 0.96) : 0;
-          const trueRef = getTrueRefUnitPrice(itemId, refine || 0, itemName, unitPrice);
-          const rawSafeU = (trueRef > 0 && Number(unitPrice) > Math.round(trueRef * 1.25))
-            ? trueRef
-            : (Number(unitPrice) || trueRef);
-          const safeU = Math.max(rawSafeU, minFloor);
+          const safeU = computeFlippedSafeUnit(itemId, refine, itemName, unitPrice, buyTotal, lotQty, manualRepriceUnit);
           if (safeU > 0) {
             flippedByProfile.get(pKey).set(nm, safeU);
           }
         };
         for (const h of (state.history || []).slice().reverse()) {
           if (h && (h.action === 'relisted' || h.action === 'buy' || h.action === 'won')) {
-            registerProfileFlip(h.buyerProfileId, h.itemName, h.itemId, h.refine, h.relistUnitPrice || h.listedUnitPrice || h.cleanRefUnitPrice, h.buyPriceTotal, h.qty);
+            registerProfileFlip(h.buyerProfileId, h.itemName, h.itemId, h.refine, h.relistUnitPrice || h.listedUnitPrice || h.cleanRefUnitPrice, h.buyPriceTotal, h.qty, h.manualRepriceUnit);
           }
         }
         for (const b of (state.activeBids || [])) {
           if (b && (b.status === 'relisted' || b.status === 'queued_flip' || b.status === 'won' || b.status === 'bought')) {
-            registerProfileFlip(b.buyerProfileId, b.itemName, b.itemId, b.refine, b.flipUnitPrice || b.listedUnitPrice || b.cleanRefUnitPrice, b.currentBid, b.qty);
+            registerProfileFlip(b.buyerProfileId, b.itemName, b.itemId, b.refine, b.flipUnitPrice || b.listedUnitPrice || b.cleanRefUnitPrice, b.currentBid, b.qty, b.manualRepriceUnit);
           }
         }
 
@@ -3248,7 +3629,7 @@ function createMarketSniperService({
         }
       }
 
-      savePersistedState(state);
+      persistState();
     } finally {
       isMaintenanceTick = false;
     }
@@ -3514,7 +3895,7 @@ function createMarketSniperService({
     for (const lot of lots) {
       const trueRef = getTrueRefUnitPrice(lot.itemId, lot.refine, lot.itemName, lot.listedUnitPrice);
       const listedUnit = lot.listedUnitPrice || trueRef;
-      const isOverpriced = trueRef > 0 && listedUnit > Math.round(trueRef * 1.25);
+      const isOverpriced = trueRef > 0 && listedUnit > Math.round(trueRef * 1.12);
 
       let rem = lot.qty;
       let inStockUnits = 0;
@@ -3631,7 +4012,7 @@ function createMarketSniperService({
         const realisticGross = (trueRef || activeMatchedUnitPrice) * inStockUnits;
         const realisticNetRev = realisticGross - Math.floor(realisticGross * 4 / 100);
         const realisticProfit = realisticNetRev - stockCost;
-        const lotOverpriced = trueRef > 0 && activeMatchedUnitPrice > Math.round(trueRef * 1.25);
+        const lotOverpriced = trueRef > 0 && activeMatchedUnitPrice > Math.round(trueRef * 1.12);
 
         inStockSummary.lotsCount += 1;
         inStockSummary.unitsCount += inStockUnits;
@@ -3670,7 +4051,7 @@ function createMarketSniperService({
         buyUnitPrice: lot.buyUnitPrice,
         listedUnitPrice: activeMatchedUnitPrice,
         trueRefUnitPrice: trueRef,
-        isOverpriced: Boolean(inStockUnits > 0 && trueRef > 0 && activeMatchedUnitPrice > Math.round(trueRef * 1.25)),
+        isOverpriced: Boolean(inStockUnits > 0 && trueRef > 0 && activeMatchedUnitPrice > Math.round(trueRef * 1.12)),
         stockState: soldUnits >= lot.qty ? 'sold' : (inStockUnits >= lot.qty ? 'in_stock' : 'partial'),
         buyers: matchedBuyers,
         buyerCharName: lot.buyerCharName,
@@ -3693,7 +4074,7 @@ function createMarketSniperService({
       if (!avgBuyUnitByName[a.nameLower] && a.nameLower !== 'enchant rune' && a.nameLower !== 'armor blueprint') continue;
       const trueRef = getTrueRefUnitPrice(a.itemId, a.refine, a.name, 0);
       if (trueRef <= 0) continue;
-      const isOverpricedActive = a.unitPrice > Math.round(trueRef * 1.25);
+      const isOverpricedActive = a.unitPrice > Math.round(trueRef * 1.12);
       if (!isOverpricedActive) continue;
 
       const q = a.remQty;
@@ -3793,8 +4174,8 @@ function createMarketSniperService({
     };
   }
 
-  // Cancel active listings across all screens that are overpriced (> 1.25x true stable reference price)
-  // and re-list them at the true Most-Stable Cluster reference price!
+  // Cancel active listings across all screens that are overpriced (> 1.12x true current market reference price)
+  // and re-list them at the true current market reference price!
   async function repriceOverpricedStock(onlineScreens, filterItemName = '') {
     const targetFilterNorm = String(filterItemName || '').trim().toLowerCase();
     const hours = Number(config.relistDurationHours) || 24;
@@ -3814,7 +4195,7 @@ function createMarketSniperService({
         if (targetFilterNorm && nmLower !== targetFilterNorm) continue;
         const trueRef = getTrueRefUnitPrice(a.itemId, a.refine, a.name, 0);
         if (trueRef <= 0) continue;
-        if (a.unitPrice > Math.round(trueRef * 1.25)) {
+        if (a.unitPrice > Math.round(trueRef * 1.12)) {
           const newUnitPrice = Math.max(1, trueRef - undercut);
           const bCfg = getSmartFlipBatchConfig(nmLower, newUnitPrice, isSingleUnitFlipItem(a.name));
           targetsOnScreen.push({
@@ -3937,10 +4318,11 @@ function createMarketSniperService({
       const nm = String(b.itemName).trim().toLowerCase();
       if (!repricedProfileItemKeys.has(`${String(b.buyerProfileId || '')}::${nm}`)) continue;
       const trueRef = getTrueRefUnitPrice(b.itemId, b.refine, b.itemName, 0);
-      if (trueRef > 0 && Number(b.flipUnitPrice) > Math.round(trueRef * 1.25)) {
+      if (trueRef > 0 && Number(b.flipUnitPrice) > Math.round(trueRef * 1.12)) {
         const newU = Math.max(1, trueRef - undercut);
         b.flipUnitPrice = newU;
         b.listedUnitPrice = newU;
+        b.manualRepriceUnit = newU;
         b.relistedPrice = newU * Math.max(1, Number(b.qty) || 1);
       }
     }
@@ -3950,7 +4332,7 @@ function createMarketSniperService({
       if (!repricedProfileItemKeys.has(`${String(h.buyerProfileId || '')}::${nm}`)) continue;
       if (h.at && (nowRepriceTs - Number(h.at) > 12 * 3600 * 1000)) continue; // Never overwrite old already-sold lots
       const trueRef = getTrueRefUnitPrice(h.itemId, h.refine, h.itemName, 0);
-      if (trueRef > 0 && Number(h.relistUnitPrice) > Math.round(trueRef * 1.25)) {
+      if (trueRef > 0 && Number(h.relistUnitPrice) > Math.round(trueRef * 1.12)) {
         const q = Math.max(1, Number(h.qty) || 1);
         if (!h.initialListedUnitPrice) {
           h.initialListedUnitPrice = extractOriginalListedUnitFromNote(h.note, q) || Number(h.relistUnitPrice) || 0;
@@ -3958,11 +4340,12 @@ function createMarketSniperService({
         const newU = Math.max(1, trueRef - undercut);
         h.relistUnitPrice = newU;
         h.listedUnitPrice = newU;
+        h.manualRepriceUnit = newU;
         h.relistPriceTotal = newU * q;
       }
     }
     sanitizeHistoricalState();
-    savePersistedState(state);
+    persistState();
     cachedOnlineScreensAt = 0; // Force fresh screen state on next status poll
 
     return {
@@ -4051,7 +4434,7 @@ function createMarketSniperService({
           replyJSON(400, { success: false, error: 'Invalid JSON body' });
           return true;
         }
-        config = saveConfig(Object.assign({}, config, body));
+        config = persistConfig(Object.assign({}, config, body));
         scheduleNextScan();
         replyJSON(200, { success: true, config });
         return true;
@@ -4093,7 +4476,7 @@ function createMarketSniperService({
         state.pendingFlips = [];
         state.history = [];
         listingLocks.clear();
-        savePersistedState(state);
+        persistState();
         replyJSON(200, { success: true });
         return true;
       }
@@ -4110,6 +4493,9 @@ function createMarketSniperService({
     start,
     handleRoute,
     getConfig: () => config,
+    getState: () => state,
+    runScanCycle,
+    fetchItemReferencePrice,
     computeCleanReferencePrice
   };
 }

@@ -1285,7 +1285,7 @@
                   </td>
                   <td>
                     <b style="color:#38bdf8;">${fmtZeny(g.trueRefUnitPrice)}/ชิ้น</b>
-                    <div style="font-size:10px;color:#64748b;">กลุ่มราคาคงที่ 10–20 ล่าสุด</div>
+                    <div style="font-size:10px;color:#64748b;">ราคาขายจริงปัจจุบัน (ขายล่าสุด + เพดานตั้งขายสด)</div>
                   </td>
                   <td>
                     ${g.soldUnits > 0

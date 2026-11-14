@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4.57.2">
+  <link rel="stylesheet" href="style.css?v=4.59.0">
   <link rel="stylesheet" href="inventory_market.css?v=4.55.0">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=4.45.0">
@@ -18,7 +18,7 @@
   <link rel="stylesheet" href="guild_manager.css?v=4.49.0">
   <link rel="stylesheet" href="jail_manager.css?v=4.51.9">
   <link rel="stylesheet" href="device_manager.css?v=4.53.6">
-  <link rel="stylesheet" href="fleet_dashboard.css?v=4.58.0">
+  <link rel="stylesheet" href="fleet_dashboard.css?v=4.59.0">
   <style id="pm-boot-splash-style">
     #pm-boot-splash {
       position: fixed;
@@ -325,6 +325,12 @@
       </div>
 
       <div id="access-lock-guest-view" style="display:flex;flex-direction:column;gap:12px;">
+        <div class="existing-id-notice-banner">
+          <span class="existing-id-notice-icon">📢</span>
+          <div class="existing-id-notice-text">
+            <strong>ประกาศสำคัญ:</strong> หากมี <b>ID PS (Username / รหัสผ่าน)</b> อยู่แล้ว <b>ไม่ต้องสมัครใหม่</b>! สามารถกดเข้าสู่ระบบด้วย ID เดิมเพื่อใช้งานและเชื่อมส่วนบุญได้ทันที
+          </div>
+        </div>
         <div style="display:flex;gap:6px;background:rgba(2,6,23,0.75);padding:4px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);">
           <button type="button" id="btn-lock-tab-login" style="flex:1;padding:8px 10px;border-radius:8px;border:none;font-size:12.5px;font-weight:700;cursor:pointer;background:rgba(56,189,248,0.26);color:#e0f2fe;">🔓 เข้าสู่ระบบ (Login)</button>
           <button type="button" id="btn-lock-tab-register" style="flex:1;padding:8px 10px;border-radius:8px;border:none;font-size:12.5px;font-weight:700;cursor:pointer;background:transparent;color:#94a3b8;">📝 สมัคร ID ใหม่</button>
@@ -338,6 +344,10 @@
         </div>
 
         <div id="access-lock-pane-register" style="display:none;background:rgba(2,6,23,0.68);border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:14px 16px;flex-direction:column;gap:10px;">
+          <div class="existing-id-switch-callout">
+            <span>⚠️ มี <b>ID PS</b> ไว้อยู่แล้ว? ไม่ต้องสมัครใหม่</span>
+            <button type="button" id="btn-lock-switch-to-login" class="existing-id-switch-btn">กดสลับไปหน้า Login →</button>
+          </div>
           <input type="text" id="lock-reg-username" maxlength="32" placeholder="ตั้ง Username ใหม่ (3-32 ตัวอักษร a-z, 0-9, _, ., -)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
             <input type="password" id="lock-reg-password" maxlength="128" autocomplete="new-password" placeholder="รหัสผ่าน (4+ ตัวอักษร)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
@@ -457,6 +467,7 @@
         <button id="btn-topup-captcha" class="btn" title="เติมส่วนบุญเข้าบัญชีบริการ PmheeAether" style="background: linear-gradient(135deg, rgba(234, 179, 8, 0.2), rgba(202, 138, 4, 0.1)); border: 1px solid rgba(250, 204, 21, 0.45); color: #facc15; font-weight: 600; display: inline-flex; align-items: center; gap: 6px;">
           <span class="icon" style="font-size: 14px;">💰</span> <span>เติมส่วนบุญ</span>
           <span id="topup-point-badge" class="badge" style="background: rgba(250, 204, 21, 0.25); color: #fef08a; border: 1px solid rgba(250, 204, 21, 0.4); padding: 1px 6px; border-radius: 999px; font-size: 10.5px; font-weight: 700;">0 ส่วนบุญ</span>
+          <span id="topup-machine-debt-badge" class="badge" style="display:none;background: rgba(244, 63, 94, 0.24); color: #fda4af; border: 1px solid rgba(244, 63, 94, 0.55); padding: 1px 6px; border-radius: 999px; font-size: 10.5px; font-weight: 700;">เครื่องนี้ 0</span>
         </button>
         <button id="btn-refresh" class="btn btn-icon" title="รีเฟรชข้อมูล">
           <span class="icon">🔄</span>
@@ -1679,7 +1690,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4.53.35"></script>
-  <script src="app.js?v=4.58.0"></script>
+  <script src="app.js?v=4.59.0"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.54.0"></script>
@@ -1694,8 +1705,8 @@
   <script src="guild_manager.js?v=4.56.1"></script>
   <script src="jail_manager.js?v=4.56.1"></script>
   <script src="device_manager.js?v=4.56.1"></script>
-  <script src="fleet_dashboard.js?v=4.58.0"></script>
-  <script src="update_log.js?v=4.58.0"></script>
+  <script src="fleet_dashboard.js?v=4.59.0"></script>
+  <script src="update_log.js?v=4.59.0"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 
@@ -1916,7 +1927,7 @@
       <div style="background: linear-gradient(135deg, rgba(234, 179, 8, 0.14), rgba(15, 23, 42, 0.95)); border: 1px solid rgba(250, 204, 21, 0.35); border-radius: 10px; padding: 12px 16px; margin-bottom: 14px;">
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
           <div>
-            <div style="font-size: 11px; color: #cbd5e1; font-weight: 600;">ยอดส่วนบุญคงเหลือของเครื่องนี้:</div>
+            <div style="font-size: 11px; color: #cbd5e1; font-weight: 600;">ยอดส่วนบุญรวมทั้งบัญชี (ทุกเครื่อง):</div>
             <div style="font-size: 28px; font-weight: 800; color: #facc15; display: flex; align-items: baseline; gap: 6px; margin-top: 1px;">
               <span id="topup-modal-points">0</span>
               <span style="font-size: 13.5px; font-weight: normal; color: #94a3b8;">ส่วนบุญ</span>
@@ -1924,6 +1935,7 @@
             <div id="topup-modal-rate" style="font-size: 10.5px; color: #94a3b8; margin-top: 1px;">
               Humancheck ไม่มีค่าต่อคำตอบ • 1 บาท = 1 ส่วนบุญ
             </div>
+            <div id="topup-modal-this-machine-pill" class="topup-this-machine-pill" style="display:none;"></div>
           </div>
           <div style="text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
             <span id="topup-modal-status-badge" style="background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4); padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 600;">
@@ -1937,6 +1949,8 @@
           </div>
         </div>
       </div>
+
+      <div id="topup-machine-breakdown-box" class="machine-merit-breakdown-box" style="display:none;"></div>
 
       <div style="font-size: 11px; color: #94a3b8; margin-bottom: 12px;">บัญชีบริการ: <span id="topup-service-account">กำลังเชื่อมต่อ...</span><br>ยอดส่วนบุญปัจจุบัน เก็บไฟล์บัญชีบริการไว้เพื่อรักษาสิทธิ์เข้าถึงยอดเดิม</div>
 
@@ -2774,14 +2788,21 @@
           • เครื่องนี้: <span id="auth-modal-device">-</span> (<span id="auth-modal-hwid">-</span>)<br>
           • สถานะสิทธิ์: <strong id="auth-modal-status">-</strong>
         </div>
+        <div id="auth-modal-machine-breakdown" class="machine-merit-breakdown-box" style="display:none;margin-top:10px;margin-bottom:0;"></div>
         <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end;">
           <button type="button" id="btn-auth-view-fleet" class="btn btn-primary btn-sm" style="font-size:12px;padding:6px 12px;">🖥️ ดูเครื่องทั้งหมด</button>
           <button type="button" id="btn-auth-logout" class="btn btn-danger btn-sm" style="font-size:12px;padding:6px 12px;">🚪 ออกจากระบบ / สลับบัญชี</button>
         </div>
       </div>
       <div id="auth-modal-guest">
-        <div style="font-size:12px;color:#94a3b8;line-height:1.55;margin-bottom:12px;">
+        <div style="font-size:12px;color:#94a3b8;line-height:1.55;margin-bottom:10px;">
           ล็อกอินด้วย <b>Username</b> เดียวกันในทุกเครื่องที่ใช้งาน ยอดส่วนบุญ (รวมถึงยอดค้างเดิมของเครื่องนี้) จะถูกเชื่อมรวมเป็นกระเป๋าเดียวกันอัตโนมัติ และไม่ต้องขออนุมัติเครื่องซ้ำทุกครั้ง
+        </div>
+        <div class="existing-id-notice-banner" style="margin-bottom:12px;">
+          <span class="existing-id-notice-icon">📢</span>
+          <div class="existing-id-notice-text">
+            <strong>ประกาศสำคัญ:</strong> หากมี <b>ID PS (Username / รหัสผ่าน)</b> อยู่แล้ว <b>ไม่ต้องสมัครใหม่</b>! สามารถกดเข้าสู่ระบบด้วย ID เดิมเพื่อใช้งานและเชื่อมส่วนบุญได้ทันที
+          </div>
         </div>
         <div style="display:flex;gap:6px;margin-bottom:12px;">
           <button type="button" id="btn-auth-tab-login" class="btn btn-sm" style="flex:1;background:rgba(56,189,248,0.22);border:1px solid rgba(56,189,248,0.6);color:#e0f2fe;font-weight:700;padding:7px;border-radius:8px;cursor:pointer;">🔓 เข้าสู่ระบบ (Login)</button>
@@ -2797,6 +2818,10 @@
         </div>
         <div id="auth-pane-register" style="display:none;">
           <div style="display:grid;gap:9px;">
+            <div class="existing-id-switch-callout">
+              <span>⚠️ มี <b>ID PS</b> ไว้อยู่แล้ว? ไม่ต้องสมัครใหม่</span>
+              <button type="button" id="btn-auth-switch-to-login" class="existing-id-switch-btn">กดสลับไปหน้า Login →</button>
+            </div>
             <input type="text" id="auth-reg-username" maxlength="32" placeholder="ตั้ง Username ใหม่ (3-32 ตัวอักษร a-z, 0-9, _, .)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">
             <input type="password" id="auth-reg-password" maxlength="128" placeholder="ตั้งรหัสผ่าน (อย่างน้อย 4 ตัวอักษร)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">
             <input type="password" id="auth-reg-password2" maxlength="128" placeholder="ยืนยันรหัสผ่านอีกครั้ง" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">

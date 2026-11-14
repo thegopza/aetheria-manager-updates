@@ -4043,28 +4043,168 @@ window.clearProfileBan = async function(profileId, event) {
 // AUTO CAPTCHA POINT TOP-UP MODAL CONTROLLER
 // ==========================================
 let lastKnownPointsPerSolve = 1;
-function updatePointDisplays(points, pointsPerSolve, serviceAvailable) {
+let lastKnownMachineMerit = null;
+
+function formatMeritAmount(v) {
+  const n = Number(v || 0);
+  if (!Number.isFinite(n)) return "0";
+  return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+function buildMachineMeritBreakdownHtml(effMerit) {
+  const list = effMerit && Array.isArray(effMerit.machines) ? effMerit.machines : [];
+  if (list.length === 0) return "";
+  const negCount = Number(effMerit.negativeMachineCount != null ? effMerit.negativeMachineCount : list.filter(m => Number(m.debtUnits || 0) < 0).length);
+  const unassignedUnits = Number(effMerit.unassignedDebtUnits || 0);
+  const rowsHtml = list.map(m => {
+    const isDebt = Number(m.debtUnits || 0) < 0;
+    const isCur = Boolean(m.isCurrentMachine);
+    const name = escapeHTML(m.deviceName || m.hostname || m.hwidCode || m.machineKey || "-");
+    const hwid = escapeHTML(m.hwidCode || m.machineKey || "-");
+    const todayUsed = formatMeritAmount(m.todayUsedMerit != null ? m.todayUsedMerit : Number(m.todayUsedUnits || 0) / 100);
+    const totalUsed = formatMeritAmount(m.totalUsedMerit != null ? m.totalUsedMerit : Number(m.totalUsedUnits || 0) / 100);
+    const debtText = isDebt
+      ? `ติดลบ ${formatMeritAmount(m.debtMerit != null ? m.debtMerit : Number(m.debtUnits || 0) / 100)} ส่วนบุญ`
+      : "ไม่ติดลบ (0 บุญ)";
+    return `<div class="machine-merit-row ${isCur ? "is-current" : ""} ${isDebt ? "is-debt" : ""}">
+      <div class="machine-merit-left">
+        <div class="machine-merit-name">
+          <span>💻 ${name}</span>
+          ${isCur ? '<span class="machine-merit-current-tag">📍 เครื่องนี้</span>' : ""}
+          <span class="machine-merit-hwid">${hwid}</span>
+        </div>
+        <div class="machine-merit-usage">วันนี้ใช้ ${todayUsed} บุญ • สะสม ${totalUsed} บุญ</div>
+      </div>
+      <span class="machine-merit-debt-pill ${isDebt ? "is-debt" : "is-clean"}">${debtText}</span>
+    </div>`;
+  }).join("");
+
+  const unassignedRow = unassignedUnits < 0
+    ? `<div class="machine-merit-row is-debt">
+        <div class="machine-merit-left">
+          <div class="machine-merit-name"><span>⏳ ยอดค้างเก่าก่อนผูกเครื่อง</span></div>
+          <div class="machine-merit-usage">บันทึกประวัติเดิมก่อนแยกรหัสเครื่อง</div>
+        </div>
+        <span class="machine-merit-debt-pill is-debt">ติดลบ ${formatMeritAmount(effMerit.unassignedDebtMerit != null ? effMerit.unassignedDebtMerit : unassignedUnits / 100)} ส่วนบุญ</span>
+      </div>`
+    : "";
+
+  const summaryTag = negCount > 0 ? `ติดลบ ${negCount} เครื่อง` : "ไม่ติดลบทุกเครื่อง";
+  return `<div class="machine-merit-breakdown-head">
+      <span>📊 ยอดส่วนบุญแยกตามเครื่อง (${list.length} เครื่อง)</span>
+      <span class="machine-merit-breakdown-sub">${summaryTag}</span>
+    </div>
+    <div class="machine-merit-list">${rowsHtml}${unassignedRow}</div>`;
+}
+
+function updatePointDisplays(points, pointsPerSolve, serviceAvailable, machineMerit) {
   if (pointsPerSolve != null) lastKnownPointsPerSolve = pointsPerSolve;
+  if (machineMerit !== undefined) lastKnownMachineMerit = machineMerit || null;
+  const effMerit = machineMerit !== undefined ? (machineMerit || null) : lastKnownMachineMerit;
   const p = points != null ? Number(points) : 0;
+  const topupBtn = document.getElementById("btn-topup-captcha");
   const topupBadge = document.getElementById("topup-point-badge");
+  const machineDebtBadge = document.getElementById("topup-machine-debt-badge");
   const topupPointsVal = document.getElementById("topup-modal-points");
+  const topupThisMachinePill = document.getElementById("topup-modal-this-machine-pill");
+  const topupBreakdownBox = document.getElementById("topup-machine-breakdown-box");
+  const authBreakdownBox = document.getElementById("auth-modal-machine-breakdown");
   const hcPoints = document.getElementById("hc-points-val");
   const topupStatusBadge = document.getElementById("topup-modal-status-badge");
   const topupRate = document.getElementById("topup-modal-rate");
 
+  const machinesList = effMerit && Array.isArray(effMerit.machines) ? effMerit.machines : [];
+  const curMachine = effMerit && effMerit.currentMachine ? effMerit.currentMachine : null;
+  const multiMachine = machinesList.length > 1;
+
   if (topupBadge) {
+    const pText = p.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
     if (lastKnownPointsPerSolve === 0) {
-      topupBadge.innerText = p < 0 ? `ส่วนบุญ ${p.toLocaleString()}` : `ส่วนบุญคงเหลือ ${p.toLocaleString()}`;
+      topupBadge.innerText = multiMachine ? `รวม ${pText}` : (p < 0 ? `ส่วนบุญ ${pText}` : `ส่วนบุญคงเหลือ ${pText}`);
       topupBadge.style.background = "rgba(16, 185, 129, 0.25)";
       topupBadge.style.color = "#a7f3d0";
       topupBadge.style.borderColor = "rgba(16, 185, 129, 0.4)";
     } else {
-      topupBadge.innerText = p < 0 ? `ส่วนบุญ ${p.toLocaleString()}` : `ส่วนบุญคงเหลือ ${p.toLocaleString()}`;
+      topupBadge.innerText = multiMachine ? `รวม ${pText}` : (p < 0 ? `ส่วนบุญ ${pText}` : `ส่วนบุญคงเหลือ ${pText}`);
       topupBadge.style.background = "rgba(250, 204, 21, 0.25)";
       topupBadge.style.color = "#fef08a";
       topupBadge.style.borderColor = "rgba(250, 204, 21, 0.4)";
     }
   }
+
+  if (machineDebtBadge) {
+    if (curMachine && Number(curMachine.debtUnits || 0) < 0) {
+      const debtMerit = curMachine.debtMerit != null ? curMachine.debtMerit : Number(curMachine.debtUnits || 0) / 100;
+      machineDebtBadge.style.display = "inline-block";
+      machineDebtBadge.innerText = `เครื่องนี้ ${formatMeritAmount(debtMerit)}`;
+      machineDebtBadge.style.background = "rgba(244, 63, 94, 0.24)";
+      machineDebtBadge.style.color = "#fda4af";
+      machineDebtBadge.style.borderColor = "rgba(244, 63, 94, 0.55)";
+    } else if (curMachine && (multiMachine || p < 0)) {
+      machineDebtBadge.style.display = "inline-block";
+      machineDebtBadge.innerText = "เครื่องนี้ ไม่ติดลบ";
+      machineDebtBadge.style.background = "rgba(16, 185, 129, 0.22)";
+      machineDebtBadge.style.color = "#6ee7b7";
+      machineDebtBadge.style.borderColor = "rgba(52, 211, 153, 0.45)";
+    } else {
+      machineDebtBadge.style.display = "none";
+    }
+  }
+
+  if (topupBtn) {
+    if (machinesList.length > 0) {
+      const lines = [
+        `เติมส่วนบุญเข้าบัญชีบริการ PmheeAether`,
+        `ยอดรวมบัญชี: ${p.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })} ส่วนบุญ`,
+        ...machinesList.map(m => {
+          const tag = m.isCurrentMachine ? " [เครื่องนี้]" : "";
+          const dm = m.debtMerit != null ? m.debtMerit : Number(m.debtUnits || 0) / 100;
+          const st = Number(m.debtUnits || 0) < 0 ? `ติดลบ ${formatMeritAmount(dm)}` : "ไม่ติดลบ (0)";
+          return `• ${m.deviceName || m.hwidCode || m.machineKey}${tag}: ${st} ส่วนบุญ`;
+        })
+      ];
+      topupBtn.title = lines.join("\n");
+    } else {
+      topupBtn.title = "เติมส่วนบุญเข้าบัญชีบริการ PmheeAether";
+    }
+  }
+
+  if (topupThisMachinePill) {
+    if (curMachine) {
+      const curName = curMachine.deviceName || curMachine.hwidCode || curMachine.machineKey || "เครื่องนี้";
+      const curToday = formatMeritAmount(curMachine.todayUsedMerit != null ? curMachine.todayUsedMerit : Number(curMachine.todayUsedUnits || 0) / 100);
+      const isCurDebt = Number(curMachine.debtUnits || 0) < 0;
+      const curDebtVal = formatMeritAmount(curMachine.debtMerit != null ? curMachine.debtMerit : Number(curMachine.debtUnits || 0) / 100);
+      topupThisMachinePill.style.display = "inline-flex";
+      topupThisMachinePill.className = `topup-this-machine-pill ${isCurDebt ? "is-debt" : "is-clean"}`;
+      topupThisMachinePill.textContent = isCurDebt
+        ? `🖥️ เครื่องนี้ (${curName}): ติดลบ ${curDebtVal} ส่วนบุญ • วันนี้ใช้ ${curToday} บุญ`
+        : `🖥️ เครื่องนี้ (${curName}): ไม่ติดลบ (0 บุญ) • วันนี้ใช้ ${curToday} บุญ`;
+    } else {
+      topupThisMachinePill.style.display = "none";
+    }
+  }
+
+  const breakdownHtml = buildMachineMeritBreakdownHtml(effMerit);
+  if (topupBreakdownBox) {
+    if (breakdownHtml) {
+      topupBreakdownBox.innerHTML = breakdownHtml;
+      topupBreakdownBox.style.display = "block";
+    } else {
+      topupBreakdownBox.innerHTML = "";
+      topupBreakdownBox.style.display = "none";
+    }
+  }
+  if (authBreakdownBox) {
+    if (breakdownHtml) {
+      authBreakdownBox.innerHTML = breakdownHtml;
+      authBreakdownBox.style.display = "block";
+    } else {
+      authBreakdownBox.innerHTML = "";
+      authBreakdownBox.style.display = "none";
+    }
+  }
+
   if (topupPointsVal) topupPointsVal.innerText = p.toLocaleString();
   if (hcPoints) hcPoints.innerText = p;
   if (topupStatusBadge) {
@@ -4154,7 +4294,7 @@ function initTopupCaptchaModal() {
       const res = await fetch(`${API_BASE}/api/human-check/settings`).then(r => r.json());
       if (res && res.success && res.settings) {
         const s = res.settings;
-        updatePointDisplays(s.points, s.pointsPerSolve, s.serviceAvailable);
+        updatePointDisplays(s.points, s.pointsPerSolve, s.serviceAvailable, s.machineMerit);
 
         // Show dev-only shortcuts ONLY if running in dev/git mode
         const isDev = !!res.isDev;
@@ -4553,7 +4693,7 @@ function initDeviceNickname() {
       const res = await fetch(`${API_BASE}/api/human-check/settings`).then(r => r.json());
       if (res && res.success && res.settings) {
         updateAutoAnswerToolbarBtn(res.settings.autoAnswer !== false);
-        updatePointDisplays(res.settings.points, res.settings.pointsPerSolve, res.settings.serviceAvailable);
+        updatePointDisplays(res.settings.points, res.settings.pointsPerSolve, res.settings.serviceAvailable, res.settings.machineMerit);
       }
     } catch (_) {}
   }
@@ -4602,6 +4742,14 @@ function initDeviceNickname() {
     overlay._setLockTab = setLockTab;
     if (tabBtns.login) tabBtns.login.onclick = () => setLockTab("login");
     if (tabBtns.register) tabBtns.register.onclick = () => setLockTab("register");
+    const switchToLoginBtn = overlay.querySelector("#btn-lock-switch-to-login");
+    if (switchToLoginBtn) {
+      switchToLoginBtn.onclick = () => {
+        setLockTab("login");
+        const u = overlay.querySelector("#lock-login-username");
+        if (u) u.focus();
+      };
+    }
 
     const statusMsg = overlay.querySelector("#access-lock-status-msg");
     const showLockMsg = (msg, isErr = false) => {
@@ -5076,7 +5224,7 @@ function initAccountAuthModal() {
       if (aRes && aRes.success) access = aRes;
       if (sRes && sRes.success && sRes.settings) {
         hcSettings = sRes.settings;
-        updatePointDisplays(hcSettings.points, hcSettings.pointsPerSolve, hcSettings.serviceAvailable);
+        updatePointDisplays(hcSettings.points, hcSettings.pointsPerSolve, hcSettings.serviceAvailable, hcSettings.machineMerit);
       }
     } catch (_) {}
 
@@ -5128,6 +5276,13 @@ function initAccountAuthModal() {
   });
   if (tabLogin) tabLogin.addEventListener("click", () => setTab("login"));
   if (tabReg) tabReg.addEventListener("click", () => setTab("register"));
+  const authSwitchToLoginBtn = document.getElementById("btn-auth-switch-to-login");
+  if (authSwitchToLoginBtn) {
+    authSwitchToLoginBtn.addEventListener("click", () => {
+      setTab("login");
+      if (loginUserEl) loginUserEl.focus();
+    });
+  }
 
   const handleLogin = async () => {
     const username = (loginUserEl?.value || "").trim();
@@ -5219,7 +5374,7 @@ function initAccountAuthModal() {
     const res = await fetch(`${API_BASE}/api/human-check/settings`).then(r => r.json());
     if (res && res.success && res.settings) {
       updateAutoAnswerToolbarBtn(res.settings.autoAnswer !== false);
-      updatePointDisplays(res.settings.points, res.settings.pointsPerSolve, res.settings.serviceAvailable);
+      updatePointDisplays(res.settings.points, res.settings.pointsPerSolve, res.settings.serviceAvailable, res.settings.machineMerit);
       const isDev = !!res.isDev;
       document.querySelectorAll(".dev-only-feature").forEach(el => {
         el.style.display = isDev ? "" : "none";

@@ -646,6 +646,7 @@ function createRemoteFleetService(deps) {
           accountId: data?.accountId || access.accountId,
           currentMachineKey: myKey || data?.currentMachineKey || null,
           serverTime: data?.serverTime || Date.now(),
+          ...(data?.walletSummary ? { walletSummary: data.walletSummary } : {}),
           machines
         });
       } catch (e) {

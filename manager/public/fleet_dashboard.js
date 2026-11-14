@@ -11,12 +11,12 @@
   }
 
   let machines = [];
-  let fleetMeta = { username: null, currentMachineKey: null, serverTime: 0 };
+  let fleetMeta = { username: null, currentMachineKey: null, serverTime: 0, walletSummary: null };
   let lastError = null;
   let lastUpdatedAt = 0;
   let loading = false;
   let searchQuery = "";
-  let statusFilter = "all"; // 'all' | 'online' | 'offline'
+  let statusFilter = "all"; // 'all' | 'online' | 'offline' | 'debt'
   let editingMachineKey = null;
   let editingDraft = "";
   let activeRemoteKey = null;
@@ -49,6 +49,12 @@
     return n.toLocaleString("en-US") + " z";
   }
 
+  function formatMerit(num) {
+    const n = Number(num || 0);
+    if (!Number.isFinite(n)) return "0";
+    return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  }
+
   function isFleetTabActive() {
     const pane = document.getElementById("fleet-dashboard-pane");
     return Boolean(pane && pane.classList.contains("active"));
@@ -69,6 +75,7 @@
                 <button type="button" class="fleet-filter-btn active" data-fleet-filter="all">ทั้งหมด</button>
                 <button type="button" class="fleet-filter-btn" data-fleet-filter="online">🟢 ออนไลน์</button>
                 <button type="button" class="fleet-filter-btn" data-fleet-filter="offline">⚫ ออฟไลน์</button>
+                <button type="button" class="fleet-filter-btn" data-fleet-filter="debt">🔴 ติดลบ</button>
               </div>
             </div>
             <div class="fleet-toolbar-right">
@@ -77,6 +84,7 @@
               <button type="button" class="btn btn-sm btn-primary" id="fleet-btn-refresh">🔄 รีเฟรชทันที</button>
             </div>
           </div>
+          <div id="fleet-merit-overview-bar" class="fleet-merit-overview-bar" style="display:none;"></div>
           <div id="fleet-cards-container">
             <div class="fleet-cards-grid" id="fleet-cards-grid"></div>
           </div>
@@ -134,6 +142,20 @@
       totalZenyAll += Number(s.totalZeny || 0);
     });
 
+    const ws = fleetMeta.walletSummary || null;
+    const fallbackDebtUnits = machines.reduce((acc, m) => acc + Number(m.merit?.debtUnits || 0), 0);
+    const balUnits = ws ? Number(ws.balanceUnits || 0) : fallbackDebtUnits;
+    const balMerit = ws && ws.balanceMerit != null ? Number(ws.balanceMerit) : (balUnits / 100);
+    const negMachines = ws
+      ? Number(ws.negativeMachineCount || 0)
+      : machines.filter(m => Number(m.merit?.debtUnits || 0) < 0).length;
+    const hasMeritInfo = Boolean(ws || machines.some(m => m.merit));
+    const meritCls = balUnits < 0 ? "accent-rose" : "accent-emerald";
+    const meritValText = hasMeritInfo ? `${formatMerit(balMerit)} บุญ` : "-";
+    const meritSubText = !hasMeritInfo
+      ? "กำลังโหลดข้อมูล..."
+      : (negMachines > 0 ? `ติดลบ ${negMachines} / ${totalMachines} เครื่อง` : "ไม่ติดลบทุกเครื่อง");
+
     grid.innerHTML = `
       <div class="fleet-kpi-card">
         <span class="fleet-kpi-label">🖥️ เครื่องทั้งหมดในบัญชี</span>
@@ -155,7 +177,37 @@
         <span class="fleet-kpi-label">💰 Zeny รวมทุกเครื่อง</span>
         <span class="fleet-kpi-val accent-gold">${formatZeny(totalZenyAll)}</span>
       </div>
+      <div class="fleet-kpi-card">
+        <span class="fleet-kpi-label">🧧 ส่วนบุญรวมบัญชี</span>
+        <span class="fleet-kpi-val ${meritCls}">${meritValText}</span>
+        <span class="fleet-kpi-sub ${negMachines > 0 ? "is-debt" : "is-clean"}">${meritSubText}</span>
+      </div>
     `;
+
+    const overviewBar = document.getElementById("fleet-merit-overview-bar");
+    if (overviewBar) {
+      if (hasMeritInfo && machines.length > 0) {
+        const chips = machines.map(m => {
+          const mr = m.merit || {};
+          const dUnits = Number(mr.debtUnits || 0);
+          const dMerit = mr.debtMerit != null ? mr.debtMerit : (dUnits / 100);
+          const isDebt = dUnits < 0;
+          const cls = `fleet-merit-chip ${isDebt ? "is-debt" : "is-clean"} ${m.isCurrentMachine ? "is-current" : ""}`;
+          const lbl = esc(m.deviceName || m.hwidCode || m.machineKey || "-");
+          const val = isDebt ? `ติดลบ ${formatMerit(dMerit)} ส่วนบุญ` : "ไม่ติดลบ (0 บุญ)";
+          return `<span class="${cls}" title="HWID: ${esc(m.hwidCode || m.machineKey || "")}">💻 <b>${lbl}</b>: ${val}</span>`;
+        });
+        if (ws && Number(ws.unassignedDebtUnits || 0) < 0) {
+          const unMerit = ws.unassignedDebtMerit != null ? ws.unassignedDebtMerit : (Number(ws.unassignedDebtUnits) / 100);
+          chips.push(`<span class="fleet-merit-chip is-debt">⏳ <b>ยอดค้างเดิมก่อนผูกเครื่อง</b>: ติดลบ ${formatMerit(unMerit)} ส่วนบุญ</span>`);
+        }
+        overviewBar.innerHTML = `<span class="fleet-merit-overview-lbl">💳 ส่วนบุญแยกตามเครื่อง:</span>${chips.join("")}`;
+        overviewBar.style.display = "flex";
+      } else {
+        overviewBar.innerHTML = "";
+        overviewBar.style.display = "none";
+      }
+    }
 
     const userBadge = document.getElementById("fleet-user-badge");
     if (userBadge) {
@@ -222,6 +274,7 @@
     const filtered = machines.filter(m => {
       if (statusFilter === "online" && !m.isOnline) return false;
       if (statusFilter === "offline" && m.isOnline) return false;
+      if (statusFilter === "debt" && !(Number(m.merit?.debtUnits || 0) < 0)) return false;
       if (!q) return true;
       const hay = [
         m.deviceName,
@@ -308,6 +361,28 @@
         `;
       }
 
+      const mr = m.merit || null;
+      const mDebtUnits = Number(mr?.debtUnits || 0);
+      const mDebtMerit = mr && mr.debtMerit != null ? mr.debtMerit : (mDebtUnits / 100);
+      const mTodayMerit = mr && mr.todayUsedMerit != null ? mr.todayUsedMerit : (Number(mr?.todayUsedUnits || 0) / 100);
+      const mTotalMerit = mr && mr.totalUsedMerit != null ? mr.totalUsedMerit : (Number(mr?.totalUsedUnits || 0) / 100);
+      const mIsDebt = mDebtUnits < 0;
+      const meritStripHtml = mr
+        ? `<div class="fleet-merit-strip ${mIsDebt ? "is-debt" : "is-clean"}">
+            <div class="fleet-merit-strip-left">
+              <span class="fleet-merit-strip-title">💳 ส่วนบุญเครื่องนี้</span>
+              <span class="fleet-merit-strip-sub">ใช้วันนี้ ${formatMerit(mTodayMerit)} บุญ • สะสม ${formatMerit(mTotalMerit)} บุญ</span>
+            </div>
+            <span class="fleet-merit-strip-badge ${mIsDebt ? "is-debt" : "is-clean"}">${mIsDebt ? `ติดลบ ${formatMerit(mDebtMerit)} ส่วนบุญ` : "ไม่ติดลบ (0 บุญ)"}</span>
+          </div>`
+        : `<div class="fleet-merit-strip">
+            <div class="fleet-merit-strip-left">
+              <span class="fleet-merit-strip-title">💳 ส่วนบุญเครื่องนี้</span>
+              <span class="fleet-merit-strip-sub">ใช้วันนี้ 0 บุญ • สะสม 0 บุญ</span>
+            </div>
+            <span class="fleet-merit-strip-badge is-clean">ไม่ติดลบ (0 บุญ)</span>
+          </div>`;
+
       return `
         <article class="${cardCls}" data-machine-key="${esc(m.machineKey)}">
           <div class="fleet-card-top">
@@ -328,6 +403,7 @@
               <span>• ${esc(formatAgo(m.lastSeenAt))}</span>
             </div>
           </div>
+          ${meritStripHtml}
           <div class="fleet-card-stats">
             <div class="fleet-stat-box">
               <span class="fleet-stat-lbl">จอออนไลน์</span>
@@ -556,7 +632,8 @@
         fleetMeta = {
           username: data.username || null,
           currentMachineKey: data.currentMachineKey || null,
-          serverTime: data.serverTime || Date.now()
+          serverTime: data.serverTime || Date.now(),
+          walletSummary: data.walletSummary || null
         };
         lastUpdatedAt = Date.now();
       }

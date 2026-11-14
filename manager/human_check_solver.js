@@ -36,6 +36,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   let balanceUnits = null;
   let pointsPerSolve = 1;
   let topupHistory = [];
+  let machineMerit = null;
   let serviceAvailable = false;
   let account = null;
   let enrollment = null;
@@ -84,7 +85,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       if (!isUserAccount && savedAccess.isUserAccount) isUserAccount = true;
     }
   } catch (_) {}
-  try{const saved=JSON.parse(fs.readFileSync(walletSnapshotFile,'utf8'));if(saved.origin===base.origin&&saved.accountId===account?.accountId&&Number.isSafeInteger(saved.balanceUnits)){balanceUnits=saved.balanceUnits;points=balanceUnits/100;if(Array.isArray(saved.topupHistory))topupHistory=saved.topupHistory;}}catch(_){}
+  try{const saved=JSON.parse(fs.readFileSync(walletSnapshotFile,'utf8'));if(saved.origin===base.origin&&saved.accountId===account?.accountId&&Number.isSafeInteger(saved.balanceUnits)){balanceUnits=saved.balanceUnits;points=balanceUnits/100;if(Array.isArray(saved.topupHistory))topupHistory=saved.topupHistory;if(saved.machineMerit&&typeof saved.machineMerit==='object')machineMerit=saved.machineMerit;}}catch(_){}
   function atomicWrite(file, data) {
     fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(file + '.tmp', file);
@@ -173,16 +174,58 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       accountId: account?.accountId || null
     };
   }
+  function resolveEffectiveMachineMerit(effectiveBalanceUnits) {
+    if (!machineMerit || typeof machineMerit !== 'object') return null;
+    const baseMachines = Array.isArray(machineMerit.machines) ? machineMerit.machines : [];
+    const nextMachines = baseMachines.map(m => ({ ...m }));
+    const next = {
+      ...machineMerit,
+      machines: nextMachines,
+      currentMachine: machineMerit.currentMachine ? { ...machineMerit.currentMachine } : null
+    };
+    if (
+      Number.isSafeInteger(effectiveBalanceUnits) &&
+      Number.isSafeInteger(next.balanceUnits) &&
+      effectiveBalanceUnits < next.balanceUnits
+    ) {
+      const charge = next.balanceUnits - effectiveBalanceUnits;
+      const shared = Math.max(0, Number(next.sharedCreditUnits || 0));
+      const fromShared = Math.min(shared, charge);
+      const extraDebt = -(charge - fromShared);
+      next.sharedCreditUnits = shared - fromShared;
+      next.sharedCreditMerit = next.sharedCreditUnits / 100;
+      next.balanceUnits = effectiveBalanceUnits;
+      next.balanceMerit = effectiveBalanceUnits / 100;
+      const target = nextMachines.find(m => (next.currentMachineKey && m.machineKey === next.currentMachineKey) || m.isCurrentMachine);
+      if (target) {
+        target.debtUnits = Number(target.debtUnits || 0) + extraDebt;
+        target.debtMerit = target.debtUnits / 100;
+        target.todayUsedUnits = Number(target.todayUsedUnits || 0) + charge;
+        target.todayUsedMerit = target.todayUsedUnits / 100;
+        target.totalUsedUnits = Number(target.totalUsedUnits || 0) + charge;
+        target.totalUsedMerit = target.totalUsedUnits / 100;
+        next.currentMachine = { ...target };
+      } else if (next.currentMachine) {
+        next.currentMachine.debtUnits = Number(next.currentMachine.debtUnits || 0) + extraDebt;
+        next.currentMachine.debtMerit = next.currentMachine.debtUnits / 100;
+      }
+      next.totalMachineDebtUnits = nextMachines.reduce((acc, m) => acc + Number(m.debtUnits || 0), 0);
+      next.totalMachineDebtMerit = next.totalMachineDebtUnits / 100;
+      next.negativeMachineCount = nextMachines.filter(m => Number(m.debtUnits || 0) < 0).length;
+    }
+    return next;
+  }
   function loadSettings() {
     let s = {};
     try { s = JSON.parse(fs.readFileSync(settingsFile, 'utf8')); } catch (_) {}
+    const effectiveBalanceUnits = offlineWallet ? offlineWallet.balance() : balanceUnits;
     return {
       autoAnswer: s.autoAnswer !== false,
       answerDelayMs: Math.max(800, Math.min(10000, parseInt(s.answerDelayMs, 10) || 1800)),
-      pointSystemEnabled: true, points: offlineWallet ? offlineWallet.balance()/100 : points, balanceUnits: offlineWallet ? offlineWallet.balance() : balanceUnits, unitScale: 100, pointsPerSolve: localMatcher.ready() ? 0 : pointsPerSolve, localCatalogReady: localMatcher.ready(), pointsPerBaht: 1,
+      pointSystemEnabled: true, points: offlineWallet ? offlineWallet.balance()/100 : points, balanceUnits: effectiveBalanceUnits, unitScale: 100, pointsPerSolve: localMatcher.ready() ? 0 : pointsPerSolve, localCatalogReady: localMatcher.ready(), pointsPerBaht: 1,
       machineHwid, machineHwidShort, accessStatus, customRateUnits, effectiveRateUnits, accessRequestedAt, accessNote,
       username, isUserAccount, requiresLogin: computeRequiresLogin(),
-      topupHistory, serviceAvailable, serviceOrigin: base.origin,
+      topupHistory, machineMerit: resolveEffectiveMachineMerit(effectiveBalanceUnits), serviceAvailable, serviceOrigin: base.origin,
       accountId: account?.accountId || null
     };
   }
@@ -280,6 +323,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
         const prevAccountId = account?.accountId || null;
         const wasUserAccount = Boolean(isUserAccount || account?.isUserAccount);
         account = null;
+        machineMerit = null;
         try { fs.unlinkSync(walletSnapshotFile); } catch (_) {}
         if (wasUserAccount || requireUserLogin) {
           username = null;
@@ -331,7 +375,8 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     }
     if (result.pointsPerSolve === 0 || result.pointsPerSolve === 1) pointsPerSolve = result.pointsPerSolve;
     if (Array.isArray(result.topupHistory)) topupHistory = result.topupHistory;
-    if(account&&Number.isSafeInteger(balanceUnits))atomicWrite(walletSnapshotFile,{origin:base.origin,accountId:account.accountId,balanceUnits,topupHistory});
+    if (result.machineMerit && typeof result.machineMerit === 'object') machineMerit = result.machineMerit;
+    if(account&&Number.isSafeInteger(balanceUnits))atomicWrite(walletSnapshotFile,{origin:base.origin,accountId:account.accountId,balanceUnits,topupHistory,machineMerit});
   }
   async function refreshBalance() {
     if(offlineWallet){try{await offlineWallet.refresh();}catch(_){serviceAvailable=false;}try{const result=await call('/v1/aetheria/balance');if(result?.success&&result.schemaVersion===2&&result.unitScale===100&&Number.isSafeInteger(result.balanceUnits))updateBalance(result);}catch(_){}return loadSettings();}
@@ -444,6 +489,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     accessNote = '';
     balanceUnits = null;
     points = 0;
+    machineMerit = null;
     try { atomicWrite(accountFile, { origin: base.origin, machineHwid, loggedOutExplicitly: true }); } catch (_) {}
     try { fs.unlinkSync(walletSnapshotFile); } catch (_) {}
     try { fs.unlinkSync(accessStateFile); } catch (_) {}
@@ -530,7 +576,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       'autoAnswer', 'answerDelayMs', 'pointSystemEnabled', 'points', 'pointsPerSolve',
       'pointsPerBaht', 'machineHwid', 'machineHwidShort', 'accessStatus', 'customRateUnits', 'effectiveRateUnits', 'accessRequestedAt', 'accessNote',
       'username', 'isUserAccount', 'requiresLogin',
-      'topupHistory', 'serviceAvailable', 'serviceOrigin', 'accountId', 'balanceUnits', 'unitScale', 'localCatalogReady'
+      'topupHistory', 'machineMerit', 'serviceAvailable', 'serviceOrigin', 'accountId', 'balanceUnits', 'unitScale', 'localCatalogReady'
     ].map(key => [key, s[key]])),
     refreshBalance, solveHumanCheck, redeemTrueMoneyVoucher, getMachineFingerprint, reportSecurityEvent, recoverOfflineCredit,
     getMachineHwid: () => machineHwid,

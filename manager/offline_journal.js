@@ -32,13 +32,58 @@ function createOfflineJournal({dataDir,accountId,initialBalanceUnits=0,now=Date.
     persist();
   }
   function slot(profileId){if(typeof profileId!=='string'||!profileId||profileId.length>128)throw Error('INVALID_PROFILE_ID');if(!state.slots[profileId]){state.slots[profileId]=crypto.randomUUID();persist();}return state.slots[profileId];}
-  function observe({profileId,characterId,observedAt=now()}){if(typeof profileId!=='string'||!profileId||profileId.length>128)throw Error('INVALID_PROFILE_ID');if(characterId!=null&&(typeof characterId!=='string'||characterId.length>128))throw Error('INVALID_CHARACTER_ID');if(!Number.isSafeInteger(observedAt)||observedAt<0)throw Error('INVALID_OBSERVED_AT');const slotId=slot(profileId),date=bangkokDate(observedAt),key=slotId+':'+date;if(!state.debtPolicy.enabled||state.seen[key])return null;const event={eventId:crypto.randomUUID(),slotId,profileId,date,observedAt,rateUnits:state.rateUnits,...(characterId?{characterId}:{} )};state.seen[key]=event.eventId;pending.push(event);state.history.push(event);const keepAfter=observedAt-HISTORY_RETENTION_MS;if(state.history.length>1000)state.history=state.history.filter(e=>!e.acknowledged||e.observedAt>=keepAfter);persist();return event;}
+  function estimateRateUnits(baseRate,shareCount,isCustom){
+    const cfg=state.surchargeConfig||{enabled:true,baseline:6,tiers:{'6':0,'5':5,'4':10,'3':15,'2':20,'1':25},customExtraPct:0};
+    if(!cfg||cfg.enabled===false)return baseRate;
+    const base=Math.max(1,Math.min(20,Math.floor(Number(cfg.baseline)||6)));
+    const share=shareCount!=null?Math.max(1,Math.min(20,Math.floor(Number(shareCount)||base))):base;
+    let pct=0;
+    if(share<base&&cfg.tiers&&Number.isFinite(Number(cfg.tiers[String(share)])))pct+=Math.max(0,Number(cfg.tiers[String(share)]));
+    if(isCustom&&Number(cfg.customExtraPct)>0)pct+=Number(cfg.customExtraPct);
+    return Math.round(baseRate*(100+Math.min(500,Math.max(0,pct)))/100);
+  }
+  function observe({profileId,characterId,ipShareCount,ipCustom,observedAt=now()}){
+    if(typeof profileId!=='string'||!profileId||profileId.length>128)throw Error('INVALID_PROFILE_ID');
+    if(characterId!=null&&(typeof characterId!=='string'||characterId.length>128))throw Error('INVALID_CHARACTER_ID');
+    const hasShare=ipShareCount!==undefined&&ipShareCount!==null;
+    if(hasShare&&(!Number.isSafeInteger(ipShareCount)||ipShareCount<1||ipShareCount>20))throw Error('INVALID_IP_SHARE_COUNT');
+    const hasCustom=ipCustom!==undefined&&ipCustom!==null;
+    if(hasCustom&&typeof ipCustom!=='boolean')throw Error('INVALID_IP_CUSTOM');
+    if(!Number.isSafeInteger(observedAt)||observedAt<0)throw Error('INVALID_OBSERVED_AT');
+    const slotId=slot(profileId),date=bangkokDate(observedAt),key=slotId+':'+date;
+    if(!state.debtPolicy.enabled)return null;
+    if(state.seen[key]){
+      const pendEv=pending.find(e=>e.eventId===state.seen[key]);
+      if(pendEv&&(hasShare||hasCustom)){
+        let updated=false;
+        if(hasShare&&(!Number.isSafeInteger(pendEv.ipShareCount)||ipShareCount<pendEv.ipShareCount)){pendEv.ipShareCount=ipShareCount;updated=true;}
+        if(hasCustom&&ipCustom&&!pendEv.ipCustom){pendEv.ipCustom=true;updated=true;}
+        if(updated){
+          pendEv.rateUnits=estimateRateUnits(state.rateUnits,pendEv.ipShareCount,Boolean(pendEv.ipCustom));
+          const histEv=state.history.find(h=>h.eventId===pendEv.eventId);
+          if(histEv){
+            if(pendEv.ipShareCount!==undefined)histEv.ipShareCount=pendEv.ipShareCount;
+            if(pendEv.ipCustom!==undefined)histEv.ipCustom=pendEv.ipCustom;
+            histEv.rateUnits=pendEv.rateUnits;
+          }
+          persist();
+        }
+      }
+      return null;
+    }
+    const effRate=(hasShare||hasCustom)?estimateRateUnits(state.rateUnits,hasShare?ipShareCount:undefined,hasCustom?ipCustom:false):state.rateUnits;
+    const event={eventId:crypto.randomUUID(),slotId,profileId,date,observedAt,rateUnits:effRate,...(characterId?{characterId}:{}),...(hasShare?{ipShareCount}:{}),...(hasCustom?{ipCustom}:{})};
+    state.seen[key]=event.eventId;pending.push(event);state.history.push(event);
+    const keepAfter=observedAt-HISTORY_RETENTION_MS;
+    if(state.history.length>1000)state.history=state.history.filter(e=>!e.acknowledged||e.observedAt>=keepAfter);
+    persist();return event;
+  }
   function snapshot(limit=500,sessions=[]){if(state.pendingBatch)return JSON.parse(JSON.stringify(state.pendingBatch));const boundedLimit=Math.max(1,Math.min(Number.isSafeInteger(limit)?limit:500,500));const cleanSessions=Array.isArray(sessions)?sessions.filter(s=>s&&typeof s.profileId==='string'&&typeof s.slotId==='string').slice(0,1000):[];state.pendingBatch={machineId:state.machineId,batchId:crypto.randomUUID(),events:pending.slice(0,boundedLimit).map(({rateUnits,...event})=>event),sessions:cleanSessions};persist();return JSON.parse(JSON.stringify(state.pendingBatch));}
   // Review R4: clearing ACKed events and accepting a balance snapshot are separate. Clearing is always correct
   // (the server settled those events at or before response.walletRevision). The balance/rate/statement are only
   // accepted when the server's walletRevision is newer than the base we already hold, so a delayed ACK can never
   // roll back a newer topup/admin balance.
-  function acknowledge(batch,response){if(response?.success!==true||response.batchId!==batch.batchId||response.unitScale!==100||!Number.isSafeInteger(response.balanceUnits)||!Number.isSafeInteger(response.rateUnits)||response.rateUnits<0||!Number.isSafeInteger(response.walletRevision)||response.walletRevision<0||!Array.isArray(response.ackEventIds))throw Error('INVALID_SYNC_ACK');const submitted=new Set(batch.events.map(e=>e.eventId));if(response.ackEventIds.some(id=>!submitted.has(id))||new Set(response.ackEventIds).size!==response.ackEventIds.length)throw Error('INVALID_SYNC_ACK_IDS');const policy=validateResponsePolicy(response);const charges=validateEventCharges(response);const ack=new Set(response.ackEventIds);pending=pending.filter(e=>!ack.has(e.eventId));for(const event of state.history)if(ack.has(event.eventId)){event.acknowledged=true;if(charges.has(event.eventId)){event.rateUnits=charges.get(event.eventId);const seenKey=event.slotId+':'+event.date;if(event.rateUnits===0&&state.seen[seenKey]===event.eventId)delete state.seen[seenKey];}}if(state.pendingBatch&&state.pendingBatch.batchId===batch.batchId)delete state.pendingBatch;const policyApplied=policy&&policy.revision>state.debtPolicy.revision;if(policyApplied)state.debtPolicy=policy;const currentRev=Number.isSafeInteger(state.walletRevision)?state.walletRevision:-1;const notOlder=response.walletRevision>=currentRev;const applied=acceptSnapshot(response.walletRevision,response.balanceUnits);if(applied||notOlder){state.rateUnits=response.rateUnits;state.statement=response.statement||state.statement;const syncDay=typeof response.bangkokDay==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(response.bangkokDay)?response.bangkokDay:bangkokDate(now());for(const event of state.history){if(event.acknowledged&&event.date===syncDay&&event.rateUnits>0&&!charges.has(event.eventId)){event.rateUnits=response.rateUnits;}}}persist();return {balance:balance(),applied,policyApplied:!!policyApplied,stale:!applied};}
+  function acknowledge(batch,response){if(response?.success!==true||response.batchId!==batch.batchId||response.unitScale!==100||!Number.isSafeInteger(response.balanceUnits)||!Number.isSafeInteger(response.rateUnits)||response.rateUnits<0||!Number.isSafeInteger(response.walletRevision)||response.walletRevision<0||!Array.isArray(response.ackEventIds))throw Error('INVALID_SYNC_ACK');const submitted=new Set(batch.events.map(e=>e.eventId));if(response.ackEventIds.some(id=>!submitted.has(id))||new Set(response.ackEventIds).size!==response.ackEventIds.length)throw Error('INVALID_SYNC_ACK_IDS');const policy=validateResponsePolicy(response);const charges=validateEventCharges(response);const slotChargeMap=new Map();if(Array.isArray(response.todaySlotCharges)){for(const sc of response.todaySlotCharges){if(sc&&typeof sc.slotId==='string'&&Number.isSafeInteger(sc.chargedUnits)&&sc.chargedUnits>=0)slotChargeMap.set(sc.slotId,sc.chargedUnits);}}const ack=new Set(response.ackEventIds);pending=pending.filter(e=>!ack.has(e.eventId));for(const event of state.history)if(ack.has(event.eventId)){event.acknowledged=true;if(charges.has(event.eventId)){event.rateUnits=charges.get(event.eventId);const seenKey=event.slotId+':'+event.date;if(event.rateUnits===0&&state.seen[seenKey]===event.eventId)delete state.seen[seenKey];}else if(slotChargeMap.has(event.slotId)){event.rateUnits=slotChargeMap.get(event.slotId);}}if(state.pendingBatch&&state.pendingBatch.batchId===batch.batchId)delete state.pendingBatch;const policyApplied=policy&&policy.revision>state.debtPolicy.revision;if(policyApplied)state.debtPolicy=policy;const currentRev=Number.isSafeInteger(state.walletRevision)?state.walletRevision:-1;const notOlder=response.walletRevision>=currentRev;const applied=acceptSnapshot(response.walletRevision,response.balanceUnits);if(applied||notOlder){state.rateUnits=response.rateUnits;state.statement=response.statement||state.statement;if(response.surchargeConfig&&typeof response.surchargeConfig==='object')state.surchargeConfig=response.surchargeConfig;if(Array.isArray(response.todaySlotCharges))state.todaySlotCharges=response.todaySlotCharges;const syncDay=typeof response.bangkokDay==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(response.bangkokDay)?response.bangkokDay:bangkokDate(now());for(const event of state.history){if(event.acknowledged&&event.date===syncDay&&event.rateUnits>0&&!charges.has(event.eventId)){event.rateUnits=slotChargeMap.has(event.slotId)?slotChargeMap.get(event.slotId):response.rateUnits;}}}persist();return {balance:balance(),applied,policyApplied:!!policyApplied,stale:!applied};}
   function validateEventCharges(response){
     const charges=new Map();if(response.eventCharges===undefined)return charges;
     if(!Array.isArray(response.eventCharges)||response.eventCharges.length!==response.ackEventIds.length)throw Error('INVALID_SYNC_EVENT_CHARGES');
@@ -62,6 +107,6 @@ function createOfflineJournal({dataDir,accountId,initialBalanceUnits=0,now=Date.
     setConfirmedBalance(value,revision){if(!Number.isSafeInteger(value))throw Error('INVALID_CONFIRMED_BALANCE');if(!Number.isSafeInteger(revision)||revision<0)throw Error('WALLET_REVISION_REQUIRED');const applied=acceptSnapshot(revision,value);if(applied)persist();return applied;},
     walletRevision:()=>Number.isSafeInteger(state.walletRevision)?state.walletRevision:null,
     discardPendingBatch(rotateSlots=false){if(!state.pendingBatch&&!pending.length&&!rotateSlots)return false;delete state.pendingBatch;pending=[];if(rotateSlots){state.machineId=crypto.randomUUID();state.slots={};}persist();return true;},
-    pendingCount:()=>pending.length,machineId:state.machineId,history:()=>state.history.map(e=>({...e})),statement:()=>state.statement||null,rate:()=>state.rateUnits};
+    pendingCount:()=>pending.length,machineId:state.machineId,history:()=>state.history.map(e=>({...e})),statement:()=>state.statement||null,rate:()=>state.rateUnits,surchargeConfig:()=>state.surchargeConfig?JSON.parse(JSON.stringify(state.surchargeConfig)):null,todaySlotCharges:()=>Array.isArray(state.todaySlotCharges)?state.todaySlotCharges.map(x=>({...x})):[]};
 }
 module.exports={createOfflineJournal,dpapi,bangkokDate,encryptedStore};

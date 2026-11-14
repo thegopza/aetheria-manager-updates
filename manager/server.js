@@ -5570,7 +5570,36 @@ const planSync = createPlanSync({ loadPlans, savePlans, loadProfiles, evalProfil
 const scriptRollout = loadScriptRollout({dataDir:path.join(__dirname,'data'),serviceOrigin:humanCheckSolver.serviceOrigin});
 const legacyScriptCoordinator = createScriptCoordinator({ dataDir: path.join(__dirname, 'data'), loadProfiles, evalProfilePort, service: humanCheckSolver, ...scriptRollout, reloadRollout:()=>loadScriptRollout({dataDir:path.join(__dirname,'data'),serviceOrigin:humanCheckSolver.serviceOrigin}) });
 const {createOfflineCoordinator}=require('./offline_coordinator');
-const offlineCoordinator = createOfflineCoordinator({dataDir:path.join(__dirname,'data'),loadProfiles,evalProfilePort,service:humanCheckSolver,trustedKeys:require('./script_release_keys'),legacyCoordinator:legacyScriptCoordinator,autoBindWallet:false});
+function getProfileIpIsolationInfo(profileId) {
+  try {
+    if (typeof screenProxy === 'undefined' || !screenProxy || typeof browserMode === 'undefined' || !browserMode) return null;
+    const spSettings = screenProxy.loadSettings();
+    const meta = typeof browserMode.getProfileIpIsolationMeta === 'function'
+      ? browserMode.getProfileIpIsolationMeta(profileId, spSettings.maxScreensPerIp)
+      : null;
+    if (!meta) return null;
+    const sc = typeof screenProxy.getSurchargeConfig === 'function' ? screenProxy.getSurchargeConfig() : null;
+    let surchargePct = 0;
+    if (sc && sc.enabled !== false && (spSettings.enabled || meta.isCustom)) {
+      const n = Math.max(1, Math.min(20, Number(meta.shareCount) || 6));
+      const base = Math.max(1, Math.min(20, Number(sc.baseline) || 6));
+      if (n < base && sc.tiers && Number.isFinite(Number(sc.tiers[String(n)]))) {
+        surchargePct += Math.max(0, Number(sc.tiers[String(n)]));
+      }
+      if (meta.isCustom && Number(sc.customExtraPct) > 0) {
+        surchargePct += Number(sc.customExtraPct);
+      }
+    }
+    return {
+      ...meta,
+      proxyEnabled: Boolean(spSettings.enabled),
+      surchargePct: Math.round(surchargePct * 100) / 100
+    };
+  } catch (_) {
+    return null;
+  }
+}
+const offlineCoordinator = createOfflineCoordinator({dataDir:path.join(__dirname,'data'),loadProfiles,evalProfilePort,service:humanCheckSolver,trustedKeys:require('./script_release_keys'),legacyCoordinator:legacyScriptCoordinator,getProfileIpIsolationMeta:(pid)=>getProfileIpIsolationInfo(pid),autoBindWallet:false});
 humanCheckSolver.setDeviceNameProvider?.(() => getEffectiveDeviceNickname());
 humanCheckSolver.setOnAccountChanged?.(() => { offlineCoordinator.cycle?.().catch(() => {}); });
 
@@ -5595,7 +5624,7 @@ const botAutoUpdater = createBotAutoUpdater({
 });
 // Auto-login / auto-register: game clients get their profile's ID + password (manager/auth_sync.js)
 const authSync = createAuthSync({ loadProfiles, saveProfiles, evalProfilePort, credentials, proxyRegister, requireOnlineWindowForQueue: true });
-// Per-screen IP queue & split-tunnel forwarder (1 IP : 3 screens)
+// Per-screen IP queue & split-tunnel forwarder (1 IP : 6 screens default)
 const screenProxy = createScreenProxyManager({
   dataDir: path.join(__dirname, "data"),
   solver: humanCheckSolver,
@@ -5603,6 +5632,17 @@ const screenProxy = createScreenProxyManager({
 });
 // Browser mode: game windows in one real Chrome / Edge instead of one Electron app each (manager/browser_mode.js)
 const browserMode = createBrowserMode({ rootDir: path.resolve(__dirname, ".."), sessionsDir: SESSIONS_DIR, getSettings: () => installer.loadSettings(), loadProfiles, ...(TEST_INSTANCE?{cdpPort:testCdpPort,browserUserDataDir:path.join(SESSIONS_DIR,'_isolated_test_browser')}:{ }), profileScriptSource:id=>scriptCoordinator.profileScriptSource(id), screenProxy });
+if (typeof screenProxy.setCustomIpGroupsProvider === "function") {
+  screenProxy.setCustomIpGroupsProvider(() => browserMode.getCustomIpDeviceConfig());
+}
+setTimeout(() => {
+  try {
+    const cfg = browserMode.getCustomIpDeviceConfig();
+    if (cfg && Array.isArray(cfg.ipGroups) && cfg.ipGroups.length > 0) {
+      screenProxy.reserveCustomIpGroupsNow?.().catch(() => {});
+    }
+  } catch (_) {}
+}, 1500).unref?.();
 const isBrowserMode = () => {
   const st = installer.loadSettings() || {};
   return (st.launchMode || "browser") === "browser";
@@ -8005,7 +8045,10 @@ const server = http.createServer(async (req, res) => {
       const deviceGroups = typeof browserMode.getDeviceGroupsSnapshot === "function"
         ? browserMode.getDeviceGroupsSnapshot()
         : [];
-      return sendJSON({ ...st, deviceGroups });
+      const customIpConfig = typeof browserMode.getCustomIpDeviceConfig === "function"
+        ? browserMode.getCustomIpDeviceConfig()
+        : { ipGroups: [] };
+      return sendJSON({ ...st, deviceGroups, customIpConfig });
     } catch (e) {
       return sendJSON({ success: false, error: e.message }, 500);
     }
@@ -8018,7 +8061,10 @@ const server = http.createServer(async (req, res) => {
         const deviceGroups = typeof browserMode.getDeviceGroupsSnapshot === "function"
           ? browserMode.getDeviceGroupsSnapshot()
           : [];
-        return sendJSON({ ...st, deviceGroups });
+        const customIpConfig = typeof browserMode.getCustomIpDeviceConfig === "function"
+          ? browserMode.getCustomIpDeviceConfig()
+          : { ipGroups: [] };
+        return sendJSON({ ...st, deviceGroups, customIpConfig });
       } catch (e) {
         return sendJSON({ success: false, error: e.message }, 500);
       }
@@ -8060,7 +8106,10 @@ const server = http.createServer(async (req, res) => {
           const deviceGroups = typeof browserMode.getDeviceGroupsSnapshot === "function"
             ? browserMode.getDeviceGroupsSnapshot()
             : [];
-          sendJSON({ ...status, deviceGroups, backendSync: saved.backendSync || null });
+          const customIpConfig = typeof browserMode.getCustomIpDeviceConfig === "function"
+            ? browserMode.getCustomIpDeviceConfig()
+            : { ipGroups: [] };
+          sendJSON({ ...status, deviceGroups, customIpConfig, backendSync: saved.backendSync || null });
         } catch (e) {
           sendJSON({ success: false, error: e.message }, 400);
         }
@@ -8471,6 +8520,7 @@ const server = http.createServer(async (req, res) => {
           zenyRate,
           bandwidth,
           screenProxy: screenProxy.getProfileLeaseSnapshot(p.id),
+          ipIsolation: getProfileIpIsolationInfo(p.id),
           windowState: windowStates[p.id] || { isHidden: false, zeroRender: false }
         };
       }
@@ -8548,6 +8598,9 @@ const server = http.createServer(async (req, res) => {
       success: true,
       profiles: enriched,
       deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : [],
+      customIpConfig: typeof browserMode.getCustomIpDeviceConfig === "function" ? browserMode.getCustomIpDeviceConfig() : { ipGroups: [] },
+      customGroupLeases: typeof screenProxy.getCustomGroupLeases === "function" ? screenProxy.getCustomGroupLeases() : [],
+      ipSurchargeConfig: typeof screenProxy.getSurchargeConfig === "function" ? screenProxy.getSurchargeConfig() : null,
       bandwidthSummary,
       screenProxySummary: screenProxy.publicSettings(),
       proxyBilling: typeof screenProxy.getBillingStatus === "function" ? screenProxy.getBillingStatus() : null,
@@ -8644,8 +8697,79 @@ const server = http.createServer(async (req, res) => {
     const groups = typeof browserMode.getDeviceGroupsSnapshot === "function"
       ? browserMode.getDeviceGroupsSnapshot()
       : [];
-    const screensPerIp = screenProxy.loadSettings().maxScreensPerIp || 3;
-    return sendJSON({ success: true, maxScreensPerDevice: 3, screensPerIp, groups });
+    const screensPerIp = screenProxy.loadSettings().maxScreensPerIp || 6;
+    const customIpConfig = typeof browserMode.getCustomIpDeviceConfig === "function"
+      ? browserMode.getCustomIpDeviceConfig()
+      : { ipGroups: [] };
+    const customGroupLeases = typeof screenProxy.getCustomGroupLeases === "function"
+      ? screenProxy.getCustomGroupLeases()
+      : [];
+    const surchargeConfig = typeof screenProxy.getSurchargeConfig === "function"
+      ? screenProxy.getSurchargeConfig()
+      : null;
+    return sendJSON({ success: true, maxScreensPerDevice: 3, screensPerIp, groups, customIpConfig, customGroupLeases, surchargeConfig });
+  }
+
+  // GET / POST /api/custom-ip-devices
+  if (pathname === "/api/custom-ip-devices") {
+    if (req.method === "GET") {
+      try {
+        const refresh = parsedUrl.searchParams.get("refresh") === "1";
+        if (refresh && typeof screenProxy.reserveCustomIpGroupsNow === "function") {
+          await screenProxy.reserveCustomIpGroupsNow().catch(() => {});
+        }
+        return sendJSON({
+          success: true,
+          customIpConfig: typeof browserMode.getCustomIpDeviceConfig === "function" ? browserMode.getCustomIpDeviceConfig() : { ipGroups: [] },
+          customGroupLeases: typeof screenProxy.getCustomGroupLeases === "function" ? screenProxy.getCustomGroupLeases() : [],
+          surchargeConfig: typeof screenProxy.getSurchargeConfig === "function" ? screenProxy.getSurchargeConfig() : null,
+          deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : [],
+          screensPerIp: screenProxy.loadSettings().maxScreensPerIp || 6
+        });
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 500);
+      }
+    }
+    if (req.method === "POST") {
+      let body = "";
+      req.on("data", chunk => {
+        body += chunk;
+        if (Buffer.byteLength(body, "utf8") > 262144) req.destroy();
+      });
+      req.on("end", async () => {
+        try {
+          const payload = JSON.parse(body || "{}");
+          const mutated = await browserMode.mutateCustomIpDevices(payload);
+          const affected = Array.isArray(mutated.affectedProfileIds) ? mutated.affectedProfileIds : [];
+          for (const pid of affected) {
+            if (windowStates[pid]) {
+              delete windowStates[pid].syncedDeviceId;
+              delete windowStates[pid].syncedMachineId;
+            }
+          }
+          const resv = typeof screenProxy.reserveCustomIpGroupsNow === "function"
+            ? await screenProxy.reserveCustomIpGroupsNow().catch(() => ({}))
+            : {};
+          if (screenProxy.isEnabled() && affected.length > 0) {
+            await syncScreenProxyForOpenProfiles().catch(() => {});
+            if (isBrowserMode() && typeof browserMode.applyProxyModeToOpenWindows === "function") {
+              await browserMode.applyProxyModeToOpenWindows({ onlyProfileIds: affected }).catch(() => {});
+            }
+          }
+          return sendJSON({
+            success: true,
+            ...mutated,
+            customIpConfig: mutated.customIpConfig || browserMode.getCustomIpDeviceConfig(),
+            customGroupLeases: resv.customGroupLeases || screenProxy.getCustomGroupLeases(),
+            surchargeConfig: resv.surchargeConfig || screenProxy.getSurchargeConfig(),
+            deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : []
+          });
+        } catch (e) {
+          return sendJSON({ success: false, error: e.message }, 400);
+        }
+      });
+      return;
+    }
   }
 
   // POST /api/device-groups/rotate
@@ -9249,6 +9373,8 @@ const server = http.createServer(async (req, res) => {
         }
 
         saveProfiles(remaining, { allowEmpty: true });
+        try { browserMode.pruneDeletedProfilesFromCustomGroups?.(remaining.map(p => p.id)); } catch (_) {}
+        screenProxy.reserveCustomIpGroupsNow?.().catch(() => {});
         try { writeJsonAtomic(PROFILES_BACKUP_FILE, remaining); } catch (_) {}
         scheduleCentralProfileBackupSync(1000);
         return sendJSON({
@@ -9290,6 +9416,8 @@ const server = http.createServer(async (req, res) => {
 
     profiles.splice(idx, 1);
     saveProfiles(profiles, { allowEmpty: true });
+    try { browserMode.pruneDeletedProfilesFromCustomGroups?.(profiles.map(p => p.id)); } catch (_) {}
+    screenProxy.reserveCustomIpGroupsNow?.().catch(() => {});
     try { writeJsonAtomic(PROFILES_BACKUP_FILE, profiles); } catch (_) {}
     scheduleCentralProfileBackupSync(1000);
     return sendJSON({ success: true });

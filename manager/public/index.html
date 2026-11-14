@@ -17,7 +17,7 @@
   <link rel="stylesheet" href="market_overview.css?v=4.49.3">
   <link rel="stylesheet" href="guild_manager.css?v=4.49.0">
   <link rel="stylesheet" href="jail_manager.css?v=4.51.9">
-  <link rel="stylesheet" href="device_manager.css?v=4.53.6">
+  <link rel="stylesheet" href="device_manager.css?v=4.62.0">
   <link rel="stylesheet" href="fleet_dashboard.css?v=4.61.0">
   <link rel="stylesheet" href="support_chat.css?v=4.60.0.1">
   <style id="pm-boot-splash-style">
@@ -1693,7 +1693,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4.53.35"></script>
-  <script src="app.js?v=4.61.0"></script>
+  <script src="app.js?v=4.62.0"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.61.1"></script>
@@ -1707,10 +1707,10 @@
   <script src="market_sniper.js?v=4.56.8"></script>
   <script src="guild_manager.js?v=4.56.1"></script>
   <script src="jail_manager.js?v=4.56.1"></script>
-  <script src="device_manager.js?v=4.56.1"></script>
+  <script src="device_manager.js?v=4.62.0"></script>
   <script src="fleet_dashboard.js?v=4.61.0"></script>
   <script src="support_chat.js?v=4.60.0.1"></script>
-  <script src="update_log.js?v=4.61.1"></script>
+  <script src="update_log.js?v=4.62.0"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 
@@ -2526,14 +2526,17 @@
             </div>
             <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
               <span style="font-size: 11px; color: #cbd5e1;">จำกัดจอต่อ 1 IP:</span>
-              <input type="number" id="sp-max-screens" min="1" max="20" value="3" style="width: 52px; padding: 3px 6px; border-radius: 5px; border: 1px solid rgba(168,85,247,0.4); background: #090d16; color: #f8fafc; font-size: 11.5px; text-align: center; font-weight: 700;">
+              <input type="number" id="sp-max-screens" min="1" max="20" value="6" style="width: 52px; padding: 3px 6px; border-radius: 5px; border: 1px solid rgba(168,85,247,0.4); background: #090d16; color: #f8fafc; font-size: 11.5px; text-align: center; font-weight: 700;">
               <span style="font-size: 11px; color: #94a3b8;">จอ</span>
-              <div style="display: inline-flex; gap: 4px; margin-left: 4px;">
-                <button type="button" class="btn-sp-max-preset" data-max="3" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 3 จอ (1 กลุ่ม Device: 3 จอ)">3</button>
-                <button type="button" class="btn-sp-max-preset" data-max="4" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 4 จอ (2 กลุ่ม Device: 3 + 1 จอ)">4</button>
-                <button type="button" class="btn-sp-max-preset" data-max="5" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 5 จอ (2 กลุ่ม Device: 3 + 2 จอ)">5</button>
-                <button type="button" class="btn-sp-max-preset" data-max="6" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 6 จอ (2 กลุ่ม Device: 3 + 3 จอ)">6</button>
+              <div style="display: inline-flex; gap: 4px; margin-left: 4px; flex-wrap: wrap;">
+                <button type="button" class="btn-sp-max-preset" data-max="1" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 1 จอ (+25% ส่วนบุญ)">1</button>
+                <button type="button" class="btn-sp-max-preset" data-max="2" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 2 จอ (+20% ส่วนบุญ)">2</button>
+                <button type="button" class="btn-sp-max-preset" data-max="3" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 3 จอ (1 กลุ่ม Device: 3 จอ · +15% ส่วนบุญ)">3</button>
+                <button type="button" class="btn-sp-max-preset" data-max="4" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 4 จอ (2 กลุ่ม Device: 3 + 1 จอ · +10% ส่วนบุญ)">4</button>
+                <button type="button" class="btn-sp-max-preset" data-max="5" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 5 จอ (2 กลุ่ม Device: 3 + 2 จอ · +5% ส่วนบุญ)">5</button>
+                <button type="button" class="btn-sp-max-preset" data-max="6" style="padding: 2px 7px; font-size: 10.5px; font-weight: 700; border-radius: 5px; border: 1px solid rgba(148,163,184,0.3); background: rgba(15,23,42,0.8); color: #cbd5e1; cursor: pointer;" title="1 IP = 6 จอ (2 กลุ่ม Device: 3 + 3 จอ · มาตรฐาน +0%)">6</button>
               </div>
+              <span id="sp-surcharge-ratio-hint" style="padding: 2px 8px; border-radius: 99px; font-size: 10.5px; font-weight: 700; background: rgba(16,185,129,0.16); border: 1px solid rgba(52,211,153,0.4); color: #6ee7b7;">+0% มาตรฐาน</span>
             </div>
           </div>
 
@@ -2541,11 +2544,16 @@
           <div id="sp-device-split-box" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 7px 10px; border-radius: 7px; background: rgba(2, 132, 199, 0.14); border: 1px solid rgba(56, 189, 248, 0.32);">
             <div id="sp-device-split-preview" style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: #e0f2fe;">
               <span>⚙️ <b>การแบ่ง Device ต่อ 1 IP:</b></span>
-              <span>1 IP (3 จอ) = <b>1 กลุ่ม · 1 Device</b> (3 จอ)</span>
+              <span>1 IP (6 จอ) = <b>2 กลุ่ม · 2 Device</b> (3 + 3 จอ)</span>
             </div>
-            <button type="button" id="btn-sp-open-device-drawer" style="padding: 3px 9px; font-size: 10.5px; font-weight: 700; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.45); background: rgba(14, 165, 233, 0.2); color: #bae6fd; cursor: pointer; white-space: nowrap;" title="เปิดแถบจัดการ Device Spoof เพื่อดูกลุ่ม Device และ IP ของแต่ละจอ">
-              ⚙️ ดูกลุ่ม Device Spoof
-            </button>
+            <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+              <button type="button" id="btn-sp-open-device-drawer" style="padding: 3px 9px; font-size: 10.5px; font-weight: 700; border-radius: 6px; border: 1px solid rgba(56, 189, 248, 0.45); background: rgba(14, 165, 233, 0.2); color: #bae6fd; cursor: pointer; white-space: nowrap;" title="เปิดแถบจัดการ Device Spoof เพื่อดูกลุ่ม Device และ IP ของแต่ละจอ">
+                ⚙️ ดูกลุ่ม Device Spoof
+              </button>
+              <button type="button" id="btn-sp-open-custom-ip-drawer" style="padding: 3px 9px; font-size: 10.5px; font-weight: 700; border-radius: 6px; border: 1px solid rgba(251, 191, 36, 0.55); background: rgba(245, 158, 11, 0.22); color: #fef3c7; cursor: pointer; white-space: nowrap;" title="เปิดแถบแยก IP และแยก Device พิเศษสำหรับกำหนดเฉพาะจอที่ต้องการ">
+                🎯 แยก IP / Device พิเศษรายจอ
+              </button>
+            </div>
           </div>
 
           <div style="display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.06);">

@@ -1,6 +1,6 @@
 'use strict';
 // manager/screen_proxy_manager.js
-// Per-Screen IP Queue (1 IP : 3 Screens) & Local Per-Profile Split-Tunnel Proxy Forwarder
+// Per-Screen IP Queue (1 IP : 6 Screens default) & Local Per-Profile Split-Tunnel Proxy Forwarder
 const http = require('http');
 const https = require('https');
 const net = require('net');
@@ -11,7 +11,7 @@ const crypto = require('crypto');
 
 const { createAssetCache } = require('./asset_cache');
 
-const DEFAULT_MAX_SCREENS_PER_IP = 3;
+const DEFAULT_MAX_SCREENS_PER_IP = 6;
 const LEASE_TTL_MS = 180000;
 const FORCE_DISABLE_REVISION = '2026-10-21-off';
 
@@ -306,6 +306,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   const leasesFile = path.join(dataDir, 'screen_proxy_leases.json');
   const blockedFile = path.join(dataDir, 'screen_proxy_blocked.json');
   const billingFile = path.join(dataDir, 'screen_proxy_billing.json');
+  const localCustomGroupsFile = path.join(dataDir, 'screen_proxy_custom_groups.json');
   const assetCache = providedAssetCache || createAssetCache({ dataDir, now });
 
   const BYTES_PER_GB = 1024 * 1024 * 1024;
@@ -318,6 +319,107 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   const blockedProxies = new Map(); // key (proxyId or ip:x.x.x.x) -> block record
   const jailCooldowns = new Map(); // key (proxyId or ip:x.x.x.x) -> cooldownUntilMs
   const JAIL_IP_COOLDOWN_MS = 30 * 60 * 1000;
+  let customGroupsProvider = null;
+  const customGroupLeasesMap = new Map();
+  let lastSurchargeConfig = {
+    enabled: true,
+    baseline: 6,
+    tiers: { '6': 0, '5': 5, '4': 10, '3': 15, '2': 20, '1': 25 },
+    customExtraPct: 0
+  };
+
+  function computeLocalSurchargePct(shareCount, isCustom = false, cfg = lastSurchargeConfig) {
+    if (!cfg || cfg.enabled === false) return 0;
+    const baseline = Math.max(1, Math.min(20, Math.floor(Number(cfg.baseline) || 6)));
+    const n = Math.max(1, Math.min(20, Math.floor(Number(shareCount) || baseline)));
+    let pct = 0;
+    if (n < baseline) {
+      const tierVal = Number(cfg.tiers && cfg.tiers[String(n)]);
+      pct = Number.isFinite(tierVal) ? Math.max(0, tierVal) : 0;
+    }
+    if (isCustom && Number(cfg.customExtraPct) > 0) {
+      pct += Number(cfg.customExtraPct);
+    }
+    return Math.min(500, Math.max(0, Math.round(pct * 100) / 100));
+  }
+
+  function setCustomIpGroupsProvider(fn) {
+    customGroupsProvider = typeof fn === 'function' ? fn : null;
+  }
+
+  function getSurchargeConfig() {
+    return JSON.parse(JSON.stringify(lastSurchargeConfig));
+  }
+
+  function getCustomGroupLeases() {
+    return Array.from(customGroupLeasesMap.values()).map(item => ({ ...item }));
+  }
+
+  function readCustomIpGroupsState() {
+    const customIpGroups = [];
+    const profileGroupMap = new Map();
+    try {
+      const cfg = customGroupsProvider ? customGroupsProvider() : null;
+      const rawGroups = Array.isArray(cfg?.ipGroups) ? cfg.ipGroups : [];
+      for (const g of rawGroups) {
+        if (!g || typeof g !== 'object' || !g.id) continue;
+        const groupId = String(g.id).trim();
+        const groupName = String(g.name || groupId).trim() || groupId;
+        const pidSet = new Set();
+        const devGroups = Array.isArray(g.deviceGroups) ? g.deviceGroups : [];
+        for (const dg of devGroups) {
+          const pids = Array.isArray(dg?.profileIds) ? dg.profileIds : [];
+          for (const rawPid of pids) {
+            const pid = String(rawPid || '').trim();
+            if (pid && !profileGroupMap.has(pid)) {
+              pidSet.add(pid);
+            }
+          }
+        }
+        const profileIds = Array.from(pidSet);
+        const groupCap = Math.max(1, profileIds.length);
+        const ipGroupKey = `custom:${groupId}`;
+        customIpGroups.push({
+          id: groupId,
+          name: groupName,
+          profileIds,
+          maxScreensPerIp: groupCap
+        });
+        for (const pid of profileIds) {
+          profileGroupMap.set(pid, {
+            customGroupId: groupId,
+            customGroupName: groupName,
+            ipGroupKey,
+            groupCap
+          });
+        }
+      }
+    } catch (_) {}
+    return { customIpGroups, profileGroupMap };
+  }
+
+  function ingestServerCustomMeta(res) {
+    if (!res || typeof res !== 'object') return;
+    if (res.surchargeConfig && typeof res.surchargeConfig === 'object') {
+      lastSurchargeConfig = {
+        ...lastSurchargeConfig,
+        ...res.surchargeConfig,
+        tiers: {
+          ...lastSurchargeConfig.tiers,
+          ...(res.surchargeConfig.tiers || {})
+        }
+      };
+    }
+    if (Array.isArray(res.customGroupLeases)) {
+      customGroupLeasesMap.clear();
+      for (const item of res.customGroupLeases) {
+        if (!item || typeof item !== 'object') continue;
+        const id = String(item.id || item.ipGroupId || '').trim();
+        if (!id) continue;
+        customGroupLeasesMap.set(id, { ...item, id });
+      }
+    }
+  }
 
   function getThaiDateKey(ts = now()) {
     return new Date(ts + 7 * 3600000).toISOString().slice(0, 10);
@@ -1043,6 +1145,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
   function loadSettings() {
     const raw = readJson(settingsFile, {});
+    if (raw && typeof raw === 'object' && raw.enabled !== true && Number(raw.maxScreensPerIp) === 3 && !raw.default6Migrated) {
+      raw.maxScreensPerIp = 6;
+      raw.default6Migrated = true;
+      try { writeJson(settingsFile, raw); } catch (_) {}
+    }
     const maxScreensPerIp = Math.max(1, Math.min(20, parseInt(raw.maxScreensPerIp, 10) || DEFAULT_MAX_SCREENS_PER_IP));
     const mode = raw.mode === 'local-pool' ? 'local-pool' : 'owner-queue';
     const localAssetCache = raw.localAssetCache !== false;
@@ -1052,6 +1159,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       maxScreensPerIp,
       onlyGameTraffic: raw.onlyGameTraffic !== false,
       localAssetCache,
+      default6Migrated: Boolean(raw.default6Migrated),
       forceDisableRev: raw.forceDisableRev || null,
       lastTestedIp: raw.lastTestedIp || null,
       lastTestedAt: raw.lastTestedAt || null,
@@ -1068,6 +1176,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       ...(patch.maxScreensPerIp !== undefined ? { maxScreensPerIp: Math.max(1, Math.min(20, parseInt(patch.maxScreensPerIp, 10) || DEFAULT_MAX_SCREENS_PER_IP)) } : {}),
       ...(typeof patch.onlyGameTraffic === 'boolean' ? { onlyGameTraffic: patch.onlyGameTraffic } : {}),
       ...(typeof patch.localAssetCache === 'boolean' ? { localAssetCache: patch.localAssetCache } : {}),
+      default6Migrated: Boolean(patch.default6Migrated !== undefined ? patch.default6Migrated : (cur.default6Migrated || patch.maxScreensPerIp !== undefined)),
       ...(patch.forceDisableRev !== undefined ? { forceDisableRev: patch.forceDisableRev } : {}),
       ...(patch.lastTestedIp !== undefined ? { lastTestedIp: patch.lastTestedIp } : {}),
       ...(patch.lastTestedAt !== undefined ? { lastTestedAt: patch.lastTestedAt } : {}),
@@ -1443,6 +1552,78 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     };
   }
 
+  function syncLocalCustomGroupReservations(enabledPool, poolMap, customIpGroups) {
+    const saved = readJson(localCustomGroupsFile, { reservations: {} });
+    const prevRes = (saved && saved.reservations && typeof saved.reservations === 'object') ? saved.reservations : {};
+    const nextRes = {};
+    const validGroupIds = new Set(customIpGroups.map(g => g.id));
+    let dirty = Object.keys(prevRes).some(k => !validGroupIds.has(k));
+
+    // Preserve still-valid existing reservations first
+    const usedProxyIds = new Set();
+    for (const cg of customIpGroups) {
+      const existingPid = prevRes[cg.id];
+      if (existingPid && poolMap.has(existingPid) && !usedProxyIds.has(existingPid)) {
+        nextRes[cg.id] = existingPid;
+        usedProxyIds.add(existingPid);
+      } else if (existingPid) {
+        dirty = true;
+      }
+    }
+
+    // Count active leases per proxy so newly reserved custom groups prefer unused proxies
+    const activeCountByProxy = new Map();
+    for (const l of activeLeases.values()) {
+      if (l && l.proxyId) {
+        activeCountByProxy.set(l.proxyId, (activeCountByProxy.get(l.proxyId) || 0) + 1);
+      }
+    }
+
+    // Assign fresh dedicated proxies to unreserved custom IP groups
+    const sortedCandidates = [...enabledPool].sort((a, b) => {
+      const aJail = isProxyOnJailCooldown(a) ? 1 : 0;
+      const bJail = isProxyOnJailCooldown(b) ? 1 : 0;
+      if (aJail !== bJail) return aJail - bJail;
+      const aUse = activeCountByProxy.get(a.proxyId) || 0;
+      const bUse = activeCountByProxy.get(b.proxyId) || 0;
+      return aUse - bUse;
+    });
+
+    customGroupLeasesMap.clear();
+    for (const cg of customIpGroups) {
+      if (!nextRes[cg.id]) {
+        const cand = sortedCandidates.find(p => !usedProxyIds.has(p.proxyId)) || null;
+        if (cand) {
+          nextRes[cg.id] = cand.proxyId;
+          usedProxyIds.add(cand.proxyId);
+          dirty = true;
+        }
+      }
+      const proxy = nextRes[cg.id] ? (poolMap.get(nextRes[cg.id]) || null) : null;
+      const shareCount = Math.max(1, Array.isArray(cg.profileIds) ? cg.profileIds.length : 1);
+      customGroupLeasesMap.set(cg.id, {
+        id: cg.id,
+        name: cg.name,
+        assigned: Boolean(proxy),
+        proxyId: proxy ? proxy.proxyId : null,
+        ip: proxy ? proxy.labelIp : null,
+        proxyHost: proxy ? proxy.host : null,
+        proxyPort: proxy ? proxy.port : null,
+        scheme: proxy ? proxy.scheme : 'http',
+        profileCount: Array.isArray(cg.profileIds) ? cg.profileIds.length : 0,
+        maxScreens: shareCount,
+        surchargePct: computeLocalSurchargePct(shareCount, true),
+        error: proxy ? null : (enabledPool.length === 0 ? 'ยังไม่มี Proxy IP ในคิว' : 'คิว Proxy IP ไม่พอจองวงพิเศษ')
+      });
+    }
+
+    if (dirty || Object.keys(nextRes).length !== Object.keys(prevRes).length) {
+      try { writeJson(localCustomGroupsFile, { reservations: nextRes, updatedAt: now() }); } catch (_) {}
+    }
+
+    return { reservations: nextRes, reservedProxyIds: usedProxyIds };
+  }
+
   // Local 1 IP : N Screens Queue Allocator
   function allocateFromLocalPool(requestedProfiles) {
     const settings = loadSettings();
@@ -1450,18 +1631,31 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const enabledPool = proxies.filter(p => p.enabled !== false && !isProxyBlocked(p));
     const poolMap = new Map(enabledPool.map(p => [p.proxyId, p]));
     const maxPerIp = settings.maxScreensPerIp || DEFAULT_MAX_SCREENS_PER_IP;
+    const { customIpGroups, profileGroupMap } = readCustomIpGroupsState();
+    const { reservations: customResMap, reservedProxyIds } = syncLocalCustomGroupReservations(enabledPool, poolMap, customIpGroups);
+    const autoEnabledPool = enabledPool.filter(p => !reservedProxyIds.has(p.proxyId));
 
     const profileOrderMap = new Map();
     try {
       const allProfiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
-      allProfiles.forEach((p, idx) => {
-        if (p && p.id) profileOrderMap.set(p.id, idx);
+      let autoIdx = 0;
+      allProfiles.forEach((p) => {
+        if (p && p.id && !profileGroupMap.has(p.id)) {
+          profileOrderMap.set(p.id, autoIdx++);
+        }
       });
     } catch (_) {}
 
-    // Prune activeLeases for profiles whose proxy is no longer in pool or was blocked
+    // Prune activeLeases for profiles whose proxy is no longer in pool, was blocked, or changed auto/custom group
     for (const [pid, l] of Array.from(activeLeases.entries())) {
-      if (!poolMap.has(l.proxyId) || isProxyBlocked(l)) activeLeases.delete(pid);
+      const customMeta = profileGroupMap.get(pid);
+      const wantKey = customMeta ? customMeta.ipGroupKey : 'auto';
+      const haveKey = l.ipGroupKey || 'auto';
+      const wrongReserved = !customMeta && reservedProxyIds.has(l.proxyId);
+      const wrongCustomProxy = Boolean(customMeta && customResMap[customMeta.customGroupId] && l.proxyId !== customResMap[customMeta.customGroupId]);
+      if (!poolMap.has(l.proxyId) || isProxyBlocked(l) || haveKey !== wantKey || wrongReserved || wrongCustomProxy) {
+        activeLeases.delete(pid);
+      }
     }
 
     const slotsByProxy = new Map();
@@ -1481,16 +1675,80 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
     const results = [];
     let stickyChanged = false;
-    const cleanEnabledPool = enabledPool.filter(p => !isProxyOnJailCooldown(p));
+    const autoCleanPool = autoEnabledPool.filter(p => !isProxyOnJailCooldown(p));
 
     for (const reqItem of requestedProfiles) {
       const pid = reqItem.profileId;
+      const customMeta = profileGroupMap.get(pid) || (
+        reqItem.ipGroupKey && String(reqItem.ipGroupKey).startsWith('custom:')
+          ? { customGroupId: String(reqItem.ipGroupKey).slice(7), ipGroupKey: String(reqItem.ipGroupKey), groupCap: Math.max(1, Number(reqItem.groupCap) || 1) }
+          : null
+      );
+
+      if (customMeta) {
+        const resProxyId = customResMap[customMeta.customGroupId];
+        const cand = resProxyId ? poolMap.get(resProxyId) : null;
+        const cap = Math.max(1, Number(customMeta.groupCap) || 1);
+        if (!cand) {
+          results.push({
+            assigned: false,
+            profileId: pid,
+            code: enabledPool.length === 0 ? 'IP_POOL_EMPTY' : 'IP_POOL_EXHAUSTED',
+            error: enabledPool.length === 0
+              ? (proxies.length > 0 ? 'Proxy IP ในคิวถูกบล็อค (โดนแบน/เข้าคุก) หมดแล้ว' : 'ยังไม่ได้ใส่รายการ Proxy IP')
+              : 'ยังไม่มี Proxy IP ว่างสำหรับวงแยกพิเศษนี้'
+          });
+          continue;
+        }
+        const usedMap = slotsByProxy.get(cand.proxyId);
+        let chosenSlotNo = usedMap.has(pid) ? usedMap.get(pid) : null;
+        if (chosenSlotNo === null) {
+          if (usedMap.size >= cap) {
+            results.push({
+              assigned: false,
+              profileId: pid,
+              code: 'IP_POOL_EXHAUSTED',
+              error: `วง IP พิเศษนี้เต็มแล้ว (${cap} จอ)`
+            });
+            continue;
+          }
+          chosenSlotNo = pickFreeSlotNo(usedMap, cap);
+          usedMap.set(pid, chosenSlotNo);
+        }
+        const leaseObj = {
+          assigned: true,
+          profileId: pid,
+          proxyId: cand.proxyId,
+          ip: cand.labelIp,
+          scheme: cand.scheme,
+          proxyHost: cand.host,
+          proxyPort: cand.port,
+          proxyUser: cand.user,
+          proxyPass: cand.pass,
+          slotNo: chosenSlotNo,
+          maxScreens: cap,
+          groupCap: cap,
+          activeOnIp: usedMap ? usedMap.size : 1,
+          ipGroupKey: customMeta.ipGroupKey,
+          isCustomIp: true,
+          source: 'local-pool',
+          expiresAt: now() + LEASE_TTL_MS
+        };
+        activeLeases.set(pid, leaseObj);
+        if (stickyHistory.get(pid) !== cand.proxyId) {
+          stickyHistory.set(pid, cand.proxyId);
+          stickyChanged = true;
+        }
+        results.push(leaseObj);
+        continue;
+      }
+
       let chosenProxy = null;
       let chosenSlotNo = 1;
       const existingActive = activeLeases.get(pid);
 
       // Keep already-active survivor screen on its IP even if that IP entered soft jail cooldown
-      if (existingActive && poolMap.has(existingActive.proxyId)) {
+      if (existingActive && poolMap.has(existingActive.proxyId) && !reservedProxyIds.has(existingActive.proxyId)) {
         const cand = poolMap.get(existingActive.proxyId);
         const usedMap = slotsByProxy.get(cand.proxyId);
         const cap = maxPerIp;
@@ -1501,12 +1759,12 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       }
 
       const orderIdx = profileOrderMap.has(pid) ? profileOrderMap.get(pid) : -1;
-      const preferredBlockProxy = (!chosenProxy && orderIdx >= 0 && Math.floor(orderIdx / maxPerIp) < enabledPool.length)
-        ? enabledPool[Math.floor(orderIdx / maxPerIp)]
+      const preferredBlockProxy = (!chosenProxy && orderIdx >= 0 && Math.floor(orderIdx / maxPerIp) < autoEnabledPool.length)
+        ? autoEnabledPool[Math.floor(orderIdx / maxPerIp)]
         : null;
       const preferredSlotInBlock = orderIdx >= 0 ? ((orderIdx % maxPerIp) + 1) : 1;
 
-      if (!chosenProxy && preferredBlockProxy && (!isProxyOnJailCooldown(preferredBlockProxy) || cleanEnabledPool.length === 0)) {
+      if (!chosenProxy && preferredBlockProxy && (!isProxyOnJailCooldown(preferredBlockProxy) || autoCleanPool.length === 0)) {
         const usedMap = slotsByProxy.get(preferredBlockProxy.proxyId);
         const cap = maxPerIp;
         if (usedMap.has(pid) && usedMap.size <= cap) {
@@ -1529,9 +1787,9 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       if (!chosenProxy) {
         const stickyProxyId = existingActive?.proxyId || stickyHistory.get(pid);
 
-        if (stickyProxyId && poolMap.has(stickyProxyId)) {
+        if (stickyProxyId && poolMap.has(stickyProxyId) && !reservedProxyIds.has(stickyProxyId)) {
           const cand = poolMap.get(stickyProxyId);
-          if (!isProxyOnJailCooldown(cand) || cleanEnabledPool.length === 0) {
+          if (!isProxyOnJailCooldown(cand) || autoCleanPool.length === 0) {
             const usedMap = slotsByProxy.get(cand.proxyId);
             const cap = maxPerIp;
             if (usedMap.has(pid) && usedMap.size <= cap) {
@@ -1547,7 +1805,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       }
 
       if (!chosenProxy) {
-        const poolOrder = cleanEnabledPool.length > 0 ? [...cleanEnabledPool, ...enabledPool.filter(p => isProxyOnJailCooldown(p))] : enabledPool;
+        const poolOrder = autoCleanPool.length > 0 ? [...autoCleanPool, ...autoEnabledPool.filter(p => isProxyOnJailCooldown(p))] : autoEnabledPool;
         for (const cand of poolOrder) {
           const usedMap = slotsByProxy.get(cand.proxyId);
           const cap = maxPerIp;
@@ -1568,7 +1826,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           code: enabledPool.length === 0 ? 'IP_POOL_EMPTY' : 'IP_POOL_EXHAUSTED',
           error: enabledPool.length === 0
             ? (proxies.length > 0 ? 'Proxy IP ในคิวถูกบล็อค (โดนแบน/เข้าคุก) หมดแล้ว' : 'ยังไม่ได้ใส่รายการ Proxy IP')
-            : `คิว IP เต็มทุกช่องแล้ว (1 IP : ${maxPerIp} จอ)`
+            : (autoEnabledPool.length === 0 ? 'Proxy IP ทั้งหมดถูกจองให้วงแยกพิเศษแล้ว' : `คิว IP เต็มทุกช่องแล้ว (1 IP : ${maxPerIp} จอ)`)
         });
         continue;
       }
@@ -1587,6 +1845,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         slotNo: chosenSlotNo,
         maxScreens: maxPerIp,
         activeOnIp: usedMap ? usedMap.size : 1,
+        ipGroupKey: 'auto',
+        isCustomIp: false,
         source: 'local-pool',
         expiresAt: now() + LEASE_TTL_MS
       };
@@ -1602,7 +1862,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     for (const l of activeLeases.values()) {
       const m = slotsByProxy.get(l.proxyId);
       if (m) l.activeOnIp = m.size;
-      l.maxScreens = maxPerIp;
+      if (!l.isCustomIp) {
+        l.maxScreens = maxPerIp;
+      } else {
+        l.maxScreens = Math.max(1, Number(l.groupCap || l.maxScreens) || 1);
+      }
     }
     saveStickyHistory();
     syncDaemonState().catch(() => {});
@@ -1805,7 +2069,13 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const settings = loadSettings();
     if (!settings.enabled) return [];
 
-    const reqProfiles = ids.map(profileId => ({ profileId }));
+    const { customIpGroups, profileGroupMap } = readCustomIpGroupsState();
+    const reqProfiles = ids.map(profileId => {
+      const cm = profileGroupMap.get(profileId);
+      return cm
+        ? { profileId, ipGroupKey: cm.ipGroupKey, groupCap: cm.groupCap }
+        : { profileId, ipGroupKey: 'auto', groupCap: settings.maxScreensPerIp };
+    });
     const allKnownProfiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
     const validProfileIds = allKnownProfiles.map(p => p && p.id).filter(Boolean);
 
@@ -1814,10 +2084,13 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         const excludedFilters = getExcludedProxyFilters();
         const res = await solver.serviceRequest('/v1/aetheria/proxy/screen-lease', {
           machineId: getMachineId(),
+          maxScreensPerIp: settings.maxScreensPerIp,
+          customIpGroups,
           profiles: reqProfiles,
           validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined,
           ...excludedFilters
         });
+        if (res?.success) ingestServerCustomMeta(res);
         if (res?.success && Array.isArray(res.leases)) {
           const validLeases = res.leases.filter(l => !l.assigned || !isProxyBlocked(l));
           const hasAnyAssigned = validLeases.some(l => l.assigned);
@@ -1826,7 +2099,18 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
             for (const l of validLeases) {
               if (l.assigned) {
                 const prev = activeLeases.get(l.profileId);
-                activeLeases.set(l.profileId, { ...prev, ...l, source: 'owner-queue', renewedAt: now() });
+                const cm = profileGroupMap.get(l.profileId);
+                const effGroupKey = cm ? cm.ipGroupKey : (l.ipGroupKey || 'auto');
+                const isCustomIp = Boolean(cm || (effGroupKey && String(effGroupKey).startsWith('custom:')));
+                activeLeases.set(l.profileId, {
+                  ...prev,
+                  ...l,
+                  ipGroupKey: effGroupKey,
+                  isCustomIp,
+                  groupCap: cm ? cm.groupCap : (l.maxScreens || settings.maxScreensPerIp),
+                  source: 'owner-queue',
+                  renewedAt: now()
+                });
                 stickyHistory.set(l.profileId, l.proxyId);
                 if (prev && prev.proxyId && prev.proxyId !== l.proxyId) {
                   resetProfileSockets(l.profileId);
@@ -2145,8 +2429,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         lease: null
       };
     }
+    const { profileGroupMap } = readCustomIpGroupsState();
+    const cm = profileGroupMap.get(profileId);
+    const wantGroupKey = cm ? cm.ipGroupKey : 'auto';
     let lease = activeLeases.get(profileId) || null;
-    if (!lease || !lease.assigned || isProxyBlocked(lease)) {
+    if (!lease || !lease.assigned || isProxyBlocked(lease) || (lease.ipGroupKey || 'auto') !== wantGroupKey) {
       const res = await acquireLeasesForProfiles([profileId]);
       lease = res[0] || activeLeases.get(profileId) || null;
     }
@@ -2245,6 +2532,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       totalSlots,
       activeLeaseCount,
       freeSlots: Math.max(0, totalSlots - activeLeaseCount),
+      surchargeConfig: getSurchargeConfig(),
       poolText: rawText
     };
   }
@@ -2279,12 +2567,15 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         allocateFromLocalPool(currentActivePids.map(profileId => ({ profileId })));
       }
     }
+    await reserveCustomIpGroupsNow().catch(() => {});
     return {
       success: true,
       settings: publicSettings(),
       pool: poolInfo,
       billing: getBillingStatus(),
-      blockedProxies: getBlockedProxies()
+      blockedProxies: getBlockedProxies(),
+      customGroupLeases: getCustomGroupLeases(),
+      surchargeConfig: getSurchargeConfig()
     };
   }
 
@@ -2393,11 +2684,15 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       }
     }
 
+    const { customIpGroups, profileGroupMap } = readCustomIpGroupsState();
+
     if (pub.enabled && Array.isArray(openProfileIds) && openProfileIds.length > 0) {
       const nowMs = now();
       const missing = openProfileIds.filter(pid => {
         const l = activeLeases.get(pid);
-        if (!l || !l.assigned || isProxyBlocked(l)) return true;
+        const cm = profileGroupMap.get(pid);
+        const wantKey = cm ? cm.ipGroupKey : 'auto';
+        if (!l || !l.assigned || isProxyBlocked(l) || (l.ipGroupKey || 'auto') !== wantKey) return true;
         if (pub.mode === 'owner-queue' && (nowMs - (l.renewedAt || 0) > 5 * 60 * 1000)) return true;
         return false;
       });
@@ -2412,9 +2707,12 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         const excludedFilters = getExcludedProxyFilters();
         const r = await solver.serviceRequest('/v1/aetheria/proxy/screen-status', {
           machineId: getMachineId(),
+          maxScreensPerIp: maxPerIp,
+          customIpGroups,
           validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined,
           ...excludedFilters
         });
+        if (r?.success) ingestServerCustomMeta(r);
         if (r?.success && r.totalIps > 0) {
           remoteSummary = r;
           if (Array.isArray(r.myLeases)) {
@@ -2422,13 +2720,17 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
             for (const rl of r.myLeases) {
               if (!rl || !rl.profileId || isProxyBlocked(rl)) continue;
               const prev = activeLeases.get(rl.profileId);
+              const cm = profileGroupMap.get(rl.profileId);
+              const effGroupKey = cm ? cm.ipGroupKey : (rl.ipGroupKey || 'auto');
               if (rl.proxyHost && rl.proxyPort) {
                 const proxyChanged = Boolean(prev && prev.proxyId && prev.proxyId !== rl.proxyId);
-                const metaChanged = Boolean(!prev || proxyChanged || prev.slotNo !== rl.slotNo || prev.activeOnIp !== rl.activeOnIp);
+                const metaChanged = Boolean(!prev || proxyChanged || prev.slotNo !== rl.slotNo || prev.activeOnIp !== rl.activeOnIp || (prev.ipGroupKey || 'auto') !== effGroupKey);
                 if (metaChanged) {
                   activeLeases.set(rl.profileId, {
                     ...prev,
                     ...rl,
+                    ipGroupKey: effGroupKey,
+                    isCustomIp: Boolean(cm || (effGroupKey && String(effGroupKey).startsWith('custom:'))),
                     assigned: true,
                     source: 'owner-queue',
                     renewedAt: prev?.renewedAt || now()
@@ -2452,6 +2754,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           }
         }
       } catch (_) {}
+    } else {
+      syncLocalCustomGroupReservations(enabledPool, new Map(enabledPool.map(p => [p.proxyId, p])), customIpGroups);
     }
 
     const totalIps = remoteSummary ? remoteSummary.totalIps : enabledPool.length;
@@ -2477,6 +2781,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         maxScreensPerIp: l.maxScreens || maxPerIp,
         activeOnIp: l.activeOnIp || 1,
         scheme: l.scheme || 'http',
+        ipGroupKey: l.ipGroupKey || 'auto',
+        isCustomIp: Boolean(l.isCustomIp || (l.ipGroupKey && String(l.ipGroupKey).startsWith('custom:'))),
         tunnelPort: tunnel?.port || null,
         proxyRxBytes: pTraffic.proxyRxBytes || 0,
         proxyTxBytes: pTraffic.proxyTxBytes || 0,
@@ -2555,7 +2861,48 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       leases,
       assignments,
       traffic,
-      assetCache: traffic.assetCache
+      assetCache: traffic.assetCache,
+      surchargeConfig: getSurchargeConfig(),
+      customGroupLeases: getCustomGroupLeases()
+    };
+  }
+
+  async function reserveCustomIpGroupsNow() {
+    const settings = loadSettings();
+    const { customIpGroups } = readCustomIpGroupsState();
+    const validGroupSet = new Set(customIpGroups.map(g => g.id));
+    for (const key of Array.from(customGroupLeasesMap.keys())) {
+      if (!validGroupSet.has(key)) customGroupLeasesMap.delete(key);
+    }
+    const allProfiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+    const validProfileIds = allProfiles.map(p => p && p.id).filter(Boolean);
+
+    if (settings.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
+      try {
+        const excludedFilters = getExcludedProxyFilters();
+        const r = await solver.serviceRequest('/v1/aetheria/proxy/screen-status', {
+          machineId: getMachineId(),
+          maxScreensPerIp: settings.maxScreensPerIp,
+          customIpGroups,
+          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined,
+          ...excludedFilters
+        });
+        if (r?.success) {
+          ingestServerCustomMeta(r);
+          return {
+            customGroupLeases: getCustomGroupLeases(),
+            surchargeConfig: getSurchargeConfig()
+          };
+        }
+      } catch (_) {}
+    }
+
+    const { proxies } = loadPool();
+    const enabledPool = proxies.filter(p => p.enabled !== false && !isProxyBlocked(p));
+    syncLocalCustomGroupReservations(enabledPool, new Map(enabledPool.map(p => [p.proxyId, p])), customIpGroups);
+    return {
+      customGroupLeases: getCustomGroupLeases(),
+      surchargeConfig: getSurchargeConfig()
     };
   }
 
@@ -2582,6 +2929,8 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       maxScreensPerIp: maxS,
       activeOnIp: l.activeOnIp || 1,
       scheme: l.scheme || 'http',
+      ipGroupKey: l.ipGroupKey || 'auto',
+      isCustomIp: Boolean(l.isCustomIp || (l.ipGroupKey && String(l.ipGroupKey).startsWith('custom:'))),
       proxyTotalBytes: (pTraffic.proxyRxBytes || 0) + (pTraffic.proxyTxBytes || 0)
     };
   }
@@ -2623,6 +2972,10 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     getStatus,
     getQueueStatus,
     getProfileLeaseSnapshot,
+    setCustomIpGroupsProvider,
+    reserveCustomIpGroupsNow,
+    getCustomGroupLeases,
+    getSurchargeConfig,
     getTrafficStats,
     resetTrafficStats,
     getBillingStatus,

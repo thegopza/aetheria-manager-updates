@@ -439,7 +439,12 @@ async function fetchProfiles() {
           window.updateDeviceManagerFromProfiles(
             currentProfiles,
             data.deviceGroups,
-            data.screenProxySummary ? data.screenProxySummary.maxScreensPerIp : undefined
+            data.screenProxySummary ? data.screenProxySummary.maxScreensPerIp : undefined,
+            {
+              customIpConfig: data.customIpConfig,
+              customGroupLeases: data.customGroupLeases,
+              ipSurchargeConfig: data.ipSurchargeConfig || (data.screenProxySummary ? data.screenProxySummary.surchargeConfig : undefined)
+            }
           );
         }
 
@@ -1737,7 +1742,8 @@ function buildProfileCard(p) {
             ${baseLv !== null ? `<span class="lv-text">Base <b>${baseLv}</b></span>` : ''}
             ${jobLv !== null ? `<span class="lv-text">Job <b>${jobLv}</b></span>` : ''}
             ${buildPartyRoleChip(p.id)}
-            ${p.screenProxy && p.screenProxy.active && p.screenProxy.proxyHost ? `<span class="chip" style="background:rgba(168,85,247,0.18);color:#e9d5ff;border:1px solid rgba(168,85,247,0.45);font-size:0.68rem;cursor:pointer;" onclick="openScreenProxyModal()" title="จอนี้เชื่อมต่อผ่านคิวแยก IP: ${escapeHTML(p.screenProxy.proxyHost)}:${p.screenProxy.proxyPort || ''} (ช่อง ${p.screenProxy.slotIndex || 1}/${p.screenProxy.maxScreensPerIp || 3})">🛡️ IP: ${escapeHTML(p.screenProxy.proxyHost)} (${p.screenProxy.slotIndex || 1}/${p.screenProxy.maxScreensPerIp || 3})</span>` : ''}
+            ${p.screenProxy && p.screenProxy.active && p.screenProxy.proxyHost ? `<span class="chip" style="background:rgba(168,85,247,0.18);color:#e9d5ff;border:1px solid rgba(168,85,247,0.45);font-size:0.68rem;cursor:pointer;" onclick="openScreenProxyModal()" title="จอนี้เชื่อมต่อผ่านคิวแยก IP: ${escapeHTML(p.screenProxy.proxyHost)}:${p.screenProxy.proxyPort || ''} (ช่อง ${p.screenProxy.slotIndex || 1}/${p.screenProxy.maxScreensPerIp || 6})">🛡️ IP: ${escapeHTML(p.screenProxy.proxyHost)} (${p.screenProxy.slotIndex || 1}/${p.screenProxy.maxScreensPerIp || 6})</span>` : ''}
+            ${p.ipIsolation && p.ipIsolation.isCustom ? `<span class="chip" style="background:rgba(245,158,11,0.18);color:#fde68a;border:1px solid rgba(251,191,36,0.48);font-size:0.68rem;cursor:pointer;" onclick="window.openDeviceDrawerTab && window.openDeviceDrawerTab('custom')" title="จอนี้ถูกจัดอยู่ในวงแยก IP / Device พิเศษ (${escapeHTML(p.ipIsolation.ipGroupName || 'Custom IP')} · ${escapeHTML(p.ipIsolation.deviceGroupName || 'Device')})">🎯 ${escapeHTML(p.ipIsolation.ipGroupName || 'แยกพิเศษ')}${Number(p.ipIsolation.surchargePct) > 0 ? ` (+${p.ipIsolation.surchargePct}%)` : ''}</span>` : ''}
           </div>
         </div>
         <div class="card-meta">
@@ -3241,12 +3247,12 @@ function initProxyRegisterControls() {
 }
 
 // ==========================================
-// PER-SCREEN IP QUEUE (1 IP : 3 SCREENS) MODAL & TOGGLE CONTROLLER
+// PER-SCREEN IP QUEUE (1 IP : 6 SCREENS DEFAULT) MODAL & TOGGLE CONTROLLER
 // ==========================================
 let currentScreenProxySettings = {
   enabled: false,
   mode: "owner-queue",
-  maxScreensPerIp: 3,
+  maxScreensPerIp: 6,
   onlyGameTraffic: true,
   localAssetCache: true,
   poolCount: 0,
@@ -3269,7 +3275,7 @@ function updateScreenProxyToolbarBtn(summary) {
     currentScreenProxySettings = { ...currentScreenProxySettings, ...summary };
   }
   const enabled = !!currentScreenProxySettings.enabled;
-  const maxS = Number(currentScreenProxySettings.maxScreensPerIp) || 3;
+  const maxS = Number(currentScreenProxySettings.maxScreensPerIp) || 6;
   const activeCount = Number(currentScreenProxySettings.activeLeaseCount) || 0;
   const poolCount = Number(currentScreenProxySettings.poolCount) || 0;
 
@@ -3298,7 +3304,7 @@ function updateScreenProxyToolbarBtn(summary) {
 window.updateScreenProxyToolbarBtn = updateScreenProxyToolbarBtn;
 
 function computeDeviceSubSizesForIp(screensPerIp) {
-  const perIp = Math.max(1, Math.min(20, Number(screensPerIp) || 3));
+  const perIp = Math.max(1, Math.min(20, Number(screensPerIp) || 6));
   const maxPerDevice = 3;
   const count = Math.ceil(perIp / maxPerDevice);
   const sizes = [];
@@ -3309,8 +3315,22 @@ function computeDeviceSubSizesForIp(screensPerIp) {
 }
 window.computeDeviceSubSizesForIp = computeDeviceSubSizesForIp;
 
+function computeIpRatioSurchargePct(screensPerIp) {
+  const cfg = (currentScreenProxySettings && currentScreenProxySettings.surchargeConfig) || {
+    enabled: true,
+    baseline: 6,
+    tiers: { '6': 0, '5': 5, '4': 10, '3': 15, '2': 20, '1': 25 }
+  };
+  if (cfg.enabled === false) return 0;
+  const base = Math.max(1, Math.min(20, Math.floor(Number(cfg.baseline) || 6)));
+  const n = Math.max(1, Math.min(20, Math.floor(Number(screensPerIp) || base)));
+  if (n >= base) return 0;
+  const val = Number(cfg.tiers && cfg.tiers[String(n)]);
+  return Number.isFinite(val) ? Math.max(0, val) : 0;
+}
+
 function updateScreenProxyDynamicRatioLabels(maxScreensInput, poolCountInput, activeCountInput) {
-  const maxS = Math.max(1, Math.min(20, Number(maxScreensInput) || Number(currentScreenProxySettings.maxScreensPerIp) || 3));
+  const maxS = Math.max(1, Math.min(20, Number(maxScreensInput) || Number(currentScreenProxySettings.maxScreensPerIp) || 6));
   const poolCount = Number.isFinite(Number(poolCountInput)) ? Number(poolCountInput) : (Number(currentScreenProxySettings.poolCount) || 0);
   const activeCount = Number.isFinite(Number(activeCountInput)) ? Number(activeCountInput) : (Number(currentScreenProxySettings.activeLeaseCount) || 0);
   const subSizes = computeDeviceSubSizesForIp(maxS);
@@ -3361,10 +3381,23 @@ function updateScreenProxyDynamicRatioLabels(maxScreensInput, poolCountInput, ac
   document.querySelectorAll(".btn-sp-max-preset").forEach(btn => {
     const val = Number(btn.getAttribute("data-max"));
     const isAct = val === maxS;
+    const pct = computeIpRatioSurchargePct(val);
     btn.style.borderColor = isAct ? "#a855f7" : "rgba(148,163,184,0.3)";
     btn.style.background = isAct ? "rgba(168,85,247,0.28)" : "rgba(15,23,42,0.8)";
     btn.style.color = isAct ? "#f3e8ff" : "#cbd5e1";
+    btn.title = pct > 0
+      ? `1 IP = ${val} จอ (ส่วนบุญเพิ่ม +${pct}%)`
+      : `1 IP = ${val} จอ (มาตรฐาน +0%)`;
   });
+
+  const spHintEl = document.getElementById("sp-surcharge-ratio-hint");
+  if (spHintEl) {
+    const pct = computeIpRatioSurchargePct(maxS);
+    spHintEl.textContent = pct > 0 ? `+${pct}% ส่วนบุญ (1:${maxS})` : `+0% มาตรฐาน (1:${maxS})`;
+    spHintEl.style.color = pct > 0 ? "#fde68a" : "#6ee7b7";
+    spHintEl.style.background = pct > 0 ? "rgba(245,158,11,0.18)" : "rgba(16,185,129,0.16)";
+    spHintEl.style.borderColor = pct > 0 ? "rgba(251,191,36,0.45)" : "rgba(52,211,153,0.4)";
+  }
 
   const toggleBtn = document.getElementById("btn-screen-proxy-toggle-main");
   if (toggleBtn && !currentScreenProxySettings.enabled) {
@@ -3379,10 +3412,19 @@ function renderScreenProxyModal(statusData) {
   }
   const s = currentScreenProxySettings;
   const enabled = !!s.enabled;
-  const maxS = Number(s.maxScreensPerIp) || 3;
+  const maxS = Number(s.maxScreensPerIp) || 6;
 
-  if (Array.isArray(statusData.deviceGroups) && typeof window.updateDeviceManagerFromProfiles === "function") {
-    window.updateDeviceManagerFromProfiles(currentProfiles, statusData.deviceGroups, maxS);
+  if (typeof window.updateDeviceManagerFromProfiles === "function") {
+    window.updateDeviceManagerFromProfiles(
+      currentProfiles,
+      statusData.deviceGroups,
+      maxS,
+      {
+        customIpConfig: statusData.customIpConfig,
+        customGroupLeases: statusData.customGroupLeases,
+        ipSurchargeConfig: statusData.surchargeConfig || (statusData.settings && statusData.settings.surchargeConfig)
+      }
+    );
   }
 
   const badge = document.getElementById("screen-proxy-status-badge");
@@ -3635,7 +3677,7 @@ window.closeScreenProxyModal = closeScreenProxyModal;
 async function saveScreenProxySettings(showToastFeedback = true) {
   const modeOwner = document.getElementById("sp-mode-owner");
   const mode = (modeOwner && modeOwner.checked) ? "owner-queue" : "local-pool";
-  const maxScreensPerIp = Math.max(1, Math.min(20, Number(document.getElementById("sp-max-screens")?.value) || 3));
+  const maxScreensPerIp = Math.max(1, Math.min(20, Number(document.getElementById("sp-max-screens")?.value) || 6));
   const onlyGameTraffic = document.getElementById("sp-only-game-traffic")?.checked !== false;
   const localAssetCache = document.getElementById("sp-local-asset-cache")?.checked !== false;
   const poolText = document.getElementById("sp-pool-textarea")?.value || "";
@@ -3651,7 +3693,11 @@ async function saveScreenProxySettings(showToastFeedback = true) {
     if (res && res.success) {
       renderScreenProxyModal(res);
       if (Array.isArray(res.deviceGroups) && typeof window.updateDeviceManagerFromProfiles === "function") {
-        window.updateDeviceManagerFromProfiles(currentProfiles, res.deviceGroups, maxScreensPerIp);
+        window.updateDeviceManagerFromProfiles(currentProfiles, res.deviceGroups, maxScreensPerIp, {
+          customIpConfig: res.customIpConfig,
+          customGroupLeases: res.customGroupLeases,
+          ipSurchargeConfig: res.surchargeConfig || (res.settings && res.settings.surchargeConfig)
+        });
       }
       fetchProfiles();
       if (showToastFeedback) {
@@ -3699,11 +3745,11 @@ function initScreenProxyControls() {
   const maxScreensInput = document.getElementById("sp-max-screens");
   if (maxScreensInput) {
     maxScreensInput.addEventListener("input", () => {
-      const v = Math.max(1, Math.min(20, Number(maxScreensInput.value) || 3));
+      const v = Math.max(1, Math.min(20, Number(maxScreensInput.value) || 6));
       updateScreenProxyDynamicRatioLabels(v);
     });
     maxScreensInput.addEventListener("change", () => {
-      const v = Math.max(1, Math.min(20, Number(maxScreensInput.value) || 3));
+      const v = Math.max(1, Math.min(20, Number(maxScreensInput.value) || 6));
       maxScreensInput.value = String(v);
       updateScreenProxyDynamicRatioLabels(v);
       saveScreenProxySettings(true);
@@ -3712,7 +3758,7 @@ function initScreenProxyControls() {
 
   document.querySelectorAll(".btn-sp-max-preset").forEach(btn => {
     btn.addEventListener("click", () => {
-      const v = Math.max(1, Math.min(20, Number(btn.getAttribute("data-max")) || 3));
+      const v = Math.max(1, Math.min(20, Number(btn.getAttribute("data-max")) || 6));
       if (maxScreensInput) maxScreensInput.value = String(v);
       updateScreenProxyDynamicRatioLabels(v);
       saveScreenProxySettings(true);
@@ -3723,7 +3769,21 @@ function initScreenProxyControls() {
   if (btnOpenDeviceDrawer) {
     btnOpenDeviceDrawer.addEventListener("click", () => {
       closeScreenProxyModal();
-      if (typeof window.toggleDeviceDrawer === "function") {
+      if (typeof window.openDeviceDrawerTab === "function") {
+        window.openDeviceDrawerTab("auto");
+      } else if (typeof window.toggleDeviceDrawer === "function") {
+        window.toggleDeviceDrawer(true);
+      }
+    });
+  }
+
+  const btnOpenCustomIpDrawer = document.getElementById("btn-sp-open-custom-ip-drawer");
+  if (btnOpenCustomIpDrawer) {
+    btnOpenCustomIpDrawer.addEventListener("click", () => {
+      closeScreenProxyModal();
+      if (typeof window.openDeviceDrawerTab === "function") {
+        window.openDeviceDrawerTab("custom");
+      } else if (typeof window.toggleDeviceDrawer === "function") {
         window.toggleDeviceDrawer(true);
       }
     });

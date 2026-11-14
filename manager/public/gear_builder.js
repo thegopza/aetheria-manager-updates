@@ -103,7 +103,7 @@
         <header class="gb-head">
           <div>
             <h3>🛡️ เซ็ตอุปกรณ์ <span class="gb-plan-name"></span></h3>
-            <small>คลิกช่องสวมใส่ / เจม → เลือกไอเทม → ใส่เงินและเลเวลที่ต้องถึงก่อน · <b>🕳️</b> = เจาะรู · <b>+</b> = ตีบวก · <b>🃏</b> = ใส่การ์ด · บอททำทีละรายการตามลำดับ · เจม % สูงกว่าที่ตั้งก็นับว่าผ่าน</small>
+            <small>คลิกช่องสวมใส่ / เจม → เลือกไอเทม → ใส่เงินและเลเวลที่ต้องถึงก่อน · <b>🕳️</b> = เจาะรู · <b>+</b> = ตีบวก · <b>🃏</b> = ใส่การ์ด · ของในกระเป๋าที่ตรงกับเซ็ตจะสวมให้ทันทีไม่ต้องรอคิว · เจม % สูงกว่าที่ตั้งก็นับว่าผ่าน</small>
           </div>
           <button type="button" class="gb-x" data-gb="cancel" aria-label="ปิด">✕</button>
         </header>
@@ -360,7 +360,7 @@
         </div>
         <div class="gb-conds">
           <label class="gb-zeny" title="บอทเริ่มรายการนี้เมื่อมีเงินในตัวถึงจำนวนนี้">เมื่อเงิน ≥ <input type="text" inputmode="numeric" data-gb="zeny" data-id="${esc(st.id)}" value="${num(st.zeny)}"> z</label>
-          ${st.kind !== 'refine' ? `<label class="gb-zeny" title="เพดานราคาสูงสุดที่ยอมซื้อจากตลาด (0 = ใช้ค่าเดียวกับ เมื่อเงิน ≥ หักเงินสำรอง)">ซื้อไม่เกิน ≤ <input type="text" inputmode="numeric" data-gb="maxprice" data-id="${esc(st.id)}" value="${num(st.maxPrice || 0)}"> z</label>` : ''}
+          ${st.kind !== 'refine' ? `<label class="gb-zeny" title="เพดานราคาสูงสุดที่ยอมซื้อจากตลาด (0 = ไม่จำกัดเพดาน ซื้อชิ้นที่ถูกสุดในตลาดเมื่อเงินในตัวพอจ่ายหลังหักเงินสำรอง)">ซื้อไม่เกิน ≤ <input type="text" inputmode="numeric" data-gb="maxprice" data-id="${esc(st.id)}" value="${num(st.maxPrice || 0)}"> z</label>` : ''}
           <label class="gb-lv" title="และ Base Lv. ถึงค่านี้ (0 = ไม่กำหนด)">เลเวล ≥ <input type="text" inputmode="numeric" data-gb="lv" data-id="${esc(st.id)}" value="${Number(st.minLevel) || 0}"></label>
         </div>
         <div class="gb-step-btns">

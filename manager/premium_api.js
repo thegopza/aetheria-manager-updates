@@ -389,10 +389,21 @@ function decide(snap, cfg, gateOpen, nowMs, timing) {
   }
   const budget = Math.max(0, (Number(snap.zeny) || 0) - Math.max(0, Number(cfg.reserveZeny) || 0));
   const neededZeny = estimateTokensZenyCost(ex, need);
-  const shortfallZeny = Math.max(0, neededZeny - budget);
+  const requiredFullZeny = (inConsolidateWindow && !prebuy && neededZeny > 0) ? Math.ceil(neededZeny * 1.01) : neededZeny;
+  const shortfallZeny = Math.max(0, requiredFullZeny - budget);
   const consMeta = inConsolidateWindow && shortfallZeny > 0
-    ? { needsConsolidation: true, neededZeny, shortfallZeny }
+    ? { needsConsolidation: true, neededZeny: requiredFullZeny, shortfallZeny }
     : {};
+  if (!(ex.asks && ex.asks.length) || neededZeny <= 0) {
+    return Object.assign(base, consMeta, { action: 'wait', need, text: 'ยังไม่มีคนขาย Token' });
+  }
+  if (!prebuy && inConsolidateWindow && shortfallZeny > 0) {
+    return Object.assign(base, consMeta, {
+      action: 'wait',
+      need,
+      text: `รอเงินรวมครบก้อนเดียว (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
+    });
+  }
   if (budget <= 0) {
     const waitTxt = inConsolidateWindow && shortfallZeny > 0
       ? `รอรวมเงินซื้อ VIP (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
@@ -720,8 +731,16 @@ function createPremiumService(opts) {
     }
 
     const neededZeny = estimateTokensZenyCost(ex, needTokens);
-    const ownUsable = Math.max(0, (Number(snap.zeny) || 0) - Math.max(0, Number(settings.reserveZeny) || 0));
-    const shortfallZeny = Math.max(0, neededZeny - ownUsable);
+    if (neededZeny <= 0 || !(ex.asks && ex.asks.length)) {
+      if (R.decision) {
+        R.decision.text = `รอรวมเงินซื้อ VIP (< ${underHours} ชม.): ยังไม่มีคนตั้งขาย Token ในตลาด`;
+      }
+      return { ok: false, started: false, reason: 'no-market-asks', error: 'ยังไม่มีคนตั้งขาย Token ในตลาด' };
+    }
+    const reserve = Math.max(0, Number(settings.reserveZeny) || 0);
+    const requiredTotalZeny = Math.ceil(neededZeny * 1.01);
+    const ownUsable = Math.max(0, (Number(snap.zeny) || 0) - reserve);
+    const shortfallZeny = Math.max(0, requiredTotalZeny - ownUsable);
     if (shortfallZeny <= 0 && !isManualForce) {
       return { ok: false, started: false, reason: 'enough-own-zeny' };
     }
@@ -745,6 +764,8 @@ function createPremiumService(opts) {
     senderCandidates.sort((a, b) => b.transferable - a.transferable);
     const totalTransferable = senderCandidates.reduce((sum, c) => sum + c.transferable, 0);
     const recvDisplayName = snap.name || recvProfile.lastCharName || recvProfile.name;
+    const canFinishFullVip = totalTransferable >= shortfallZeny;
+    const missingZeny = Math.max(0, shortfallZeny - totalTransferable);
 
     lastConsolidationSummary = {
       at: now(),
@@ -752,8 +773,12 @@ function createPremiumService(opts) {
       receiverId: recvProfile.id,
       receiverName: recvDisplayName,
       needTokens,
+      neededZeny: requiredTotalZeny,
+      ownUsable,
       shortfallZeny,
       totalTransferable,
+      missingZeny,
+      readyToConsolidate: canFinishFullVip,
       senderCount: senderCandidates.length,
       keepZeny,
       underHours
@@ -761,36 +786,33 @@ function createPremiumService(opts) {
 
     if (!senderCandidates.length || totalTransferable <= 0) {
       if (R.decision) {
-        R.decision.text = `รอรวมเงินซื้อ VIP (< ${underHours} ชม.): จออื่นยังไม่มีเงินเกิน ${keepZeny.toLocaleString()} z`;
+        R.decision.text = `รอเงินรวมครบก้อนเดียว (< ${underHours} ชม.): จออื่นยังไม่มีเงินเกิน ${keepZeny.toLocaleString()} z (ขาดอีก ~${shortfallZeny.toLocaleString()} z)`;
       }
       return {
         ok: false,
         started: false,
         reason: 'no-senders-with-excess-zeny',
-        error: `ไม่มีจออื่นที่มี VIP และมีเงินเกิน ${keepZeny.toLocaleString()} z ให้ดึงมารวม`
+        error: `ไม่มีจออื่นที่มี VIP และมีเงินเกิน ${keepZeny.toLocaleString()} z ให้ดึงมารวม (ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
       };
     }
 
-    const cheapestAsk = Number(ex.bestAsk) || (ex.asks && ex.asks[0] && ex.asks[0].price) || 25000;
-    const minBatchCost = cheapestAsk * Math.min(needTokens, T.minBatch);
-    const canFinishFullVip = totalTransferable >= shortfallZeny * 0.95;
-    const canBuyMinBatch = (totalTransferable + ownUsable) >= minBatchCost;
-    const partialCooldownPassed = !R.lastPartialConsolidateAt || (now() - R.lastPartialConsolidateAt >= T.partialConsolidateCooldownMs);
-
-    if (!isManualForce && !canFinishFullVip && (!canBuyMinBatch || !partialCooldownPassed)) {
+    const allowPartial = Boolean(triggerOpts.allowPartial);
+    if (!canFinishFullVip && !allowPartial) {
       if (R.decision) {
-        R.decision.text = `รอรวมเงินซื้อ VIP (< ${underHours} ชม.): เงินดึงได้ ${totalTransferable.toLocaleString()} / ขาดอีก ${shortfallZeny.toLocaleString()} z`;
+        R.decision.text = `รอเงินรวมครบก้อนเดียว (< ${underHours} ชม.): ดึงจากจออื่นได้ ${totalTransferable.toLocaleString()} / ขาดอีก ${shortfallZeny.toLocaleString()} z (ยังขาดอีก ~${missingZeny.toLocaleString()} z)`;
       }
       return {
         ok: false,
         started: false,
-        reason: 'waiting-for-more-zeny',
+        reason: 'waiting-for-full-zeny',
+        error: `เงินรวมทุกจอยังไม่พอซื้อ VIP ครบแพ็กเกจ (${recvDisplayName}: ดึงจากจออื่นได้ ${totalTransferable.toLocaleString()} / ขาดอีก ${shortfallZeny.toLocaleString()} z · ยังขาดอีก ~${missingZeny.toLocaleString()} z)`,
         totalTransferable,
-        shortfallZeny
+        shortfallZeny,
+        missingZeny
       };
     }
 
-    const targetCollect = Math.ceil(Math.max(shortfallZeny, minBatchCost) * 1.35) + Math.max(0, Number(settings.reserveZeny) || 0);
+    const targetCollect = Math.ceil(shortfallZeny * 1.25) + reserve;
     const selectedSenders = [];
     let accZeny = 0;
     let extraBackups = 0;
@@ -882,10 +904,8 @@ function createPremiumService(opts) {
               return;
             }
           } catch (e) {}
-          R.lastPartialConsolidateAt = now();
-        } else {
-          R.lastConsolidateFailAt = now();
         }
+        R.lastConsolidateFailAt = now();
       }
     });
 

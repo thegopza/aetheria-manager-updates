@@ -100,13 +100,14 @@ const { createBrowserMode, extractPelicanStorageFromLevelDb, mergeAuthConfigStri
 const { createDiscordBotService } = require("./discord_bot");
 const { allowLocalRequest } = require("./local_request_security");
 const { createHumanCheckSolver } = require("./human_check_solver");
-const humanCheckSolver = createHumanCheckSolver({ dataDir: path.join(__dirname, "data"), ...(TEST_INSTANCE ? { requestJSON: require('./test_isolation').createFixtureRequestJSON(testFixturePort) } : {}) });
+const humanCheckSolver = createHumanCheckSolver({ dataDir: path.join(__dirname, "data"), requireUserLogin: true, ...(TEST_INSTANCE ? { requestJSON: require('./test_isolation').createFixtureRequestJSON(testFixturePort) } : {}) });
 const { createProxyRegisterService } = require("./proxy_register");
 const proxyRegister = createProxyRegisterService({ dataDir: path.join(__dirname, "data"), solver: humanCheckSolver });
 const { createScreenProxyManager } = require("./screen_proxy_manager");
 const imageBoardSolver = require('./image_board_solver');
 const { createScriptCoordinator } = require('./script_coordinator');
 const { loadScriptRollout, saveScriptRolloutSelection } = require('./script_rollout');
+const { createRemoteFleetService } = require('./remote_fleet');
 const PROFILES_BACKUP_FILE = path.join(__dirname, "data", "profiles.backup.json");
 const PLANS_BACKUP_FILE = path.join(__dirname, "data", "plans.backup.json");
 const PRESETS_BACKUP_FILE = path.join(__dirname, "data", "presets.backup.json");
@@ -5570,6 +5571,8 @@ const scriptRollout = loadScriptRollout({dataDir:path.join(__dirname,'data'),ser
 const legacyScriptCoordinator = createScriptCoordinator({ dataDir: path.join(__dirname, 'data'), loadProfiles, evalProfilePort, service: humanCheckSolver, ...scriptRollout, reloadRollout:()=>loadScriptRollout({dataDir:path.join(__dirname,'data'),serviceOrigin:humanCheckSolver.serviceOrigin}) });
 const {createOfflineCoordinator}=require('./offline_coordinator');
 const offlineCoordinator = createOfflineCoordinator({dataDir:path.join(__dirname,'data'),loadProfiles,evalProfilePort,service:humanCheckSolver,trustedKeys:require('./script_release_keys'),legacyCoordinator:legacyScriptCoordinator,autoBindWallet:false});
+humanCheckSolver.setDeviceNameProvider?.(() => getEffectiveDeviceNickname());
+humanCheckSolver.setOnAccountChanged?.(() => { offlineCoordinator.cycle?.().catch(() => {}); });
 
 const { createCoordinatedScriptCoordinator } = require('./coordinated_coordinator');
 
@@ -7082,7 +7085,7 @@ async function pollCentralCommands() {
   try {
     let accountSettings = humanCheckSolver.loadSettings();
     const deviceNickname = getEffectiveDeviceNickname();
-    if ((!accountSettings || !accountSettings.accountId) && !TEST_INSTANCE) {
+    if ((!accountSettings || !accountSettings.accountId) && !accountSettings?.requiresLogin && !TEST_INSTANCE) {
       await humanCheckSolver.ensureAccount?.(deviceNickname).catch(() => {});
       accountSettings = humanCheckSolver.loadSettings();
     }
@@ -7133,6 +7136,32 @@ async function pollCentralCommands() {
 }
 setInterval(pollCentralCommands, 3000);
 
+const remoteFleet = createRemoteFleetService({
+  getPort: () => PORT,
+  publicDir: PUBLIC_DIR,
+  humanCheckSolver,
+  loadProfiles,
+  runningProcesses,
+  browserMode,
+  isProcessAlive,
+  queryClientState,
+  clientStateCacheByPort,
+  updateZenyRateTracker,
+  getEffectiveDeviceNickname,
+  setLocalDeviceNickname: (nick) => {
+    const clean = typeof nick === 'string' ? nick.trim().slice(0, 32) : '';
+    if (!clean) return;
+    const st = installer.loadSettings() || {};
+    st.deviceNickname = clean;
+    installer.saveSettings(st);
+    if (discordService && typeof discordService.setDeviceNickname === 'function') {
+      discordService.setDeviceNickname(clean);
+    }
+  },
+  managerVersion: '4.58.0'
+});
+humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
+
 const server = http.createServer(async (req, res) => {
   req.setEncoding('utf8');   // request bodies are built with += (Thai split across chunks -> U+FFFD)
   if (!allowLocalRequest(req, PORT)) {
@@ -7155,6 +7184,25 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(data));
   };
+
+  if (req.headers['x-pmhee-remote-relay'] === '1' && (
+    pathname === '/api/auth/logout' ||
+    pathname === '/api/auth/login' ||
+    pathname === '/api/auth/register' ||
+    pathname === '/api/fleet' ||
+    pathname.startsWith('/api/fleet/') ||
+    pathname === '/api/game-install/browse' ||
+    pathname === '/api/test' ||
+    pathname.startsWith('/api/test/')
+  )) {
+    return sendJSON({
+      success: false,
+      code: pathname.startsWith('/api/auth/') ? 'REMOTE_AUTH_LOCKED' : 'REMOTE_ROUTE_BLOCKED',
+      error: pathname.startsWith('/api/auth/')
+        ? 'ไม่สามารถออกจากระบบหรือสลับบัญชีระหว่างการควบคุมระยะไกลได้'
+        : 'ไม่อนุญาตให้เรียกใช้งานเส้นทางนี้จากระยะไกล'
+    }, 403);
+  }
 
   if (TEST_INSTANCE && pathname === '/api/test/outbound-blocked' && req.method === 'GET') {
     return sendJSON({ success: true, blocked: testIsolation.blocked() });
@@ -7218,11 +7266,12 @@ const server = http.createServer(async (req, res) => {
   if (pathname === '/api/access/status' && (req.method === 'GET' || req.method === 'POST')) {
     const forceSync = parsedUrl.searchParams.get('sync') === '1' || req.method === 'POST';
     const currentNick = getEffectiveDeviceNickname();
-    if (forceSync && !TEST_INSTANCE && typeof humanCheckSolver.syncAccessStatus === 'function') {
+    const preSyncState = typeof humanCheckSolver.getAccessState === 'function' ? humanCheckSolver.getAccessState() : {};
+    if (forceSync && preSyncState.accountId && typeof humanCheckSolver.syncAccessStatus === 'function') {
       const prevStatus = humanCheckSolver.getAccessStatus?.() || 'approved';
       await humanCheckSolver.syncAccessStatus(currentNick).catch(() => {});
       const afterStatus = humanCheckSolver.getAccessStatus?.() || 'approved';
-      if (afterStatus === 'revoked' && prevStatus !== 'revoked') {
+      if (afterStatus === 'revoked' && prevStatus !== 'revoked' && !TEST_INSTANCE) {
         await stopAllProfiles().catch(() => {});
       }
     }
@@ -7236,19 +7285,28 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (pathname === '/api/access/request' && req.method === 'POST') {
+    req.resume();
+    return sendJSON({
+      success: false,
+      code: 'USE_USER_REGISTER',
+      error: 'ยกเลิกระบบขออนุมัติรายเครื่องแล้ว กรุณาสมัคร ID ผู้ใช้งาน (Username / Password) เพื่อให้แอดมินอนุมัติ ID แทน'
+    }, 410);
+  }
+
+  if (pathname === '/api/auth/register' && req.method === 'POST') {
     let body = '';
     req.on('data', c => {
       body += c;
-      if (Buffer.byteLength(body, 'utf8') > 8192) req.destroy();
+      if (Buffer.byteLength(body, 'utf8') > 16384) req.destroy();
     });
     req.on('end', async () => {
       try {
         const data = JSON.parse(body || '{}');
-        const st = installer.loadSettings() || {};
         const rawNick = typeof data.nickname === 'string' && data.nickname.trim()
           ? data.nickname.trim().slice(0, 32)
           : (typeof data.deviceName === 'string' && data.deviceName.trim() ? data.deviceName.trim().slice(0, 32) : '');
         if (rawNick) {
+          const st = installer.loadSettings() || {};
           st.deviceNickname = rawNick;
           installer.saveSettings(st);
           if (discordService && typeof discordService.setDeviceNickname === 'function') {
@@ -7256,21 +7314,14 @@ const server = http.createServer(async (req, res) => {
           }
         }
         const effectiveNick = getEffectiveDeviceNickname();
-        const note = typeof data.note === 'string' ? data.note.trim().slice(0, 240) : '';
-        if (TEST_INSTANCE && !data.allowRemoteInTest) {
-          return sendJSON({
-            success: true,
-            nickname: effectiveNick,
-            defaultNickname: getDefaultDeviceNickname(),
-            ...(typeof humanCheckSolver.getAccessState === 'function' ? humanCheckSolver.getAccessState() : {}),
-            accessRequestedAt: Date.now(),
-            accessNote: note
-          });
-        }
-        const result = await humanCheckSolver.requestMachineAccess({
+        const result = await humanCheckSolver.registerUserAccount({
+          username: String(data.username || '').trim(),
+          password: String(data.password || ''),
           deviceName: effectiveNick,
-          note
+          note: typeof data.note === 'string' ? data.note.trim().slice(0, 240) : ''
         });
+        offlineCoordinator.cycle?.().catch(() => {});
+        remoteFleet.poke();
         return sendJSON({
           success: true,
           nickname: effectiveNick,
@@ -7280,16 +7331,80 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         return sendJSON({
           success: false,
-          error: e?.message || 'ไม่สามารถส่งคำขออนุมัติไปยังเซิร์ฟเวอร์ได้ กรุณาคัดลอกชื่อเครื่องและ HWID ส่งให้แอดมินโดยตรง'
-        }, 502);
+          code: e?.code || 'AUTH_REGISTER_FAILED',
+          error: e?.message || 'สมัครบัญชีไม่สำเร็จ'
+        }, e?.status && e.status >= 400 ? e.status : 400);
       }
     });
     return;
   }
 
-  // Gatekeeper: Block game launch & bot control routes if machine access is pending or revoked
-  const currentMachineAccessStatus = typeof humanCheckSolver.getAccessStatus === 'function' ? humanCheckSolver.getAccessStatus() : 'approved';
-  if (currentMachineAccessStatus !== 'approved') {
+  if (pathname === '/api/auth/login' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => {
+      body += c;
+      if (Buffer.byteLength(body, 'utf8') > 16384) req.destroy();
+    });
+    req.on('end', async () => {
+      try {
+        const data = JSON.parse(body || '{}');
+        const rawNick = typeof data.nickname === 'string' && data.nickname.trim()
+          ? data.nickname.trim().slice(0, 32)
+          : (typeof data.deviceName === 'string' && data.deviceName.trim() ? data.deviceName.trim().slice(0, 32) : '');
+        if (rawNick) {
+          const st = installer.loadSettings() || {};
+          st.deviceNickname = rawNick;
+          installer.saveSettings(st);
+          if (discordService && typeof discordService.setDeviceNickname === 'function') {
+            discordService.setDeviceNickname(rawNick);
+          }
+        }
+        const effectiveNick = getEffectiveDeviceNickname();
+        const result = await humanCheckSolver.loginUserAccount({
+          username: String(data.username || '').trim(),
+          password: String(data.password || ''),
+          deviceName: effectiveNick
+        });
+        offlineCoordinator.cycle?.().catch(() => {});
+        remoteFleet.poke();
+        return sendJSON({
+          success: true,
+          nickname: effectiveNick,
+          defaultNickname: getDefaultDeviceNickname(),
+          ...result
+        });
+      } catch (e) {
+        return sendJSON({
+          success: false,
+          code: e?.code || 'AUTH_LOGIN_FAILED',
+          error: e?.message || 'เข้าสู่ระบบไม่สำเร็จ'
+        }, e?.status && e.status >= 400 ? e.status : 401);
+      }
+    });
+    return;
+  }
+
+  if (pathname === '/api/auth/logout' && req.method === 'POST') {
+    if (!TEST_INSTANCE) {
+      await stopAllProfiles().catch(() => {});
+    }
+    const result = await humanCheckSolver.logoutUserAccount();
+    return sendJSON({
+      success: true,
+      nickname: getEffectiveDeviceNickname(),
+      defaultNickname: getDefaultDeviceNickname(),
+      ...result
+    });
+  }
+
+  // Multi-PC Fleet Card Dashboard & Remote Manager Relay — see remote_fleet.js
+  if (await remoteFleet.handleRoute(req, res, pathname, parsedUrl, sendJSON)) return;
+
+  // Gatekeeper: Block game launch & bot control routes if machine access is pending/revoked or logged out
+  const currentAccessStateObj = typeof humanCheckSolver.getAccessState === 'function' ? humanCheckSolver.getAccessState() : {};
+  const currentMachineAccessStatus = currentAccessStateObj.accessStatus || 'approved';
+  const requiresLogin = Boolean(currentAccessStateObj.requiresLogin || !currentAccessStateObj.isUserAccount || !currentAccessStateObj.username);
+  if (requiresLogin || currentMachineAccessStatus !== 'approved') {
     const isBlockedActionRoute = (
       (req.method === 'POST' && pathname === '/api/launch-all') ||
       (req.method === 'POST' && /^\/api\/profiles\/[^/]+\/launch$/.test(pathname)) ||
@@ -7299,12 +7414,15 @@ const server = http.createServer(async (req, res) => {
     if (isBlockedActionRoute) {
       return sendJSON({
         success: false,
-        code: currentMachineAccessStatus === 'revoked' ? 'ACCESS_REVOKED' : 'ACCESS_PENDING',
+        code: requiresLogin ? 'AUTH_LOGIN_REQUIRED' : (currentMachineAccessStatus === 'revoked' ? 'ACCESS_REVOKED' : 'ACCESS_PENDING'),
         accessStatus: currentMachineAccessStatus,
+        requiresLogin,
         machineHwidShort: humanCheckSolver.getMachineHwidShort?.() || '',
-        error: currentMachineAccessStatus === 'revoked'
-          ? 'สิทธิ์การใช้งานของเครื่องนี้ถูกระงับโดยผู้ดูแลระบบ กรุณาติดต่อแอดมิน'
-          : 'เครื่องนี้ยังไม่ได้รับอนุมัติสิทธิ์เข้าใช้งาน กรุณากดส่งคำขออนุมัติหรือแจ้งชื่อเครื่อง + HWID ให้แอดมิน'
+        error: requiresLogin
+          ? 'กรุณาเข้าสู่ระบบบัญชีผู้ใช้งาน (Username / Password) ก่อนเปิดบอท'
+          : (currentMachineAccessStatus === 'revoked'
+            ? 'สิทธิ์การใช้งานของบัญชี/เครื่องนี้ถูกระงับโดยผู้ดูแลระบบ กรุณาติดต่อแอดมิน'
+            : 'บัญชีนี้ยังไม่ได้รับอนุมัติสิทธิ์เข้าใช้งาน กรุณารอแอดมินอนุมัติหรือเข้าสู่ระบบด้วย ID ที่อนุมัติแล้ว')
       }, 403);
     }
   }
@@ -10248,7 +10366,7 @@ public class PmFocus {
           if (discordService && typeof discordService.setDeviceNickname === 'function') {
             discordService.setDeviceNickname(nextNick);
           }
-          if (!TEST_INSTANCE && typeof humanCheckSolver.syncAccessStatus === 'function') {
+          if (!TEST_INSTANCE && typeof humanCheckSolver.syncAccessStatus === 'function' && humanCheckSolver.getAccessState?.().accountId) {
             humanCheckSolver.syncAccessStatus(nextNick).catch(() => {});
           }
           const accessMeta = typeof humanCheckSolver.getAccessState === "function" ? humanCheckSolver.getAccessState() : {};
@@ -11011,6 +11129,7 @@ public class PmFocus {
 
 server.listen(PORT, "127.0.0.1", () => {
   scriptCoordinator.start();
+  if (!TEST_INSTANCE || process.env.PMHEE_ENABLE_FLEET_WORKER === '1') remoteFleet.start();
   if(!TEST_INSTANCE)botAutoUpdater.start();
   if(!TEST_INSTANCE)managerUpdater.start();
   planSync.start();
@@ -11040,3 +11159,4 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`🎮 Game executable: ${getGameExe()}`);
   console.log(`========================================================`);
 });
+server.once('close', () => { try { remoteFleet.stop(); } catch (_) {} });

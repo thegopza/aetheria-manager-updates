@@ -78,12 +78,14 @@ function installTestIsolation({ allowedPorts }) {
 // Replaces human_check_solver's HTTPS requestJSON in test instances: same contract (resolve parsed JSON on
 // success, reject with code/status otherwise) but only ever talks to the fixture mock on loopback.
 function createFixtureRequestJSON(port) {
-  return (route, payload, token) => new Promise((resolve, reject) => {
+  return (route, payload, token, opts = {}) => new Promise((resolve, reject) => {
     const data = payload === undefined || payload === null ? null : JSON.stringify(payload);
     const headers = { Accept: 'application/json', 'X-Pmhee-Fixture': '1' };
+    if (opts && opts.machineHwid) headers['X-Machine-Hwid'] = String(opts.machineHwid);
     if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
     if (token) headers.Authorization = 'Bearer ' + token;
-    const req = http.request({ host: '127.0.0.1', port, path: route, method: data ? 'POST' : 'GET', headers, timeout: 5000 }, res => {
+    const timeoutMs = Math.max(1000, Number(opts && opts.timeoutMs) || 5000);
+    const req = http.request({ host: '127.0.0.1', port, path: route, method: data ? 'POST' : 'GET', headers, timeout: timeoutMs }, res => {
       let body = ''; res.setEncoding('utf8');
       res.on('data', c => { body += c; });
       res.on('end', () => {

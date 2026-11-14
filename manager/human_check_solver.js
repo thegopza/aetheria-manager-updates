@@ -16,7 +16,7 @@ function getMachineFingerprint() {
   } catch (_) {}
   return crypto.createHash('sha256').update('PMhee.MachineFingerprint.v1|' + identity).digest('hex').toUpperCase();
 }
-function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl: testServiceUrl, localCatalogSeed = true } = {}) {
+function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl: testServiceUrl, localCatalogSeed = true, requireUserLogin = false } = {}) {
   const settingsFile = path.join(dataDir, 'human_check_settings.json');
   const accountFile = path.join(dataDir, 'aetheria_service_account.json');
   const walletSnapshotFile = path.join(dataDir, 'wallet_snapshot_v1.json');
@@ -41,24 +41,47 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   let enrollment = null;
   let offlineWallet = null;
   let onAccountChanged = null;
+  const onAccountChangedListeners = new Set();
+  function emitAccountChanged(newId, prevId) {
+    if (onAccountChanged) {
+      try { onAccountChanged(newId, prevId); } catch (_) {}
+    }
+    for (const fn of onAccountChangedListeners) {
+      try { fn(newId, prevId); } catch (_) {}
+    }
+  }
+  let deviceNameProvider = null;
   let lastCatalogAttempt = 0;
   let accessStatus = 'approved';
   let customRateUnits = null;
   let effectiveRateUnits = null;
   let accessRequestedAt = null;
   let accessNote = '';
+  let username = null;
+  let isUserAccount = false;
+  let loggedOutExplicitly = false;
   try {
     const saved = JSON.parse(fs.readFileSync(accountFile, 'utf8'));
-    if (saved.origin === base.origin && /^[a-f0-9]{64}$/.test(saved.token || '') && typeof saved.accountId === 'string' && (!saved.machineHwid || saved.machineHwid === machineHwid)) account = saved;
+    if (saved.origin === base.origin && (!saved.machineHwid || saved.machineHwid === machineHwid)) {
+      if (saved.loggedOutExplicitly && !saved.token) {
+        loggedOutExplicitly = true;
+      } else if (/^[a-f0-9]{64}$/.test(saved.token || '') && typeof saved.accountId === 'string') {
+        account = saved;
+        username = typeof saved.username === 'string' && saved.username ? saved.username : null;
+        isUserAccount = Boolean(saved.isUserAccount || username);
+      }
+    }
   } catch (_) {}
   try {
     const savedAccess = JSON.parse(fs.readFileSync(accessStateFile, 'utf8'));
-    if (savedAccess && savedAccess.origin === base.origin && savedAccess.machineHwid === machineHwid) {
+    if (savedAccess && savedAccess.origin === base.origin && savedAccess.machineHwid === machineHwid && !loggedOutExplicitly) {
       if (['approved', 'pending', 'revoked'].includes(savedAccess.accessStatus)) accessStatus = savedAccess.accessStatus;
       if (savedAccess.customRateUnits === null || Number.isSafeInteger(savedAccess.customRateUnits)) customRateUnits = savedAccess.customRateUnits;
       if (savedAccess.effectiveRateUnits === null || Number.isSafeInteger(savedAccess.effectiveRateUnits)) effectiveRateUnits = savedAccess.effectiveRateUnits;
       if (savedAccess.accessRequestedAt === null || Number.isSafeInteger(savedAccess.accessRequestedAt)) accessRequestedAt = savedAccess.accessRequestedAt;
       if (typeof savedAccess.accessNote === 'string') accessNote = savedAccess.accessNote;
+      if (!username && typeof savedAccess.username === 'string' && savedAccess.username) username = savedAccess.username;
+      if (!isUserAccount && savedAccess.isUserAccount) isUserAccount = true;
     }
   } catch (_) {}
   try{const saved=JSON.parse(fs.readFileSync(walletSnapshotFile,'utf8'));if(saved.origin===base.origin&&saved.accountId===account?.accountId&&Number.isSafeInteger(saved.balanceUnits)){balanceUnits=saved.balanceUnits;points=balanceUnits/100;if(Array.isArray(saved.topupHistory))topupHistory=saved.topupHistory;}}catch(_){}
@@ -96,6 +119,20 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       accessNote = result.accessNote;
       changed = true;
     }
+    if (result.username !== undefined) {
+      const nextU = typeof result.username === 'string' && result.username ? result.username : null;
+      if (nextU !== username) {
+        username = nextU;
+        changed = true;
+      }
+    }
+    if (result.isUserAccount !== undefined) {
+      const nextIsUser = Boolean(result.isUserAccount);
+      if (nextIsUser !== isUserAccount) {
+        isUserAccount = nextIsUser;
+        changed = true;
+      }
+    }
     if (changed) {
       try {
         atomicWrite(accessStateFile, {
@@ -107,10 +144,19 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
           effectiveRateUnits,
           accessRequestedAt,
           accessNote,
+          username,
+          isUserAccount,
           updatedAt: Date.now()
         });
       } catch (_) {}
     }
+  }
+  function computeRequiresLogin() {
+    if (loggedOutExplicitly && !account) return true;
+    if (requireUserLogin) {
+      return !account || !isUserAccount || !username;
+    }
+    return false;
   }
   function getAccessState() {
     return {
@@ -121,6 +167,9 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       effectiveRateUnits,
       accessRequestedAt,
       accessNote,
+      username,
+      isUserAccount,
+      requiresLogin: computeRequiresLogin(),
       accountId: account?.accountId || null
     };
   }
@@ -132,6 +181,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       answerDelayMs: Math.max(800, Math.min(10000, parseInt(s.answerDelayMs, 10) || 1800)),
       pointSystemEnabled: true, points: offlineWallet ? offlineWallet.balance()/100 : points, balanceUnits: offlineWallet ? offlineWallet.balance() : balanceUnits, unitScale: 100, pointsPerSolve: localMatcher.ready() ? 0 : pointsPerSolve, localCatalogReady: localMatcher.ready(), pointsPerBaht: 1,
       machineHwid, machineHwidShort, accessStatus, customRateUnits, effectiveRateUnits, accessRequestedAt, accessNote,
+      username, isUserAccount, requiresLogin: computeRequiresLogin(),
       topupHistory, serviceAvailable, serviceOrigin: base.origin,
       accountId: account?.accountId || null
     };
@@ -148,13 +198,19 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     });
     return loadSettings();
   }
-  const requestJSON = testRequest || ((route, payload, token) => new Promise((resolve, reject) => {
-    const responseLimit = ['/v1/aetheria/script/payload-chunk','/v1/aetheria/offline/payload-chunk','/v1/aetheria/script/catalog'].includes(route) ? 1024 * 1024 : 131072;
+  const requestJSON = testRequest || ((route, payload, token, opts = {}) => new Promise((resolve, reject) => {
+    const responseLimit = Number(opts && opts.responseLimit) || (['/v1/aetheria/script/payload-chunk','/v1/aetheria/offline/payload-chunk','/v1/aetheria/script/catalog'].includes(route) ? 1024 * 1024 : 131072);
     const data = payload == null ? null : JSON.stringify(payload);
-    const headers = { 'Accept': 'application/json', 'X-Machine-Hwid': machineHwid };
+    const activeDevName = String((typeof deviceNameProvider === 'function' ? deviceNameProvider() : '') || machineName || '').trim().slice(0, 80);
+    const headers = {
+      'Accept': 'application/json',
+      'X-Machine-Hwid': machineHwid,
+      'X-Device-Name-B64': Buffer.from(activeDevName, 'utf8').toString('base64url')
+    };
     if (token) headers.Authorization = 'Bearer ' + token;
     if (data) { headers['Content-Type'] = 'application/json'; headers['Content-Length'] = Buffer.byteLength(data); }
-    const req = https.request(new URL(route, base), { method: data ? 'POST' : 'GET', headers, timeout: 15000 }, res => {
+    const timeoutMs = Math.max(1000, Math.min(60000, Number(opts && opts.timeoutMs) || 15000));
+    const req = https.request(new URL(route, base), { method: data ? 'POST' : 'GET', headers, timeout: timeoutMs }, res => {
       let body = '';
       res.setEncoding('utf8');
       res.on('error', reject);
@@ -182,6 +238,12 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   }));
   async function ensureAccount(preferredDeviceName) {
     if (account) return account;
+    if (loggedOutExplicitly || requireUserLogin) {
+      const err = new Error('กรุณาเข้าสู่ระบบบัญชีผู้ใช้งาน');
+      err.status = 401;
+      err.code = 'AUTH_LOGIN_REQUIRED';
+      throw err;
+    }
     if (!enrollment) enrollment = (async () => {
       const payload = { machineHwid, machineName };
       if (typeof preferredDeviceName === 'string' && preferredDeviceName.trim()) {
@@ -189,9 +251,10 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       }
       const result = await requestJSON('/v1/aetheria/enroll', payload, null);
       if (!result?.success || typeof result.accountId !== 'string' || !/^[a-f0-9]{64}$/.test(result.token || '')) throw new Error('Invalid account enrollment');
-      const saved = { origin: base.origin, accountId: result.accountId, token: result.token, machineHwid };
+      const saved = { origin: base.origin, accountId: result.accountId, token: result.token, machineHwid, username: result.username || null, isUserAccount: Boolean(result.isUserAccount) };
       atomicWrite(accountFile, saved);
       account = saved;
+      loggedOutExplicitly = false;
       applyAccessMeta(result);
       if (result.schemaVersion === 2 && result.unitScale === 100 && Number.isSafeInteger(result.balanceUnits)) {
         updateBalance(result);
@@ -215,13 +278,27 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       }
       if (e && e.status === 401 && (e.code === 'ACCOUNT_HWID_MISMATCH' || e.code === 'UNAUTHORIZED')) {
         const prevAccountId = account?.accountId || null;
+        const wasUserAccount = Boolean(isUserAccount || account?.isUserAccount);
         account = null;
-        try { fs.unlinkSync(accountFile); } catch (_) {}
         try { fs.unlinkSync(walletSnapshotFile); } catch (_) {}
+        if (wasUserAccount || requireUserLogin) {
+          username = null;
+          isUserAccount = false;
+          loggedOutExplicitly = true;
+          try { atomicWrite(accountFile, { origin: base.origin, machineHwid, loggedOutExplicitly: true }); } catch (_) {}
+          if (prevAccountId) {
+            emitAccountChanged(null, prevAccountId);
+          }
+          const err = new Error('เซสชันบัญชีผู้ใช้หมดอายุ กรุณาเข้าสู่ระบบใหม่อีกครั้ง');
+          err.status = 401;
+          err.code = 'AUTH_LOGIN_REQUIRED';
+          throw err;
+        }
+        try { fs.unlinkSync(accountFile); } catch (_) {}
         try {
           const fresh = await ensureAccount();
-          if (onAccountChanged && fresh?.accountId && fresh.accountId !== prevAccountId) {
-            try { onAccountChanged(fresh.accountId, prevAccountId); } catch (_) {}
+          if (fresh?.accountId && fresh.accountId !== prevAccountId) {
+            emitAccountChanged(fresh.accountId, prevAccountId);
           }
           const retried = await requestJSON(route, payload, fresh.token);
           serviceAvailable = true;
@@ -300,6 +377,98 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
       deviceName: res?.deviceName || cleanName
     };
   }
+  async function completeUserAuth(route, payload) {
+    const cleanName = (typeof payload?.deviceName === 'string' && payload.deviceName.trim())
+      ? payload.deviceName.trim().slice(0, 64)
+      : ((typeof deviceNameProvider === 'function' ? deviceNameProvider() : '') || machineName);
+    const res = await requestJSON(route, {
+      ...payload,
+      machineHwid,
+      machineName: cleanName,
+      deviceName: cleanName
+    }, null);
+    if (!res?.success || typeof res.accountId !== 'string' || !/^[a-f0-9]{64}$/.test(res.token || '')) {
+      throw new Error(res?.message || 'การยืนยันตัวตนไม่สำเร็จ');
+    }
+    const prevAccountId = account?.accountId || null;
+    account = {
+      origin: base.origin,
+      accountId: res.accountId,
+      token: res.token,
+      machineHwid,
+      username: res.username || payload.username,
+      isUserAccount: true,
+      loggedOutExplicitly: false
+    };
+    loggedOutExplicitly = false;
+    username = res.username || payload.username;
+    isUserAccount = true;
+    serviceAvailable = true;
+    atomicWrite(accountFile, account);
+    applyAccessMeta(res);
+    if (Number.isSafeInteger(res.balanceUnits)) {
+      updateBalance({ ...res, schemaVersion: 2, unitScale: 100 });
+    }
+    if (res.accountId !== prevAccountId) {
+      emitAccountChanged(res.accountId, prevAccountId);
+    }
+    return {
+      success: true,
+      ...getAccessState(),
+      deviceName: res.deviceName || cleanName,
+      balanceUnits: Number.isSafeInteger(res.balanceUnits) ? res.balanceUnits : balanceUnits,
+      mergedLegacyCount: Number(res.mergedLegacyCount || 0),
+      mergedDeltaUnits: Number(res.mergedDeltaUnits || 0)
+    };
+  }
+  async function registerUserAccount({ username: u, password, deviceName, note } = {}) {
+    return completeUserAuth('/v1/aetheria/machine/auth-register', { username: u, password, deviceName, note });
+  }
+  async function loginUserAccount({ username: u, password, deviceName } = {}) {
+    return completeUserAuth('/v1/aetheria/machine/auth-login', { username: u, password, deviceName });
+  }
+  async function logoutUserAccount() {
+    const prevToken = account?.token || null;
+    const prevAccountId = account?.accountId || null;
+    if (prevToken) {
+      try { await requestJSON('/v1/aetheria/machine/auth-logout', {}, prevToken); } catch (_) {}
+    }
+    account = null;
+    username = null;
+    isUserAccount = false;
+    loggedOutExplicitly = true;
+    accessStatus = 'approved';
+    customRateUnits = null;
+    effectiveRateUnits = null;
+    accessRequestedAt = null;
+    accessNote = '';
+    balanceUnits = null;
+    points = 0;
+    try { atomicWrite(accountFile, { origin: base.origin, machineHwid, loggedOutExplicitly: true }); } catch (_) {}
+    try { fs.unlinkSync(walletSnapshotFile); } catch (_) {}
+    try { fs.unlinkSync(accessStateFile); } catch (_) {}
+    if (prevAccountId) {
+      emitAccountChanged(null, prevAccountId);
+    }
+    return { success: true, ...getAccessState() };
+  }
+  async function fleetRequest(route, payload, opts = {}) {
+    if (!/^\/v1\/aetheria\/machine\/fleet\/(?:poll|reply|machines|request|rename|remove)$/.test(route)) {
+      throw new Error('Unsupported fleet route');
+    }
+    if (loggedOutExplicitly || !account?.token || !isUserAccount || !username) {
+      const err = new Error('กรุณาเข้าสู่ระบบด้วยบัญชีผู้ใช้ก่อนใช้งานระบบควบคุมหลายเครื่อง');
+      err.status = 401;
+      err.code = 'USER_ACCOUNT_REQUIRED';
+      throw err;
+    }
+    const result = await requestJSON(route, payload, account.token, {
+      timeoutMs: Math.max(5000, Math.min(40000, Number(opts && opts.timeoutMs) || 25000)),
+      responseLimit: Math.max(131072, Math.min(16 * 1024 * 1024, Number(opts && opts.responseLimit) || 8 * 1024 * 1024))
+    });
+    if (result && typeof result === 'object') applyAccessMeta(result);
+    return result;
+  }
   async function solveHumanCheck(prompt, options = [], items = null, requestId = crypto.randomUUID()) {
     if (account && Date.now() - lastCatalogAttempt > 3600000) {
       lastCatalogAttempt = Date.now();
@@ -352,12 +521,15 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     get serviceOrigin() { return base.origin; },
     setOfflineWallet(value){offlineWallet=value||null;},
     setOnAccountChanged(fn){onAccountChanged=typeof fn==='function'?fn:null;},
+    addAccountChangedListener(fn){if(typeof fn==='function')onAccountChangedListeners.add(fn);return ()=>onAccountChangedListeners.delete(fn);},
+    setDeviceNameProvider(fn){deviceNameProvider=typeof fn==='function'?fn:null;},
     applyOfflineBalance(value){if(offlineWallet&&Number.isSafeInteger(value)){balanceUnits=value;points=value/100;}},
     applyOfflineWalletSnapshot(result){if(offlineWallet&&result?.unitScale===100&&Number.isSafeInteger(result.balanceUnits))updateBalance({...result,schemaVersion:2});},
     isRemoteService: true, loadSettings, saveSettings,
     publicSettings: (s = loadSettings()) => Object.fromEntries([
       'autoAnswer', 'answerDelayMs', 'pointSystemEnabled', 'points', 'pointsPerSolve',
       'pointsPerBaht', 'machineHwid', 'machineHwidShort', 'accessStatus', 'customRateUnits', 'effectiveRateUnits', 'accessRequestedAt', 'accessNote',
+      'username', 'isUserAccount', 'requiresLogin',
       'topupHistory', 'serviceAvailable', 'serviceOrigin', 'accountId', 'balanceUnits', 'unitScale', 'localCatalogReady'
     ].map(key => [key, s[key]])),
     refreshBalance, solveHumanCheck, redeemTrueMoneyVoucher, getMachineFingerprint, reportSecurityEvent, recoverOfflineCredit,
@@ -369,6 +541,10 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     ensureAccount: (preferredDeviceName) => ensureAccount(preferredDeviceName),
     syncAccessStatus,
     requestMachineAccess,
+    registerUserAccount,
+    loginUserAccount,
+    logoutUserAccount,
+    fleetRequest,
     serviceRequest: (route, payload) => {
       if (route !== '/v1/aetheria/health' && !/^\/v1\/aetheria\/(?:script|usage|billing|proxy|offline|machine)\/[a-z-]+(?:\/[a-z-]+)?$/.test(route)) throw new Error('Unsupported coordinator route');
       return call(route, payload);

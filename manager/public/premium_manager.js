@@ -156,7 +156,7 @@
           <label class="pm-opt-toggle pm-opt-consolidate" for="pm-consolidate-before">
             <div class="pm-opt-txt">
               <b>🤝 รวมเงินซื้อก่อนหมด</b>
-              <small>รวมเงินให้ตัวที่ VIP ใกล้หมดเพื่อซื้อ Token จนได้ VIP แล้วหยุดทันที</small>
+              <small>รอจนเงินรวมทุกจอพอซื้อครบแพ็กเกจก่อน จึงเริ่มเทรดรวดเดียวแล้วต่อ VIP ทันที</small>
             </div>
             <span class="pm-switch"><input type="checkbox" id="pm-consolidate-before" data-set="consolidateBeforeExpire"><span></span></span>
           </label>
@@ -496,13 +496,25 @@
           const firstUrg = urgentClients[0];
           const uName = firstUrg.charName || firstUrg.name;
           const sfTxt = firstUrg.shortfallZeny ? ` (ขาดอีก ~${fmt(firstUrg.shortfallZeny)} z)` : '';
-          setHtml(
-            quickConsBanner,
-            `<div class="pm-cons-ready">
-              <span>⚡ พบ <b>${urgentClients.length}</b> ตัวละครที่ VIP เหลือ &lt; ${esc(underHoursVal)} ชม. · คิวถัดไป: <b>${esc(uName)}</b>${sfTxt}</span>
-              <button type="button" class="pm-cons-now-btn" data-cons-action="now" data-profile-id="${esc(firstUrg.id)}">🤝 รวมเงินซื้อทันที</button>
-            </div>`
-          );
+          const sum = data.consolidationSummary;
+          const isWaitingFull = Boolean(sum && String(sum.receiverId) === String(firstUrg.id) && sum.readyToConsolidate === false);
+          if (isWaitingFull) {
+            setHtml(
+              quickConsBanner,
+              `<div class="pm-cons-ready">
+                <span>⏳ รอเงินรวมครบก่อนเทรดครั้งเดียว: คิวถัดไป <b>${esc(uName)}</b> · ดึงจากจออื่นได้ <b>${fmt(sum.totalTransferable || 0)}</b> / ขาดอีก <b>~${fmt(sum.shortfallZeny || firstUrg.shortfallZeny || 0)} z</b> (ยังขาดอีก ~${fmt(sum.missingZeny || 0)} z)</span>
+                <button type="button" class="pm-cons-now-btn ghost" data-cons-action="now" data-profile-id="${esc(firstUrg.id)}">🔍 เช็กยอดรวมอีกครั้ง</button>
+              </div>`
+            );
+          } else {
+            setHtml(
+              quickConsBanner,
+              `<div class="pm-cons-ready">
+                <span>⚡ พบ <b>${urgentClients.length}</b> ตัวละครที่ VIP เหลือ &lt; ${esc(underHoursVal)} ชม. · คิวถัดไป: <b>${esc(uName)}</b>${sfTxt}</span>
+                <button type="button" class="pm-cons-now-btn" data-cons-action="now" data-profile-id="${esc(firstUrg.id)}">🤝 รวมเงินซื้อทันที</button>
+              </div>`
+            );
+          }
         }
       } else {
         quickConsBanner.hidden = true;
@@ -525,18 +537,30 @@
         const firstUrg = urgentClients[0];
         const uName = firstUrg.charName || firstUrg.name;
         const sfTxt = firstUrg.shortfallZeny ? ` (ขาดอีก ~${fmt(firstUrg.shortfallZeny)} z)` : '';
-        setHtml(
-          consStatusEl,
-          `<div class="pm-cons-ready">
-            <span>⚡ พบ <b>${urgentClients.length}</b> ตัวละครที่ VIP เหลือ &lt; ${esc(underHoursVal)} ชม. · คิวถัดไป: <b>${esc(uName)}</b>${sfTxt}</span>
-            <button type="button" class="pm-cons-now-btn" id="pm-consolidate-now-btn" data-cons-action="now" data-profile-id="${esc(firstUrg.id)}">🤝 รวมเงินซื้อทันที</button>
-          </div>`
-        );
+        const sum = data.consolidationSummary;
+        const isWaitingFull = Boolean(sum && String(sum.receiverId) === String(firstUrg.id) && sum.readyToConsolidate === false);
+        if (isWaitingFull) {
+          setHtml(
+            consStatusEl,
+            `<div class="pm-cons-ready">
+              <span>⏳ รอเงินรวมครบก่อนเทรดครั้งเดียว: คิวถัดไป <b>${esc(uName)}</b> · ดึงจากจออื่นได้ <b>${fmt(sum.totalTransferable || 0)}</b> / ขาดอีก <b>~${fmt(sum.shortfallZeny || firstUrg.shortfallZeny || 0)} z</b> (ยังขาดอีก ~${fmt(sum.missingZeny || 0)} z)</span>
+              <button type="button" class="pm-cons-now-btn ghost" id="pm-consolidate-now-btn" data-cons-action="now" data-profile-id="${esc(firstUrg.id)}">🔍 เช็กยอดรวมอีกครั้ง</button>
+            </div>`
+          );
+        } else {
+          setHtml(
+            consStatusEl,
+            `<div class="pm-cons-ready">
+              <span>⚡ พบ <b>${urgentClients.length}</b> ตัวละครที่ VIP เหลือ &lt; ${esc(underHoursVal)} ชม. · คิวถัดไป: <b>${esc(uName)}</b>${sfTxt}</span>
+              <button type="button" class="pm-cons-now-btn" id="pm-consolidate-now-btn" data-cons-action="now" data-profile-id="${esc(firstUrg.id)}">🤝 รวมเงินซื้อทันที</button>
+            </div>`
+          );
+        }
       } else {
         setHtml(
           consStatusEl,
           `<div class="pm-cons-hint">
-            <span>💡 เมื่อตัวที่เปิดไว้เหลือ VIP <b>&lt; ${esc(underHoursVal)} ชั่วโมง</b> ระบบจะดึงเงินจากจออื่นที่มี VIP (เหลือเงินติดตัว <b>${fmt(keepZenyVal)} z</b>) มาซื้อ Token จนต่อ VIP สำเร็จแล้วหยุดรวมเงินทันที</span>
+            <span>💡 ระบบจะรอจนเงินรวมจากจออื่นที่มี VIP (เหลือติดตัว <b>${fmt(keepZenyVal)} z</b>) พอซื้อ Token ครบแพ็กเกจก่อน จึงเริ่มเทรดรวดเดียวจนต่อ VIP สำเร็จแล้วหยุดทันที</span>
             <button type="button" class="pm-cons-now-btn ghost" id="pm-consolidate-now-btn" data-cons-action="now" title="สั่งตรวจสอบและรวมเงินซื้อ VIP ทันที">🤝 เช็ก/รวมทันที</button>
           </div>`
         );

@@ -351,7 +351,7 @@ function openWebConfigModal(profileId, mode, preloadedJson = '') {
   modal.style.display = 'flex';
 }
 
-﻿const API_BASE = "";
+﻿const API_BASE = typeof window.__PM_REMOTE_API_BASE__ === "string" ? window.__PM_REMOTE_API_BASE__ : "";
 let currentProfiles = [];
 let currentBandwidthSummary = null;
 let allWindowsHidden = false;
@@ -4540,80 +4540,77 @@ function initDeviceNickname() {
   let currentAccessStatus = "approved";
   let currentAccessRequestedAt = null;
   let currentAccessNote = "";
+  let currentUsername = "";
+  let currentIsUserAccount = false;
+  let currentRequiresLogin = true;
+  let initialAccessHydrated = false;
   let hideSavedTimer = null;
 
+  const escHtml = (s) => String(s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
+
+  async function refreshPointsFromServer() {
+    try {
+      const res = await fetch(`${API_BASE}/api/human-check/settings`).then(r => r.json());
+      if (res && res.success && res.settings) {
+        updateAutoAnswerToolbarBtn(res.settings.autoAnswer !== false);
+        updatePointDisplays(res.settings.points, res.settings.pointsPerSolve, res.settings.serviceAvailable);
+      }
+    } catch (_) {}
+  }
+
+  function updateHeaderAuthUi() {
+    const btnAuth = document.getElementById("btn-account-auth");
+    const txtAuth = document.getElementById("header-account-auth-text");
+    const loggedInUser = currentIsUserAccount && currentUsername && !currentRequiresLogin;
+    if (txtAuth) {
+      txtAuth.textContent = loggedInUser ? currentUsername : "เข้าสู่ระบบ / สมัคร ID";
+    }
+    if (btnAuth) {
+      btnAuth.title = loggedInUser
+        ? `บัญชีผู้ใช้: ${currentUsername} (เครื่อง: ${currentSavedValue || currentDefaultNick || "-"}) • คลิกเพื่อจัดการบัญชี`
+        : "เข้าสู่ระบบหรือสมัครบัญชีผู้ใช้งาน (Username) เพื่อใช้ส่วนบุญร่วมกันหลายเครื่อง";
+      btnAuth.style.background = loggedInUser ? "rgba(16, 185, 129, 0.16)" : "";
+      btnAuth.style.borderColor = loggedInUser ? "rgba(52, 211, 153, 0.48)" : "";
+      btnAuth.style.color = loggedInUser ? "#a7f3d0" : "";
+    }
+  }
+
   function ensureAccessLockOverlay() {
-    let overlay = document.getElementById("access-lock-overlay");
-    if (overlay) return overlay;
-    overlay = document.createElement("div");
-    overlay.id = "access-lock-overlay";
-    overlay.style.cssText = "display:none;position:fixed;inset:0;z-index:9999999;background:radial-gradient(circle at top,#1e1b4b 0%,#090d16 55%,#020617 100%);align-items:center;justify-content:center;padding:20px;font-family:'IBM Plex Sans Thai','Plus Jakarta Sans',sans-serif;color:#f8fafc;";
-    overlay.innerHTML = `
-      <div style="width:100%;max-width:540px;background:linear-gradient(155deg,rgba(15,23,42,0.96),rgba(30,27,75,0.92));border:1.5px solid rgba(168,85,247,0.45);border-radius:18px;padding:26px 28px;box-shadow:0 30px 80px rgba(0,0,0,0.88),0 0 40px rgba(168,85,247,0.22);display:flex;flex-direction:column;gap:16px;">
-        <div style="display:flex;align-items:center;gap:14px;">
-          <div id="access-lock-icon" style="width:52px;height:52px;border-radius:14px;background:rgba(168,85,247,0.18);border:1px solid rgba(168,85,247,0.45);display:flex;align-items:center;justify-content:center;font-size:26px;flex-shrink:0;">🔒</div>
-          <div>
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-              <h2 id="access-lock-title" style="margin:0;font-size:18px;font-weight:800;color:#f8fafc;">รอการอนุมัติสิทธิ์เข้าใช้งาน</h2>
-              <span id="access-lock-pill" style="background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.5);color:#fde68a;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;">⏳ รออนุมัติ (Pending)</span>
-            </div>
-            <p id="access-lock-desc" style="margin:4px 0 0 0;font-size:12.5px;color:#cbd5e1;line-height:1.45;">
-              เครื่องนี้ยังไม่ได้รับอนุญาตให้เข้าใช้งานระบบ PmheeAether Manager กรุณาตั้งชื่อเครื่องและส่งรหัส <b>HWID</b> ให้ผู้ดูแลระบบอนุมัติ
-            </p>
-          </div>
-        </div>
+    const overlay = document.getElementById("access-lock-overlay");
+    if (!overlay) return null;
+    if (overlay._bound) return overlay;
+    overlay._bound = true;
 
-        <div style="background:rgba(2,6,23,0.68);border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:12px;">
-          <div>
-            <label style="display:block;font-size:11.5px;font-weight:700;color:#93c5fd;margin-bottom:5px;">💻 ชื่อเครื่องของคุณ (แสดงในระบบแอดมิน):</label>
-            <div style="display:flex;gap:8px;">
-              <input type="text" id="access-lock-nickname" maxlength="32" placeholder="ตั้งชื่อเครื่อง เช่น PC-เพื่อนกอล์ฟ..." style="flex:1;background:#0f172a;border:1px solid rgba(56,189,248,0.4);border-radius:8px;color:#f8fafc;font-size:13px;font-weight:600;padding:8px 12px;outline:none;">
-              <button type="button" id="btn-access-save-nick" style="background:rgba(14,165,233,0.2);border:1px solid rgba(56,189,248,0.45);color:#bae6fd;border-radius:8px;padding:8px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">💾 บันทึกชื่อ</button>
-            </div>
-          </div>
+    const tabBtns = {
+      login: overlay.querySelector("#btn-lock-tab-login"),
+      register: overlay.querySelector("#btn-lock-tab-register"),
+    };
+    const panes = {
+      login: overlay.querySelector("#access-lock-pane-login"),
+      register: overlay.querySelector("#access-lock-pane-register"),
+    };
+    const setLockTab = (tab) => {
+      for (const k of Object.keys(panes)) {
+        if (panes[k]) panes[k].style.display = k === tab ? "flex" : "none";
+        if (tabBtns[k]) {
+          const activeColor = k === "register" ? "rgba(16,185,129,0.28)" : "rgba(56,189,248,0.26)";
+          tabBtns[k].style.background = k === tab ? activeColor : "transparent";
+          tabBtns[k].style.color = k === tab ? "#f8fafc" : "#94a3b8";
+        }
+      }
+    };
+    overlay._setLockTab = setLockTab;
+    if (tabBtns.login) tabBtns.login.onclick = () => setLockTab("login");
+    if (tabBtns.register) tabBtns.register.onclick = () => setLockTab("register");
 
-          <div>
-            <label style="display:block;font-size:11.5px;font-weight:700;color:#d8b4fe;margin-bottom:5px;">🔑 รหัสประจำเครื่อง (HWID สำหรับขอสิทธิ์):</label>
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;background:rgba(88,28,135,0.25);border:1px solid rgba(168,85,247,0.45);border-radius:9px;padding:10px 14px;">
-              <div>
-                <div id="access-lock-hwid-short" style="font-family:'JetBrains Mono',monospace;font-size:19px;font-weight:800;color:#f8fafc;letter-spacing:1.2px;">----</div>
-                <div id="access-lock-hwid-full" style="font-family:'JetBrains Mono',monospace;font-size:10px;color:#94a3b8;word-break:break-all;margin-top:2px;">-</div>
-              </div>
-              <button type="button" id="btn-access-copy-info" style="background:#7c3aed;border:1px solid #a855f7;color:#fff;border-radius:8px;padding:9px 14px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;box-shadow:0 4px 14px rgba(124,58,237,0.4);">
-                📋 คัดลอกชื่อเครื่อง + HWID
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label style="display:block;font-size:11.5px;font-weight:600;color:#94a3b8;margin-bottom:5px;">📝 ข้อความแจ้งแอดมิน (ไม่บังคับ):</label>
-            <input type="text" id="access-lock-note" maxlength="160" placeholder="เช่น เพื่อนกอล์ฟ ขอเปิดใช้งานเครื่องใหม่ครับ..." style="width:100%;box-sizing:border-box;background:#0f172a;border:1px solid rgba(148,163,184,0.25);border-radius:8px;color:#e2e8f0;font-size:12px;padding:8px 12px;outline:none;">
-          </div>
-        </div>
-
-        <div id="access-lock-status-msg" style="display:none;padding:9px 12px;border-radius:8px;font-size:12px;font-weight:600;background:rgba(16,185,129,0.16);border:1px solid rgba(52,211,153,0.4);color:#6ee7b7;text-align:center;"></div>
-
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button type="button" id="btn-access-request-send" style="flex:2;min-width:210px;background:linear-gradient(135deg,#10b981,#059669);border:1px solid #34d399;color:#fff;border-radius:10px;padding:11px 16px;font-size:13px;font-weight:800;cursor:pointer;box-shadow:0 6px 20px rgba(16,185,129,0.35);">
-            📨 ส่งคำขออนุญาตเข้าใช้งาน (Request Access)
-          </button>
-          <button type="button" id="btn-access-check-now" style="flex:1;min-width:140px;background:rgba(30,41,59,0.9);border:1px solid rgba(148,163,184,0.35);color:#e2e8f0;border-radius:10px;padding:11px 14px;font-size:12.5px;font-weight:700;cursor:pointer;">
-            🔄 เช็กสถานะอนุมัติ
-          </button>
-        </div>
-
-        <div style="text-align:center;font-size:11px;color:#64748b;">
-          ระบบจะตรวจสอบสถานะการอนุมัติอัตโนมัติทุก 5 วินาที — เมื่อแอดมินกดอนุมัติแล้ว หน้าจอนี้จะปลดล็อกเองทันที
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-
-    const nickEl = overlay.querySelector("#access-lock-nickname");
-    const noteEl = overlay.querySelector("#access-lock-note");
     const statusMsg = overlay.querySelector("#access-lock-status-msg");
     const showLockMsg = (msg, isErr = false) => {
       if (!statusMsg) return;
+      if (!msg) {
+        statusMsg.style.display = "none";
+        statusMsg.textContent = "";
+        return;
+      }
       statusMsg.style.display = "block";
       statusMsg.style.background = isErr ? "rgba(239,68,68,0.16)" : "rgba(16,185,129,0.16)";
       statusMsg.style.borderColor = isErr ? "rgba(248,113,113,0.45)" : "rgba(52,211,153,0.4)";
@@ -4621,53 +4618,115 @@ function initDeviceNickname() {
       statusMsg.textContent = msg;
     };
 
-    overlay.querySelector("#btn-access-save-nick").onclick = async () => {
-      const val = (nickEl.value || "").trim();
-      if (!val) return showLockMsg("⚠️ กรุณากรอกชื่อเครื่องก่อนบันทึก", true);
-      input.value = val;
-      await saveNickname();
-      showLockMsg(`✅ บันทึกชื่อเครื่องเป็น "${currentSavedValue}" เรียบร้อยแล้ว`);
-    };
-
-    overlay.querySelector("#btn-access-copy-info").onclick = () => {
-      const nick = (nickEl.value || currentSavedValue || currentDefaultNick || "ไม่ระบุ").trim();
-      copyMachineIdentityText(nick);
-      showLockMsg(`📋 คัดลอก "เครื่อง: ${nick} | HWID: ${currentHwidShort}" ลง Clipboard แล้ว ส่งให้แอดมินได้เลย!`);
-    };
-
-    overlay.querySelector("#btn-access-request-send").onclick = async () => {
-      const btn = overlay.querySelector("#btn-access-request-send");
-      const nick = (nickEl.value || currentSavedValue || currentDefaultNick || "").trim();
-      const note = (noteEl.value || "").trim();
+    const doLockLogin = async () => {
+      const btn = overlay.querySelector("#btn-lock-login-submit");
+      const username = (overlay.querySelector("#lock-login-username")?.value || "").trim();
+      const password = overlay.querySelector("#lock-login-password")?.value || "";
+      const nickname = (overlay.querySelector("#lock-login-nickname")?.value || "").trim();
+      if (!username || !password) return showLockMsg("⚠️ กรุณากรอก Username และ Password", true);
       btn.disabled = true;
-      btn.textContent = "⏳ กำลังส่งคำขอไปยังระบบแอดมิน...";
+      btn.textContent = "⏳ กำลังเข้าสู่ระบบ...";
       try {
-        const res = await fetch(`${API_BASE}/api/access/request`, {
+        const res = await fetch(`${API_BASE}/api/auth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ nickname: nick, note })
+          body: JSON.stringify({ username, password, ...(nickname ? { nickname } : {}) }),
         }).then(r => r.json());
         if (res && res.success) {
-          applyAccessDataToUi(res);
-          showLockMsg("✅ ส่งคำขออนุญาตเข้าใช้งานไปยัง Admin Console เรียบร้อยแล้ว! กรุณารอแอดมินกดอนุมัติ");
+          overlay.querySelector("#lock-login-password").value = "";
+          await refreshPointsFromServer();
+          const unlocked = await pollAccessStatusFromServer(true);
+          const mergeMsg = res.mergedLegacyCount > 0 ? ` (โอนยอดเดิม ${Number(res.mergedDeltaUnits || 0).toLocaleString()} เข้าระบบแล้ว)` : "";
+          if (unlocked) {
+            showLockMsg(`✅ เข้าสู่ระบบ ${res.username} สำเร็จ!${mergeMsg}`);
+          } else {
+            showLockMsg(`✅ เข้าสู่ระบบ ${res.username} แล้ว${mergeMsg} — รอแอดมินอนุมัติ ID ใน Admin Dashboard`);
+          }
         } else {
-          showLockMsg("⚠️ " + (res?.error || "ส่งคำขอไม่สำเร็จ กรุณากดคัดลอกชื่อเครื่อง + HWID ส่งให้แอดมินโดยตรง"), true);
+          showLockMsg("⚠️ " + (res?.error || "เข้าสู่ระบบไม่สำเร็จ"), true);
         }
       } catch (e) {
-        showLockMsg("⚠️ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ กรุณากดคัดลอกชื่อเครื่อง + HWID ส่งให้แอดมิน", true);
+        showLockMsg("⚠️ เชื่อมต่อเซิร์ฟเวอร์ไม่ได้", true);
       } finally {
         btn.disabled = false;
-        btn.textContent = "📨 ส่งคำขออนุญาตเข้าใช้งาน (Request Access)";
+        btn.textContent = "🔓 เข้าสู่ระบบ & เชื่อมส่วนบุญ";
       }
     };
+    const loginSubmitBtn = overlay.querySelector("#btn-lock-login-submit");
+    if (loginSubmitBtn) loginSubmitBtn.onclick = doLockLogin;
+    for (const sel of ["#lock-login-username", "#lock-login-password", "#lock-login-nickname"]) {
+      const el = overlay.querySelector(sel);
+      if (el) el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); doLockLogin(); }
+      });
+    }
 
-    overlay.querySelector("#btn-access-check-now").onclick = async () => {
-      showLockMsg("🔄 กำลังตรวจสอบสถานะสิทธิ์กับเซิร์ฟเวอร์...");
+    const doLockRegister = async () => {
+      const btn = overlay.querySelector("#btn-lock-reg-submit");
+      const username = (overlay.querySelector("#lock-reg-username")?.value || "").trim();
+      const password = overlay.querySelector("#lock-reg-password")?.value || "";
+      const password2 = overlay.querySelector("#lock-reg-password2")?.value || "";
+      const nickname = (overlay.querySelector("#lock-reg-nickname")?.value || "").trim();
+      const note = (overlay.querySelector("#lock-reg-note")?.value || "").trim();
+      if (!username) return showLockMsg("⚠️ กรุณากรอก Username", true);
+      if (password.length < 4) return showLockMsg("⚠️ รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร", true);
+      if (password !== password2) return showLockMsg("⚠️ รหัสผ่านทั้งสองช่องไม่ตรงกัน", true);
+      btn.disabled = true;
+      btn.textContent = "⏳ กำลังสมัคร ID...";
+      try {
+        const res = await fetch(`${API_BASE}/api/auth/register`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username, password, ...(nickname ? { nickname } : {}), note }),
+        }).then(r => r.json());
+        if (res && res.success) {
+          overlay.querySelector("#lock-reg-password").value = "";
+          overlay.querySelector("#lock-reg-password2").value = "";
+          await refreshPointsFromServer();
+          await pollAccessStatusFromServer(true);
+          const mergeMsg = res.mergedLegacyCount > 0 ? ` และโอนยอดเดิม ${Number(res.mergedDeltaUnits || 0).toLocaleString()} เข้าระบบแล้ว` : "";
+          showLockMsg(`✅ สมัคร ID "${res.username}" สำเร็จ${mergeMsg}! คำขอส่งเข้า Admin Dashboard แล้ว กรุณารอแอดมินกดอนุมัติ`);
+        } else {
+          showLockMsg("⚠️ " + (res?.error || "สมัครไม่สำเร็จ"), true);
+        }
+      } catch (e) {
+        showLockMsg("⚠️ เชื่อมต่อเซิร์ฟเวอร์ไม่ได้", true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "📝 สมัคร ID & ส่งให้แอดมินอนุมัติ";
+      }
+    };
+    const regSubmitBtn = overlay.querySelector("#btn-lock-reg-submit");
+    if (regSubmitBtn) regSubmitBtn.onclick = doLockRegister;
+    for (const sel of ["#lock-reg-password2", "#lock-reg-note"]) {
+      const el = overlay.querySelector(sel);
+      if (el) el.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); doLockRegister(); }
+      });
+    }
+
+    const logoutBtn = overlay.querySelector("#btn-access-lock-logout");
+    if (logoutBtn) logoutBtn.onclick = async () => {
+      try {
+        await fetch(`${API_BASE}/api/auth/logout`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        await pollAccessStatusFromServer(true);
+        setLockTab("login");
+        showLockMsg("🚪 ออกจากระบบแล้ว กรุณาเข้าสู่ระบบด้วย ID อื่น");
+      } catch (_) {}
+    };
+
+    const checkNowBtn = overlay.querySelector("#btn-access-check-now");
+    if (checkNowBtn) checkNowBtn.onclick = async () => {
+      showLockMsg("🔄 กำลังตรวจสอบสถานะการอนุมัติกับเซิร์ฟเวอร์...");
       const unlocked = await pollAccessStatusFromServer(true);
       if (!unlocked) {
-        showLockMsg(currentAccessStatus === "revoked"
-          ? "🚫 เครื่องนี้ยังถูกระงับสิทธิ์อยู่ กรุณาติดต่อแอดมิน"
-          : "⏳ ยังอยู่ระหว่างรอแอดมินกดอนุมัติสิทธิ์...");
+        if (currentRequiresLogin || !currentIsUserAccount || !currentUsername) {
+          showLockMsg("🔐 กรุณาเข้าสู่ระบบด้วย Username และ Password", true);
+        } else {
+          showLockMsg(currentAccessStatus === "revoked"
+            ? `🚫 ID "${currentUsername}" ถูกระงับสิทธิ์อยู่ กรุณาติดต่อแอดมิน`
+            : `⏳ ID "${currentUsername}" ยังรอแอดมินกดอนุมัติใน Admin Dashboard...`);
+        }
       }
     };
 
@@ -4675,46 +4734,119 @@ function initDeviceNickname() {
   }
 
   function renderAccessLockOverlay() {
-    const isLocked = currentAccessStatus === "pending" || currentAccessStatus === "revoked";
-    const existing = document.getElementById("access-lock-overlay");
-    if (!isLocked && !existing) return;
+    const hasUserSession = Boolean(currentIsUserAccount && currentUsername && !currentRequiresLogin);
+    const isLocked = !hasUserSession || currentAccessStatus !== "approved";
     const overlay = ensureAccessLockOverlay();
+    if (!overlay) return;
     if (!isLocked) {
       overlay.style.display = "none";
       return;
     }
     overlay.style.display = "flex";
-    const isRevoked = currentAccessStatus === "revoked";
+    const isRevoked = hasUserSession && currentAccessStatus === "revoked";
     const iconEl = overlay.querySelector("#access-lock-icon");
     const titleEl = overlay.querySelector("#access-lock-title");
     const pillEl = overlay.querySelector("#access-lock-pill");
     const descEl = overlay.querySelector("#access-lock-desc");
-    const nickEl = overlay.querySelector("#access-lock-nickname");
-    const noteEl = overlay.querySelector("#access-lock-note");
-    const shortEl = overlay.querySelector("#access-lock-hwid-short");
-    const fullEl = overlay.querySelector("#access-lock-hwid-full");
+    const guestView = overlay.querySelector("#access-lock-guest-view");
+    const pendingView = overlay.querySelector("#access-lock-pending-view");
+    const loginNickEl = overlay.querySelector("#lock-login-nickname");
+    const regNickEl = overlay.querySelector("#lock-reg-nickname");
+    const pendingUserEl = overlay.querySelector("#lock-pending-username");
+    const pendingDeviceEl = overlay.querySelector("#lock-pending-device");
+    const pendingHwidEl = overlay.querySelector("#lock-pending-hwid");
+    const pendingNoteRowEl = overlay.querySelector("#lock-pending-note-row");
+    const pendingNoteEl = overlay.querySelector("#lock-pending-note");
+    const footerDeviceEl = overlay.querySelector("#access-lock-footer-device");
+    const hwidShortEl = overlay.querySelector("#access-lock-hwid-short");
 
-    if (iconEl) iconEl.textContent = isRevoked ? "🚫" : "🔒";
-    if (titleEl) titleEl.textContent = isRevoked ? "สิทธิ์การใช้งานของเครื่องนี้ถูกระงับ" : "รอการอนุมัติสิทธิ์เข้าใช้งาน (HWID Access)";
-    if (pillEl) {
-      pillEl.textContent = isRevoked ? "🚫 ระงับสิทธิ์ (Revoked)" : "⏳ รออนุมัติ (Pending)";
-      pillEl.style.background = isRevoked ? "rgba(239,68,68,0.2)" : "rgba(245,158,11,0.2)";
-      pillEl.style.borderColor = isRevoked ? "rgba(248,113,113,0.5)" : "rgba(245,158,11,0.5)";
-      pillEl.style.color = isRevoked ? "#fca5a5" : "#fde68a";
+    const pcName = currentSavedValue || currentDefaultNick || "-";
+    if (footerDeviceEl) footerDeviceEl.textContent = pcName;
+    if (hwidShortEl) hwidShortEl.textContent = currentHwidShort || "----";
+    if (loginNickEl && document.activeElement !== loginNickEl && !loginNickEl.value) {
+      loginNickEl.value = currentSavedValue || currentDefaultNick || "";
     }
-    if (descEl) {
-      descEl.innerHTML = isRevoked
-        ? "ผู้ดูแลระบบได้ระงับสิทธิ์การใช้งานของเครื่องนี้ชั่วคราว หากต้องการขอเปิดสิทธิ์อีกครั้ง กรุณาส่งคำขอหรือแจ้งรหัส <b>HWID</b> ให้แอดมิน"
-        : "เครื่องนี้ยังไม่ได้รับอนุญาตให้ใช้งานโปรแกรม กรุณาตั้งชื่อเครื่องและส่งรหัส <b>HWID</b> ด้านล่างให้แอดมินเพื่อกดอนุมัติสิทธิ์";
+    if (regNickEl && document.activeElement !== regNickEl && !regNickEl.value) {
+      regNickEl.value = currentSavedValue || currentDefaultNick || "";
     }
-    if (nickEl && document.activeElement !== nickEl) {
-      nickEl.value = currentSavedValue || currentDefaultNick || "";
+
+    const ensurePmLockSvg = () => {
+      if (!iconEl) return;
+      if (!iconEl.querySelector("svg.pm-emblem-svg")) {
+        iconEl.innerHTML = `<svg class="pm-emblem-svg" viewBox="22 20 140 76" width="32" height="20" fill="none" aria-hidden="true"><defs><linearGradient id="pmLockIconGradDynamic" x1="26" y1="24" x2="156" y2="92" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#ffffff" /><stop offset="52%" stop-color="#7dd3fc" /><stop offset="100%" stop-color="#c4b5fd" /></linearGradient></defs><path d="M 34 84 L 34 32 H 59 C 71.5 32 78.5 38.5 78.5 47.5 C 78.5 56.5 71.5 63 59 63 H 34" stroke="url(#pmLockIconGradDynamic)" stroke-width="14.5" stroke-linecap="round" stroke-linejoin="round" /><path d="M 98 84 L 98 32 L 124 62 L 150 32 L 150 84" stroke="url(#pmLockIconGradDynamic)" stroke-width="14.5" stroke-linecap="round" stroke-linejoin="round" /></svg>`;
+      }
+    };
+
+    if (!hasUserSession) {
+      if (guestView) guestView.style.display = "flex";
+      if (pendingView) pendingView.style.display = "none";
+      if (iconEl) {
+        ensurePmLockSvg();
+        iconEl.style.background = "linear-gradient(145deg,#0b152e,#1e1b4b)";
+        iconEl.style.borderColor = "rgba(56,189,248,0.55)";
+        iconEl.style.boxShadow = "0 6px 20px rgba(14,165,233,0.28),inset 0 1px 0 rgba(255,255,255,0.18)";
+      }
+      if (titleEl) titleEl.textContent = "บัญชีผู้ใช้ & เชื่อมส่วนบุญข้ามเครื่อง";
+      if (pillEl) {
+        pillEl.textContent = "🔐 ต้องเข้าสู่ระบบ";
+        pillEl.style.background = "rgba(99,102,241,0.22)";
+        pillEl.style.borderColor = "rgba(129,140,248,0.55)";
+        pillEl.style.color = "#c7d2fe";
+      }
+      if (descEl) {
+        descEl.innerHTML = "ล็อกอินด้วย <b>Username</b> เดียวกันในทุกเครื่องที่ใช้งาน ยอดส่วนบุญ (รวมถึงยอดค้างเดิมของเครื่องนี้) จะถูกเชื่อมรวมเป็นกระเป๋าเดียวกันอัตโนมัติ และไม่ต้องขออนุมัติเครื่องซ้ำทุกครั้ง";
+      }
+    } else if (isRevoked) {
+      if (guestView) guestView.style.display = "none";
+      if (pendingView) pendingView.style.display = "flex";
+      if (iconEl) {
+        ensurePmLockSvg();
+        iconEl.style.background = "linear-gradient(145deg,#280d14,#3b121b)";
+        iconEl.style.borderColor = "rgba(248,113,113,0.58)";
+        iconEl.style.boxShadow = "0 6px 20px rgba(239,68,68,0.25),inset 0 1px 0 rgba(255,255,255,0.14)";
+      }
+      if (titleEl) titleEl.textContent = `สิทธิ์ของ ID "${currentUsername}" ถูกระงับ`;
+      if (pillEl) {
+        pillEl.textContent = "🚫 ระงับสิทธิ์ (Revoked)";
+        pillEl.style.background = "rgba(239,68,68,0.2)";
+        pillEl.style.borderColor = "rgba(248,113,113,0.5)";
+        pillEl.style.color = "#fca5a5";
+      }
+      if (descEl) {
+        descEl.innerHTML = "ผู้ดูแลระบบได้ระงับสิทธิ์ชั่วคราว กรุณาติดต่อแอดมิน หรือสลับไปเข้าสู่ระบบด้วย ID อื่นที่ได้รับอนุมัติแล้ว";
+      }
+    } else {
+      if (guestView) guestView.style.display = "none";
+      if (pendingView) pendingView.style.display = "flex";
+      if (iconEl) {
+        ensurePmLockSvg();
+        iconEl.style.background = "linear-gradient(145deg,#241907,#332209)";
+        iconEl.style.borderColor = "rgba(245,158,11,0.58)";
+        iconEl.style.boxShadow = "0 6px 20px rgba(245,158,11,0.24),inset 0 1px 0 rgba(255,255,255,0.14)";
+      }
+      if (titleEl) titleEl.textContent = `รอแอดมินอนุมัติ ID: ${currentUsername}`;
+      if (pillEl) {
+        pillEl.textContent = "⏳ รออนุมัติ (Pending)";
+        pillEl.style.background = "rgba(245,158,11,0.2)";
+        pillEl.style.borderColor = "rgba(245,158,11,0.5)";
+        pillEl.style.color = "#fde68a";
+      }
+      if (descEl) {
+        descEl.innerHTML = `สมัคร ID <b>${escHtml(currentUsername)}</b> เรียบร้อยแล้ว! คำขอถูกส่งไปยัง Admin Dashboard แล้ว (อนุมัติครั้งเดียว ใช้ได้ไม่จำกัดเครื่อง)`;
+      }
     }
-    if (noteEl && document.activeElement !== noteEl && currentAccessNote && !noteEl.value) {
-      noteEl.value = currentAccessNote;
+
+    if (pendingUserEl) pendingUserEl.textContent = currentUsername || "-";
+    if (pendingDeviceEl) pendingDeviceEl.textContent = pcName;
+    if (pendingHwidEl) pendingHwidEl.textContent = currentHwidShort || "-";
+    if (pendingNoteRowEl && pendingNoteEl) {
+      if (currentAccessNote) {
+        pendingNoteRowEl.style.display = "block";
+        pendingNoteEl.textContent = currentAccessNote;
+      } else {
+        pendingNoteRowEl.style.display = "none";
+      }
     }
-    if (shortEl) shortEl.textContent = currentHwidShort || "----";
-    if (fullEl) fullEl.textContent = `เครื่อง: ${currentSavedValue || currentDefaultNick || "-"} • HWID: ${currentHwidShort || "-"}`;
   }
 
   function applyAccessDataToUi(res) {
@@ -4736,19 +4868,34 @@ function initDeviceNickname() {
     }
     if (hwidBadge && currentHwidShort) {
       const nick = currentSavedValue || currentDefaultNick || "ไม่ระบุ";
-      hwidBadge.title = `เครื่อง: ${nick} | HWID: ${currentHwidShort} (คลิกเพื่อคัดลอกส่งแอดมิน)`;
+      hwidBadge.title = `เครื่อง: ${nick} | HWID: ${currentHwidShort} (คลิกเพื่อคัดลอกข้อมูลเครื่อง)`;
     }
+    const wasHydrated = initialAccessHydrated;
     const prevStatus = currentAccessStatus;
+    const prevReqLogin = currentRequiresLogin;
     if (["approved", "pending", "revoked"].includes(res.accessStatus)) {
       currentAccessStatus = res.accessStatus;
     }
+    if (typeof res.username === "string") currentUsername = res.username;
+    else if (res.username === null) currentUsername = "";
+    if (typeof res.isUserAccount === "boolean") currentIsUserAccount = res.isUserAccount;
+    if (typeof res.requiresLogin === "boolean") currentRequiresLogin = res.requiresLogin;
     if (res.accessRequestedAt !== undefined) currentAccessRequestedAt = res.accessRequestedAt;
     if (typeof res.accessNote === "string") currentAccessNote = res.accessNote;
 
+    if (typeof res.requiresLogin === "boolean" || typeof res.accessStatus === "string") {
+      initialAccessHydrated = true;
+    }
+    updateHeaderAuthUi();
     renderAccessLockOverlay();
-    if ((prevStatus === "pending" || prevStatus === "revoked") && currentAccessStatus === "approved") {
-      if (typeof showToast === "function") {
-        showToast("✅ แอดมินอนุมัติสิทธิ์เครื่องนี้เรียบร้อยแล้ว! พร้อมใช้งานทันที", "success");
+    if (initialAccessHydrated && typeof window.__pmNotifyAccessHydrated === "function") {
+      window.__pmNotifyAccessHydrated();
+    }
+    if (((prevStatus === "pending" || prevStatus === "revoked") || prevReqLogin) && currentAccessStatus === "approved" && !currentRequiresLogin) {
+      refreshPointsFromServer();
+      if (wasHydrated && typeof showToast === "function") {
+        const who = currentIsUserAccount && currentUsername ? `ID ${currentUsername}` : "เครื่องนี้";
+        showToast(`✅ ยืนยันสิทธิ์ ${who} เรียบร้อยแล้ว! พร้อมใช้งานทันที`, "success");
       }
     }
   }
@@ -4798,10 +4945,10 @@ function initDeviceNickname() {
       const res = await fetch(`${API_BASE}/api/access/status${forceSync ? "?sync=1" : ""}`).then(r => r.json());
       if (res && res.success) {
         applyAccessDataToUi(res);
-        return res.accessStatus === "approved";
+        return res.accessStatus === "approved" && !res.requiresLogin;
       }
     } catch (_) {}
-    return currentAccessStatus === "approved";
+    return currentAccessStatus === "approved" && !currentRequiresLogin;
   }
 
   async function saveNickname() {
@@ -4841,13 +4988,230 @@ function initDeviceNickname() {
   window.setAccessLockOverlayState = (mockState) => {
     applyAccessDataToUi(mockState);
   };
+  window.__refreshAccessAndPoints = async (forceSync = true) => {
+    await refreshPointsFromServer();
+    return pollAccessStatusFromServer(forceSync);
+  };
+  window.__getAccessUiState = () => ({
+    nickname: currentSavedValue || currentDefaultNick || "-",
+    hwidShort: currentHwidShort || "-",
+    accessStatus: currentAccessStatus,
+    username: currentUsername,
+    isUserAccount: currentIsUserAccount,
+    requiresLogin: currentRequiresLogin,
+  });
 
   loadNickname();
   setTimeout(() => pollAccessStatusFromServer(true), 1500);
   setInterval(() => {
-    const needSync = currentAccessStatus === "pending" || currentAccessStatus === "revoked";
+    const needSync = currentRequiresLogin || currentAccessStatus === "pending" || currentAccessStatus === "revoked";
     pollAccessStatusFromServer(needSync);
   }, 5000);
+}
+
+function initAccountAuthModal() {
+  const modal = document.getElementById("account-auth-modal");
+  const openBtn = document.getElementById("btn-account-auth");
+  const closeBtn = document.getElementById("btn-auth-modal-close");
+  if (!modal || !openBtn) return;
+
+  const loggedInPane = document.getElementById("auth-modal-logged-in");
+  const guestPane = document.getElementById("auth-modal-guest");
+  const tabLogin = document.getElementById("btn-auth-tab-login");
+  const tabReg = document.getElementById("btn-auth-tab-register");
+  const paneLogin = document.getElementById("auth-pane-login");
+  const paneReg = document.getElementById("auth-pane-register");
+  const loginUserEl = document.getElementById("auth-login-username");
+  const loginPassEl = document.getElementById("auth-login-password");
+  const loginMsgEl = document.getElementById("auth-login-msg");
+  const loginBtn = document.getElementById("btn-auth-login-submit");
+  const regUserEl = document.getElementById("auth-reg-username");
+  const regPassEl = document.getElementById("auth-reg-password");
+  const regPass2El = document.getElementById("auth-reg-password2");
+  const regNoteEl = document.getElementById("auth-reg-note");
+  const regMsgEl = document.getElementById("auth-reg-msg");
+  const regBtn = document.getElementById("btn-auth-reg-submit");
+  const logoutBtn = document.getElementById("btn-auth-logout");
+
+  const setMsg = (el, msg, isErr = false) => {
+    if (!el) return;
+    if (!msg) {
+      el.style.display = "none";
+      el.textContent = "";
+      return;
+    }
+    el.style.display = "block";
+    el.style.background = isErr ? "rgba(239,68,68,0.16)" : "rgba(16,185,129,0.16)";
+    el.style.border = isErr ? "1px solid rgba(248,113,113,0.45)" : "1px solid rgba(52,211,153,0.4)";
+    el.style.color = isErr ? "#fca5a5" : "#6ee7b7";
+    el.textContent = msg;
+  };
+
+  const setTab = (tab) => {
+    const isLogin = tab === "login";
+    if (paneLogin) paneLogin.style.display = isLogin ? "block" : "none";
+    if (paneReg) paneReg.style.display = isLogin ? "none" : "block";
+    if (tabLogin) {
+      tabLogin.classList.toggle("active", isLogin);
+      tabLogin.style.background = isLogin ? "rgba(99,102,241,0.3)" : "transparent";
+      tabLogin.style.color = isLogin ? "#f8fafc" : "#94a3b8";
+    }
+    if (tabReg) {
+      tabReg.classList.toggle("active", !isLogin);
+      tabReg.style.background = !isLogin ? "rgba(16,185,129,0.28)" : "transparent";
+      tabReg.style.color = !isLogin ? "#f8fafc" : "#94a3b8";
+    }
+  };
+
+  const renderModalContent = async () => {
+    setMsg(loginMsgEl, "");
+    setMsg(regMsgEl, "");
+    let access = null;
+    let hcSettings = null;
+    try {
+      const [aRes, sRes] = await Promise.all([
+        fetch(`${API_BASE}/api/access/status?sync=1`).then(r => r.json()).catch(() => null),
+        fetch(`${API_BASE}/api/human-check/settings`).then(r => r.json()).catch(() => null),
+      ]);
+      if (aRes && aRes.success) access = aRes;
+      if (sRes && sRes.success && sRes.settings) {
+        hcSettings = sRes.settings;
+        updatePointDisplays(hcSettings.points, hcSettings.pointsPerSolve, hcSettings.serviceAvailable);
+      }
+    } catch (_) {}
+
+    const st = window.__getAccessUiState ? window.__getAccessUiState() : {};
+    const isUser = Boolean(access ? access.isUserAccount : st.isUserAccount);
+    const uname = String((access ? access.username : st.username) || "");
+    const reqLogin = Boolean(access ? access.requiresLogin : st.requiresLogin);
+    const status = String((access ? access.accessStatus : st.accessStatus) || "approved");
+    const nick = String((access ? (access.nickname || access.defaultNickname) : st.nickname) || "-");
+    const hwid = String((access ? access.machineHwidShort : st.hwidShort) || "-");
+
+    if (isUser && uname && !reqLogin) {
+      if (loggedInPane) loggedInPane.style.display = "block";
+      if (guestPane) guestPane.style.display = "none";
+      const uEl = document.getElementById("auth-modal-username");
+      const mEl = document.getElementById("auth-modal-merit");
+      const dEl = document.getElementById("auth-modal-device");
+      const hEl = document.getElementById("auth-modal-hwid");
+      const sEl = document.getElementById("auth-modal-status");
+      if (uEl) uEl.textContent = uname;
+      if (mEl) mEl.textContent = hcSettings && hcSettings.points != null ? Number(hcSettings.points).toLocaleString() : "-";
+      if (dEl) dEl.textContent = nick;
+      if (hEl) hEl.textContent = hwid;
+      if (sEl) {
+        sEl.textContent = status === "approved" ? "อนุมัติแล้ว" : status === "revoked" ? "ถูกระงับ" : "รออนุมัติ";
+        sEl.style.color = status === "approved" ? "#34d399" : status === "revoked" ? "#f87171" : "#fbbf24";
+      }
+    } else {
+      if (loggedInPane) loggedInPane.style.display = "none";
+      if (guestPane) guestPane.style.display = "block";
+      setTab("login");
+    }
+  };
+
+  const openModal = () => {
+    modal.classList.add("show");
+    modal.style.display = "flex";
+    renderModalContent();
+  };
+  const closeModal = () => {
+    modal.classList.remove("show");
+    modal.style.display = "none";
+  };
+
+  openBtn.addEventListener("click", openModal);
+  if (closeBtn) closeBtn.addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => {
+    if (e.target === modal) closeModal();
+  });
+  if (tabLogin) tabLogin.addEventListener("click", () => setTab("login"));
+  if (tabReg) tabReg.addEventListener("click", () => setTab("register"));
+
+  const handleLogin = async () => {
+    const username = (loginUserEl?.value || "").trim();
+    const password = loginPassEl?.value || "";
+    if (!username || !password) return setMsg(loginMsgEl, "⚠️ กรุณากรอก Username และ Password", true);
+    if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = "⏳ กำลังเข้าสู่ระบบ..."; }
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      }).then(r => r.json());
+      if (res && res.success) {
+        if (loginPassEl) loginPassEl.value = "";
+        if (window.__refreshAccessAndPoints) await window.__refreshAccessAndPoints(true);
+        const mergeText = res.mergedLegacyCount > 0 ? ` (โอนยอดเดิม ${Number(res.mergedDeltaUnits || 0).toLocaleString()} แล้ว)` : "";
+        if (typeof showToast === "function") {
+          showToast(`✅ เข้าสู่ระบบ ${res.username} สำเร็จ${mergeText}`, "success");
+        }
+        closeModal();
+      } else {
+        setMsg(loginMsgEl, "⚠️ " + (res?.error || "เข้าสู่ระบบไม่สำเร็จ"), true);
+      }
+    } catch (_) {
+      setMsg(loginMsgEl, "⚠️ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้", true);
+    } finally {
+      if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = "🔓 เข้าสู่ระบบและเชื่อมส่วนบุญ"; }
+    }
+  };
+  if (loginBtn) loginBtn.addEventListener("click", handleLogin);
+  if (loginPassEl) loginPassEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); handleLogin(); }
+  });
+
+  if (regBtn) regBtn.addEventListener("click", async () => {
+    const username = (regUserEl?.value || "").trim();
+    const password = regPassEl?.value || "";
+    const password2 = regPass2El?.value || "";
+    const note = (regNoteEl?.value || "").trim();
+    if (!username) return setMsg(regMsgEl, "⚠️ กรุณากรอก Username", true);
+    if (password.length < 4) return setMsg(regMsgEl, "⚠️ รหัสผ่านต้องมีอย่างน้อย 4 ตัวอักษร", true);
+    if (password !== password2) return setMsg(regMsgEl, "⚠️ รหัสผ่านยืนยันไม่ตรงกัน", true);
+    regBtn.disabled = true;
+    regBtn.textContent = "⏳ กำลังสมัคร ID...";
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password, note }),
+      }).then(r => r.json());
+      if (res && res.success) {
+        if (regPassEl) regPassEl.value = "";
+        if (regPass2El) regPass2El.value = "";
+        if (window.__refreshAccessAndPoints) await window.__refreshAccessAndPoints(true);
+        const mergeText = res.mergedLegacyCount > 0 ? ` และโอนยอดเดิม ${Number(res.mergedDeltaUnits || 0).toLocaleString()} แล้ว` : "";
+        if (typeof showToast === "function") {
+          showToast(`✨ สมัคร ID ${res.username} สำเร็จ${mergeText}`, "success");
+        }
+        closeModal();
+      } else {
+        setMsg(regMsgEl, "⚠️ " + (res?.error || "สมัครบัญชีไม่สำเร็จ"), true);
+      }
+    } catch (_) {
+      setMsg(regMsgEl, "⚠️ ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้", true);
+    } finally {
+      regBtn.disabled = false;
+      regBtn.textContent = "✨ สมัคร ID และส่งขออนุมัติ";
+    }
+  });
+
+  if (logoutBtn) logoutBtn.addEventListener("click", async () => {
+    logoutBtn.disabled = true;
+    try {
+      await fetch(`${API_BASE}/api/auth/logout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      if (window.__refreshAccessAndPoints) await window.__refreshAccessAndPoints(true);
+      closeModal();
+    } catch (_) {} finally {
+      logoutBtn.disabled = false;
+    }
+  });
 }
 
 (async () => {
@@ -4863,7 +5227,7 @@ function initDeviceNickname() {
     }
   } catch (e) {}
   // The modal markup follows this script; a fast/cached response can finish before parsing it.
-  const initAccountModals=()=>{initTopupCaptchaModal();initProxyRegisterControls();initScreenProxyControls();};
+  const initAccountModals=()=>{initTopupCaptchaModal();initProxyRegisterControls();initScreenProxyControls();initAccountAuthModal();};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initAccountModals, { once: true });
   else initAccountModals();
   initDeviceNickname();
@@ -5476,8 +5840,13 @@ function switchMainTab(tabName) {
     if (window.MarketOverview && typeof window.MarketOverview.onTabShown === "function") {
       window.MarketOverview.onTabShown();
     }
+  } else if (tabName === "fleet") {
+    if (window.FleetDashboard && typeof window.FleetDashboard.onTabShown === "function") {
+      window.FleetDashboard.onTabShown();
+    }
   }
 }
+window.switchMainTab = switchMainTab;
 
 (() => {
   let saved = null;

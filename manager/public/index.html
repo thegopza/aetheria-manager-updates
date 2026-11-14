@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=4.56.0">
+  <link rel="stylesheet" href="style.css?v=4.57.2">
   <link rel="stylesheet" href="inventory_market.css?v=4.55.0">
   <link rel="stylesheet" href="bot_update.css?v=44002">
   <link rel="stylesheet" href="plan_editor.css?v=4.45.0">
@@ -18,14 +18,379 @@
   <link rel="stylesheet" href="guild_manager.css?v=4.49.0">
   <link rel="stylesheet" href="jail_manager.css?v=4.51.9">
   <link rel="stylesheet" href="device_manager.css?v=4.53.6">
+  <link rel="stylesheet" href="fleet_dashboard.css?v=4.58.0">
+  <style id="pm-boot-splash-style">
+    #pm-boot-splash {
+      position: fixed;
+      inset: 0;
+      z-index: 10000020;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at 50% 42%, #131c38 0%, #070b16 54%, #02050d 100%);
+      cursor: pointer;
+      user-select: none;
+      overflow: hidden;
+      transition: opacity 0.28s cubic-bezier(0.2, 0, 0, 1);
+      will-change: opacity;
+    }
+    #pm-boot-splash.is-leaving {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #pm-splash-aura {
+      position: absolute;
+      width: 380px;
+      height: 380px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.20) 0%, rgba(139, 92, 246, 0.14) 42%, transparent 72%);
+      pointer-events: none;
+      animation: pmAuraPulse 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    #pm-splash-stage {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      transition: transform 0.26s cubic-bezier(0.2, 0, 0, 1), opacity 0.24s cubic-bezier(0.2, 0, 0, 1);
+      will-change: transform, opacity;
+    }
+    #pm-boot-splash.is-leaving #pm-splash-stage {
+      opacity: 0;
+      transform: scale3d(1.09, 1.09, 1);
+    }
+    .pm-splash-emblem-wrap {
+      position: relative;
+      width: 156px;
+      height: 98px;
+      border-radius: 24px;
+      overflow: hidden;
+      filter: drop-shadow(0 16px 38px rgba(14, 165, 233, 0.28));
+    }
+    .pm-splash-svg {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    .pm-splash-frame {
+      stroke-dasharray: 100;
+      stroke-dashoffset: 100;
+      animation: pmStrokeDraw 0.55s cubic-bezier(0.16, 1, 0.3, 1) 0.02s forwards;
+    }
+    .pm-splash-p-outer {
+      stroke-dasharray: 100;
+      stroke-dashoffset: 100;
+      animation: pmStrokeDraw 0.44s cubic-bezier(0.16, 1, 0.3, 1) 0.04s forwards;
+    }
+    .pm-splash-m-outer {
+      stroke-dasharray: 100;
+      stroke-dashoffset: 100;
+      animation: pmStrokeDraw 0.48s cubic-bezier(0.16, 1, 0.3, 1) 0.12s forwards;
+    }
+    .pm-splash-core {
+      opacity: 0;
+      stroke-dasharray: 100;
+      stroke-dashoffset: 100;
+      animation: pmCoreDraw 0.42s cubic-bezier(0.16, 1, 0.3, 1) 0.24s forwards;
+    }
+    .pm-splash-sheen {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(105deg, transparent 32%, rgba(255, 255, 255, 0.26) 50%, transparent 68%);
+      transform: translate3d(-130%, 0, 0);
+      animation: pmSheenSweep 0.58s cubic-bezier(0.16, 1, 0.3, 1) 0.40s forwards;
+      pointer-events: none;
+    }
+    .pm-splash-meta {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      opacity: 0;
+      transform: translate3d(0, 12px, 0) scale(0.96);
+      animation: pmWordmarkIn 0.44s cubic-bezier(0.16, 1, 0.3, 1) 0.32s forwards;
+    }
+    .pm-splash-wordmark {
+      font-family: 'Plus Jakarta Sans', 'IBM Plex Sans Thai', sans-serif;
+      font-size: 25px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      line-height: 1.1;
+      color: #f8fafc;
+    }
+    .pm-wm-accent {
+      background: linear-gradient(90deg, #38bdf8, #22e3c4, #c4b5fd);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .pm-splash-sub {
+      font-size: 12px;
+      color: #94a3b8;
+      font-weight: 500;
+      margin-top: 4px;
+      text-align: center;
+    }
+    .pm-splash-bar-track {
+      width: 136px;
+      height: 2.5px;
+      border-radius: 999px;
+      background: rgba(148, 163, 184, 0.16);
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    .pm-splash-bar-fill {
+      width: 100%;
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #38bdf8, #22e3c4, #a78bfa);
+      transform-origin: left center;
+      transform: scaleX(0);
+      animation: pmBarFill 0.88s cubic-bezier(0.16, 1, 0.3, 1) 0.08s forwards;
+    }
+    @keyframes pmStrokeDraw {
+      from { stroke-dashoffset: 100; }
+      to { stroke-dashoffset: 0; }
+    }
+    @keyframes pmCoreDraw {
+      0% { opacity: 0; stroke-dashoffset: 100; }
+      35% { opacity: 0.95; }
+      100% { opacity: 1; stroke-dashoffset: 0; }
+    }
+    @keyframes pmAuraPulse {
+      0% { opacity: 0; transform: scale(0.76); }
+      55% { opacity: 1; transform: scale(1.04); }
+      100% { opacity: 0.85; transform: scale(1); }
+    }
+    @keyframes pmSheenSweep {
+      0% { transform: translate3d(-130%, 0, 0); }
+      100% { transform: translate3d(130%, 0, 0); }
+    }
+    @keyframes pmWordmarkIn {
+      0% { opacity: 0; transform: translate3d(0, 12px, 0) scale(0.96); }
+      100% { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+    }
+    @keyframes pmBarFill {
+      0% { transform: scaleX(0); }
+      100% { transform: scaleX(1); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #pm-boot-splash *,
+      #pm-boot-splash *::before,
+      #pm-boot-splash *::after {
+        animation: none !important;
+        transition-duration: 0.08s !important;
+      }
+      .pm-splash-frame,
+      .pm-splash-p-outer,
+      .pm-splash-m-outer,
+      .pm-splash-core {
+        opacity: 1 !important;
+        stroke-dashoffset: 0 !important;
+      }
+      .pm-splash-meta {
+        opacity: 1 !important;
+        transform: none !important;
+      }
+      .pm-splash-bar-fill {
+        transform: scaleX(1) !important;
+      }
+    }
+  </style>
 </head>
 <body>
+  <!-- PM INTRO MOTION SPLASH (Plays on load/refresh, masks initial access check & click/key to skip) -->
+  <div id="pm-boot-splash" role="status" aria-label="กำลังโหลด PmheeAether Manager" title="คลิกเพื่อข้าม">
+    <div id="pm-splash-aura" aria-hidden="true"></div>
+    <div id="pm-splash-stage">
+      <div class="pm-splash-emblem-wrap">
+        <svg class="pm-splash-svg" viewBox="0 0 184 116" fill="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="pmSplashGrad" x1="16" y1="12" x2="168" y2="104" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#38bdf8" />
+              <stop offset="52%" stop-color="#22e3c4" />
+              <stop offset="100%" stop-color="#a78bfa" />
+            </linearGradient>
+            <linearGradient id="pmSplashFrameGrad" x1="8" y1="8" x2="176" y2="108" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="rgba(56,189,248,0.85)" />
+              <stop offset="50%" stop-color="rgba(34,227,196,0.65)" />
+              <stop offset="100%" stop-color="rgba(167,139,250,0.85)" />
+            </linearGradient>
+            <linearGradient id="pmSplashBgGrad" x1="8" y1="8" x2="176" y2="108" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#0b152e" />
+              <stop offset="100%" stop-color="#17153b" />
+            </linearGradient>
+          </defs>
+          <rect x="8" y="8" width="168" height="100" rx="26" fill="url(#pmSplashBgGrad)" fill-opacity="0.88" />
+          <rect class="pm-splash-frame" x="8" y="8" width="168" height="100" rx="26" pathLength="100" stroke="url(#pmSplashFrameGrad)" stroke-width="2.5" />
+          <path class="pm-splash-p-outer" pathLength="100" d="M 34 84 L 34 32 H 59 C 71.5 32 78.5 38.5 78.5 47.5 C 78.5 56.5 71.5 63 59 63 H 34" stroke="url(#pmSplashGrad)" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round" />
+          <path class="pm-splash-m-outer" pathLength="100" d="M 98 84 L 98 32 L 124 62 L 150 32 L 150 84" stroke="url(#pmSplashGrad)" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round" />
+          <path class="pm-splash-core" pathLength="100" d="M 34 84 L 34 32 H 59 C 71.5 32 78.5 38.5 78.5 47.5 C 78.5 56.5 71.5 63 59 63 H 34" stroke="#f0f9ff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" />
+          <path class="pm-splash-core" pathLength="100" d="M 98 84 L 98 32 L 124 62 L 150 32 L 150 84" stroke="#f0f9ff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+        <div class="pm-splash-sheen" aria-hidden="true"></div>
+      </div>
+      <div class="pm-splash-meta">
+        <div class="pm-splash-wordmark">Pmhee<span class="pm-wm-accent">Aether</span></div>
+        <div class="pm-splash-sub">Pmhee Multi-Client Manager</div>
+        <div class="pm-splash-bar-track" aria-hidden="true">
+          <div class="pm-splash-bar-fill"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const splash = document.getElementById('pm-boot-splash');
+      if (!splash) return;
+      const prefersReduced = Boolean(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+      const splashStart = performance.now();
+      const minShowMs = prefersReduced ? 60 : 980;
+      const hardMaxMs = prefersReduced ? 220 : 1320;
+      let accessHydrated = false;
+      let leaving = false;
+      let timerId = null;
+      let fallbackTimerId = null;
+
+      window.__pmBootSplashState = { active: true, leaving: false, startedAt: Date.now(), dismissedAt: null };
+
+      function onKeyDown(e) {
+        if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
+          dismiss(true);
+        }
+      }
+
+      function dismiss(immediate) {
+        if (leaving) return;
+        const elapsed = performance.now() - splashStart;
+        if (!immediate && elapsed < minShowMs) {
+          if (timerId) clearTimeout(timerId);
+          timerId = setTimeout(() => dismiss(false), Math.max(0, minShowMs - elapsed));
+          return;
+        }
+        leaving = true;
+        window.__pmBootSplashState.leaving = true;
+        if (timerId) clearTimeout(timerId);
+        if (fallbackTimerId) clearTimeout(fallbackTimerId);
+        document.removeEventListener('keydown', onKeyDown);
+        splash.classList.add('is-leaving');
+        setTimeout(() => {
+          if (splash && splash.parentNode) splash.remove();
+          window.__pmBootSplashState.active = false;
+          window.__pmBootSplashState.dismissedAt = Date.now();
+          window.dispatchEvent(new CustomEvent('pm:splash-done'));
+        }, prefersReduced ? 90 : 290);
+      }
+
+      window.__pmDismissBootSplash = dismiss;
+      window.__pmNotifyAccessHydrated = function () {
+        accessHydrated = true;
+        dismiss(false);
+      };
+
+      splash.addEventListener('click', () => dismiss(true));
+      document.addEventListener('keydown', onKeyDown);
+      fallbackTimerId = setTimeout(() => {
+        if (!accessHydrated) dismiss(true);
+        else dismiss(false);
+      }, hardMaxMs);
+    })();
+  </script>
+  <!-- MANDATORY FULL-SCREEN USER LOGIN / REGISTER GATE OVERLAY (Replaces legacy HWID machine approval) -->
+  <div id="access-lock-overlay" style="display:flex;position:fixed;inset:0;z-index:9999999;background:radial-gradient(circle at top,#1e1b4b 0%,#090d16 55%,#020617 100%);align-items:center;justify-content:center;padding:18px;overflow-y:auto;font-family:'IBM Plex Sans Thai','Plus Jakarta Sans',sans-serif;color:#f8fafc;">
+    <div style="width:100%;max-width:500px;background:linear-gradient(155deg,rgba(15,23,42,0.97),rgba(30,27,75,0.93));border:1.5px solid rgba(56,189,248,0.45);border-radius:18px;padding:22px 24px;box-shadow:0 30px 80px rgba(0,0,0,0.88),0 0 40px rgba(56,189,248,0.16);display:flex;flex-direction:column;gap:14px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <div id="access-lock-icon" style="width:48px;height:48px;border-radius:14px;background:linear-gradient(145deg,#0b152e,#1e1b4b);border:1px solid rgba(56,189,248,0.55);box-shadow:0 6px 20px rgba(14,165,233,0.28),inset 0 1px 0 rgba(255,255,255,0.18);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg class="pm-emblem-svg" viewBox="22 20 140 76" width="32" height="20" fill="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="pmLockIconGrad" x1="26" y1="24" x2="156" y2="92" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#ffffff" />
+                <stop offset="52%" stop-color="#7dd3fc" />
+                <stop offset="100%" stop-color="#c4b5fd" />
+              </linearGradient>
+            </defs>
+            <path d="M 34 84 L 34 32 H 59 C 71.5 32 78.5 38.5 78.5 47.5 C 78.5 56.5 71.5 63 59 63 H 34" stroke="url(#pmLockIconGrad)" stroke-width="14.5" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M 98 84 L 98 32 L 124 62 L 150 32 L 150 84" stroke="url(#pmLockIconGrad)" stroke-width="14.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </div>
+        <div style="min-width:0;flex:1;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <h2 id="access-lock-title" style="margin:0;font-size:17.5px;font-weight:800;color:#f8fafc;">บัญชีผู้ใช้ &amp; เชื่อมส่วนบุญข้ามเครื่อง</h2>
+            <span id="access-lock-pill" style="background:rgba(99,102,241,0.22);border:1px solid rgba(129,140,248,0.55);color:#c7d2fe;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;">🔐 ต้องเข้าสู่ระบบ</span>
+          </div>
+          <p id="access-lock-desc" style="margin:5px 0 0 0;font-size:12.5px;color:#cbd5e1;line-height:1.5;">
+            ล็อกอินด้วย <b>Username</b> เดียวกันในทุกเครื่องที่ใช้งาน ยอดส่วนบุญ (รวมถึงยอดค้างเดิมของเครื่องนี้) จะถูกเชื่อมรวมเป็นกระเป๋าเดียวกันอัตโนมัติ และไม่ต้องขออนุมัติเครื่องซ้ำทุกครั้ง
+          </p>
+        </div>
+      </div>
+
+      <div id="access-lock-guest-view" style="display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;gap:6px;background:rgba(2,6,23,0.75);padding:4px;border-radius:10px;border:1px solid rgba(148,163,184,0.2);">
+          <button type="button" id="btn-lock-tab-login" style="flex:1;padding:8px 10px;border-radius:8px;border:none;font-size:12.5px;font-weight:700;cursor:pointer;background:rgba(56,189,248,0.26);color:#e0f2fe;">🔓 เข้าสู่ระบบ (Login)</button>
+          <button type="button" id="btn-lock-tab-register" style="flex:1;padding:8px 10px;border-radius:8px;border:none;font-size:12.5px;font-weight:700;cursor:pointer;background:transparent;color:#94a3b8;">📝 สมัคร ID ใหม่</button>
+        </div>
+
+        <div id="access-lock-pane-login" style="background:rgba(2,6,23,0.68);border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
+          <input type="text" id="lock-login-username" maxlength="32" autocomplete="username" placeholder="Username (เช่น user01)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
+          <input type="password" id="lock-login-password" maxlength="128" autocomplete="current-password" placeholder="รหัสผ่าน (Password)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
+          <input type="text" id="lock-login-nickname" maxlength="32" placeholder="ชื่อเล่นเครื่องนี้ เช่น PC-บ้าน (ไม่บังคับ)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #1e293b;border-radius:8px;color:#cbd5e1;font-size:12px;padding:8px 12px;outline:none;">
+          <button type="button" id="btn-lock-login-submit" style="width:100%;background:linear-gradient(135deg,#0ea5e9,#0284c7);border:1px solid #38bdf8;color:#fff;border-radius:10px;padding:10px 14px;font-size:13.5px;font-weight:800;cursor:pointer;">🔓 เข้าสู่ระบบ &amp; เชื่อมส่วนบุญ</button>
+        </div>
+
+        <div id="access-lock-pane-register" style="display:none;background:rgba(2,6,23,0.68);border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:14px 16px;flex-direction:column;gap:10px;">
+          <input type="text" id="lock-reg-username" maxlength="32" placeholder="ตั้ง Username ใหม่ (3-32 ตัวอักษร a-z, 0-9, _, ., -)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <input type="password" id="lock-reg-password" maxlength="128" autocomplete="new-password" placeholder="รหัสผ่าน (4+ ตัวอักษร)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
+            <input type="password" id="lock-reg-password2" maxlength="128" autocomplete="new-password" placeholder="ยืนยันรหัสผ่าน" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
+          </div>
+          <input type="text" id="lock-reg-nickname" maxlength="32" placeholder="ชื่อเล่นเครื่องนี้แสดงในหน้าแอดมิน (เช่น PC-เพื่อนA)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #1e293b;border-radius:8px;color:#cbd5e1;font-size:12px;padding:8px 12px;outline:none;">
+          <input type="text" id="lock-reg-note" maxlength="160" placeholder="หมายเหตุ / ชื่อเล่นแจ้งแอดมิน (ไม่บังคับ)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #1e293b;border-radius:8px;color:#cbd5e1;font-size:12px;padding:8px 12px;outline:none;">
+          <button type="button" id="btn-lock-reg-submit" style="width:100%;background:linear-gradient(135deg,#10b981,#059669);border:1px solid #34d399;color:#fff;border-radius:10px;padding:10px 14px;font-size:13.5px;font-weight:800;cursor:pointer;">📝 สมัคร ID &amp; ส่งให้แอดมินอนุมัติ</button>
+        </div>
+      </div>
+
+      <div id="access-lock-pending-view" style="display:none;flex-direction:column;gap:12px;">
+        <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.38);border-radius:12px;padding:14px 16px;font-size:12.5px;color:#e2e8f0;line-height:1.65;">
+          <div style="font-size:13px;font-weight:800;color:#fde68a;margin-bottom:6px;">📋 ข้อมูลคำขอสมัคร ID ที่ส่งเข้าหน้าแอดมินแล้ว</div>
+          <div>• 👤 ID ผู้ใช้: <strong id="lock-pending-username" style="color:#fff;">-</strong></div>
+          <div>• 💻 เครื่องนี้: <span id="lock-pending-device">-</span></div>
+          <div>• 🔑 HWID: <span id="lock-pending-hwid" style="font-family:'JetBrains Mono',monospace;">-</span></div>
+          <div id="lock-pending-note-row" style="display:none;">• 📝 หมายเหตุ: <span id="lock-pending-note">-</span></div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button type="button" id="btn-access-check-now" style="flex:1;min-width:170px;background:rgba(30,41,59,0.92);border:1px solid rgba(148,163,184,0.35);color:#e2e8f0;border-radius:10px;padding:10px 14px;font-size:12.5px;font-weight:700;cursor:pointer;">🔄 เช็กสถานะการอนุมัติเดี๋ยวนี้</button>
+          <button type="button" id="btn-access-lock-logout" style="background:rgba(239,68,68,0.16);border:1px solid rgba(248,113,113,0.45);color:#fca5a5;border-radius:10px;padding:10px 14px;font-size:12.5px;font-weight:700;cursor:pointer;">🚪 สลับบัญชี / ออกจาก ID นี้</button>
+        </div>
+        <div style="text-align:center;font-size:11px;color:#94a3b8;">
+          เมื่อแอดมินกดอนุมัติ ID ใน Admin Dashboard แล้ว ระบบจะตรวจสอบและปลดล็อกเข้าหน้า Manager ให้อัตโนมัติทุก 5 วินาที
+        </div>
+      </div>
+
+      <div id="access-lock-status-msg" style="display:none;padding:9px 12px;border-radius:8px;font-size:12px;font-weight:600;background:rgba(16,185,129,0.16);border:1px solid rgba(52,211,153,0.4);color:#6ee7b7;text-align:center;"></div>
+
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding-top:4px;border-top:1px solid rgba(148,163,184,0.16);font-size:11px;color:#64748b;">
+        <span>💻 เครื่องนี้: <strong id="access-lock-footer-device" style="color:#94a3b8;">-</strong></span>
+        <span>🔑 HWID: <strong id="access-lock-hwid-short" style="font-family:'JetBrains Mono',monospace;color:#94a3b8;">----</strong></span>
+      </div>
+    </div>
+  </div>
+
   <div class="app-container">
     <!-- TOP HEADER -->
     <header class="app-header">
       <div class="brand">
-        <div class="brand-logo">
-          <span>🎮</span>
+        <div class="brand-logo" aria-label="PmheeAether PM Logo">
+          <svg class="pm-emblem-svg" viewBox="22 20 140 76" width="31" height="19" fill="none" aria-hidden="true">
+            <defs>
+              <linearGradient id="pmHeaderLogoGrad" x1="26" y1="24" x2="156" y2="92" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stop-color="#ffffff" />
+                <stop offset="52%" stop-color="#7dd3fc" />
+                <stop offset="100%" stop-color="#c4b5fd" />
+              </linearGradient>
+            </defs>
+            <path d="M 34 84 L 34 32 H 59 C 71.5 32 78.5 38.5 78.5 47.5 C 78.5 56.5 71.5 63 59 63 H 34" stroke="url(#pmHeaderLogoGrad)" stroke-width="14.5" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M 98 84 L 98 32 L 124 62 L 150 32 L 150 84" stroke="url(#pmHeaderLogoGrad)" stroke-width="14.5" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
         </div>
         <div class="brand-text">
           <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
@@ -36,12 +401,16 @@
               <input type="text" id="device-nickname-input" class="device-nickname-field" placeholder="ชื่อเครื่อง..." maxlength="25" spellcheck="false" title="ตั้งชื่อเล่นประจำเครื่องนี้ เพื่อให้รู้ว่าแจ้งเตือน Discord มาจากเครื่องไหน">
               <span id="device-nickname-saved" style="display: none; font-size: 11px; color: #34d399; font-weight: bold;" title="บันทึกแล้ว">✓</span>
             </div>
-            <div id="device-hwid-badge" class="device-hwid-badge" role="button" tabindex="0" title="คลิกเพื่อคัดลอก ชื่อเครื่อง + รหัส HWID สำหรับส่งให้แอดมินอนุมัติสิทธิ์">
+            <div id="device-hwid-badge" class="device-hwid-badge" role="button" tabindex="0" title="คลิกเพื่อคัดลอก ชื่อเครื่อง + รหัสประจำเครื่อง (HWID)">
               <span class="hwid-icon">🔑</span>
               <span class="hwid-label">HWID:</span>
               <span id="device-hwid-short" class="hwid-code">----</span>
               <span id="device-hwid-copy-hint" class="hwid-copy-icon">📋</span>
             </div>
+            <button type="button" id="btn-account-auth" class="btn btn-ghost" title="เข้าสู่ระบบ / สมัครบัญชี Username เพื่อเชื่อมส่วนบุญข้ามเครื่อง" style="background: rgba(56, 189, 248, 0.14); border: 1px solid rgba(56, 189, 248, 0.45); color: #7dd3fc; padding: 4px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; display: inline-flex; align-items: center; gap: 5px;">
+              <span>👤</span>
+              <span id="header-account-auth-text">เข้าสู่ระบบ / สมัคร ID</span>
+            </button>
             <button type="button" id="btn-anti-ban-guide" class="read-alert-btn" title="คลิกเพื่ออ่านคำแนะนำสำคัญ: วิธีหลีกเลี่ยงการโดนแบนและสาเหตุการติดคุก">
               <span class="read-alert-dot"></span>
               <span>อ่าน !!</span>
@@ -141,6 +510,9 @@
           <nav class="tab-bar" role="tablist">
             <button type="button" class="tab-btn active" data-tab="profiles" role="tab">
               <span class="icon">🎮</span> รายชื่อจอเกมและบอท <span class="tab-count" id="tab-count-profiles">0</span>
+            </button>
+            <button type="button" class="tab-btn" data-tab="fleet" id="tab-btn-fleet" role="tab">
+              <span class="icon">🖥️</span> เครื่องทั้งหมด <span class="tab-count" id="tab-count-fleet">0</span>
             </button>
             <button type="button" class="tab-btn" data-tab="zeny" role="tab">
               <span class="icon">💰</span> ระบบรวมเงิน
@@ -488,8 +860,12 @@
 
       <!-- TAB: GLOBAL MARKET OVERVIEW (ตลาดกลางรวมทุกตัวละคร) -->
       <section class="tab-pane" data-pane="market" id="market-overview-pane"></section>
+
+      <!-- TAB: MULTI-PC FLEET CARD DASHBOARD -->
+      <section class="tab-pane" data-pane="fleet" id="fleet-dashboard-pane"></section>
     </main>
   </div>
+  <div id="fleet-remote-overlay" class="fleet-remote-overlay" style="display:none;"></div>
 
   <!-- MODAL: CHARACTER EQUIPMENT & STATS INSPECTOR (Aetheria Authentic Sheet) -->
   <div class="modal-overlay" id="char-detail-modal" style="display: none; z-index: 100000;">
@@ -1303,7 +1679,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4.53.35"></script>
-  <script src="app.js?v=4.56.9"></script>
+  <script src="app.js?v=4.58.0"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.54.0"></script>
@@ -1311,14 +1687,15 @@
   <script src="bot_update.js?v=4.56.1"></script>
   <script src="config_copy.js?v=4.50.5"></script>
   <script src="party_manager.js?v=4.56.1"></script>
-  <script src="premium_manager.js?v=4.56.2"></script>
+  <script src="premium_manager.js?v=4.57.3"></script>
   <script src="card_manager.js?v=4.56.1"></script>
   <script src="market_overview.js?v=4.56.1"></script>
   <script src="market_sniper.js?v=4.56.8"></script>
   <script src="guild_manager.js?v=4.56.1"></script>
   <script src="jail_manager.js?v=4.56.1"></script>
   <script src="device_manager.js?v=4.56.1"></script>
-  <script src="update_log.js?v=4.56.10"></script>
+  <script src="fleet_dashboard.js?v=4.58.0"></script>
+  <script src="update_log.js?v=4.58.0"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 
@@ -2362,6 +2739,71 @@
           <button type="button" id="btn-bdp-confirm-selected" class="btn btn-danger" style="font-size: 12px; padding: 6px 16px; font-weight: 700; background: #dc2626; border-color: #ef4444; color: #fff;" disabled>
             🗑️ ลบโปรไฟล์ที่เลือก (<span id="bdp-confirm-count">0</span>)
           </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ACCOUNT AUTH MODAL (Login / Register Username for Shared Merit Across PCs) -->
+  <div id="account-auth-modal" style="display:none;position:fixed;inset:0;z-index:9998;background:rgba(2,6,23,0.82);backdrop-filter:blur(8px);align-items:center;justify-content:center;padding:18px;">
+    <div style="width:100%;max-width:460px;background:#0f172a;border:1px solid rgba(56,189,248,0.45);border-radius:16px;padding:20px 22px;color:#e2e8f0;box-shadow:0 24px 60px rgba(0,0,0,0.65);">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div style="display:flex;align-items:center;gap:10px;font-size:16px;font-weight:800;color:#f8fafc;">
+          <span style="width:28px;height:28px;border-radius:8px;background:linear-gradient(145deg,#0b152e,#1e1b4b);border:1px solid rgba(56,189,248,0.52);display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 4px 12px rgba(14,165,233,0.22);">
+            <svg class="pm-emblem-svg" viewBox="22 20 140 76" width="20" height="12" fill="none" aria-hidden="true">
+              <defs>
+                <linearGradient id="pmAuthModalGrad" x1="26" y1="24" x2="156" y2="92" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stop-color="#ffffff" />
+                  <stop offset="52%" stop-color="#7dd3fc" />
+                  <stop offset="100%" stop-color="#c4b5fd" />
+                </linearGradient>
+              </defs>
+              <path d="M 34 84 L 34 32 H 59 C 71.5 32 78.5 38.5 78.5 47.5 C 78.5 56.5 71.5 63 59 63 H 34" stroke="url(#pmAuthModalGrad)" stroke-width="15.5" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="M 98 84 L 98 32 L 124 62 L 150 32 L 150 84" stroke="url(#pmAuthModalGrad)" stroke-width="15.5" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+          <span>บัญชีผู้ใช้ &amp; เชื่อมส่วนบุญข้ามเครื่อง</span>
+        </div>
+        <button type="button" id="btn-auth-modal-close" style="background:transparent;border:none;color:#94a3b8;font-size:18px;cursor:pointer;padding:4px 8px;">✕</button>
+      </div>
+      <div id="auth-modal-logged-in" style="display:none;background:rgba(16,185,129,0.1);border:1px solid rgba(52,211,153,0.35);border-radius:12px;padding:14px;margin-bottom:14px;">
+        <div style="font-size:12px;color:#6ee7b7;font-weight:700;margin-bottom:4px;">✅ กำลังเชื่อมต่อบัญชีกลางอยู่</div>
+        <div style="font-size:17px;font-weight:800;color:#fff;margin-bottom:6px;">👤 <span id="auth-modal-username">-</span></div>
+        <div style="font-size:12px;color:#cbd5e1;line-height:1.6;">
+          • ยอดส่วนบุญร่วมกันทุกเครื่อง: <strong id="auth-modal-merit" style="color:#fde68a;">0</strong> ส่วนบุญ<br>
+          • เครื่องนี้: <span id="auth-modal-device">-</span> (<span id="auth-modal-hwid">-</span>)<br>
+          • สถานะสิทธิ์: <strong id="auth-modal-status">-</strong>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end;">
+          <button type="button" id="btn-auth-view-fleet" class="btn btn-primary btn-sm" style="font-size:12px;padding:6px 12px;">🖥️ ดูเครื่องทั้งหมด</button>
+          <button type="button" id="btn-auth-logout" class="btn btn-danger btn-sm" style="font-size:12px;padding:6px 12px;">🚪 ออกจากระบบ / สลับบัญชี</button>
+        </div>
+      </div>
+      <div id="auth-modal-guest">
+        <div style="font-size:12px;color:#94a3b8;line-height:1.55;margin-bottom:12px;">
+          ล็อกอินด้วย <b>Username</b> เดียวกันในทุกเครื่องที่ใช้งาน ยอดส่วนบุญ (รวมถึงยอดค้างเดิมของเครื่องนี้) จะถูกเชื่อมรวมเป็นกระเป๋าเดียวกันอัตโนมัติ และไม่ต้องขออนุมัติเครื่องซ้ำทุกครั้ง
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:12px;">
+          <button type="button" id="btn-auth-tab-login" class="btn btn-sm" style="flex:1;background:rgba(56,189,248,0.22);border:1px solid rgba(56,189,248,0.6);color:#e0f2fe;font-weight:700;padding:7px;border-radius:8px;cursor:pointer;">🔓 เข้าสู่ระบบ (Login)</button>
+          <button type="button" id="btn-auth-tab-register" class="btn btn-sm" style="flex:1;background:rgba(148,163,184,0.1);border:1px solid rgba(148,163,184,0.3);color:#cbd5e1;font-weight:600;padding:7px;border-radius:8px;cursor:pointer;">📝 สมัคร ID ใหม่</button>
+        </div>
+        <div id="auth-pane-login">
+          <div style="display:grid;gap:9px;">
+            <input type="text" id="auth-login-username" maxlength="32" placeholder="Username (เช่น user01)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">
+            <input type="password" id="auth-login-password" maxlength="128" placeholder="รหัสผ่าน (Password)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">
+            <div id="auth-login-msg" style="font-size:12px;min-height:16px;color:#fca5a5;"></div>
+            <button type="button" id="btn-auth-login-submit" class="btn btn-primary" style="width:100%;padding:9px 14px;font-weight:700;">🔓 เข้าสู่ระบบ &amp; เชื่อมส่วนบุญ</button>
+          </div>
+        </div>
+        <div id="auth-pane-register" style="display:none;">
+          <div style="display:grid;gap:9px;">
+            <input type="text" id="auth-reg-username" maxlength="32" placeholder="ตั้ง Username ใหม่ (3-32 ตัวอักษร a-z, 0-9, _, .)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">
+            <input type="password" id="auth-reg-password" maxlength="128" placeholder="ตั้งรหัสผ่าน (อย่างน้อย 4 ตัวอักษร)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">
+            <input type="password" id="auth-reg-password2" maxlength="128" placeholder="ยืนยันรหัสผ่านอีกครั้ง" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">
+            <input type="text" id="auth-reg-note" maxlength="200" placeholder="หมายเหตุ / ชื่อเล่นส่งแอดมิน (ไม่บังคับ)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#fff;padding:9px 11px;font-size:13px;">
+            <div id="auth-reg-msg" style="font-size:12px;min-height:16px;color:#fca5a5;"></div>
+            <button type="button" id="btn-auth-reg-submit" class="btn btn-success" style="width:100%;padding:9px 14px;font-weight:700;">📝 สมัครสมาชิก &amp; ส่งอนุมัติ</button>
+          </div>
         </div>
       </div>
     </div>

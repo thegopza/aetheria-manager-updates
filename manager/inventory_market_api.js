@@ -1088,6 +1088,25 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
   };
   window.spreadChannelBeforeKrathongWalk = async function (room, manual = false) {
     if (window.__krathongChannelSpreadDoneThisTrip) return false;
+    if (!manual && (
+      window.__isShopping ||
+      window.__isStoring ||
+      window.__isWalkingToMap ||
+      window.__isNavigating ||
+      window.__alicePollInterval != null ||
+      window.__isGearRefining ||
+      window.__isChangingJob ||
+      window.__isWeightScrollBusy ||
+      window.__isManualSelling ||
+      window.__isAutoSellingNow ||
+      window.__isConsolidating ||
+      window.__consolidationPending ||
+      window.__senderTradeBusy ||
+      (typeof isCharacterOverweight === 'function' && isCharacterOverweight()) ||
+      document.querySelector('.human-check')
+    )) {
+      return false;
+    }
     window.__krathongChannelSpreadDoneThisTrip = true;
     try {
       if (typeof window.getChannelsList !== 'function' || typeof window.switchChannel !== 'function') return false;
@@ -1371,7 +1390,23 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     if (!room) {
       return manual ? { success: false, error: 'ยังไม่ได้เชื่อมต่อเข้าสู่แผนที่เกม หรือเกมกำลังโหลดอยู่' } : false;
     }
-    if (!manual && (window.__isShopping || window.__isStoring || window.__isGearRefining || window.__isChangingJob || window.__isManualSelling || window.__isAutoSellingNow || window.__isConsolidating || window.__senderTradeBusy || document.querySelector('.human-check'))) {
+    if (!manual && (
+      window.__isShopping ||
+      window.__isStoring ||
+      window.__isWalkingToMap ||
+      window.__isNavigating ||
+      window.__alicePollInterval != null ||
+      window.__isGearRefining ||
+      window.__isChangingJob ||
+      window.__isWeightScrollBusy ||
+      window.__isManualSelling ||
+      window.__isAutoSellingNow ||
+      window.__isConsolidating ||
+      window.__consolidationPending ||
+      window.__senderTradeBusy ||
+      (typeof isCharacterOverweight === 'function' && isCharacterOverweight()) ||
+      document.querySelector('.human-check')
+    )) {
       return false;
     }
     const inv0 = getAuthoritativeLiveInventory();
@@ -1641,6 +1676,24 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       return { success: false, busy: true, message: 'กำลังดำเนินการแลก/เปิดใช้ของกิจกรรมลอยกระทงอยู่...' };
     }
     if (!manual && (window.__halloweenNextTryAt || 0) > Date.now()) return false;
+    const isBusyForAutoHalloween = () => !manual && (
+      window.__isWalkingToMap ||
+      window.__isNavigating ||
+      window.__alicePollInterval != null ||
+      window.__isShopping ||
+      window.__isStoring ||
+      window.__isGearRefining ||
+      window.__isChangingJob ||
+      window.__isWeightScrollBusy ||
+      window.__isManualSelling ||
+      window.__isAutoSellingNow ||
+      window.__isConsolidating ||
+      window.__consolidationPending ||
+      window.__senderTradeBusy ||
+      (typeof isCharacterOverweight === 'function' && isCharacterOverweight()) ||
+      document.querySelector('.human-check')
+    );
+    if (isBusyForAutoHalloween()) return false;
     const st = window.getHalloweenExchangeStatus();
     const cfg = window.__halloweenExchangeConfig || {};
     const rules = cfg.rules || {};
@@ -1669,8 +1722,8 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
     const isCap = typeof window.isInCapital === 'function'
       ? window.isInCapital()
       : /เมืองหลวง|โซลเฮเวน|capital/i.test((typeof window.getCurrentMapName === 'function' ? window.getCurrentMapName() : '') || (room.state && room.state.mapId) || '');
+    if (isBusyForAutoHalloween()) return false;
     if (!isCap) {
-      if (!manual && (window.__isWalkingToMap || window.__isNavigating)) return false;
       if (!manual && typeof window.checkKrathongWaveGate === 'function') {
         const gate = window.checkKrathongWaveGate(false);
         if (gate && !gate.allowed) {
@@ -1696,6 +1749,14 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       window.__halloweenNextTryAt = Date.now() + 8000;
       return { success: true, navigating: true, message: window.__halloweenLastLog };
     }
+    const shouldAbortMidStep = () => !manual && (
+      !window.__isBotRunning ||
+      window.__isShopping ||
+      window.__isStoring ||
+      window.__isConsolidating ||
+      window.__consolidationPending ||
+      document.querySelector('.human-check')
+    );
     if (!candidates.length && needFloatExistingKrathong) {
       window.__isHalloweenExchanging = true;
       window.__planJobChangeHoldUntil = Date.now() + 45000;
@@ -1706,12 +1767,18 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
           await window.spreadChannelBeforeKrathongWalk(room, manual);
           room = getActiveOpenGameRoom(manual) || room;
         }
+        if (shouldAbortMidStep()) {
+          window.__planJobChangeHoldUntil = 0;
+          if (typeof window.doneTown === 'function') window.doneTown('halloween');
+          return false;
+        }
         const useRes = await window.runLoyKrathongAutoUseInBag(true);
         window.__halloweenNextTryAt = Date.now() + 8000;
         window.__planJobChangeHoldUntil = 0;
         window.__krathongChannelSpreadDoneThisTrip = false;
         window.__krathongTripApprovedAt = 0;
-        if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
+        if (!shouldAbortMidStep() && typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
+        else if (typeof window.doneTown === 'function') window.doneTown('halloween');
         return { success: true, exchanged: [], summary: (useRes && useRes.summary) || 'ลอยกระทงเรียบร้อยแล้ว', status: window.getHalloweenExchangeStatus() };
       } finally {
         window.__isHalloweenExchanging = false;
@@ -1726,6 +1793,11 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       if (typeof window.spreadChannelBeforeKrathongWalk === 'function') {
         await window.spreadChannelBeforeKrathongWalk(room, manual);
         room = getActiveOpenGameRoom(manual) || room;
+      }
+      if (shouldAbortMidStep()) {
+        window.__planJobChangeHoldUntil = 0;
+        if (typeof window.doneTown === 'function') window.doneTown('halloween');
+        return false;
       }
       let witchKey = null;
       let witchNpc = null;
@@ -1752,6 +1824,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       }
       window.syncHalloweenWhitelist();
       const closeAll = () => {
+        if (!manual && (window.__isShopping || window.__isStoring)) return;
         document.querySelectorAll('.shop-window .win-close, .npc-dialog .win-close').forEach(b => { try { b.click(); } catch (_) {} });
         try { room.send('npc_close', {}); } catch (_) {}
       };
@@ -1761,7 +1834,7 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         if (me && Number.isFinite(Number(me.x)) && Math.hypot(me.x - witchNpc.x, me.y - witchNpc.y) > 115) {
           const walkStart = Date.now();
           let lastMove = 0;
-          while (Date.now() - walkStart < 15000 && (manual || window.__isBotRunning)) {
+          while (Date.now() - walkStart < 15000 && !shouldAbortMidStep()) {
             me = getMe();
             if (me && Math.hypot(me.x - witchNpc.x, me.y - witchNpc.y) <= 115) break;
             if (Date.now() - lastMove > 1800) {
@@ -1776,6 +1849,11 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
           await sleep(250);
         }
       }
+      if (shouldAbortMidStep()) {
+        window.__planJobChangeHoldUntil = 0;
+        if (typeof window.doneTown === 'function') window.doneTown('halloween');
+        return false;
+      }
       let netDlg = null, netShop = null;
       if (typeof room.onMessage === 'function') {
         try {
@@ -1789,11 +1867,16 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       if (!shopObj) {
         room.send('npc_talk', { npcKey: witchKey });
         let dlg = null;
-        for (let i = 0; i < 100 && !dlg && !netDlg && !shopObj && !netShop; i++) {
-          if (i === 40) { try { room.send('npc_talk', { npcKey: witchKey }); } catch (_) {} }
+        for (let i = 0; i < 100 && !dlg && !netDlg && !shopObj && !netShop && !shouldAbortMidStep(); i++) {
+          if (i === 40 && !shouldAbortMidStep()) { try { room.send('npc_talk', { npcKey: witchKey }); } catch (_) {} }
           await sleep(200);
           shopObj = netShop || window.readLiveWitchShopState();
           dlg = document.querySelector('.npc-dialog:not(.guide-talk)');
+        }
+        if (shouldAbortMidStep()) {
+          window.__planJobChangeHoldUntil = 0;
+          if (typeof window.doneTown === 'function') window.doneTown('halloween');
+          return false;
         }
         if ((dlg || netDlg) && !shopObj) {
           const opts = netDlg && Array.isArray(netDlg.options)
@@ -1802,14 +1885,21 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
           let optIdx = opts.findIndex(o => /แลก|เทียน|รางวัล|ร้าน|กระทง|reward|shop|exchange/i.test(o));
           if (optIdx < 0) optIdx = 0;
           room.send('npc_option', { index: optIdx });
-          for (let i = 0; i < 40 && !shopObj; i++) {
+          for (let i = 0; i < 40 && !shopObj && !shouldAbortMidStep(); i++) {
             await sleep(200);
             shopObj = netShop || window.readLiveWitchShopState();
           }
         }
       }
+      if (shouldAbortMidStep()) {
+        window.__planJobChangeHoldUntil = 0;
+        if (typeof window.doneTown === 'function') window.doneTown('halloween');
+        return false;
+      }
       if (!shopObj) {
         closeAll();
+        window.__planJobChangeHoldUntil = 0;
+        if (typeof window.doneTown === 'function') window.doneTown('halloween');
         window.__halloweenNextTryAt = Date.now() + 15000;
         return { success: false, error: 'เปิดหน้าต่างแลกของนางนพมาศ (Nang Noppamas) ไม่สำเร็จ (กำลังเดินไปหา NPC)' };
       }
@@ -1859,7 +1949,8 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
         window.__planJobChangeHoldUntil = 0;
         window.__krathongChannelSpreadDoneThisTrip = false;
         window.__krathongTripApprovedAt = 0;
-        if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
+        if (!shouldAbortMidStep() && typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
+        else if (typeof window.doneTown === 'function') window.doneTown('halloween');
         return { success: false, error: 'โควต้าของที่เลือกเต็มแล้ว หรือเทียนดอกบัว/Zeny ไม่พอแลกตามจำนวนขั้นต่ำที่ตั้งไว้' };
       }
       netShop = null;
@@ -1884,7 +1975,8 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       window.__planJobChangeHoldUntil = 0;
       window.__krathongChannelSpreadDoneThisTrip = false;
       window.__krathongTripApprovedAt = 0;
-      if (typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
+      if (!shouldAbortMidStep() && typeof window.restoreFarmMapAfterJobChange === 'function') window.restoreFarmMapAfterJobChange('halloween');
+      else if (typeof window.doneTown === 'function') window.doneTown('halloween');
       return { success: true, exchanged: lines, summary: exchangedSummary.join(' · '), status: window.getHalloweenExchangeStatus() };
     } finally {
       if (typeof unsubDlg === 'function') { try { unsubDlg(); } catch (_) {} }
@@ -1892,20 +1984,20 @@ const HALLOWEEN_RUNTIME_INSTALL_JS = `(() => {
       window.__isHalloweenExchanging = false;
     }
   };
-  if (!window.__pmHalloweenLoopId || window.__pmHalloweenLoopVer !== 6) {
+  if (!window.__pmHalloweenLoopId || window.__pmHalloweenLoopVer !== 7) {
     if (window.__pmHalloweenLoopId) { try { clearInterval(window.__pmHalloweenLoopId); } catch (_) {} }
-    window.__pmHalloweenLoopVer = 6;
+    window.__pmHalloweenLoopVer = 7;
     window.__halloweenEventEnded = false;
     if ((window.__halloweenNextTryAt || 0) > Date.now() + 86400000) window.__halloweenNextTryAt = 0;
     window.__pmHalloweenLoopId = setInterval(async () => {
       try {
         const liveShop = window.readLiveWitchShopState && window.readLiveWitchShopState();
         if (liveShop && !window.__isHalloweenExchanging) window.updateHalloweenQuotaFromShop(liveShop);
-        if (!window.__consolidationPending && !window.__isHalloweenExchanging && !window.__isUsingEventItems) {
+        if (!window.__consolidationPending && !window.__isHalloweenExchanging && !window.__isUsingEventItems && !window.__isShopping && !window.__isStoring) {
           if (typeof window.runLoyKrathongAutoUseInBag === 'function') {
             await window.runLoyKrathongAutoUseInBag(false);
           }
-          if (window.__isBotRunning && !window.__isUsingEventItems) {
+          if (window.__isBotRunning && !window.__isUsingEventItems && !window.__isShopping && !window.__isStoring) {
             await window.runHalloweenExchangeStep(false);
           }
         }

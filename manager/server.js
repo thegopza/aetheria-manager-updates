@@ -8619,16 +8619,22 @@ const server = http.createServer(async (req, res) => {
         const deviceGroupIndex = typeof browserMode.ensureProfileDeviceGroupIndex === "function"
           ? browserMode.ensureProfileDeviceGroupIndex(p.id)
           : 1;
+        const assignedDeviceSpec = typeof browserMode.ensureProfileDeviceSpec === "function"
+          ? browserMode.ensureProfileDeviceSpec(p.id)
+          : null;
 
         if (alive && hasFreshLiveState && p.debugPort && assignedDeviceId && !browserMode.isOpen(p.id)) {
           if (!windowStates[p.id]) windowStates[p.id] = {};
-          if (windowStates[p.id].syncedDeviceId !== assignedDeviceId || windowStates[p.id].syncedMachineId !== assignedMachineId) {
+          const specPlat = assignedDeviceSpec?.platform || 'pc';
+          if (windowStates[p.id].syncedDeviceId !== assignedDeviceId || windowStates[p.id].syncedMachineId !== assignedMachineId || windowStates[p.id].syncedPlatform !== specPlat) {
             windowStates[p.id].syncedDeviceId = assignedDeviceId;
             windowStates[p.id].syncedMachineId = assignedMachineId;
+            windowStates[p.id].syncedPlatform = specPlat;
             evalProfilePort(p.debugPort, `(() => {
               window.__pmManagedDeviceGroup = true;
               window.__pmDeviceId = ${JSON.stringify(assignedDeviceId)};
               window.__pmMachineId = ${JSON.stringify(assignedMachineId || '')};
+              window.__pmDeviceSpec = ${JSON.stringify(assignedDeviceSpec || null)};
               try {
                 if (window.localStorage) {
                   window.localStorage.setItem('aetheria.device', window.__pmDeviceId);
@@ -8646,6 +8652,11 @@ const server = http.createServer(async (req, res) => {
                       if (parsed && typeof parsed === 'object') {
                         parsed.deviceId = window.__pmDeviceId;
                         if (window.__pmMachineId) parsed.machineId = window.__pmMachineId;
+                        if (window.__pmDeviceSpec && typeof window.__pmDeviceSpec === 'object') {
+                          if (window.__pmDeviceSpec.gpu) parsed.gpu = window.__pmDeviceSpec.gpu;
+                          if (window.__pmDeviceSpec.ua) parsed.ua = window.__pmDeviceSpec.ua;
+                          if (typeof window.__pmDeviceSpec.touch === 'number') parsed.touch = window.__pmDeviceSpec.touch;
+                        }
                         init = Object.assign({}, init, { body: JSON.stringify(parsed) });
                       }
                     }
@@ -8664,6 +8675,9 @@ const server = http.createServer(async (req, res) => {
           deviceId: assignedDeviceId,
           machineId: assignedMachineId,
           deviceGroupIndex,
+          devicePlatform: assignedDeviceSpec?.platform || 'pc',
+          deviceModel: assignedDeviceSpec?.model || null,
+          deviceGpu: assignedDeviceSpec?.gpu || null,
           hasLoginPassword: !!credentials.getPassword(p.id),
           isRunning: alive,
           pid: alive ? (proc ? proc.pid : null) : null,

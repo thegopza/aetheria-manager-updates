@@ -176,6 +176,12 @@
             ipSlotStart: Number(g.ipSlotStart) || 1,
             proxyIp: g.proxyIp || null,
             proxyPort: g.proxyPort || null,
+            platform: g.platform || (members[0].profile && members[0].profile.devicePlatform) || 'pc',
+            platformOverride: g.platformOverride || null,
+            defaultPlatformMode: g.defaultPlatformMode || cachedCustomConfig?.defaultPlatformMode || 'pc',
+            deviceModel: g.deviceModel || (members[0].profile && members[0].profile.deviceModel) || '',
+            deviceGpu: g.deviceGpu || (members[0].profile && members[0].profile.deviceGpu) || '',
+            deviceTouch: typeof g.deviceTouch === 'number' ? g.deviceTouch : ((g.platform === 'android') ? 5 : 0),
             deviceId: g.deviceId || (members[0].profile && members[0].profile.deviceId) || '-',
             machineId: g.machineId || (members[0].profile && members[0].profile.machineId) || '',
             maxScreens: Number(g.maxScreens) || MAX_SCREENS_PER_DEVICE,
@@ -213,6 +219,10 @@
           ipSlotStart: subStart + 1,
           proxyIp: (first.screenProxy && first.screenProxy.ip) || null,
           proxyPort: (first.screenProxy && first.screenProxy.proxyPort) || null,
+          platform: first.devicePlatform || 'pc',
+          deviceModel: first.deviceModel || '',
+          deviceGpu: first.deviceGpu || '',
+          deviceTouch: first.devicePlatform === 'android' ? 5 : 0,
           deviceId: first.deviceId || '-',
           machineId: first.machineId || '',
           maxScreens: subMax,
@@ -405,6 +415,14 @@
             🛡️ ตั้งค่า Proxy IP
           </button>
         </div>
+        <div class="dv-platform-mode-bar" id="dv-platform-mode-bar">
+          <span class="dv-platform-mode-lbl">📱 โหมดจำลองอุปกรณ์:</span>
+          <div class="dv-platform-mode-group" id="dv-platform-mode-group">
+            <button type="button" class="dv-platform-mode-btn active" data-dv-platform-mode="pc" title="จำลองทุกกลุ่มอัตโนมัติเป็นเครื่องคอมพิวเตอร์ Windows PC">🖥️ PC ทั้งหมด</button>
+            <button type="button" class="dv-platform-mode-btn" data-dv-platform-mode="android" title="จำลองทุกกลุ่มอัตโนมัติเป็นมือถือ/แท็บเล็ต Android (Adreno/Mali + Touch)">📱 Android ทั้งหมด</button>
+            <button type="button" class="dv-platform-mode-btn" data-dv-platform-mode="mixed" title="สลับอัตโนมัติ: ใน 1 IP ให้ Device 1 เป็น PC และ Device 2 เป็น Android">🔀 ผสม PC + Android</button>
+          </div>
+        </div>
         <div class="dv-ip-split-banner" id="dv-ip-split-banner">
           ⚙️ 1 IP (6 จอ) ➜ แบ่งเป็น <b>2 กลุ่ม · 2 Device</b> (3 + 3 จอ)
         </div>
@@ -455,6 +473,14 @@
         const val = Number(btn.getAttribute('data-dv-per-ip')) || 6;
         if (perIpInput) perIpInput.value = String(val);
         applyScreensPerIpFromDrawer(val);
+      });
+    });
+
+    drawer.querySelectorAll('[data-dv-platform-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-dv-platform-mode') || 'pc';
+        const modeLabel = mode === 'android' ? '📱 Android ทั้งหมด' : (mode === 'mixed' ? '🔀 ผสม PC + Android' : '🖥️ PC ทั้งหมด');
+        mutateCustomApi({ action: 'set_default_platform_mode', mode, clearOverrides: true }, `✅ ตั้งโหมดจำลองอุปกรณ์เป็น "${modeLabel}" เรียบร้อย`);
       });
     });
 
@@ -887,6 +913,10 @@
               const devId = dg.deviceId || '-';
               const machId = dg.machineId || '';
               const shortMach = machId.length >= 20 ? `${machId.slice(0, 12)}...${machId.slice(-10)}` : (machId || '-');
+              const dgPlat = dg.platform === 'android' ? 'android' : 'pc';
+              const dgModel = dg.deviceModel || (dgPlat === 'android' ? 'Android Mobile' : 'Windows PC');
+              const dgGpu = dg.deviceGpu || (dgPlat === 'android' ? 'Adreno 750' : 'GeForce RTX 4060');
+              const shortDgGpu = dgGpu.replace(/\s*Direct3D11.*$/i, '');
 
               const isEditingDg = editingTitleState && editingTitleState.kind === 'device' && editingTitleState.deviceGroupId === dg.id;
               const isDeletingDg = pendingDeleteState && pendingDeleteState.kind === 'device' && pendingDeleteState.deviceGroupId === dg.id;
@@ -948,13 +978,17 @@
                   }).join('');
 
               return `
-                <div class="dv-custom-dev-card">
+                <div class="dv-custom-dev-card ${dgPlat === 'android' ? 'is-android-card' : ''}">
                   <div class="dv-custom-dev-top">
                     <div class="dv-custom-dev-title">
-                      <span>🖥️ ${esc(dg.name || `Device #${dgIdx + 1}`)}</span>
+                      <span>${dgPlat === 'android' ? '📱' : '🖥️'} ${esc(dg.name || `Device #${dgIdx + 1}`)}</span>
                       <span class="dv-group-slots-badge">${dgPids.length} จอ</span>
                     </div>
-                    <div style="display:flex;gap:4px;flex-wrap:wrap;">
+                    <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+                      <div class="dv-plat-toggle" title="สลับโหมดจำลองอุปกรณ์ของ Device นี้ (PC / Android)">
+                        <button type="button" class="dv-plat-btn ${dgPlat === 'pc' ? 'active is-pc' : ''}" data-set-custom-plat="${esc(ig.id)}:${esc(dg.id)}:pc" ${customMutating ? 'disabled' : ''}>🖥️ PC</button>
+                        <button type="button" class="dv-plat-btn ${dgPlat === 'android' ? 'active is-android' : ''}" data-set-custom-plat="${esc(ig.id)}:${esc(dg.id)}:android" ${customMutating ? 'disabled' : ''}>📱 Android</button>
+                      </div>
                       <button type="button" class="dv-btn dv-btn-xs dv-btn-emerald" data-open-picker="${esc(ig.id)}:${esc(dg.id)}" ${customMutating ? 'disabled' : ''}>+ เลือกจอเข้า Device</button>
                       <button type="button" class="dv-random-group-btn" data-rotate-custom-dg="${esc(ig.id)}:${esc(dg.id)}" ${isRotDg || customMutating ? 'disabled' : ''} title="สุ่มเลข Device ID และ Machine ID ใหม่">
                         ${isRotDg ? '⏳ กำลังสุ่ม...' : '🎲 Random Device'}
@@ -966,6 +1000,14 @@
                   ${editDgBar}
                   ${deleteDgBar}
                   <div class="dv-device-box">
+                    <div class="dv-device-row">
+                      <span class="dv-device-label">${dgPlat === 'android' ? '📱 รุ่น Android:' : '🖥️ สเปก PC:'}</span>
+                      <div class="dv-device-val-wrap">
+                        <span class="dv-spec-badge ${dgPlat === 'android' ? 'is-android' : 'is-pc'}" title="Model: ${esc(dgModel)} · GPU: ${esc(dgGpu)} · Touch: ${dgPlat === 'android' ? 5 : 0}">
+                          ${esc(dgModel)} · <b>${esc(shortDgGpu)}</b>
+                        </span>
+                      </div>
+                    </div>
                     <div class="dv-device-row">
                       <span class="dv-device-label">🔑 Device ID:</span>
                       <div class="dv-device-val-wrap">
@@ -1129,6 +1171,18 @@
       });
     });
 
+    bodyEl.querySelectorAll('[data-set-custom-plat]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const [ipGroupId, deviceGroupId, platform] = String(btn.getAttribute('data-set-custom-plat') || '').split(':');
+        if (!ipGroupId || !deviceGroupId || !platform) return;
+        mutateCustomApi(
+          { action: 'set_custom_device_platform', ipGroupId, deviceGroupId, platform },
+          platform === 'android' ? '📱 เปลี่ยนเป็นโหมดจำลอง Android แล้ว' : '🖥️ เปลี่ยนเป็นโหมดจำลอง Windows PC แล้ว'
+        );
+      });
+    });
+
     bodyEl.querySelectorAll('[data-open-picker]').forEach(btn => {
       btn.addEventListener('click', () => {
         const [ipGroupId, deviceGroupId] = String(btn.getAttribute('data-open-picker') || '').split(':');
@@ -1267,8 +1321,25 @@
       surchargeHintEl.className = `dv-surcharge-hint ${pct > 0 ? 'is-extra' : 'is-std'}`;
     }
 
+    const currentDefaultPlatMode = String(
+      cachedCustomConfig?.defaultPlatformMode ||
+      (groups[0] && groups[0].defaultPlatformMode) ||
+      'pc'
+    ).toLowerCase();
+    document.querySelectorAll('[data-dv-platform-mode]').forEach(btn => {
+      const m = btn.getAttribute('data-dv-platform-mode');
+      btn.classList.toggle('active', m === currentDefaultPlatMode);
+      btn.disabled = customMutating;
+    });
+
     if (splitBannerEl) {
-      const pills = subSizes.map((sz, i) => `<span class="dv-split-chip">🖥️ Device ${i + 1}: <b>${sz} จอ</b></span>`).join(' <span style="color:#64748b;">+</span> ');
+      const pills = subSizes.map((sz, i) => {
+        const chipPlat = currentDefaultPlatMode === 'android'
+          ? 'android'
+          : (currentDefaultPlatMode === 'mixed' && i % 2 === 1 ? 'android' : 'pc');
+        const chipIcon = chipPlat === 'android' ? '📱' : '🖥️';
+        return `<span class="dv-split-chip">${chipIcon} Device ${i + 1}: <b>${sz} จอ</b></span>`;
+      }).join(' <span style="color:#64748b;">+</span> ');
       splitBannerEl.innerHTML = `
         <span>⚙️ <b>สูตรแบ่งต่อ 1 IP:</b> 1 IP (<b>${perIp} จอ</b>) = <b style="color:#fde047;">${subSizes.length} กลุ่ม · ${subSizes.length} Device</b></span>
         <span class="dv-split-chips-wrap">${pills}</span>
@@ -1345,6 +1416,10 @@
         const devId = grp.deviceId || '-';
         const machId = grp.machineId || '';
         const shortMach = machId.length >= 20 ? `${machId.slice(0, 12)}...${machId.slice(-10)}` : (machId || '-');
+        const grpPlat = grp.platform === 'android' ? 'android' : 'pc';
+        const grpModel = grp.deviceModel || (grpPlat === 'android' ? 'Android Mobile' : 'Windows PC');
+        const grpGpu = grp.deviceGpu || (grpPlat === 'android' ? 'Adreno 750' : 'GeForce RTX 4060');
+        const shortGrpGpu = grpGpu.replace(/\s*Direct3D11.*$/i, '');
 
         const membersHtml = grp.members.map((m, slotIdx) => {
           const p = m.profile || {};
@@ -1384,20 +1459,34 @@
         }).join('');
 
         return `
-          <div class="dv-group-card ${isJustRot ? 'dv-just-rotated' : ''}" data-group-index="${gIdx}">
+          <div class="dv-group-card ${isJustRot ? 'dv-just-rotated' : ''} ${grpPlat === 'android' ? 'is-android-card' : ''}" data-group-index="${gIdx}">
             <div class="dv-group-top">
               <div class="dv-group-badges">
-                <span class="dv-group-title-badge">🖥️ Group #${gIdx}</span>
+                <span class="dv-group-title-badge">${grpPlat === 'android' ? '📱' : '🖥️'} Group #${gIdx}</span>
                 <span class="dv-group-subdevice-badge">Device ${grp.deviceIndexInIp}/${grp.devicesPerIp}</span>
                 <span class="dv-group-slots-badge">${grp.members.length} / ${grp.maxScreens} จอ</span>
                 ${onlineInGroup > 0 ? `<span class="dv-group-online-badge">🟢 ออนไลน์ ${onlineInGroup} จอ</span>` : ''}
               </div>
-              <button type="button" class="dv-random-group-btn" data-rotate-group="${gIdx}" ${isRot ? 'disabled' : ''} title="สุ่มเลข Device ID และ Machine ID ใหม่ให้จอทั้งหมดใน Group #${gIdx}">
-                ${isRot ? '⏳ กำลังสุ่ม...' : '🎲 Random Device'}
-              </button>
+              <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;">
+                <div class="dv-plat-toggle" title="สลับโหมดจำลองอุปกรณ์เฉพาะ Group #${gIdx} (PC / Android)">
+                  <button type="button" class="dv-plat-btn ${grpPlat === 'pc' ? 'active is-pc' : ''}" data-set-auto-plat="${gIdx}:pc" ${customMutating ? 'disabled' : ''}>🖥️ PC</button>
+                  <button type="button" class="dv-plat-btn ${grpPlat === 'android' ? 'active is-android' : ''}" data-set-auto-plat="${gIdx}:android" ${customMutating ? 'disabled' : ''}>📱 Android</button>
+                </div>
+                <button type="button" class="dv-random-group-btn" data-rotate-group="${gIdx}" ${isRot ? 'disabled' : ''} title="สุ่มเลข Device ID และ Machine ID ใหม่ให้จอทั้งหมดใน Group #${gIdx}">
+                  ${isRot ? '⏳ กำลังสุ่ม...' : '🎲 Random Device'}
+                </button>
+              </div>
             </div>
 
             <div class="dv-device-box">
+              <div class="dv-device-row">
+                <span class="dv-device-label">${grpPlat === 'android' ? '📱 รุ่น Android:' : '🖥️ สเปก PC:'}</span>
+                <div class="dv-device-val-wrap">
+                  <span class="dv-spec-badge ${grpPlat === 'android' ? 'is-android' : 'is-pc'}" title="Model: ${esc(grpModel)} · GPU: ${esc(grpGpu)} · Touch: ${grpPlat === 'android' ? 5 : 0}">
+                    ${esc(grpModel)} · <b>${esc(shortGrpGpu)}</b>
+                  </span>
+                </div>
+              </div>
               <div class="dv-device-row">
                 <span class="dv-device-label">🔑 Device ID:</span>
                 <div class="dv-device-val-wrap">
@@ -1449,6 +1538,19 @@
         e.stopPropagation();
         const gIdx = btn.getAttribute('data-rotate-group');
         rotateSingleGroup(gIdx, e);
+      });
+    });
+
+    bodyEl.querySelectorAll('[data-set-auto-plat]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const [gIdxStr, platform] = String(btn.getAttribute('data-set-auto-plat') || '').split(':');
+        const groupIndex = Number(gIdxStr);
+        if (!groupIndex || !platform) return;
+        mutateCustomApi(
+          { action: 'set_auto_group_platform', groupIndex, platform },
+          platform === 'android' ? `📱 เปลี่ยน Group #${groupIndex} เป็นโหมดจำลอง Android แล้ว` : `🖥️ เปลี่ยน Group #${groupIndex} เป็นโหมดจำลอง Windows PC แล้ว`
+        );
       });
     });
 

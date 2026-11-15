@@ -23,6 +23,76 @@ const SHA256_HEX_RE = /^[0-9a-f]{64}$/i;
 function deriveMachineId(seed) {
   return crypto.createHash('sha256').update('pmhee-machine:' + String(seed || crypto.randomUUID())).digest('hex');
 }
+
+const ANDROID_DEVICE_PRESETS = [
+  { model: 'Samsung Galaxy S24 Ultra (SM-S928B)', gpu: 'Adreno 750', ua: 'Mozilla/5.0 (Linux; Android 14; SM-S928B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '384x824', cores: 8 },
+  { model: 'Samsung Galaxy S23 Ultra (SM-S918B)', gpu: 'Adreno 740', ua: 'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '384x824', cores: 8 },
+  { model: 'Samsung Galaxy S24+ (SM-S926B)', gpu: 'Mali-G720 Immortalis MC12', ua: 'Mozilla/5.0 (Linux; Android 14; SM-S926B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '384x832', cores: 10 },
+  { model: 'Xiaomi 14 Pro (23116PN5BC)', gpu: 'Adreno 750', ua: 'Mozilla/5.0 (Linux; Android 14; 23116PN5BC) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '393x873', cores: 8 },
+  { model: 'Xiaomi 13T Pro (23078PND5G)', gpu: 'Mali-G715 Immortalis MC11', ua: 'Mozilla/5.0 (Linux; Android 14; 23078PND5G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '393x873', cores: 8 },
+  { model: 'ASUS ROG Phone 8 Pro (AI2401)', gpu: 'Adreno 750', ua: 'Mozilla/5.0 (Linux; Android 14; ASUS_AI2401) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '396x876', cores: 8 },
+  { model: 'OnePlus 12 (CPH2581)', gpu: 'Adreno 750', ua: 'Mozilla/5.0 (Linux; Android 14; CPH2581) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '384x856', cores: 8 },
+  { model: 'Google Pixel 8 Pro (GC3VE)', gpu: 'Mali-G715 Immortalis MC10', ua: 'Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '412x892', cores: 9 },
+  { model: 'Vivo X100 Pro (V2309)', gpu: 'Mali-G720 Immortalis MC12', ua: 'Mozilla/5.0 (Linux; Android 14; V2309) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '393x873', cores: 8 },
+  { model: 'OPPO Find X7 Ultra (PHY110)', gpu: 'Adreno 750', ua: 'Mozilla/5.0 (Linux; Android 14; PHY110) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '384x856', cores: 8 },
+  { model: 'POCO F6 Pro (23113RKC6G)', gpu: 'Adreno 740', ua: 'Mozilla/5.0 (Linux; Android 14; 23113RKC6G) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '393x873', cores: 8 },
+  { model: 'Samsung Galaxy A55 5G (SM-A556E)', gpu: 'Adreno 730', ua: 'Mozilla/5.0 (Linux; Android 14; SM-A556E) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '384x832', cores: 8 },
+  { model: 'Realme GT 6 (RMX3851)', gpu: 'Adreno 735', ua: 'Mozilla/5.0 (Linux; Android 14; RMX3851) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '393x873', cores: 8 },
+  { model: 'Samsung Galaxy Tab S9 Ultra (SM-X910)', gpu: 'Adreno 740', ua: 'Mozilla/5.0 (Linux; Android 14; SM-X910) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Safari/537.36', touch: 5, screen: '960x1524', cores: 8 },
+  { model: 'Xiaomi Pad 6S Pro (24018RPACC)', gpu: 'Adreno 740', ua: 'Mozilla/5.0 (Linux; Android 14; 24018RPACC) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Safari/537.36', touch: 5, screen: '1000x1500', cores: 8 },
+  { model: 'RedMagic 9 Pro (NX769J)', gpu: 'Adreno 750', ua: 'Mozilla/5.0 (Linux; Android 14; NX769J) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.135 Mobile Safari/537.36', touch: 5, screen: '400x892', cores: 8 }
+];
+
+const PC_DEVICE_PRESETS = [
+  { model: 'Windows PC · RTX 4060', gpu: 'GeForce RTX 4060 Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 12 },
+  { model: 'Windows PC · RTX 3060', gpu: 'GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 12 },
+  { model: 'Windows PC · RTX 4070 Super', gpu: 'GeForce RTX 4070 SUPER Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '2560x1440', cores: 16 },
+  { model: 'Windows PC · RTX 3070', gpu: 'GeForce RTX 3070 Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 16 },
+  { model: 'Windows PC · RTX 4060 Ti', gpu: 'GeForce RTX 4060 Ti Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 12 },
+  { model: 'Windows PC · Radeon RX 7600', gpu: 'Radeon RX 7600 Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 12 },
+  { model: 'Windows PC · Radeon RX 6700 XT', gpu: 'Radeon RX 6700 XT Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '2560x1440', cores: 16 },
+  { model: 'Windows PC · GTX 1660 Super', gpu: 'GeForce GTX 1660 SUPER Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 8 },
+  { model: 'Windows PC · RTX 3050', gpu: 'GeForce RTX 3050 Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 8 },
+  { model: 'Windows PC · Intel Arc A770', gpu: 'Intel Arc A770 Graphics Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 12 },
+  { model: 'Windows PC · Intel Iris Xe', gpu: 'Intel Iris Xe Graphics Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '1920x1080', cores: 8 },
+  { model: 'Windows PC · RTX 4070 Ti', gpu: 'GeForce RTX 4070 Ti Direct3D11 vs_5_0 ps_5_0', ua: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36', touch: 0, screen: '2560x1440', cores: 16 }
+];
+
+function normalizeDevicePlatform(val, fallback = 'pc') {
+  const s = String(val || '').trim().toLowerCase();
+  if (s === 'android' || s === 'mobile') return 'android';
+  if (s === 'pc' || s === 'windows' || s === 'desktop') return 'pc';
+  return fallback;
+}
+
+function normalizeDefaultPlatformMode(val) {
+  const s = String(val || '').trim().toLowerCase();
+  if (s === 'android' || s === 'mixed' || s === 'pc') return s;
+  return 'pc';
+}
+
+function resolveDeviceSpec(deviceId, platform = 'pc') {
+  const plat = normalizeDevicePlatform(platform, 'pc');
+  const presets = plat === 'android' ? ANDROID_DEVICE_PRESETS : PC_DEVICE_PRESETS;
+  const seedStr = `${plat}:${String(deviceId || 'default').toLowerCase()}`;
+  let hash = 2166136261;
+  for (let i = 0; i < seedStr.length; i++) {
+    hash ^= seedStr.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  const idx = Math.abs(hash >>> 0) % presets.length;
+  const picked = presets[idx] || presets[0];
+  return {
+    platform: plat,
+    model: picked.model,
+    gpu: picked.gpu,
+    ua: picked.ua,
+    touch: picked.touch,
+    screen: picked.screen,
+    cores: picked.cores
+  };
+}
+
 const HEALTH_JS = `(() => {
   const bs = window.__pmScriptBootstrap?.status?.() || null;
   const bootstrapPhase = bs?.phase || null;
@@ -33,6 +103,9 @@ const HEALTH_JS = `(() => {
     profileId: window.__pmProfileId || (typeof sessionStorage !== 'undefined' && sessionStorage.getItem && sessionStorage.getItem('__pmProfileId')) || null,
     deviceId: window.__pmDeviceId || null,
     machineId: window.__pmMachineId || null,
+    devicePlatform: (window.__pmDeviceSpec && window.__pmDeviceSpec.platform) || null,
+    deviceModel: (window.__pmDeviceSpec && window.__pmDeviceSpec.model) || null,
+    deviceGpu: (window.__pmDeviceSpec && window.__pmDeviceSpec.gpu) || null,
     storageRestored: !!window.__pmStorageRestored,
     version: window.__pelicanBotVersion || null,
     hud: !!document.getElementById('pelican-hud'),
@@ -455,6 +528,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   const profileDeviceIds = new Map();
   const profileMachineIds = new Map();
   const profileDeviceGroupIndex = new Map();
+  const profileDeviceSpecs = new Map();
   const deviceMachineMap = new Map();
   const usedDeviceIds = new Set();
   const usedMachineIds = new Set();
@@ -788,6 +862,19 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   let customIpConfigCache = null;
 
+  function resolveAutoGroupPlatform(cfg, groupIndex, deviceIndexInIp = 1, devicesPerIp = 2) {
+    const map = (cfg && cfg.autoGroupPlatforms && typeof cfg.autoGroupPlatforms === 'object') ? cfg.autoGroupPlatforms : {};
+    const override = map[String(groupIndex)];
+    if (override === 'android' || override === 'pc') return override;
+    const mode = normalizeDefaultPlatformMode(cfg?.defaultPlatformMode);
+    if (mode === 'android') return 'android';
+    if (mode === 'mixed') {
+      const idx = (Number(devicesPerIp) || 1) > 1 ? (Number(deviceIndexInIp) || 1) : (Number(groupIndex) || 1);
+      return idx % 2 === 0 ? 'android' : 'pc';
+    }
+    return 'pc';
+  }
+
   function loadCustomIpDeviceConfig(forceReload = false) {
     if (!forceReload && customIpConfigCache) return customIpConfigCache;
     let raw = null;
@@ -795,6 +882,15 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       try {
         raw = JSON.parse(fs.readFileSync(customIpFile, 'utf8'));
       } catch (_) {}
+    }
+    const defaultPlatformMode = normalizeDefaultPlatformMode(raw?.defaultPlatformMode);
+    const autoGroupPlatforms = {};
+    if (raw && raw.autoGroupPlatforms && typeof raw.autoGroupPlatforms === 'object') {
+      for (const [k, v] of Object.entries(raw.autoGroupPlatforms)) {
+        if (/^\d+$/.test(String(k)) && (v === 'pc' || v === 'android')) {
+          autoGroupPlatforms[String(k)] = v;
+        }
+      }
     }
     const rawGroups = Array.isArray(raw?.ipGroups) ? raw.ipGroups : [];
     const seenIpIds = new Set();
@@ -836,6 +932,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         const dgName = typeof d.name === 'string' && d.name.trim()
           ? d.name.trim().slice(0, 64)
           : `Device #${deviceGroups.length + 1}`;
+        const dgPlatform = normalizeDevicePlatform(d.platform, defaultPlatformMode === 'android' ? 'android' : 'pc');
         let devId = typeof d.deviceId === 'string' ? d.deviceId.trim() : '';
         if (!UUID_V4_RE.test(devId)) {
           devId = mintUniqueDeviceId();
@@ -860,6 +957,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         deviceGroups.push({
           id: dgId,
           name: dgName,
+          platform: dgPlatform,
           deviceId: devId,
           machineId: machId,
           profileIds: pids
@@ -873,7 +971,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       });
     }
 
-    const normalized = { version: 1, ipGroups };
+    const normalized = { version: 1, defaultPlatformMode, autoGroupPlatforms, ipGroups };
     customIpConfigCache = normalized;
     if (changed && customIpFile && fs.existsSync(customIpFile)) {
       saveCustomIpDeviceConfig(normalized);
@@ -884,6 +982,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   function saveCustomIpDeviceConfig(cfg) {
     const clean = {
       version: 1,
+      defaultPlatformMode: normalizeDefaultPlatformMode(cfg?.defaultPlatformMode),
+      autoGroupPlatforms: (cfg?.autoGroupPlatforms && typeof cfg.autoGroupPlatforms === 'object' && !Array.isArray(cfg.autoGroupPlatforms))
+        ? { ...cfg.autoGroupPlatforms }
+        : {},
       ipGroups: Array.isArray(cfg?.ipGroups) ? cfg.ipGroups : []
     };
     customIpConfigCache = clean;
@@ -922,6 +1024,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const cfg = loadCustomIpDeviceConfig();
     return {
       version: 1,
+      defaultPlatformMode: cfg.defaultPlatformMode || 'pc',
+      autoGroupPlatforms: { ...(cfg.autoGroupPlatforms || {}) },
       ipGroups: cfg.ipGroups.map(ig => {
         const igPids = [];
         for (const dg of ig.deviceGroups) {
@@ -934,13 +1038,20 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           memberCount: igPids.length,
           shareCount: Math.max(1, igPids.length),
           profileIds: igPids,
-          deviceGroups: ig.deviceGroups.map(dg => ({
-            id: dg.id,
-            name: dg.name,
-            deviceId: dg.deviceId,
-            machineId: dg.machineId,
-            profileIds: [...dg.profileIds]
-          }))
+          deviceGroups: ig.deviceGroups.map(dg => {
+            const spec = resolveDeviceSpec(dg.deviceId, dg.platform || 'pc');
+            return {
+              id: dg.id,
+              name: dg.name,
+              platform: spec.platform,
+              deviceModel: spec.model,
+              deviceGpu: spec.gpu,
+              deviceTouch: spec.touch,
+              deviceId: dg.deviceId,
+              machineId: dg.machineId,
+              profileIds: [...dg.profileIds]
+            };
+          })
         };
       })
     };
@@ -951,6 +1062,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const customMap = buildCustomProfileMap(cfg);
     const entry = customMap.get(profileId);
     if (entry) {
+      const spec = resolveDeviceSpec(entry.dg.deviceId, entry.dg.platform || 'pc');
       return {
         isCustom: true,
         ipGroupId: entry.ig.id,
@@ -958,6 +1070,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         ipGroupKey: `custom:${entry.ig.id}`,
         deviceGroupId: entry.dg.id,
         deviceGroupName: entry.dg.name,
+        platform: spec.platform,
+        deviceModel: spec.model,
+        deviceGpu: spec.gpu,
+        deviceTouch: spec.touch,
         deviceId: entry.dg.deviceId,
         machineId: entry.dg.machineId,
         memberCount: entry.totalInIpGroup,
@@ -976,6 +1092,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const machKey = `pelican_${pid}__aetheria_machine`;
     profileDeviceIds.set(pid, deviceId);
     profileMachineIds.set(pid, machineId);
+    profileDeviceSpecs.delete(pid);
     saveProfileStorage(pid, { [devKey]: deviceId, [machKey]: machineId });
     if (pushToLiveWindow) {
       const c = clients.get(pid);
@@ -986,13 +1103,14 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     }
   }
 
-  function createCustomDeviceGroupEntry(name) {
+  function createCustomDeviceGroupEntry(name, platform = 'pc') {
     const devId = mintUniqueDeviceId();
     const machId = mintUniqueMachineId(`custom-dg:${devId.toLowerCase()}:${Date.now()}`);
     deviceMachineMap.set(devId.toLowerCase(), machId);
     return {
       id: `cdg_${crypto.randomBytes(4).toString('hex')}`,
       name,
+      platform: normalizeDevicePlatform(platform, 'pc'),
       deviceId: devId,
       machineId: machId,
       profileIds: []
@@ -1005,13 +1123,102 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const action = String(payload?.action || '').trim();
     const affected = new Set();
 
+    if (action === 'set_default_platform_mode') {
+      const nextMode = normalizeDefaultPlatformMode(payload.mode || payload.defaultPlatformMode);
+      cfg.defaultPlatformMode = nextMode;
+      if (payload.clearOverrides !== false) {
+        cfg.autoGroupPlatforms = {};
+      }
+      saveCustomIpDeviceConfig(cfg);
+      rebalanceDeviceGroups(null, true);
+      const customMap = buildCustomProfileMap(cfg);
+      const autoIds = getOrderedProfileIds().filter(pid => !customMap.has(pid));
+      for (const pid of autoIds) {
+        const c = clients.get(pid);
+        if (c && c.sessionId) {
+          await ensureSessionHooks(c.sessionId, pid, c).catch(() => {});
+          await evaluate(c, profileInitScript(pid), 4500).catch(() => {});
+        }
+      }
+      return {
+        success: true,
+        action,
+        defaultPlatformMode: cfg.defaultPlatformMode,
+        affectedProfileIds: [],
+        customIpConfig: getCustomIpDeviceConfig()
+      };
+    }
+
+    if (action === 'set_auto_group_platform') {
+      const gIdx = Math.max(1, Math.floor(Number(payload.groupIndex) || 1));
+      const rawPlat = String(payload.platform || '').trim().toLowerCase();
+      if (!cfg.autoGroupPlatforms || typeof cfg.autoGroupPlatforms !== 'object') {
+        cfg.autoGroupPlatforms = {};
+      }
+      if (rawPlat === 'auto' || rawPlat === 'default' || !rawPlat) {
+        delete cfg.autoGroupPlatforms[String(gIdx)];
+      } else {
+        cfg.autoGroupPlatforms[String(gIdx)] = normalizeDevicePlatform(rawPlat, 'pc');
+      }
+      saveCustomIpDeviceConfig(cfg);
+      rebalanceDeviceGroups(null, true);
+      const customMap = buildCustomProfileMap(cfg);
+      const autoIds = getOrderedProfileIds().filter(pid => !customMap.has(pid));
+      const layout = buildDeviceGroupLayout(autoIds, getScreensPerIp());
+      const targetGrp = layout.find(g => g.groupIndex === gIdx);
+      for (const pid of (targetGrp?.profileIds || [])) {
+        const c = clients.get(pid);
+        if (c && c.sessionId) {
+          await ensureSessionHooks(c.sessionId, pid, c).catch(() => {});
+          await evaluate(c, profileInitScript(pid), 4500).catch(() => {});
+        }
+      }
+      return {
+        success: true,
+        action,
+        groupIndex: gIdx,
+        platform: cfg.autoGroupPlatforms[String(gIdx)] || null,
+        affectedProfileIds: [],
+        customIpConfig: getCustomIpDeviceConfig()
+      };
+    }
+
+    if (action === 'set_custom_device_platform') {
+      const targetIg = cfg.ipGroups.find(x => x.id === payload.ipGroupId);
+      const targetDg = (targetIg?.deviceGroups || []).find(x => x.id === payload.deviceGroupId);
+      if (!targetIg || !targetDg) throw new Error('CUSTOM_DEVICE_GROUP_NOT_FOUND');
+      targetDg.platform = normalizeDevicePlatform(payload.platform, 'pc');
+      saveCustomIpDeviceConfig(cfg);
+      rebalanceDeviceGroups(null, true);
+      for (const pid of (targetDg.profileIds || [])) {
+        const c = clients.get(pid);
+        if (c && c.sessionId) {
+          await ensureSessionHooks(c.sessionId, pid, c).catch(() => {});
+          await evaluate(c, profileInitScript(pid), 4500).catch(() => {});
+        }
+      }
+      return {
+        success: true,
+        action,
+        ipGroupId: targetIg.id,
+        deviceGroupId: targetDg.id,
+        platform: targetDg.platform,
+        affectedProfileIds: [],
+        customIpConfig: getCustomIpDeviceConfig()
+      };
+    }
+
     if (action === 'add_ip_group') {
       const igId = `cig_${crypto.randomBytes(4).toString('hex')}`;
       const name = String(payload.name || '').trim().slice(0, 64) || `วง IP พิเศษ #${cfg.ipGroups.length + 1}`;
       const dgCount = Math.max(1, Math.min(10, Math.floor(Number(payload.deviceGroupCount) || 1)));
+      const defPlat = payload.platform ? normalizeDevicePlatform(payload.platform, 'pc') : (cfg.defaultPlatformMode === 'android' ? 'android' : 'pc');
       const deviceGroups = [];
       for (let i = 0; i < dgCount; i++) {
-        deviceGroups.push(createCustomDeviceGroupEntry(`Device #${i + 1}`));
+        const plat = (cfg.defaultPlatformMode === 'mixed' && !payload.platform)
+          ? (i % 2 === 1 ? 'android' : 'pc')
+          : defPlat;
+        deviceGroups.push(createCustomDeviceGroupEntry(`Device #${i + 1}`, plat));
       }
       const ipGroup = { id: igId, name, createdAt: Date.now(), deviceGroups };
       cfg.ipGroups.push(ipGroup);
@@ -1051,7 +1258,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const ig = cfg.ipGroups.find(x => x.id === payload.ipGroupId);
       if (!ig) throw new Error('CUSTOM_IP_GROUP_NOT_FOUND');
       const dgName = String(payload.name || '').trim().slice(0, 64) || `Device #${ig.deviceGroups.length + 1}`;
-      const dg = createCustomDeviceGroupEntry(dgName);
+      const defPlat = payload.platform
+        ? normalizeDevicePlatform(payload.platform, 'pc')
+        : (cfg.defaultPlatformMode === 'android'
+            ? 'android'
+            : (cfg.defaultPlatformMode === 'mixed' && ig.deviceGroups.length % 2 === 1 ? 'android' : 'pc'));
+      const dg = createCustomDeviceGroupEntry(dgName, defPlat);
       ig.deviceGroups.push(dg);
       saveCustomIpDeviceConfig(cfg);
       return { success: true, action, ipGroupId: ig.id, deviceGroupId: dg.id, affectedProfileIds: [], customIpConfig: getCustomIpDeviceConfig() };
@@ -1216,8 +1428,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const customMap = buildCustomProfileMap(customCfg);
       const autoOrderedIds = orderedIds.filter(pid => !customMap.has(pid));
       const perIp = getScreensPerIp();
-      const customSig = customCfg.ipGroups
-        .map(ig => `${ig.id}:${ig.deviceGroups.map(d => `${d.id}=${d.deviceId}:${d.profileIds.join(',')}`).join(';')}`)
+      const customSig = `${customCfg.defaultPlatformMode || 'pc'}::${JSON.stringify(customCfg.autoGroupPlatforms || {})}::` + customCfg.ipGroups
+        .map(ig => `${ig.id}:${ig.deviceGroups.map(d => `${d.id}=${d.deviceId}:${d.platform || 'pc'}:${d.profileIds.join(',')}`).join(';')}`)
         .join('|');
       const sig = `${perIp}::${orderedIds.join('|')}::${customSig}`;
       if (!forceRecheck && deviceIdsInitialized && sig === lastGroupedOrderSignature && (!extraProfileId || profileDeviceIds.has(extraProfileId))) {
@@ -1241,6 +1453,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       for (const [pid, entry] of customMap.entries()) {
         const groupDev = entry.dg.deviceId;
         const groupMach = entry.dg.machineId;
+        const spec = { ...resolveDeviceSpec(groupDev, entry.dg.platform || 'pc'), deviceId: groupDev };
         claimedDevices.add(groupDev.toLowerCase());
         const prevMemDev = profileDeviceIds.get(pid) || '';
         const prevMemMach = profileMachineIds.get(pid) || '';
@@ -1254,6 +1467,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         profileDeviceIds.set(pid, groupDev);
         profileMachineIds.set(pid, groupMach);
         profileDeviceGroupIndex.set(pid, -1);
+        profileDeviceSpecs.set(pid, spec);
 
         if (diskDev !== groupDev || diskMach !== groupMach || hasLegacyRaw) {
           saveProfileStorage(pid, { [devKey]: groupDev, [machKey]: groupMach });
@@ -1309,6 +1523,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         claimedDevices.add(groupDev.toLowerCase());
 
         const groupMach = getOrMintMachineIdForDevice(groupDev, candidateMach);
+        const grpPlatform = resolveAutoGroupPlatform(customCfg, grp.groupIndex, grp.deviceIndexInIp, grp.devicesPerIp);
+        const spec = { ...resolveDeviceSpec(groupDev, grpPlatform), deviceId: groupDev };
 
         for (const pid of groupPids) {
           const prevMemDev = profileDeviceIds.get(pid) || '';
@@ -1323,6 +1539,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           profileDeviceIds.set(pid, groupDev);
           profileMachineIds.set(pid, groupMach);
           profileDeviceGroupIndex.set(pid, grp.groupIndex);
+          profileDeviceSpecs.set(pid, spec);
 
           if (diskDev !== groupDev || diskMach !== groupMach || hasLegacyRaw) {
             saveProfileStorage(pid, { [devKey]: groupDev, [machKey]: groupMach });
@@ -1370,10 +1587,37 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     return typeof idx === 'number' ? idx : 1;
   }
 
+  function ensureProfileDeviceSpec(profileId) {
+    const devId = ensureProfileDeviceId(profileId);
+    if (profileId && profileDeviceSpecs.has(profileId)) {
+      const cached = profileDeviceSpecs.get(profileId);
+      if (cached && cached.deviceId === devId) return cached;
+    }
+    const cfg = loadCustomIpDeviceConfig();
+    if (profileId) {
+      const customMap = buildCustomProfileMap(cfg);
+      const customEntry = customMap.get(profileId);
+      if (customEntry && customEntry.dg) {
+        const spec = { ...resolveDeviceSpec(devId, customEntry.dg.platform || 'pc'), deviceId: devId };
+        profileDeviceSpecs.set(profileId, spec);
+        return spec;
+      }
+    }
+    const gIdx = profileId ? (profileDeviceGroupIndex.get(profileId) || 1) : 1;
+    const perIp = getScreensPerIp();
+    const devicesPerIp = Math.ceil(perIp / MAX_SCREENS_PER_DEVICE);
+    const devIdxInIp = ((Math.max(1, gIdx) - 1) % Math.max(1, devicesPerIp)) + 1;
+    const plat = resolveAutoGroupPlatform(cfg, gIdx, devIdxInIp, devicesPerIp);
+    const spec = { ...resolveDeviceSpec(devId, plat), deviceId: devId };
+    if (profileId) profileDeviceSpecs.set(profileId, spec);
+    return spec;
+  }
+
   function getDeviceGroupsSnapshot() {
     initDeviceIdsFromStorage();
     rebalanceDeviceGroups(null, false);
-    const customMap = buildCustomProfileMap(loadCustomIpDeviceConfig());
+    const customCfg = loadCustomIpDeviceConfig();
+    const customMap = buildCustomProfileMap(customCfg);
     const orderedIds = getOrderedProfileIds().filter(pid => !customMap.has(pid));
     const perIp = getScreensPerIp();
     const layout = buildDeviceGroupLayout(orderedIds, perIp);
@@ -1411,6 +1655,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const firstPid = grp.profileIds[0];
       const deviceId = firstPid ? ensureProfileDeviceId(firstPid) : '';
       const machineId = firstPid ? ensureProfileMachineId(firstPid) : '';
+      const platform = resolveAutoGroupPlatform(customCfg, grp.groupIndex, grp.deviceIndexInIp, grp.devicesPerIp);
+      const spec = resolveDeviceSpec(deviceId, platform);
       const poolItem = poolItems[grp.ipIndex - 1] || null;
       return {
         groupIndex: grp.groupIndex,
@@ -1423,6 +1669,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         ipProfileIds: grp.ipProfileIds,
         proxyIp: poolItem ? (poolItem.labelIp || poolItem.host || null) : null,
         proxyPort: poolItem ? (poolItem.port || null) : null,
+        platform: spec.platform,
+        platformOverride: (customCfg.autoGroupPlatforms && customCfg.autoGroupPlatforms[String(grp.groupIndex)]) || null,
+        defaultPlatformMode: customCfg.defaultPlatformMode || 'pc',
+        deviceModel: spec.model,
+        deviceGpu: spec.gpu,
+        deviceTouch: spec.touch,
         deviceId,
         machineId,
         maxScreens: grp.maxScreens,
@@ -1444,11 +1696,16 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         );
         if (customDg) {
           const rotRes = await mutateCustomIpDevices({ action: 'rotate_custom_device', ipGroupId: ig.id, deviceGroupId: customDg.id });
+          const spec = resolveDeviceSpec(rotRes.deviceId, customDg.platform || 'pc');
           return {
             groupIndex: -1,
             isCustom: true,
             ipGroupId: ig.id,
             deviceGroupId: customDg.id,
+            platform: spec.platform,
+            deviceModel: spec.model,
+            deviceGpu: spec.gpu,
+            deviceTouch: spec.touch,
             deviceId: rotRes.deviceId,
             machineId: rotRes.machineId,
             profileIds: [...customDg.profileIds]
@@ -1485,10 +1742,13 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const assigned = mintUniqueDeviceId();
     const assignedMach = mintUniqueMachineId('device-group:' + assigned.toLowerCase() + ':' + Date.now());
     deviceMachineMap.set(assigned.toLowerCase(), assignedMach);
+    const grpPlat = resolveAutoGroupPlatform(cfg, targetGrp.groupIndex, targetGrp.deviceIndexInIp, targetGrp.devicesPerIp);
+    const spec = resolveDeviceSpec(assigned, grpPlat);
 
     for (const pid of groupPids) {
       await syncProfileDeviceIdentity(pid, assigned, assignedMach, true);
       profileDeviceGroupIndex.set(pid, targetGrp.groupIndex);
+      profileDeviceSpecs.set(pid, { ...spec, deviceId: assigned });
     }
 
     return {
@@ -1500,6 +1760,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       deviceSubSizes: targetGrp.deviceSubSizes,
       ipSlotStart: targetGrp.ipSlotStart,
       ipProfileIds: targetGrp.ipProfileIds,
+      platform: spec.platform,
+      deviceModel: spec.model,
+      deviceGpu: spec.gpu,
+      deviceTouch: spec.touch,
       deviceId: assigned,
       machineId: assignedMach,
       maxScreens: targetGrp.maxScreens,
@@ -1779,6 +2043,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   const profileInitScript = profileId => {
     const deviceId = ensureProfileDeviceId(profileId);
     const machineId = ensureProfileMachineId(profileId);
+    const deviceSpec = ensureProfileDeviceSpec(profileId);
     const rawSaved = loadProfileStorage(profileId);
     const saved = {};
     const pfx = profileId ? `pelican_${profileId}__` : 'pelican_';
@@ -1914,6 +2179,26 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           } catch (_) {}
           return __origDigest(algo, data);
         };
+      }
+      if (!window.__pmWebGlGpuHookInstalled) {
+        window.__pmWebGlGpuHookInstalled = true;
+        const __patchWebGl = function(ctor) {
+          if (!ctor || !ctor.prototype || typeof ctor.prototype.getParameter !== 'function') return;
+          const __origGetParam = ctor.prototype.getParameter;
+          ctor.prototype.getParameter = function(pname) {
+            try {
+              if (pname === 37446 && window.__pmDeviceSpec && window.__pmDeviceSpec.gpu) {
+                return window.__pmDeviceSpec.gpu;
+              }
+              if (pname === 37445 && window.__pmDeviceSpec) {
+                return window.__pmDeviceSpec.platform === 'android' ? 'Qualcomm' : 'Google Inc. (NVIDIA)';
+              }
+            } catch (_) {}
+            return __origGetParam.apply(this, arguments);
+          };
+        };
+        if (typeof WebGLRenderingContext !== 'undefined') __patchWebGl(WebGLRenderingContext);
+        if (typeof WebGL2RenderingContext !== 'undefined') __patchWebGl(WebGL2RenderingContext);
       }
       if (!window.__pmDeviceIdHookInstalled) {
         window.__pmDeviceIdHookInstalled = true;
@@ -2071,6 +2356,17 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
                 if (parsed && typeof parsed === 'object') {
                   if (isEnterWorld || isRegisterCall || 'deviceId' in parsed) parsed.deviceId = window.__pmDeviceId;
                   if (isEnterWorld || isRegisterCall || 'machineId' in parsed) parsed.machineId = window.__pmMachineId;
+                  if (window.__pmDeviceSpec && typeof window.__pmDeviceSpec === 'object') {
+                    if ((isEnterWorld || 'gpu' in parsed) && window.__pmDeviceSpec.gpu) {
+                      parsed.gpu = window.__pmDeviceSpec.gpu;
+                    }
+                    if ((isEnterWorld || 'ua' in parsed) && window.__pmDeviceSpec.ua) {
+                      parsed.ua = window.__pmDeviceSpec.ua;
+                    }
+                    if ((isEnterWorld || 'touch' in parsed) && typeof window.__pmDeviceSpec.touch === 'number') {
+                      parsed.touch = window.__pmDeviceSpec.touch;
+                    }
+                  }
                   init = Object.assign({}, init, { body: JSON.stringify(parsed) });
                 }
               }
@@ -2170,7 +2466,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       }
     } catch (_) {}`;
     const cacheFlag = Boolean(effectiveAssetCache && effectiveAssetCache.isEnabled());
-    return `window.__pmProfileId = ${JSON.stringify(profileId)}; window.__pmManagedDeviceGroup = true; window.__pmDeviceId = ${JSON.stringify(deviceId)}; window.__pmMachineId = ${JSON.stringify(machineId)}; window.__pmLocalAssetCacheEnabled = ${cacheFlag}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {} ${deviceHookJs} ${restoreJs}`;
+    return `window.__pmProfileId = ${JSON.stringify(profileId)}; window.__pmManagedDeviceGroup = true; window.__pmDeviceId = ${JSON.stringify(deviceId)}; window.__pmMachineId = ${JSON.stringify(machineId)}; window.__pmDeviceSpec = ${JSON.stringify(deviceSpec)}; window.__pmLocalAssetCacheEnabled = ${cacheFlag}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {} ${deviceHookJs} ${restoreJs}`;
   };
 
   async function configureSessionAssetCache(sessionId) {
@@ -3719,7 +4015,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     if(ws){const socket=ws;ws=null;socket.close();}
     for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(Error('BROWSER_MODE_DISPOSED'));}pending.clear();
   }
-  return { launch, stop, stopAll, isOpen, start, dispose, findBrowser, rebalanceDeviceGroups, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, getCustomIpDeviceConfig, getProfileIpIsolationMeta, mutateCustomIpDevices, pruneDeletedProfilesFromCustomGroups, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
+  return { launch, stop, stopAll, isOpen, start, dispose, findBrowser, rebalanceDeviceGroups, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, ensureProfileDeviceSpec, resolveDeviceSpec, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, getCustomIpDeviceConfig, getProfileIpIsolationMeta, mutateCustomIpDevices, pruneDeletedProfilesFromCustomGroups, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
 }
 
-module.exports = { createBrowserMode, findBrowser, HEALTH_JS, MAX_SCREENS_PER_DEVICE, extractPelicanStorageFromLevelDb, mergeAuthConfigString, mergeSellConfigString };
+module.exports = { createBrowserMode, findBrowser, HEALTH_JS, MAX_SCREENS_PER_DEVICE, resolveDeviceSpec, extractPelicanStorageFromLevelDb, mergeAuthConfigString, mergeSellConfigString };

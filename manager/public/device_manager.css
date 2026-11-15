@@ -1117,3 +1117,129 @@ body.dv-open #dv-drawer {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(9, 13, 22, 0.9);
 }
+
+/* Platform Mode Bar (PC / Android / Mixed) & Per-Device Toggle */
+.dv-platform-mode-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 16px;
+  background: linear-gradient(90deg, rgba(16, 185, 129, 0.12), rgba(15, 23, 42, 0.9));
+  border-bottom: 1px solid rgba(52, 211, 153, 0.25);
+}
+.dv-platform-mode-lbl {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #a7f3d0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.dv-platform-mode-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.dv-platform-mode-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: inherit;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.85);
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.dv-platform-mode-btn:hover:not(:disabled) {
+  border-color: rgba(52, 211, 153, 0.55);
+  color: #f8fafc;
+}
+.dv-platform-mode-btn.active[data-dv-platform-mode="pc"] {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.32), rgba(30, 58, 138, 0.5));
+  border-color: #38bdf8;
+  color: #f0f9ff;
+  box-shadow: 0 2px 8px rgba(14, 165, 233, 0.25);
+}
+.dv-platform-mode-btn.active[data-dv-platform-mode="android"] {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.34), rgba(6, 95, 70, 0.55));
+  border-color: #34d399;
+  color: #ecfdf5;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.28);
+}
+.dv-platform-mode-btn.active[data-dv-platform-mode="mixed"] {
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.34), rgba(16, 185, 129, 0.28));
+  border-color: #c084fc;
+  color: #f5f3ff;
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.25);
+}
+
+.dv-plat-toggle {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(2, 6, 23, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+}
+.dv-plat-btn {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-family: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 3px 7px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.dv-plat-btn:hover:not(:disabled) {
+  color: #f8fafc;
+}
+.dv-plat-btn.active.is-pc {
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.38), rgba(37, 99, 235, 0.48));
+  color: #e0f2fe;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.55);
+}
+.dv-plat-btn.active.is-android {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.42), rgba(5, 150, 105, 0.55));
+  color: #ecfdf5;
+  box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.65);
+}
+
+.dv-spec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 5px;
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dv-spec-badge.is-pc {
+  color: #bae6fd;
+  background: rgba(14, 165, 233, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+.dv-spec-badge.is-android {
+  color: #a7f3d0;
+  background: rgba(16, 185, 129, 0.15);
+  border: 1px solid rgba(52, 211, 153, 0.38);
+}
+.dv-group-card.is-android-card {
+  border-color: rgba(52, 211, 153, 0.35);
+}
+.dv-custom-dev-card.is-android-card {
+  border-color: rgba(52, 211, 153, 0.38);
+}
+

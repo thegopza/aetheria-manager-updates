@@ -115,6 +115,25 @@ function parseProxyPoolText(rawInput, defaultMaxScreens = DEFAULT_MAX_SCREENS_PE
       enabled
     });
   }
+  const TH_BACKUP_SUBNETS = new Set(['87.82.53', '82.119.203', '62.105.204', '62.105.205']);
+  const ASIA_PRIMARY_SUBNETS = new Set([
+    '104.252.149', '104.252.140', '104.253.155',
+    '119.42.36', '119.42.39',
+    '45.38.111', '45.39.73', '45.39.75',
+    '82.29.223', '82.21.231',
+    '92.113.231', '92.113.236', '92.113.241', '92.113.246',
+    '104.252.113', '13.143.113', '13.143.127'
+  ]);
+  const getTier = (h) => {
+    const prefix = String(h || '').trim().split('.').slice(0, 3).join('.');
+    if (ASIA_PRIMARY_SUBNETS.has(prefix)) return 0;
+    if (TH_BACKUP_SUBNETS.has(prefix)) return 2;
+    return 1;
+  };
+  if (out.some(p => getTier(p.host) === 2)) {
+    out.sort((a, b) => (getTier(a.host) - getTier(b.host)) || (a.sortOrder - b.sortOrder));
+    for (let i = 0; i < out.length; i++) out[i].sortOrder = i;
+  }
   return out;
 }
 

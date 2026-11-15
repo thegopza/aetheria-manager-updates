@@ -1243,43 +1243,49 @@ const LIVE_STATE_EVAL = `(() => {
 
     if (screenPhase !== 'in_game') {
       const now = Date.now();
-      const pageReady = document.readyState === 'complete' && (typeof performance !== 'undefined' ? performance.now() >= 4000 : true);
-      let tracker = window.__pmScreenPhaseTracker;
-      if (!tracker || tracker.phase !== screenPhase) {
-        tracker = window.__pmScreenPhaseTracker = { phase: screenPhase, since: now, reloaded: false };
-      } else if (!pageReady) {
-        tracker.since = now;
-      }
-      const elapsed = Math.max(0, now - tracker.since);
-      let finalLabel = baseLabel;
-      if (autoReloadAfterMs > 0) {
-        let lastReloadAt = 0;
-        try { lastReloadAt = Number(sessionStorage.getItem('__pm_last_auto_reload_at') || 0); } catch (_) {}
-        const cooldownElapsed = now - lastReloadAt;
-        const cooldownRemainMs = Math.max(0, 20000 - cooldownElapsed);
-        const totalWaitMs = Math.max(autoReloadAfterMs, elapsed + cooldownRemainMs);
-        const remainSec = Math.max(1, Math.ceil((totalWaitMs - elapsed) / 1000));
-        s.autoRefreshInSec = remainSec;
-        const isImmediateErrorPhase = (screenPhase === 'char_select_error' || screenPhase === 'login_error' || screenPhase === 'char_select_online' || screenPhase === 'char_select_limit');
-        if (pageReady && elapsed >= totalWaitMs && !tracker.reloaded) {
-          tracker.reloaded = true;
-          try { sessionStorage.setItem('__pm_last_auto_reload_at', String(now)); } catch (_) {}
-          finalLabel = '🔄 กำลังรีเฟรชหน้าจออัตโนมัติ...';
-          detail = detail + ' — รีเฟรชหน้าจออัตโนมัติแล้ว';
-          console.warn('[PmheeAether Recovery] ♻️ หน้าจอค้างที่สถานะ ' + screenPhase + ' นาน ' + Math.round(elapsed / 1000) + ' วินาที -> รีเฟรชหน้าเกมอัตโนมัติ...');
-          setTimeout(() => { try { window.location.reload(); } catch (_) {} }, 150);
-        } else if (isImmediateErrorPhase || elapsed >= 4000) {
-          finalLabel = baseLabel + ' · รีเฟรชใน ' + remainSec + ' วิ';
-        }
-      }
-      s.screenPhaseLabel = finalLabel;
+      window.__pmScreenPhaseTracker = { phase: screenPhase, since: now, reloaded: true };
+      s.autoRefreshInSec = null;
+      s.screenPhaseLabel = baseLabel;
       s.screenDetail = detail;
-      s.botStatus = finalLabel;
+      s.botStatus = baseLabel;
       s.map = s.charSelectInJail ? 'คุก' : 'ไม่ทราบแมพ';
     } else {
       s.screenPhaseLabel = null;
       s.screenDetail = null;
       s.autoRefreshInSec = null;
+    }
+    if (!window.__pmAutoReloadDisabledV1 && typeof window.__evaluateGameScreenPhase === 'function') {
+      const __origEvalPhase = window.__evaluateGameScreenPhase;
+      window.__evaluateGameScreenPhase = function () {
+        const __now = Date.now();
+        if (window.__pmScreenPhaseTracker) {
+          window.__pmScreenPhaseTracker.since = __now;
+          window.__pmScreenPhaseTracker.reloaded = true;
+        }
+        const __r = __origEvalPhase.apply(this, arguments);
+        if (window.__pmScreenPhaseTracker) {
+          window.__pmScreenPhaseTracker.since = __now;
+          window.__pmScreenPhaseTracker.reloaded = true;
+        }
+        if (__r && typeof __r === 'object') {
+          __r.autoRefreshInSec = null;
+          if (typeof __r.screenPhaseLabel === 'string') {
+            __r.screenPhaseLabel = __r.screenPhaseLabel.replace(/\\s*·\\s*รีเฟรชใน\\s*\\d+\\s*วิ/g, '');
+          }
+        }
+        try {
+          const __mEl = document.getElementById('p-cur-map-display');
+          if (__mEl && __mEl.innerText) __mEl.innerText = __mEl.innerText.replace(/\\s*·\\s*รีเฟรชใน\\s*\\d+\\s*วิ/g, '');
+          const __sEl = document.getElementById('p-char-state');
+          if (__sEl && __sEl.innerText) __sEl.innerText = __sEl.innerText.replace(/\\s*·\\s*รีเฟรชใน\\s*\\d+\\s*วิ/g, '');
+        } catch (_) {}
+        return __r;
+      };
+      window.__pmAutoReloadDisabledV1 = true;
+    }
+    if (window.__pmScreenPhaseTracker) {
+      window.__pmScreenPhaseTracker.since = Date.now();
+      window.__pmScreenPhaseTracker.reloaded = true;
     }
   } catch (e) {}
   try {
@@ -3715,6 +3721,11 @@ let consolidationState = {
   ipGroupIndex: 0,
   totalIpGroups: 0,
   ipGroupSummaries: [],
+  activeTasks: [],
+  runningIps: [],
+  busyProfileIds: [],
+  activeProfileIds: [],
+  activeSenders: [],
   status: 'idle', // 'idle' | 'running' | 'completed' | 'stopped' | 'error'
   step: 'พร้อมทำงาน',
   stepIndex: 0,
@@ -3731,17 +3742,69 @@ let consolidationState = {
   endTime: 0
 };
 let consolidationAborted = false;
+let consolidationTaskSeq = 0;
+const activeConsolidationTasks = new Map(); // taskId -> taskObj
+const activeConsolidationProfiles = new Map(); // profileId -> taskId
+const activeConsolidationChannels = new Map(); // channelNum -> taskId
+
+function syncConsolidationGlobalState() {
+  const tasks = Array.from(activeConsolidationTasks.values());
+  const isRunning = tasks.length > 0;
+  consolidationState.running = isRunning;
+  consolidationState.activeTasks = tasks.map(t => ({
+    taskId: t.taskId,
+    ip: t.ip,
+    sameIpOnly: t.sameIpOnly,
+    isPremiumConsolidation: t.isPremiumConsolidation,
+    status: t.status,
+    stepIndex: t.stepIndex,
+    totalSteps: t.totalSteps || 5,
+    step: t.step,
+    receiver: t.receiver,
+    currentSender: t.currentSender,
+    completedSenders: Array.isArray(t.completedSenders) ? [...t.completedSenders] : [],
+    completedSendersCount: Array.isArray(t.completedSenders) ? t.completedSenders.length : 0,
+    totalSenders: t.totalSenders || 0,
+    transferredZeny: t.transferredZeny || 0,
+    transferredItems: t.transferredItems || 0,
+    targetChannel: t.targetChannel || null,
+    startTime: t.startTime
+  }));
+  consolidationState.runningIps = Array.from(new Set(tasks.map(t => t.ip).filter(Boolean)));
+  consolidationState.busyProfileIds = Array.from(activeConsolidationProfiles.keys());
+  consolidationState.activeProfileIds = consolidationState.busyProfileIds;
+  consolidationState.activeSenders = tasks.map(t => t.currentSender).filter(Boolean);
+
+  if (isRunning) {
+    consolidationState.status = 'running';
+    const primary = tasks[tasks.length - 1];
+    consolidationState.receiver = primary.receiver;
+    consolidationState.currentSender = primary.currentSender;
+    consolidationState.currentIpGroup = primary.ip;
+    if (tasks.length === 1) {
+      consolidationState.stepIndex = primary.stepIndex;
+      consolidationState.step = primary.step;
+    } else {
+      const avgStep = Math.max(1, Math.min(5, Math.round(tasks.reduce((s, t) => s + (t.stepIndex || 1), 0) / tasks.length)));
+      consolidationState.stepIndex = avgStep;
+      const ipBriefs = tasks.map(t => `[${t.ip}: ขั้น ${t.stepIndex}/5${t.targetChannel ? ' CH' + t.targetChannel : ''}]`).join(' · ');
+      consolidationState.step = `⚡ กำลังเทรดพร้อมกัน ${tasks.length} วง IP: ${ipBriefs}`;
+    }
+  } else {
+    consolidationState.currentSender = null;
+    consolidationState.currentIpGroup = null;
+  }
+}
 
 function addConsolidationLog(text, level = 'info') {
   const time = new Date().toLocaleTimeString('th-TH');
   consolidationState.logs.push({ time, text, level });
-  if (consolidationState.logs.length > 300) consolidationState.logs.shift();
+  if (consolidationState.logs.length > 400) consolidationState.logs.shift();
   console.log(`[Consolidation] [${level.toUpperCase()}] ${text}`);
 }
 
 async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, keepZeny = 0, tradeItemsOpts = null) {
   const batchCtx = (tradeItemsOpts && tradeItemsOpts.batchContext) ? tradeItemsOpts.batchContext : null;
-  if (consolidationState.running && !(batchCtx && batchCtx.isSubBatch)) return { ok: false, error: 'already_running' };
   const premiumGoal = (tradeItemsOpts && tradeItemsOpts.premiumGoal) ? tradeItemsOpts.premiumGoal : null;
   const sameIpOnly = Boolean((tradeItemsOpts && tradeItemsOpts.sameIpOnly) || (batchCtx && batchCtx.sameIpOnly));
   const savedItemCfg = loadConsolidationItemSettings();
@@ -3756,15 +3819,40 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       ? sanitizeConsolidationItemsList(tradeItemsOpts.items)
       : sanitizeConsolidationItemsList(savedItemCfg.items));
 
-  if (!(batchCtx && batchCtx.isSubBatch)) {
+  const allProfiles = loadProfiles();
+  const receiverProfile = allProfiles.find(p => p.id === receiverProfileId);
+  if (!receiverProfile || !receiverProfile.debugPort) {
+    addConsolidationLog('❌ ไม่พบโปรไฟล์ตัวรับเงิน (Receiver) หรือไม่ได้เปิดจอเกม', 'error');
+    return { ok: false, error: 'receiver_not_online', groupTransferredZeny: 0, groupTransferredItems: 0 };
+  }
+
+  if (activeConsolidationProfiles.has(receiverProfile.id)) {
+    return { ok: false, error: `ตัวรับเงิน (${receiverProfile.name}) กำลังอยู่ในกระบวนการเทรดรวมเงินอยู่แล้ว`, groupTransferredZeny: 0, groupTransferredItems: 0 };
+  }
+
+  const receiverIpKey = getProfileIpGroupKey(receiverProfile.id);
+  let senderProfiles = allProfiles.filter(p =>
+    senderProfileIds.includes(p.id) &&
+    p.id !== receiverProfileId &&
+    p.debugPort &&
+    !activeConsolidationProfiles.has(p.id)
+  );
+
+  if (sameIpOnly) {
+    const beforeCount = senderProfiles.length;
+    senderProfiles = senderProfiles.filter(s => getProfileIpGroupKey(s.id) === receiverIpKey);
+    const filteredOut = beforeCount - senderProfiles.length;
+    if (filteredOut > 0) {
+      addConsolidationLog(`🛡️ โหมดจำกัดเฉพาะในวง IP [${receiverIpKey}]: กรองจอที่อยู่คนละวง IP ออก ${filteredOut} จอ`, 'info');
+    }
+  }
+
+  const wasIdle = activeConsolidationTasks.size === 0;
+  if (wasIdle && !(batchCtx && batchCtx.isSubBatch)) {
     consolidationAborted = false;
-    consolidationState.running = true;
     consolidationState.isPremiumConsolidation = Boolean(premiumGoal);
     consolidationState.sameIpOnly = sameIpOnly;
-    consolidationState.ipGroupMode = false;
-    consolidationState.currentIpGroup = null;
-    consolidationState.ipGroupIndex = 0;
-    consolidationState.totalIpGroups = 0;
+    consolidationState.ipGroupMode = Boolean(batchCtx && batchCtx.isSubBatch);
     consolidationState.ipGroupSummaries = [];
     consolidationState.premiumGoal = premiumGoal ? {
       receiverId: receiverProfileId,
@@ -3774,9 +3862,6 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       underHours: premiumGoal.underHours || 10,
       keepZeny: Number(keepZeny) || 0
     } : null;
-    consolidationState.status = 'running';
-    consolidationState.stepIndex = 1;
-    consolidationState.step = 'เตรียมพร้อมและหยุดบอททุกจอ...';
     consolidationState.completedSenders = [];
     consolidationState.totalTransferredZeny = 0;
     consolidationState.totalTransferredItems = 0;
@@ -3785,65 +3870,73 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     consolidationState.logs = [];
     consolidationState.startTime = Date.now();
     consolidationState.endTime = 0;
-  } else {
-    consolidationState.currentIpGroup = batchCtx.ip || null;
-    consolidationState.ipGroupIndex = batchCtx.groupIndex || 1;
-    consolidationState.totalIpGroups = batchCtx.totalGroups || 1;
   }
+
+  const taskId = `task_${++consolidationTaskSeq}_${Date.now()}`;
+  const task = {
+    taskId,
+    ip: receiverIpKey,
+    sameIpOnly,
+    isPremiumConsolidation: Boolean(premiumGoal),
+    status: 'running',
+    aborted: false,
+    stepIndex: 1,
+    totalSteps: 5,
+    step: `[${receiverIpKey}] เตรียมพร้อมและหยุดบอทในกลุ่ม...`,
+    receiver: {
+      id: receiverProfile.id,
+      name: receiverProfile.name,
+      port: receiverProfile.debugPort,
+      ip: receiverIpKey
+    },
+    currentSender: null,
+    completedSenders: [],
+    totalSenders: senderProfiles.length,
+    transferredZeny: 0,
+    transferredItems: 0,
+    targetChannel: null,
+    startTime: Date.now(),
+    endTime: 0
+  };
+  const isTaskAborted = () => Boolean(consolidationAborted || task.aborted);
+  const setTaskStep = (stepIndex, stepText) => {
+    if (typeof stepIndex === 'number') task.stepIndex = stepIndex;
+    task.step = stepText;
+    syncConsolidationGlobalState();
+  };
+  const markSenderCompleted = (senderId) => {
+    if (!task.completedSenders.includes(senderId)) task.completedSenders.push(senderId);
+    if (!consolidationState.completedSenders.includes(senderId)) consolidationState.completedSenders.push(senderId);
+    syncConsolidationGlobalState();
+  };
 
   let groupTransferredZeny = 0;
   let groupTransferredItems = 0;
 
-  const allProfiles = loadProfiles();
-  const receiverProfile = allProfiles.find(p => p.id === receiverProfileId);
-  let senderProfiles = allProfiles.filter(p => senderProfileIds.includes(p.id) && p.id !== receiverProfileId && p.debugPort);
+  const ipGroupBadgeText = ` [วง IP: ${receiverIpKey}${batchCtx && batchCtx.totalGroups > 1 ? ` (${batchCtx.groupIndex}/${batchCtx.totalGroups})` : ''}]`;
+  const logTask = (msg, level = 'info') => addConsolidationLog(`[${receiverIpKey} · ${receiverProfile.name}] ${msg}`, level);
 
-  if (!receiverProfile || !receiverProfile.debugPort) {
-    if (!(batchCtx && batchCtx.isSubBatch)) {
-      consolidationState.running = false;
-      consolidationState.status = 'error';
-    }
-    addConsolidationLog('❌ ไม่พบโปรไฟล์ตัวรับเงิน (Receiver) หรือไม่ได้เปิดจอเกม', 'error');
-    return { ok: false, error: 'receiver_not_online', groupTransferredZeny: 0, groupTransferredItems: 0 };
-  }
-
-  const receiverIpKey = getProfileIpGroupKey(receiverProfile.id);
-  if (sameIpOnly) {
-    const beforeCount = senderProfiles.length;
-    senderProfiles = senderProfiles.filter(s => getProfileIpGroupKey(s.id) === receiverIpKey);
-    const filteredOut = beforeCount - senderProfiles.length;
-    if (filteredOut > 0) {
-      addConsolidationLog(`🛡️ โหมดจำกัดเฉพาะในวง IP [${receiverIpKey}]: กรองจอที่อยู่คนละวง IP ออก ${filteredOut} จอ`, 'info');
-    }
-  }
-  consolidationState.currentIpGroup = receiverIpKey;
-
-  const ipGroupBadgeText = (sameIpOnly || (batchCtx && batchCtx.isSubBatch))
-    ? ` [วง IP: ${receiverIpKey}${batchCtx ? ` (${batchCtx.groupIndex}/${batchCtx.totalGroups})` : ''}]`
-    : '';
   const itemModeMsg = tradeItemsEnabled ? ` + เบิกคลังและเทรดไอเทม [${tradeItemsList.join(', ')}]` : '';
   if (premiumGoal) {
-    addConsolidationLog(`💎 เริ่มต้นระบบรวมเงินซื้อ Premium ก่อนหมดเวลา (< ${premiumGoal.underHours || 10} ชม.) ให้ตัวละคร ${receiverProfile.name}${ipGroupBadgeText} · เหลือเงินติดตัวคนโอน ${Number(keepZeny || 0).toLocaleString()} z`, 'info');
+    logTask(`💎 เริ่มต้นระบบรวมเงินซื้อ Premium ก่อนหมดเวลา (< ${premiumGoal.underHours || 10} ชม.) ให้ตัวละคร ${receiverProfile.name} · เหลือเงินติดตัวคนโอน ${Number(keepZeny || 0).toLocaleString()} z`, 'info');
   } else {
-    addConsolidationLog(`🚀 เริ่มต้นระบบรวมเงินเข้าตัวรับ ${receiverProfile.name}${ipGroupBadgeText}${itemModeMsg}`, 'info');
+    logTask(`🚀 เริ่มต้นระบบรวมเงินเข้าตัวรับ ${receiverProfile.name} (${senderProfiles.length} จอโอน)${itemModeMsg}`, 'info');
   }
 
   if (senderProfiles.length === 0) {
-    addConsolidationLog(`⚠️ ไม่มีจอผู้โอนที่ออนไลน์และอยู่ในเงื่อนไขสำหรับตัวรับ ${receiverProfile.name}${ipGroupBadgeText}`, 'warning');
-    if (!(batchCtx && batchCtx.isSubBatch)) {
-      consolidationState.running = false;
+    logTask(`⚠️ ไม่มีจอผู้โอนที่ว่างและอยู่ในเงื่อนไขสำหรับตัวรับ ${receiverProfile.name}`, 'warning');
+    syncConsolidationGlobalState();
+    if (activeConsolidationTasks.size === 0) {
       consolidationState.status = 'completed';
       consolidationState.endTime = Date.now();
     }
-    return { ok: true, groupTransferredZeny: 0, groupTransferredItems: 0 };
+    return { ok: true, taskId, groupTransferredZeny: 0, groupTransferredItems: 0 };
   }
 
-  consolidationState.receiver = {
-    id: receiverProfile.id,
-    name: receiverProfile.name,
-    port: receiverProfile.debugPort,
-    ip: receiverIpKey
-  };
+  activeConsolidationTasks.set(taskId, task);
+  activeConsolidationProfiles.set(receiverProfile.id, taskId);
+  for (const s of senderProfiles) activeConsolidationProfiles.set(s.id, taskId);
+  syncConsolidationGlobalState();
 
   try {
     // Ensure all involved clients have up-to-date stash/consolidation item & trade helpers
@@ -3858,7 +3951,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     // -------------------------------------------------------------
     // STEP 0: ตรวจสอบและเคลียร์สถานะค้าง (เช่น __isShopping ค้างตอนหยุดบอท) และรองานสำคัญสั้นๆ
     // -------------------------------------------------------------
-    consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}เตรียมความพร้อมและเคลียร์หน้าต่างค้างของแต่ละจอ...`;
+    setTaskStep(1, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}เตรียมความพร้อมและเคลียร์หน้าต่างค้างของแต่ละจอ...`);
     const BUSY_JS = `(() => {
       window.__consolidationPending = true;
       if (window.__townQueueTimer) {
@@ -3906,9 +3999,9 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       let b = await busyOf(p);
       const allBusy = [...b.hard, ...b.soft];
       if (allBusy.length) {
-        addConsolidationLog(`⏳ ${p.name}: รอ "${allBusy.join(', ')}" ให้เสร็จก่อน...`, 'info');
+        logTask(`⏳ ${p.name}: รอ "${allBusy.join(', ')}" ให้เสร็จก่อน...`, 'info');
       }
-      for (let i = 0; i < 20 && (b.hard.length || b.soft.length) && !consolidationAborted; i++) {
+      for (let i = 0; i < 20 && (b.hard.length || b.soft.length) && !isTaskAborted(); i++) {
         await new Promise(r => setTimeout(r, 1500));
         b = await busyOf(p);
         // Fast-skip screens stuck at "กำลังเชื่อมต่อใหม่..." after ~6s (4 polls) instead of holding up consolidation
@@ -3931,13 +4024,13 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         }
         const curList = [...b.hard, ...b.soft];
         if (curList.length && (i + 1) % 4 === 0) {
-          consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}รอ ${p.name} ทำ "${curList.join(', ')}" (${Math.round((i + 1) * 1.5)} วิ)...`;
+          setTaskStep(1, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}รอ ${p.name} ทำ "${curList.join(', ')}" (${Math.round((i + 1) * 1.5)} วิ)...`);
         }
       }
       if (b.hard.length) stillBusy.set(p.id, b.hard);
     }));
     const clearPending = p => evalProfilePort(p.debugPort, `(() => { window.__consolidationPending = false; return true; })()`, 4000);
-    if (consolidationAborted) {
+    if (isTaskAborted()) {
       await Promise.all([receiverProfile, ...senderProfiles].map(clearPending));
       throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
     }
@@ -3946,32 +4039,27 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       throw new Error(`ตัวรับเงิน (${receiverProfile.name}) ติดสถานะ "${stillBusy.get(receiverProfile.id).join(', ')}" — ลองรวมเงินใหม่อีกครั้งภายหลัง`);
     }
     for (const s of senderProfiles.filter(x => stillBusy.has(x.id))) {
-      addConsolidationLog(`⏭️ ${s.name}: ติดสถานะสำคัญ "${stillBusy.get(s.id).join(', ')}" -> ข้ามจอนี้ในรอบนี้`, 'warning');
-      consolidationState.completedSenders.push(s.id);
+      logTask(`⏭️ ${s.name}: ติดสถานะสำคัญ "${stillBusy.get(s.id).join(', ')}" -> ข้ามจอนี้ในรอบนี้`, 'warning');
+      activeConsolidationProfiles.delete(s.id);
+      markSenderCompleted(s.id);
       await clearPending(s);
     }
     for (let i = senderProfiles.length - 1; i >= 0; i--) if (stillBusy.has(senderProfiles[i].id)) senderProfiles.splice(i, 1);
     if (senderProfiles.length === 0) {
       await clearPending(receiverProfile);
-      addConsolidationLog(`⚠️ ไม่มีจอผู้โอนที่พร้อมทำงานในรอบนี้สำหรับตัวรับ ${receiverProfile.name}`, 'warning');
-      if (!(batchCtx && batchCtx.isSubBatch)) {
-        consolidationState.running = false;
-        consolidationState.status = 'completed';
-        consolidationState.endTime = Date.now();
-      }
-      return { ok: true, groupTransferredZeny: 0, groupTransferredItems: 0 };
+      logTask(`⚠️ ไม่มีจอผู้โอนที่พร้อมทำงานในรอบนี้สำหรับตัวรับ ${receiverProfile.name}`, 'warning');
+      return { ok: true, taskId, ip: receiverIpKey, receiverId: receiverProfile.id, receiverName: receiverProfile.name, groupTransferredZeny: 0, groupTransferredItems: 0 };
     }
 
     // -------------------------------------------------------------
     // STEP 1: สั่ง Stop Bot และหยุดโจมตีทุกจอที่เกี่ยวข้องพร้อมกัน
     // -------------------------------------------------------------
-    consolidationState.stepIndex = 1;
-    consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}หยุดการทำงานของบอททุกจอในรอบนี้ (Stop Bot)...`;
-    addConsolidationLog(`⏹️ ขั้นตอนที่ 1/5: กำลังสั่งหยุดบอทและหยุดโจมตีทุกจอในกลุ่ม (${senderProfiles.length + 1} จอ)...`, 'info');
+    setTaskStep(1, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}หยุดการทำงานของบอททุกจอในรอบนี้ (Stop Bot)...`);
+    logTask(`⏹️ ขั้นตอนที่ 1/5: กำลังสั่งหยุดบอทและหยุดโจมตีทุกจอในกลุ่ม (${senderProfiles.length + 1} จอ)...`, 'info');
 
     const involvedProfiles = [receiverProfile, ...senderProfiles];
     await Promise.all(involvedProfiles.map(async (p) => {
-      if (consolidationAborted) return;
+      if (isTaskAborted()) return;
       await evalProfilePort(p.debugPort, `(() => {
         window.__consolidationAborted = false;
         window.__isConsolidating = true;
@@ -4011,16 +4099,15 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         return { success: true };
       })()`, 6000);
     }));
-    addConsolidationLog(`🛑 สั่งหยุดบอทครบ ${involvedProfiles.length} จอเรียบร้อย`, 'info');
+    logTask(`🛑 สั่งหยุดบอทครบ ${involvedProfiles.length} จอเรียบร้อย`, 'info');
     await new Promise(r => setTimeout(r, 450));
 
     // -------------------------------------------------------------
     // STEP 2: ทยอยกด Butterfly Wing กลับบ้าน (โซลเฮเวน)
     // -------------------------------------------------------------
-    if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
-    consolidationState.stepIndex = 2;
-    consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}วาร์ปกลับเมืองหลวง (โซลเฮเวน) ด้วย Butterfly Wing...`;
-    addConsolidationLog('🦋 ขั้นตอนที่ 2/5: สั่งกด Butterfly Wing / เดินทางกลับเมืองหลวงโซลเฮเวน...', 'info');
+    if (isTaskAborted()) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
+    setTaskStep(2, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}วาร์ปกลับเมืองหลวง (โซลเฮเวน) ด้วย Butterfly Wing...`);
+    logTask('🦋 ขั้นตอนที่ 2/5: สั่งกด Butterfly Wing / เดินทางกลับเมืองหลวงโซลเฮเวน...', 'info');
 
     const triggerBwingOnProfile = (p) => evalProfilePort(p.debugPort, `(() => {
       window.__consolidationAborted = false;
@@ -4058,17 +4145,17 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     })()`, 6000);
 
     await Promise.all(involvedProfiles.map(async (p, idx) => {
-      if (consolidationAborted) return;
+      if (isTaskAborted()) return;
       if (idx > 0) await new Promise(r => setTimeout(r, idx * 120));
       await triggerBwingOnProfile(p);
     }));
 
-    addConsolidationLog('⏳ รอตัวละครโหลดเข้าสู่เมืองหลวง (2.5 วินาที)...', 'info');
+    logTask('⏳ รอตัวละครโหลดเข้าสู่เมืองหลวง (2.5 วินาที)...', 'info');
     await new Promise(r => setTimeout(r, 2500));
 
     // Second Butterfly Wing pulse for any character that was interrupted by monster attack / animation on first pulse
     await Promise.all(involvedProfiles.map(async (p) => {
-      if (consolidationAborted) return;
+      if (isTaskAborted()) return;
       await evalProfilePort(p.debugPort, `(() => {
         if (typeof window.isInCapital === 'function' && window.isInCapital()) return { inCap: true };
         const wings = typeof window.getBagItemCount === 'function' ? window.getBagItemCount(90311) : 0;
@@ -4096,15 +4183,15 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     // The receiver must be in the capital before it changes channel (no Butterfly Wing: it walks home first)
     const recvInCapCheck = await evalProfilePort(receiverProfile.debugPort, `window.isInCapital ? window.isInCapital() : true`, 5000);
     if (recvInCapCheck && recvInCapCheck.result === false) {
-      addConsolidationLog(`🗺️ ตัวรับเงิน (${receiverProfile.name}) ยังไม่ถึงเมืองหลวง — กำลังรอให้เดินถึงเมืองหลวง...`, 'info');
-      consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}รอตัวรับเงิน (${receiverProfile.name}) เดินทางถึงเมืองหลวง...`;
+      logTask(`🗺️ ตัวรับเงิน (${receiverProfile.name}) ยังไม่ถึงเมืองหลวง — กำลังรอให้เดินถึงเมืองหลวง...`, 'info');
+      setTaskStep(2, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}รอตัวรับเงิน (${receiverProfile.name}) เดินทางถึงเมืองหลวง...`);
     }
     let recvHome = await evalProfilePort(receiverProfile.debugPort, `(() => {
       window.__consolidationAborted = false;
       window.__isConsolidating = true;
       return window.ensureInCapital ? window.ensureInCapital(240000) : { success: true };
     })()`, 250000);
-    if (!(recvHome && recvHome.result && recvHome.result.success) && !(recvHome && recvHome.result && recvHome.result.reconnecting) && !consolidationAborted) {
+    if (!(recvHome && recvHome.result && recvHome.result.success) && !(recvHome && recvHome.result && recvHome.result.reconnecting) && !isTaskAborted()) {
       await triggerBwingOnProfile(receiverProfile);
       await new Promise(r => setTimeout(r, 1500));
       recvHome = await evalProfilePort(receiverProfile.debugPort, `window.ensureInCapital ? window.ensureInCapital(180000) : { success: true }`, 190000);
@@ -4116,7 +4203,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
 
     // If tradeItemsEnabled, have the Receiver also sell trash & deposit any current matching items to free bag space before receiving trades
     if (tradeItemsEnabled) {
-      addConsolidationLog(`🧹 ตัวรับเงิน (${receiverProfile.name}): แวะขายขยะและเคลียร์น้ำหนักกระเป๋าเตรียมรับไอเทม...`, 'info');
+      logTask(`🧹 ตัวรับเงิน (${receiverProfile.name}): แวะขายขยะและเคลียร์น้ำหนักกระเป๋าเตรียมรับไอเทม...`, 'info');
       await evalProfilePort(receiverProfile.debugPort, `window.runConsolidationQuickSellTrash ? window.runConsolidationQuickSellTrash(25000) : null`, 30000);
       const recvInitDeposit = await evalProfilePort(receiverProfile.debugPort, `(async () => {
         const list = ${JSON.stringify(tradeItemsList)};
@@ -4127,61 +4214,89 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         return { success: true, depositedQty: 0 };
       })()`, 30000);
       if (recvInitDeposit?.result?.depositedQty > 0) {
-        addConsolidationLog(`📥 ตัวรับเงิน (${receiverProfile.name}) เก็บไอเทมเดิมในกระเป๋าเข้าคลังแล้ว ${recvInitDeposit.result.depositedQty} ชิ้น`, 'info');
+        logTask(`📥 ตัวรับเงิน (${receiverProfile.name}) เก็บไอเทมเดิมในกระเป๋าเข้าคลังแล้ว ${recvInitDeposit.result.depositedQty} ชิ้น`, 'info');
       }
     }
 
     // -------------------------------------------------------------
-    // STEP 3: ตัวรับเงินหา Channel ที่คนน้อยสุด และย้ายไป Channel นั้น
+    // STEP 3: ตัวรับเงินหา Channel ที่คนน้อยสุด (และไม่ชนกับวง IP อื่นที่กำลังเทรดอยู่) และย้ายไป Channel นั้น
     // -------------------------------------------------------------
-    if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
-    consolidationState.stepIndex = 3;
-    consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}ตัวรับเงินกำลังค้นหา Channel คนน้อยสุด และย้ายแชนเนล...`;
-    addConsolidationLog(`🔍 ขั้นตอนที่ 3/5: ตัวรับเงิน (${receiverProfile.name}) กำลังสแกนหา Channel ที่คนน้อยสุด...`, 'info');
+    if (isTaskAborted()) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
+    setTaskStep(3, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}ตัวรับเงินกำลังค้นหา Channel คนน้อยสุด (แยกแชนเนลไม่ให้ชนวงอื่น)...`);
+    logTask(`🔍 ขั้นตอนที่ 3/5: ตัวรับเงิน (${receiverProfile.name}) กำลังสแกนหา Channel ที่คนน้อยสุดและไม่ชนกับวงอื่น...`, 'info');
 
     let targetChannel = 1;
+    const otherReservedChannels = [];
+    for (const [ch, tid] of activeConsolidationChannels.entries()) {
+      if (tid !== taskId) otherReservedChannels.push(ch);
+    }
+
     const chFindRes = await evalProfilePort(receiverProfile.debugPort, `
       (async () => {
+        const reserved = ${JSON.stringify(otherReservedChannels)};
+        if (typeof window.getChannelsList === 'function') {
+          const list = await window.getChannelsList(4000);
+          if (Array.isArray(list) && list.length > 0) {
+            const safe = list
+              .filter(c => c && typeof c.channel === 'number' && c.channel > 0 && !c.locked && (c.players || 0) < ((c.maxPlayers || 80) - 5))
+              .sort((a, b) => (a.players || 0) - (b.players || 0));
+            const unreserved = safe.find(c => !reserved.includes(c.channel));
+            if (unreserved) return unreserved.channel;
+            if (safe[0]) return safe[0].channel;
+          }
+        }
         if (typeof window.findLeastPopulatedChannel === 'function') {
           return await window.findLeastPopulatedChannel();
         }
         return null;
       })()
-    `, 6000);
+    `, 6500);
 
     if (chFindRes && typeof chFindRes.result === 'number' && chFindRes.result > 0) {
       targetChannel = chFindRes.result;
-      addConsolidationLog(`📊 สแกน Channel สำเร็จ: CH ${targetChannel} มีผู้เล่นน้อยที่สุด!`, 'success');
+      activeConsolidationChannels.set(targetChannel, taskId);
+      task.targetChannel = targetChannel;
+      syncConsolidationGlobalState();
+      logTask(`📊 สแกน Channel สำเร็จ: เลือก CH ${targetChannel} (คนน้อยและไม่ชนกับวง IP อื่น)!`, 'success');
     } else {
       const curChRes = await evalProfilePort(receiverProfile.debugPort, `
         window.getCurrentChannel ? window.getCurrentChannel() : 1
       `);
       targetChannel = (curChRes && typeof curChRes.result === 'number') ? curChRes.result : 1;
-      addConsolidationLog(`ℹ️ ใช้ Channel ปัจจุบันของตัวรับเงิน: CH ${targetChannel}`, 'info');
+      activeConsolidationChannels.set(targetChannel, taskId);
+      task.targetChannel = targetChannel;
+      syncConsolidationGlobalState();
+      logTask(`ℹ️ ใช้ Channel ปัจจุบันของตัวรับเงิน: CH ${targetChannel}`, 'info');
     }
 
-    addConsolidationLog(`👑 ตัวรับเงิน (${receiverProfile.name}) กำลังเปลี่ยนไป Channel ${targetChannel}...`, 'info');
+    logTask(`👑 ตัวรับเงิน (${receiverProfile.name}) กำลังเปลี่ยนไป Channel ${targetChannel}...`, 'info');
     await evalProfilePort(receiverProfile.debugPort, `
       window.moveToChannel ? window.moveToChannel(${targetChannel}, 35000) : (window.switchChannel ? window.switchChannel(${targetChannel}) : null)
     `, 40000);
     await new Promise(r => setTimeout(r, 1500));
     const recvCh = await evalProfilePort(receiverProfile.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 5000);
     if (recvCh && typeof recvCh.result === 'number' && recvCh.result > 0) {
-      if (recvCh.result !== targetChannel) addConsolidationLog(`ℹ️ ตัวรับเงินย้ายไป CH ${targetChannel} ไม่ได้ ยังอยู่ CH ${recvCh.result} -> ให้จอรองมาที่ CH ${recvCh.result}`, 'warning');
+      if (recvCh.result !== targetChannel) {
+        logTask(`ℹ️ ตัวรับเงินย้ายไป CH ${targetChannel} ไม่ได้ ยังอยู่ CH ${recvCh.result} -> ให้จอรองมาที่ CH ${recvCh.result}`, 'warning');
+        if (activeConsolidationChannels.get(targetChannel) === taskId) activeConsolidationChannels.delete(targetChannel);
+      }
       targetChannel = recvCh.result;
+      activeConsolidationChannels.set(targetChannel, taskId);
+      task.targetChannel = targetChannel;
+      syncConsolidationGlobalState();
     }
-    addConsolidationLog(`📍 ตัวรับเงินอยู่ที่ CH ${targetChannel}`, 'info');
+    logTask(`📍 ตัวรับเงินประจำอยู่ที่ CH ${targetChannel}`, 'info');
 
     // -------------------------------------------------------------
     // STEP 4: จอรองทยอยย้าย Channel ตามมาทีละจอ และเรียงคิวเทรดเงิน/ไอเทมให้ตัวหลัก
     // -------------------------------------------------------------
-    if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
-    consolidationState.stepIndex = 4;
-    consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}จอรองทยอยวาร์ปมา CH ${targetChannel} และเรียงคิวเทรด${tradeItemsEnabled ? 'เงิน + ไอเทม' : 'เงิน'}...`;
-    addConsolidationLog(`🤝 ขั้นตอนที่ 4/5: เริ่มเรียงคิวจอรอง (${senderProfiles.length} จอ) เทรด${tradeItemsEnabled ? 'เงินและไอเทม (' + tradeItemsList.join(', ') + ')' : 'เงิน'}ให้ตัวหลัก...`, 'info');
+    if (isTaskAborted()) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
+    setTaskStep(4, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}จอรองทยอยวาร์ปมา CH ${targetChannel} และเรียงคิวเทรด${tradeItemsEnabled ? 'เงิน + ไอเทม' : 'เงิน'}...`);
+    logTask(`🤝 ขั้นตอนที่ 4/5: เริ่มเรียงคิวจอรอง (${senderProfiles.length} จอ) เทรด${tradeItemsEnabled ? 'เงินและไอเทม (' + tradeItemsList.join(', ') + ')' : 'เงิน'}ให้ตัวหลักที่ CH ${targetChannel}...`, 'info');
 
     const receiverLive = await queryClientState(receiverProfile.debugPort);
     const receiverCharName = receiverLive?.charName || receiverProfile.name;
+    task.receiverName = receiverCharName;
 
     const SENDER_SLOTS = 2;
     const restarted = new Set();
@@ -4191,8 +4306,9 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       const charName = live?.charName || s.name;
       const zeny = (live && typeof live.zeny === 'number') ? live.zeny : 0;
       if (!tradeItemsEnabled && Math.max(0, zeny - keepZeny) <= 0) {
-        addConsolidationLog(`⏭️ จอ ${s.name} (${charName}) มีเงิน ${zeny.toLocaleString()} z (ไม่พอโอนหรือติดเก็บสำรอง) -> ข้ามและปล่อยกลับไปฟาร์ม`, 'warning');
-        consolidationState.completedSenders.push(s.id);
+        logTask(`⏭️ จอ ${s.name} (${charName}) มีเงิน ${zeny.toLocaleString()} z (ไม่พอโอนหรือติดเก็บสำรอง) -> ข้ามและปล่อยกลับไปฟาร์ม`, 'warning');
+        activeConsolidationProfiles.delete(s.id);
+        markSenderCompleted(s.id);
         await evalProfilePort(s.debugPort, `(() => {
           window.__consolidationAborted = true; window.__isConsolidating = false; window.__consolidationPending = false; window.__isWalkingToMap = false; window.__isNavigating = false;
           if (typeof window.restoreKeptFarmMap === 'function') window.restoreKeptFarmMap();
@@ -4221,7 +4337,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     let premiumActivated = false;
 
     const prepareSender = async (s) => {
-      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel: null, earlyStop: true };
+      if (isTaskAborted() || consolidationEarlyStop) return { ok: false, homeChannel: null, earlyStop: true };
       const sStatus = await evalProfilePort(s.debugPort, `(() => {
         const reconnEl = document.querySelector('.login-reconnecting, .panel.reconnecting');
         const bodyTxt = document.body ? (document.body.innerText || '') : '';
@@ -4236,10 +4352,10 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         return { ok: false, homeChannel: null, error: 'จอค้างหน้า "กำลังเชื่อมต่อใหม่..." หรือไม่ตอบสนอง' };
       }
       if (sStatus.result && sStatus.result.inCap === false) {
-        addConsolidationLog(`🗺️ จอ ${s.name} ยังไม่ถึงเมืองหลวง (กำลังเดินทางกลับเมืองหลวง)...`, 'info');
+        logTask(`🗺️ จอ ${s.name} ยังไม่ถึงเมืองหลวง (กำลังเดินทางกลับเมืองหลวง)...`, 'info');
       }
       let home = senderHomePromises.has(s.id) ? await senderHomePromises.get(s.id) : null;
-      if (!(home && home.result && home.result.success) && !(home && home.result && home.result.reconnecting) && !consolidationAborted && !consolidationEarlyStop) {
+      if (!(home && home.result && home.result.success) && !(home && home.result && home.result.reconnecting) && !isTaskAborted() && !consolidationEarlyStop) {
         home = await evalProfilePort(s.debugPort, `(() => {
           window.__consolidationAborted = false;
           window.__isConsolidating = true;
@@ -4248,7 +4364,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
           return window.ensureInCapital ? window.ensureInCapital(180000) : { success: true };
         })()`, 190000);
       }
-      if (!(home && home.result && home.result.success) && !(home && home.result && home.result.reconnecting) && !consolidationAborted && !consolidationEarlyStop) {
+      if (!(home && home.result && home.result.success) && !(home && home.result && home.result.reconnecting) && !isTaskAborted() && !consolidationEarlyStop) {
         await triggerBwingOnProfile(s);
         await new Promise(r => setTimeout(r, 1500));
         home = await evalProfilePort(s.debugPort, `window.ensureInCapital ? window.ensureInCapital(120000) : { success: true }`, 130000);
@@ -4259,16 +4375,16 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       }
       const fromCh = await evalProfilePort(s.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 5000);
       const homeChannel = (fromCh && typeof fromCh.result === 'number') ? fromCh.result : null;
-      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
+      if (isTaskAborted() || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
 
       let bagMatchingQty = 0;
       let bagMatchingWeight = 0;
       if (tradeItemsEnabled) {
         const sellRes = await evalProfilePort(s.debugPort, `window.runConsolidationQuickSellTrash ? window.runConsolidationQuickSellTrash(28000) : { success: false }`, 32000);
         if (sellRes?.result?.sold) {
-          addConsolidationLog(`🧹 จอ ${s.name}: แวะขายขยะเคลียร์กระเป๋าแล้ว (น้ำหนัก ${sellRes.result.weight}/${sellRes.result.weightLimit})`, 'info');
+          logTask(`🧹 จอ ${s.name}: แวะขายขยะเคลียร์กระเป๋าแล้ว (น้ำหนัก ${sellRes.result.weight}/${sellRes.result.weightLimit})`, 'info');
         }
-        addConsolidationLog(`📦 จอ ${s.name}: เปิดคลังเบิกไอเทม (${tradeItemsList.join(', ')})...`, 'info');
+        logTask(`📦 จอ ${s.name}: เปิดคลังเบิกไอเทม (${tradeItemsList.join(', ')})...`, 'info');
         const wdRes = await evalProfilePort(
           s.debugPort,
           `window.withdrawConsolidationItemsFromStorage ? window.withdrawConsolidationItemsFromStorage(${JSON.stringify(tradeItemsList)}) : { success: false, error: 'No withdraw helper' }`,
@@ -4276,7 +4392,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         );
         const wd = wdRes?.result || {};
         if (wd.success === false) {
-          addConsolidationLog(`⚠️ จอ ${s.name}: เบิกไอเทมจากคลังไม่สำเร็จ (${wd.error || 'ไม่ทราบสาเหตุ'})`, 'warning');
+          logTask(`⚠️ จอ ${s.name}: เบิกไอเทมจากคลังไม่สำเร็จ (${wd.error || 'ไม่ทราบสาเหตุ'})`, 'warning');
           const fallbackBag = await evalProfilePort(
             s.debugPort,
             `window.getConsolidationMatchingBagItems ? window.getConsolidationMatchingBagItems(${JSON.stringify(tradeItemsList)}) : { totalQty: 0, totalWeight: 0 }`,
@@ -4289,11 +4405,11 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
           bagMatchingWeight = Number(wd.bagMatchingWeight) || 0;
         }
         if (wd.withdrawnQty > 0) {
-          addConsolidationLog(`📦 จอ ${s.name}: เบิกไอเทมจากคลังสำเร็จ +${wd.withdrawnQty} ชิ้น (รวมในกระเป๋า ${bagMatchingQty} ชิ้น, น้ำหนัก ${wd.weight}/${wd.weightLimit})`, 'success');
+          logTask(`📦 จอ ${s.name}: เบิกไอเทมจากคลังสำเร็จ +${wd.withdrawnQty} ชิ้น (รวมในกระเป๋า ${bagMatchingQty} ชิ้น, น้ำหนัก ${wd.weight}/${wd.weightLimit})`, 'success');
         } else if (bagMatchingQty > 0) {
-          addConsolidationLog(`🎒 จอ ${s.name}: มีไอเทมในกระเป๋าพร้อมเทรด ${bagMatchingQty} ชิ้น (ไม่มีเพิ่มในคลัง)`, 'info');
+          logTask(`🎒 จอ ${s.name}: มีไอเทมในกระเป๋าพร้อมเทรด ${bagMatchingQty} ชิ้น (ไม่มีเพิ่มในคลัง)`, 'info');
         } else if (wd.success !== false) {
-          addConsolidationLog(`ℹ️ จอ ${s.name}: ไม่มีไอเทม (${tradeItemsList.join(', ')}) ในคลังหรือในกระเป๋า`, 'info');
+          logTask(`ℹ️ จอ ${s.name}: ไม่มีไอเทม (${tradeItemsList.join(', ')}) ในคลังหรือในกระเป๋า`, 'info');
         }
 
         const sLiveNow = await queryClientState(s.debugPort);
@@ -4303,18 +4419,18 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         }
       }
 
-      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
-      addConsolidationLog(`🔄 จอ ${s.name} เตรียมย้ายไป CH ${targetChannel}...`, 'info');
+      if (isTaskAborted() || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
+      logTask(`🔄 จอ ${s.name} เตรียมย้ายไป CH ${targetChannel}...`, 'info');
       const mv = await evalProfilePort(s.debugPort, `window.moveToChannel ? window.moveToChannel(${targetChannel}, 38000) : (window.switchChannel ? window.switchChannel(${targetChannel}) : null)`, 42000);
       const there = mv && mv.result && mv.result.success;
       if (!there) {
         // Do NOT fail/skip here: defer channel alignment to live sync when it's this sender's actual turn!
-        addConsolidationLog(`ℹ️ จอ ${s.name} ยังย้ายไป CH ${targetChannel} ล่วงหน้าไม่ได้ (${(mv && mv.result && mv.result.error) || 'ติดคูลดาวน์/เต็ม'}) — จะซิงค์แชนเนลให้อีกครั้งเมื่อถึงคิวเทรดจริง`, 'info');
+        logTask(`ℹ️ จอ ${s.name} ยังย้ายไป CH ${targetChannel} ล่วงหน้าไม่ได้ (${(mv && mv.result && mv.result.error) || 'ติดคูลดาวน์/เต็ม'}) — จะซิงค์แชนเนลให้อีกครั้งเมื่อถึงคิวเทรดจริง`, 'info');
         return { ok: true, channelSwitchDeferred: true, homeChannel, bagMatchingQty, bagMatchingWeight };
       }
-      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
+      if (isTaskAborted() || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
       await new Promise(r => setTimeout(r, 1200));
-      if (consolidationAborted || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
+      if (isTaskAborted() || consolidationEarlyStop) return { ok: false, homeChannel, earlyStop: true };
       const rPosRes = await evalProfilePort(receiverProfile.debugPort, `(() => {
         const r = typeof window.getGameRoom === 'function' ? window.getGameRoom() : null;
         const me = r && r.state && r.state.players && r.state.players.get ? r.state.players.get(r.sessionId) : null;
@@ -4372,20 +4488,25 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       let rCh = (rChRes && typeof rChRes.result === 'number' && rChRes.result > 0) ? rChRes.result : targetChannel;
       let sCh = (sChRes && typeof sChRes.result === 'number' && sChRes.result > 0) ? sChRes.result : null;
       targetChannel = rCh;
+      task.targetChannel = rCh;
 
       if (sCh !== rCh) {
-        addConsolidationLog(`🔄 ซิงค์แชนเนล: ย้ายจอ ${s.name} (CH ${sCh || '?'}) มาหาตัวรับที่ CH ${rCh}...`, 'info');
+        logTask(`🔄 ซิงค์แชนเนล: ย้ายจอ ${s.name} (CH ${sCh || '?'}) มาหาตัวรับที่ CH ${rCh}...`, 'info');
         const mvSender = await evalProfilePort(s.debugPort, `window.moveToChannel ? window.moveToChannel(${rCh}, 35000) : null`, 40000);
         const sChAfterRes = await evalProfilePort(s.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 4000);
         sCh = (sChAfterRes && typeof sChAfterRes.result === 'number' && sChAfterRes.result > 0) ? sChAfterRes.result : sCh;
         if (sCh !== rCh && sCh && sCh > 0) {
-          addConsolidationLog(`🔄 CH ${rCh} เข้าไม่ได้ (${mvSender?.result?.error || 'เต็ม/คูลดาวน์'}) -> ย้ายตัวรับเงิน (${receiverCharName}) ไปหาที่ CH ${sCh} แทน!`, 'warning');
+          logTask(`🔄 CH ${rCh} เข้าไม่ได้ (${mvSender?.result?.error || 'เต็ม/คูลดาวน์'}) -> ย้ายตัวรับเงิน (${receiverCharName}) ไปหาที่ CH ${sCh} แทน!`, 'warning');
           await evalProfilePort(receiverProfile.debugPort, `window.moveToChannel ? window.moveToChannel(${sCh}, 35000) : null`, 40000);
           await new Promise(r => setTimeout(r, 1500));
           const rChAfterRes = await evalProfilePort(receiverProfile.debugPort, `window.getCurrentChannel ? window.getCurrentChannel() : null`, 4000);
           if (rChAfterRes && typeof rChAfterRes.result === 'number' && rChAfterRes.result > 0) {
+            if (activeConsolidationChannels.get(targetChannel) === taskId) activeConsolidationChannels.delete(targetChannel);
             rCh = rChAfterRes.result;
             targetChannel = rCh;
+            task.targetChannel = rCh;
+            activeConsolidationChannels.set(targetChannel, taskId);
+            syncConsolidationGlobalState();
           }
         }
       }
@@ -4458,9 +4579,11 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
 
     // Release sender immediately to start its bot and walk/warp out of Capital back to its farm map without blocking the queue for 60s
     const releaseSender = async (s, homeChannel) => {
+      activeConsolidationProfiles.delete(s.id);
+      syncConsolidationGlobalState();
       await evalProfilePort(s.debugPort, startBotJs, 5000).catch(() => {});
       restarted.add(s.id);
-      addConsolidationLog(`▶️ จอ ${s.name} เริ่มบอทเดินทางกลับไปฟาร์มทันที`, 'success');
+      logTask(`▶️ จอ ${s.name} เริ่มบอทเดินทางกลับไปฟาร์มทันที`, 'success');
       if (homeChannel && homeChannel !== targetChannel) {
         // Non-blocking background channel restore if character stays in same map
         setTimeout(() => {
@@ -4496,14 +4619,14 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       const avail = Math.max(0, st.weightLimit - st.weight - 25);
       const heavyRatio = st.weightLimit > 0 ? (st.weight / st.weightLimit) : 0;
       if (st.matchingQty > 0 && (heavyRatio >= 0.65 || incomingWeight > avail)) {
-        addConsolidationLog(`📥 กระเป๋าตัวรับเงิน (${receiverCharName}) เริ่มหนัก (${st.weight}/${st.weightLimit}) -> เดินไปฝากไอเทมเข้าคลังก่อนรับเทรด...`, 'info');
+        logTask(`📥 กระเป๋าตัวรับเงิน (${receiverCharName}) เริ่มหนัก (${st.weight}/${st.weightLimit}) -> เดินไปฝากไอเทมเข้าคลังก่อนรับเทรด...`, 'info');
         const dep = await evalProfilePort(
           receiverProfile.debugPort,
           `window.depositConsolidationItemsToStorage ? window.depositConsolidationItemsToStorage(${JSON.stringify(tradeItemsList)}, ${JSON.stringify(st.pos)}) : { success: false }`,
           35000
         );
         if (dep?.result?.success) {
-          addConsolidationLog(`✅ ตัวรับเงินฝากไอเทมเข้าคลังแล้ว ${dep.result.depositedQty} ชิ้น (น้ำหนักเหลือ ${dep.result.weight}/${dep.result.weightLimit})`, 'success');
+          logTask(`✅ ตัวรับเงินฝากไอเทมเข้าคลังแล้ว ${dep.result.depositedQty} ชิ้น (น้ำหนักเหลือ ${dep.result.weight}/${dep.result.weightLimit})`, 'success');
           return Math.max(0, (Number(dep.result.weightLimit) || 2000) - (Number(dep.result.weight) || 0) - 25);
         }
       }
@@ -4515,13 +4638,13 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     queue.slice(0, SENDER_SLOTS).forEach(startPrep);
 
     for (let i = 0; i < queue.length; i++) {
-      if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
+      if (isTaskAborted()) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
       if (consolidationEarlyStop) break;
       const sender = queue[i];
-      consolidationState.currentSender = sender.name;
-      consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}กำลังเทรดลำดับที่ ${i + 1}/${queue.length}: ${sender.name} -> ${receiverProfile.name}...`;
-      addConsolidationLog(`----------------------------------------`, 'info');
-      addConsolidationLog(`▶️ ลำดับที่ ${i + 1}/${queue.length}${ipGroupBadgeText}: จอ ${sender.name}...`, 'info');
+      task.currentSender = sender.name;
+      setTaskStep(4, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}กำลังเทรดลำดับที่ ${i + 1}/${queue.length}: ${sender.name} -> ${receiverProfile.name} (CH ${targetChannel})...`);
+      logTask(`----------------------------------------`, 'info');
+      logTask(`▶️ ลำดับที่ ${i + 1}/${queue.length}: จอ ${sender.name}...`, 'info');
       startPrep(sender);
       const ready = await prep.get(sender.id);
       if (consolidationEarlyStop || (ready && ready.earlyStop)) {
@@ -4535,8 +4658,8 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       const zenyToTransfer = Math.max(0, curZeny - keepZeny);
 
       if (ready && ready.nothingToTrade) {
-        addConsolidationLog(`⏭️ จอ ${sender.name} (${senderCharName}): ไม่มีเงินเกินสำรองและไม่มีไอเทมในคลัง/กระเป๋า -> ข้ามและกลับไปฟาร์ม`, 'warning');
-        consolidationState.completedSenders.push(sender.id);
+        logTask(`⏭️ จอ ${sender.name} (${senderCharName}): ไม่มีเงินเกินสำรองและไม่มีไอเทมในคลัง/กระเป๋า -> ข้ามและกลับไปฟาร์ม`, 'warning');
+        markSenderCompleted(sender.id);
         await releaseSender(sender, ready.homeChannel);
         startPrep(queue[i + SENDER_SLOTS]);
         continue;
@@ -4557,7 +4680,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       }
 
       if (!ready || !ready.ok || (zenyToTransfer <= 0 && senderItemsQty <= 0)) {
-        addConsolidationLog(`⚠️ จอ ${sender.name}: ${(ready && ready.error) || 'ไม่มีเงินหรือไอเทมให้โอน'} — ข้าม`, 'error');
+        logTask(`⚠️ จอ ${sender.name}: ${(ready && ready.error) || 'ไม่มีเงินหรือไอเทมให้โอน'} — ข้าม`, 'error');
         await releaseSender(sender, ready && ready.homeChannel);
         startPrep(queue[i + SENDER_SLOTS]);
         continue;
@@ -4571,11 +4694,11 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       let attempt = 0, movedZeny = 0, movedItems = 0, lastErr = '';
       while (attempt < 2 && movedZeny <= 0 && movedItems <= 0) {
         attempt++;
-        if (consolidationAborted) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
+        if (isTaskAborted()) throw new Error('ผู้ใช้ยกเลิกการรวมเงิน');
         // Always verify same channel + close proximity right before sending trade request!
         await syncSenderAndReceiverForTrade(sender, senderCharName);
 
-        addConsolidationLog(`👑 ตัวรับเงิน (${receiverCharName}) รอรับคำขอเทรดจาก '${senderCharName}'${attempt > 1 ? ' (ลองใหม่ครั้งที่ 2)' : ''}...`, 'info');
+        logTask(`👑 ตัวรับเงิน (${receiverCharName}) รอรับคำขอเทรดจาก '${senderCharName}'${attempt > 1 ? ' (ลองใหม่ครั้งที่ 2)' : ''}...`, 'info');
         await evalProfilePort(receiverProfile.debugPort, `(() => {
           if (typeof window.setupReceiverTradeWatcher === 'function') {
             Promise.resolve(window.setupReceiverTradeWatcher(${JSON.stringify(senderCharName)}, 45000)).catch(() => {});
@@ -4585,7 +4708,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         await new Promise(r => setTimeout(r, 350));
 
         const itemOfferNote = (tradeItemsEnabled && senderItemsQty > 0) ? ` + ไอเทม ${senderItemsQty} ชิ้น` : '';
-        addConsolidationLog(`📤 จอ ${sender.name} (${senderCharName}) ส่งคำขอเทรดเงิน ${zenyToTransfer.toLocaleString()} z${itemOfferNote}...`, 'info');
+        logTask(`📤 จอ ${sender.name} (${senderCharName}) ส่งคำขอเทรดเงิน ${zenyToTransfer.toLocaleString()} z${itemOfferNote}...`, 'info');
         const tradeRes = await evalProfilePort(sender.debugPort, `
           (async () => {
             if (typeof window.executeSenderTrade === 'function') {
@@ -4620,7 +4743,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         if (tradeRes?.result?.success && afterZeny === null) { movedZeny = zenyToTransfer; break; }
         if (afterZeny === null || /No executeSenderTrade/.test(lastErr)) break;
         if (attempt < 2) {
-          addConsolidationLog(`⚠️ จอ ${sender.name} เทรดไม่สำเร็จ (${lastErr || 'เงิน/ไอเทมไม่ลด'}) — กำลังจัดตำแหน่งและลองใหม่อีก 1 ครั้ง`, 'warning');
+          logTask(`⚠️ จอ ${sender.name} เทรดไม่สำเร็จ (${lastErr || 'เงิน/ไอเทมไม่ลด'}) — กำลังจัดตำแหน่งและลองใหม่อีก 1 ครั้ง`, 'warning');
           await new Promise(r => setTimeout(r, 2200));
         }
       }
@@ -4628,43 +4751,45 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       if (movedZeny > 0 || movedItems > 0) {
         groupTransferredZeny += movedZeny;
         groupTransferredItems += movedItems;
+        task.transferredZeny = groupTransferredZeny;
+        task.transferredItems = groupTransferredItems;
         consolidationState.totalTransferredZeny += movedZeny;
         consolidationState.totalTransferredItems += movedItems;
-        consolidationState.completedSenders.push(sender.id);
+        markSenderCompleted(sender.id);
         const parts = [];
         if (movedZeny > 0) parts.push(`เงิน ${movedZeny.toLocaleString()} z`);
         if (movedItems > 0) parts.push(`ไอเทม ${movedItems.toLocaleString()} ชิ้น`);
-        addConsolidationLog(`✅ โอนจาก [${senderCharName}] ให้ [${receiverCharName}] สำเร็จ: ${parts.join(' + ')}`, 'success');
+        logTask(`✅ โอนจาก [${senderCharName}] ให้ [${receiverCharName}] สำเร็จ: ${parts.join(' + ')}`, 'success');
       } else {
-        addConsolidationLog(`⚠️ จอ ${sender.name} (${senderCharName}) เทรดไม่สำเร็จ: ${lastErr || 'เงิน/ไอเทมไม่ลด'} — ข้ามไปจอถัดไป`, 'error');
+        logTask(`⚠️ จอ ${sender.name} (${senderCharName}) เทรดไม่สำเร็จ: ${lastErr || 'เงิน/ไอเทมไม่ลด'} — ข้ามไปจอถัดไป`, 'error');
       }
       evalProfilePort(receiverProfile.debugPort, `window.stopReceiverTradeWatcher ? window.stopReceiverTradeWatcher() : null`, 3000);
       await releaseSender(sender, ready.homeChannel);
 
       if (premiumGoal && typeof premiumGoal.onAfterSenderTrade === 'function') {
         if (movedZeny > 0 || i === queue.length - 1) {
-          addConsolidationLog(`💎 ตัวรับเงิน (${receiverCharName}) กำลังนำเงินที่รวมได้ไปซื้อ Token / ต่ออายุ VIP...`, 'info');
-          consolidationState.step = `ตัวรับเงิน (${receiverCharName}) กำลังซื้อ Token / ต่ออายุ VIP...`;
+          logTask(`💎 ตัวรับเงิน (${receiverCharName}) กำลังนำเงินที่รวมได้ไปซื้อ Token / ต่ออายุ VIP...`, 'info');
+          setTaskStep(4, `ตัวรับเงิน (${receiverCharName}) กำลังซื้อ Token / ต่ออายุ VIP...`);
         }
         try {
           const pgRes = await premiumGoal.onAfterSenderTrade(receiverProfile, {
             movedZeny,
-            totalTransferredZeny: consolidationState.totalTransferredZeny,
+            totalTransferredZeny: groupTransferredZeny,
             isLastSender: i === queue.length - 1,
             senderIndex: i,
             totalSenders: queue.length
           });
           if (pgRes && pgRes.bought > 0) {
-            addConsolidationLog(`🛒 ตัวรับเงิน (${receiverCharName}) ซื้อ Token ได้ +${pgRes.bought.toLocaleString()} เหรียญ (รวมมี ${Number(pgRes.tokens || 0).toLocaleString()} Token)`, 'success');
+            logTask(`🛒 ตัวรับเงิน (${receiverCharName}) ซื้อ Token ได้ +${pgRes.bought.toLocaleString()} เหรียญ (รวมมี ${Number(pgRes.tokens || 0).toLocaleString()} Token)`, 'success');
           }
           if (pgRes && pgRes.stopConsolidation) {
             premiumActivated = Boolean(pgRes.activated);
             consolidationEarlyStop = true;
-            addConsolidationLog(`🎉 ตัวรับเงิน (${receiverCharName}) ได้รับ VIP เรียบร้อยแล้ว! หยุดการรวมเงินและปล่อยจอที่เหลือกลับไปฟาร์มทันที`, 'success');
+            logTask(`🎉 ตัวรับเงิน (${receiverCharName}) ได้รับ VIP เรียบร้อยแล้ว! หยุดการรวมเงินของวงนี้และปล่อยจอที่เหลือกลับไปฟาร์มทันที`, 'success');
             break;
           }
         } catch (pgErr) {
-          addConsolidationLog(`⚠️ ตรวจสอบการซื้อ VIP หลังเทรด: ${pgErr.message}`, 'warning');
+          logTask(`⚠️ ตรวจสอบการซื้อ VIP หลังเทรด: ${pgErr.message}`, 'warning');
         }
       }
 
@@ -4692,15 +4817,15 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       );
       const endQty = Number(endCheck?.result?.totalQty) || 0;
       if (endQty > 0) {
-        consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}ตัวรับเงิน (${receiverCharName}) กำลังนำไอเทมที่รับมา (${endQty} ชิ้น) ไปฝากเข้าคลัง...`;
-        addConsolidationLog(`📦 ตัวรับเงิน (${receiverCharName}) กำลังนำไอเทมที่รับมาทั้งหมด (${endQty} ชิ้น) ไปฝากเข้าคลัง...`, 'info');
+        setTaskStep(4, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}ตัวรับเงิน (${receiverCharName}) กำลังนำไอเทมที่รับมา (${endQty} ชิ้น) ไปฝากเข้าคลัง...`);
+        logTask(`📦 ตัวรับเงิน (${receiverCharName}) กำลังนำไอเทมที่รับมาทั้งหมด (${endQty} ชิ้น) ไปฝากเข้าคลัง...`, 'info');
         const endDep = await evalProfilePort(
           receiverProfile.debugPort,
           `window.depositConsolidationItemsToStorage ? window.depositConsolidationItemsToStorage(${JSON.stringify(tradeItemsList)}) : { success: false }`,
           35000
         );
         if (endDep?.result?.success) {
-          addConsolidationLog(`✅ ตัวรับเงิน (${receiverCharName}) ฝากไอเทมเข้าคลังเรียบร้อย (${endDep.result.depositedQty} ชิ้น)`, 'success');
+          logTask(`✅ ตัวรับเงิน (${receiverCharName}) ฝากไอเทมเข้าคลังเรียบร้อย (${endDep.result.depositedQty} ชิ้น)`, 'success');
         }
       }
     }
@@ -4708,25 +4833,24 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     // -------------------------------------------------------------
     // STEP 5: เสร็จสิ้นการโอนเงิน และสั่งเริ่มบอท (START BOT) ทุกจอกลับไปฟาร์ม
     // -------------------------------------------------------------
-    consolidationState.stepIndex = 5;
-    consolidationState.step = `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}เสร็จสิ้นการรวมเงิน! กำลังเปิดบอทให้ทุกจอเดินทางกลับไปฟาร์ม...`;
+    setTaskStep(5, `${ipGroupBadgeText ? ipGroupBadgeText + ' · ' : ''}เสร็จสิ้นการรวมเงิน! กำลังเปิดบอทให้ทุกจอเดินทางกลับไปฟาร์ม...`);
     const summaryItemsText = groupTransferredItems > 0
       ? ` | ไอเทมรวม: ${groupTransferredItems.toLocaleString()} ชิ้น`
       : '';
-    addConsolidationLog(`🎉 รวมเงิน${ipGroupBadgeText}เสร็จสมบูรณ์! ยอดโอนให้ ${receiverCharName}: ${groupTransferredZeny.toLocaleString()} z${summaryItemsText}`, 'success');
-    addConsolidationLog(`🚀 ขั้นตอนที่ 5/5: เริ่มสั่งเปิดบอท (START BOT) จอที่เหลือเพื่อเดินทางกลับไปฟาร์ม...`, 'info');
+    logTask(`🎉 รวมเงินเสร็จสมบูรณ์! ยอดโอนให้ ${receiverCharName}: ${groupTransferredZeny.toLocaleString()} z${summaryItemsText}`, 'success');
+    logTask(`🚀 ขั้นตอนที่ 5/5: เริ่มสั่งเปิดบอท (START BOT) จอที่เหลือเพื่อเดินทางกลับไปฟาร์ม...`, 'info');
 
     for (const p of involvedProfiles.filter(x => !restarted.has(x.id))) {
       try {
         const startRes = await evalProfilePort(p.debugPort, startBotJs, 5000);
         if (startRes && startRes.result && startRes.result.success) {
-          addConsolidationLog(`▶️ สั่งเริ่มบอทหน้าจอ ${p.name} เดินทางกลับไปฟาร์มเรียบร้อย`, 'success');
+          logTask(`▶️ สั่งเริ่มบอทหน้าจอ ${p.name} เดินทางกลับไปฟาร์มเรียบร้อย`, 'success');
         } else {
-          addConsolidationLog(`▶️ ส่งคำสั่งเริ่มบอทหน้าจอ ${p.name} สำเร็จ`, 'info');
+          logTask(`▶️ ส่งคำสั่งเริ่มบอทหน้าจอ ${p.name} สำเร็จ`, 'info');
         }
         await new Promise(r => setTimeout(r, 400));
       } catch(e) {
-        addConsolidationLog(`⚠️ ไม่สามารถเริ่มบอทจอ ${p.name}: ${e.message}`, 'warning');
+        logTask(`⚠️ ไม่สามารถเริ่มบอทจอ ${p.name}: ${e.message}`, 'warning');
       }
     }
 
@@ -4735,21 +4859,27 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         await premiumGoal.onConsolidationFinished({
           ok: true,
           activated: premiumActivated,
-          totalTransferredZeny: consolidationState.totalTransferredZeny
+          totalTransferredZeny: groupTransferredZeny
         });
       } catch (e) {}
     }
 
-    if (!(batchCtx && batchCtx.isSubBatch)) {
-      consolidationState.step = premiumActivated
-        ? 'รวมเงินและต่ออายุ VIP สำเร็จ! เริ่มบอทกลับฟาร์มเรียบร้อย!'
-        : 'เสร็จสิ้นการรวมเงินและเริ่มบอทกลับฟาร์มเรียบร้อย!';
-      consolidationState.running = false;
-      consolidationState.status = 'completed';
-      consolidationState.endTime = Date.now();
-    }
+    // Record summary for this IP group
+    const summaryIdx = consolidationState.ipGroupSummaries.findIndex(x => x.ip === receiverIpKey);
+    const summaryEntry = {
+      ip: receiverIpKey,
+      receiverId: receiverProfile.id,
+      receiverName: receiverCharName,
+      transferredZeny: groupTransferredZeny,
+      transferredItems: groupTransferredItems,
+      ok: true
+    };
+    if (summaryIdx >= 0) consolidationState.ipGroupSummaries[summaryIdx] = summaryEntry;
+    else consolidationState.ipGroupSummaries.push(summaryEntry);
+
     return {
       ok: true,
+      taskId,
       ip: receiverIpKey,
       receiverId: receiverProfile.id,
       receiverName: receiverCharName,
@@ -4758,14 +4888,14 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
     };
 
   } catch (err) {
-    addConsolidationLog(`⛔ การรวมเงิน${ipGroupBadgeText}หยุดทำงาน: ${err.message}`, 'error');
+    logTask(`⛔ การรวมเงินหยุดทำงาน: ${err.message}`, 'error');
     if (premiumGoal && typeof premiumGoal.onConsolidationFinished === 'function') {
       try {
         await premiumGoal.onConsolidationFinished({
           ok: false,
-          aborted: consolidationAborted,
+          aborted: isTaskAborted(),
           activated: false,
-          totalTransferredZeny: consolidationState.totalTransferredZeny,
+          totalTransferredZeny: groupTransferredZeny,
           error: err.message
         });
       } catch (e) {}
@@ -4776,19 +4906,57 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
         evalProfilePort(p.debugPort, `(() => { window.__isConsolidating = false; window.__consolidationPending = false; if (typeof window.restoreKeptFarmMap === 'function') window.restoreKeptFarmMap(); })()`);
       } catch(e) {}
     }
-    if (!(batchCtx && batchCtx.isSubBatch)) {
-      consolidationState.running = false;
-      consolidationState.status = consolidationAborted ? 'stopped' : 'error';
-      consolidationState.endTime = Date.now();
+    const summaryIdx = consolidationState.ipGroupSummaries.findIndex(x => x.ip === receiverIpKey);
+    const summaryEntry = {
+      ip: receiverIpKey,
+      receiverId: receiverProfile.id,
+      receiverName: task.receiverName || receiverProfile.name,
+      transferredZeny: groupTransferredZeny,
+      transferredItems: groupTransferredItems,
+      ok: false
+    };
+    if (summaryIdx >= 0) consolidationState.ipGroupSummaries[summaryIdx] = summaryEntry;
+    else consolidationState.ipGroupSummaries.push(summaryEntry);
+
+    return { ok: false, taskId, ip: receiverIpKey, error: err.message, groupTransferredZeny, groupTransferredItems };
+  } finally {
+    activeConsolidationTasks.delete(taskId);
+    if (activeConsolidationProfiles.get(receiverProfile.id) === taskId) {
+      activeConsolidationProfiles.delete(receiverProfile.id);
     }
-    return { ok: false, error: err.message, groupTransferredZeny, groupTransferredItems };
+    for (const s of senderProfiles) {
+      if (activeConsolidationProfiles.get(s.id) === taskId) {
+        activeConsolidationProfiles.delete(s.id);
+      }
+    }
+    for (const [ch, tid] of activeConsolidationChannels.entries()) {
+      if (tid === taskId) activeConsolidationChannels.delete(ch);
+    }
+    syncConsolidationGlobalState();
+    if (activeConsolidationTasks.size === 0) {
+      consolidationState.running = false;
+      consolidationState.endTime = Date.now();
+      if (isTaskAborted()) {
+        consolidationState.status = 'stopped';
+        consolidationState.step = 'ยกเลิกการรวมเงินเรียบร้อยแล้ว';
+      } else {
+        consolidationState.status = 'completed';
+        consolidationState.stepIndex = 5;
+        consolidationState.step = `เสร็จสิ้นการรวมเงินและเริ่มบอทกลับฟาร์มเรียบร้อย! (รวม ${consolidationState.totalTransferredZeny.toLocaleString()} z)`;
+      }
+    }
   }
 }
 
 async function runIpGroupsConsolidationWorkflow(groups, keepZeny = 0, tradeItemsOpts = null) {
-  if (consolidationState.running) return;
   const validGroups = Array.isArray(groups)
-    ? groups.filter(g => g && g.receiverProfileId && Array.isArray(g.senderProfileIds) && g.senderProfileIds.length > 0)
+    ? groups
+        .filter(g => g && g.receiverProfileId && !activeConsolidationProfiles.has(g.receiverProfileId) && Array.isArray(g.senderProfileIds))
+        .map(g => ({
+          ...g,
+          senderProfileIds: g.senderProfileIds.filter(sid => sid && !activeConsolidationProfiles.has(sid))
+        }))
+        .filter(g => g.senderProfileIds.length > 0)
     : [];
   if (validGroups.length === 0) return;
 
@@ -4801,36 +4969,31 @@ async function runIpGroupsConsolidationWorkflow(groups, keepZeny = 0, tradeItems
     : sanitizeConsolidationItemsList(savedItemCfg.items);
 
   consolidationAborted = false;
+  if (activeConsolidationTasks.size === 0) {
+    consolidationState.completedSenders = [];
+    consolidationState.totalTransferredZeny = 0;
+    consolidationState.totalTransferredItems = 0;
+    consolidationState.ipGroupSummaries = [];
+    consolidationState.logs = [];
+    consolidationState.startTime = Date.now();
+  }
   consolidationState.running = true;
-  consolidationState.isPremiumConsolidation = false;
-  consolidationState.premiumGoal = null;
   consolidationState.sameIpOnly = true;
   consolidationState.ipGroupMode = true;
-  consolidationState.currentIpGroup = null;
-  consolidationState.ipGroupIndex = 0;
-  consolidationState.totalIpGroups = validGroups.length;
-  consolidationState.ipGroupSummaries = [];
+  consolidationState.totalIpGroups = validGroups.length + activeConsolidationTasks.size;
   consolidationState.status = 'running';
-  consolidationState.stepIndex = 1;
-  consolidationState.step = `เตรียมพร้อมรวมเงินแยกตามวง IP (${validGroups.length} วง IP)...`;
-  consolidationState.completedSenders = [];
-  consolidationState.totalTransferredZeny = 0;
-  consolidationState.totalTransferredItems = 0;
   consolidationState.tradeItemsEnabled = tradeItemsEnabled;
   consolidationState.tradeItemsList = tradeItemsList;
-  consolidationState.logs = [];
-  consolidationState.startTime = Date.now();
   consolidationState.endTime = 0;
 
-  addConsolidationLog(`🌐 เริ่มต้นระบบรวมเงินแยกตามวง IP อัตโนมัติ (ทั้งหมด ${validGroups.length} วง IP — รันทีละวงเพื่อให้วงอื่นฟาร์มต่อได้ไม่สะดุด)`, 'info');
+  addConsolidationLog(`🌐 เริ่มต้นระบบรวมเงินแบบ Multi-Task แยกตามวง IP พร้อมกัน (${validGroups.length} วง IP — แยก Channel อัตโนมัติไม่ให้ชนกัน)`, 'info');
 
-  for (let idx = 0; idx < validGroups.length; idx++) {
-    if (consolidationAborted) break;
-    const g = validGroups[idx];
+  await Promise.all(validGroups.map(async (g, idx) => {
+    if (idx > 0) await new Promise(r => setTimeout(r, idx * 450));
+    if (consolidationAborted) return;
     const ipLabel = g.ip || getProfileIpGroupKey(g.receiverProfileId);
-    addConsolidationLog(`========================================`, 'info');
     addConsolidationLog(`🛡️ เริ่มวง IP ที่ ${idx + 1}/${validGroups.length}: [${ipLabel}] (ผู้โอน ${g.senderProfileIds.length} จอ)`, 'info');
-    const res = await runConsolidationWorkflow(g.receiverProfileId, g.senderProfileIds, keepZeny, {
+    await runConsolidationWorkflow(g.receiverProfileId, g.senderProfileIds, keepZeny, {
       enabled: tradeItemsEnabled,
       items: tradeItemsList,
       sameIpOnly: true,
@@ -4842,32 +5005,7 @@ async function runIpGroupsConsolidationWorkflow(groups, keepZeny = 0, tradeItems
         ip: ipLabel
       }
     });
-    consolidationState.ipGroupSummaries.push({
-      ip: ipLabel,
-      receiverId: g.receiverProfileId,
-      receiverName: res?.receiverName || g.receiverProfileId,
-      transferredZeny: Number(res?.groupTransferredZeny) || 0,
-      transferredItems: Number(res?.groupTransferredItems) || 0,
-      ok: Boolean(res?.ok)
-    });
-    if (consolidationAborted) break;
-    if (idx < validGroups.length - 1) {
-      await new Promise(r => setTimeout(r, 1500));
-    }
-  }
-
-  if (consolidationAborted) {
-    consolidationState.status = 'stopped';
-    consolidationState.step = 'ยกเลิกการรวมเงินแยกตามวง IP แล้ว';
-  } else {
-    consolidationState.status = 'completed';
-    consolidationState.stepIndex = 5;
-    consolidationState.step = `รวมเงินครบทั้ง ${validGroups.length} วง IP สำเร็จ! (รวม ${consolidationState.totalTransferredZeny.toLocaleString()} z)`;
-    addConsolidationLog(`========================================`, 'info');
-    addConsolidationLog(`🏆 สรุปรวมเงินแยกตามวง IP (${validGroups.length} วง): โอนเงินรวมทั้งหมด ${consolidationState.totalTransferredZeny.toLocaleString()} z${consolidationState.totalTransferredItems > 0 ? ` + ไอเทม ${consolidationState.totalTransferredItems.toLocaleString()} ชิ้น` : ''}`, 'success');
-  }
-  consolidationState.running = false;
-  consolidationState.endTime = Date.now();
+  }));
 }
 
 const mimeTypes = {
@@ -5746,13 +5884,13 @@ const premiumService = createPremiumService({
   evalProfilePort,
   queryProfileState: async (p) => (p && p.debugPort) ? await queryClientState(p.debugPort) : null,
   startPremiumConsolidation: async (opts) => {
-    if (consolidationState.running) {
-      return { started: false, error: 'ระบบกำลังรวมเงินอยู่ในขณะนี้' };
-    }
     const recvId = opts && opts.receiverProfile && opts.receiverProfile.id;
-    const senderIds = ((opts && opts.senderProfiles) || []).map(s => s.id);
+    const senderIds = ((opts && opts.senderProfiles) || []).map(s => s.id).filter(sid => !activeConsolidationProfiles.has(sid));
     if (!recvId || !senderIds.length) {
-      return { started: false, error: 'ไม่พบตัวรับหรือตัวโอนเงิน' };
+      return { started: false, error: 'ไม่พบตัวรับหรือตัวโอนเงินที่ว่างอยู่' };
+    }
+    if (activeConsolidationProfiles.has(recvId)) {
+      return { started: false, error: 'ตัวรับกำลังดำเนินการรวมเงินอยู่ในขณะนี้' };
     }
     runConsolidationWorkflow(recvId, senderIds, opts.keepZeny || 0, {
       enabled: false,
@@ -5762,8 +5900,15 @@ const premiumService = createPremiumService({
     return { started: true };
   },
   stopPremiumConsolidation: async () => {
-    if (consolidationState.running) {
-      consolidationAborted = true;
+    let stoppedAny = false;
+    for (const t of activeConsolidationTasks.values()) {
+      if (t.isPremiumConsolidation) {
+        t.aborted = true;
+        stoppedAny = true;
+      }
+    }
+    if (stoppedAny || consolidationState.isPremiumConsolidation) {
+      if (activeConsolidationTasks.size <= 1) consolidationAborted = true;
       addConsolidationLog('🛑 ผู้ใช้สั่งหยุดการรวมเงินซื้อ Premium...', 'warning');
     }
     return { stopped: true };
@@ -7130,7 +7275,9 @@ async function pollCentralCommands() {
       accountSettings = humanCheckSolver.loadSettings();
     }
     if (!accountSettings || !accountSettings.accountId) return;
-    const offlineStatus = typeof offlineCoordinator?.getStatus === 'function' ? offlineCoordinator.getStatus() : null;
+    const offlineStatus = typeof offlineCoordinator?.getStatus === 'function'
+      ? offlineCoordinator.getStatus()
+      : (typeof offlineCoordinator?.status === 'function' ? offlineCoordinator.status() : null);
     const primaryMachineId = (offlineStatus && offlineStatus.machineId) || deviceNickname;
     const prevAccessStatus = humanCheckSolver.getAccessStatus?.() || 'approved';
     const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/commands', {
@@ -7143,10 +7290,12 @@ async function pollCentralCommands() {
       if (nextAccessStatus !== 'approved' && prevAccessStatus === 'approved') {
         console.warn(`[Central Admin] Machine access changed to ${nextAccessStatus} — stopping all profiles immediately`);
         await stopAllProfiles().catch(() => {});
+        try { await offlineCoordinator?.cycle?.(); } catch (_) {}
       }
     }
     if (res && res.success && Array.isArray(res.commands) && res.commands.length > 0) {
       const ackIds = [];
+      let stoppedAny = false;
       for (const cmd of res.commands) {
         console.log(`[Central Admin] Received remote command: ${cmd.action} target: ${cmd.target}`);
         if (cmd.action === 'stop') {
@@ -7155,6 +7304,7 @@ async function pollCentralCommands() {
           } else {
             await stopSingleProfile(cmd.target);
           }
+          stoppedAny = true;
         } else if (cmd.action === 'update_bot' || cmd.action === 'refresh_payload') {
           botAutoUpdater.retryFailed().catch(() => {});
         } else if (cmd.action === 'restore_profiles') {
@@ -7168,6 +7318,10 @@ async function pollCentralCommands() {
           commandIds: ackIds,
           machineId: primaryMachineId
         }).catch(() => {});
+      }
+      if (stoppedAny) {
+        try { await offlineCoordinator?.cycle?.(); } catch (_) {}
+        try { await offlineCoordinator?.wallet?.forceRefresh?.(); } catch (_) {}
       }
     }
   } catch (_) {} finally {
@@ -10357,10 +10511,6 @@ public class PmFocus {
         const sameIpOnly = Boolean(payload.sameIpOnly);
         const ipGroupsInput = Array.isArray(payload.ipGroups) ? payload.ipGroups : null;
 
-        if (consolidationState.running) {
-          return sendJSON({ success: false, error: "ระบบกำลังดำเนินการรวมเงินอยู่แล้วในขณะนี้" }, 409);
-        }
-
         // Persist item trade preferences if supplied
         let itemCfg = loadConsolidationItemSettings();
         if (typeof payload.tradeOnConsolidate === "boolean" || Array.isArray(payload.items) || typeof payload.storeOnlyEnabled === "boolean") {
@@ -10386,16 +10536,18 @@ public class PmFocus {
           return { ok: Number(p.lastPremiumUntil || 0) > Date.now(), name: p.lastCharName || p.name, ip };
         };
 
-        // Multi-group IP consolidation mode
+        // Multi-group IP consolidation mode (runs non-overlapping IP groups concurrently in parallel)
         if (ipGroupsInput && ipGroupsInput.length > 0) {
           const validatedGroups = [];
           for (const g of ipGroupsInput) {
             if (!g || !g.receiverProfileId || !Array.isArray(g.senderProfileIds) || g.senderProfileIds.length === 0) continue;
+            if (activeConsolidationProfiles.has(g.receiverProfileId)) continue;
             const recCheck = await checkProfilePremium(g.receiverProfileId);
             if (!recCheck.ok) continue;
+            if (Array.from(activeConsolidationTasks.values()).some(t => t.ip === recCheck.ip)) continue;
             const sChecks = await Promise.all(g.senderProfileIds.map(async sid => ({ sid, ...(await checkProfilePremium(sid)) })));
             const validSenders = sChecks
-              .filter(sc => sc.ok && sc.sid !== g.receiverProfileId && sc.ip === recCheck.ip)
+              .filter(sc => sc.ok && sc.sid !== g.receiverProfileId && sc.ip === recCheck.ip && !activeConsolidationProfiles.has(sc.sid))
               .map(sc => sc.sid);
             if (validSenders.length > 0) {
               validatedGroups.push({
@@ -10408,8 +10560,10 @@ public class PmFocus {
           if (validatedGroups.length === 0) {
             return sendJSON({
               success: false,
-              error: "ไม่พบวง IP ที่มีทั้งตัวรับและผู้โอนสถานะ 👑 Premium พร้อมโอนในวงเดียวกัน"
-            }, 400);
+              error: activeConsolidationTasks.size > 0
+                ? "วง IP ที่เลือกกำลังดำเนินการรวมเงินอยู่แล้วในขณะนี้"
+                : "ไม่พบวง IP ที่มีทั้งตัวรับและผู้โอนสถานะ 👑 Premium พร้อมโอนในวงเดียวกัน"
+            }, activeConsolidationTasks.size > 0 ? 409 : 400);
           }
           runIpGroupsConsolidationWorkflow(validatedGroups, keepZeny, {
             enabled: Boolean(itemCfg.tradeOnConsolidate),
@@ -10418,7 +10572,8 @@ public class PmFocus {
           return sendJSON({
             success: true,
             ipGroupsCount: validatedGroups.length,
-            message: `เริ่มต้นรวมเงินแยกตามวง IP (${validatedGroups.length} วง IP) เรียบร้อยแล้ว`
+            activeTasksCount: activeConsolidationTasks.size,
+            message: `เริ่มต้นรวมเงินแบบ Multi-Task แยกตามวง IP (${validatedGroups.length} วง IP) พร้อมกันเรียบร้อยแล้ว`
           });
         }
 
@@ -10432,6 +10587,10 @@ public class PmFocus {
           return sendJSON({ success: false, error: "กรุณาเลือกจอที่จะโอนเงินอย่างน้อย 1 จอ" }, 400);
         }
 
+        if (activeConsolidationProfiles.has(receiverId)) {
+          return sendJSON({ success: false, error: "ตัวรับเงินนี้กำลังดำเนินการรวมเงินอยู่แล้วในขณะนี้" }, 409);
+        }
+
         const [recCheck, senderChecks] = await Promise.all([
           checkProfilePremium(receiverId),
           Promise.all(senderIds.map(async sid => ({ sid, ...(await checkProfilePremium(sid)) })))
@@ -10440,24 +10599,36 @@ public class PmFocus {
           return sendJSON({ success: false, error: `ตัวรับเงิน (${recCheck.name}) ไม่มีสถานะ 👑 Premium — ระบบเทรดรวมเงินเลือกได้เฉพาะตัวละครที่มี Premium เท่านั้น` }, 400);
         }
 
-        let validSenders = senderChecks.filter(sc => sc.ok).map(sc => sc.sid);
+        if (sameIpOnly && Array.from(activeConsolidationTasks.values()).some(t => t.ip === recCheck.ip)) {
+          return sendJSON({ success: false, error: `วง IP [${recCheck.ip}] กำลังดำเนินการรวมเงินอยู่แล้วในขณะนี้` }, 409);
+        }
+
+        let validSenders = senderChecks
+          .filter(sc => sc.ok && !activeConsolidationProfiles.has(sc.sid))
+          .map(sc => sc.sid);
         if (validSenders.length === 0) {
-          return sendJSON({ success: false, error: "จอผู้โอนที่เลือกไม่มีสถานะ 👑 Premium (การเทรดโอนเงินใช้ได้เฉพาะตัวที่มี Premium เท่านั้น)" }, 400);
+          const anyBusy = senderChecks.some(sc => activeConsolidationProfiles.has(sc.sid));
+          return sendJSON({
+            success: false,
+            error: anyBusy
+              ? "จอผู้โอนที่เลือกกำลังติดภารกิจรวมเงินอยู่ในขณะนี้"
+              : "จอผู้โอนที่เลือกไม่มีสถานะ 👑 Premium (การเทรดโอนเงินใช้ได้เฉพาะตัวที่มี Premium เท่านั้น)"
+          }, anyBusy ? 409 : 400);
         }
 
         if (sameIpOnly) {
           validSenders = senderChecks
-            .filter(sc => sc.ok && sc.ip === recCheck.ip)
+            .filter(sc => sc.ok && sc.ip === recCheck.ip && !activeConsolidationProfiles.has(sc.sid))
             .map(sc => sc.sid);
           if (validSenders.length === 0) {
             return sendJSON({
               success: false,
-              error: `ไม่มีจอผู้โอนที่อยู่ในวง IP เดียวกับตัวรับ (${recCheck.ip}) และมี 👑 Premium`
+              error: `ไม่มีจอผู้โอนที่ว่างอยู่ในวง IP เดียวกับตัวรับ (${recCheck.ip}) และมี 👑 Premium`
             }, 400);
           }
         }
 
-        // Run in background
+        // Run in background (supports parallel non-overlapping tasks!)
         runConsolidationWorkflow(receiverId, validSenders, keepZeny, {
           enabled: Boolean(itemCfg.tradeOnConsolidate),
           items: itemCfg.items,
@@ -10468,6 +10639,7 @@ public class PmFocus {
           sameIpOnly,
           ip: recCheck.ip,
           sendersCount: validSenders.length,
+          activeTasksCount: activeConsolidationTasks.size,
           message: sameIpOnly
             ? `เริ่มต้นรวมเงินเฉพาะในวง IP [${recCheck.ip}] (${validSenders.length} จอ) เรียบร้อยแล้ว`
             : "เริ่มต้นกระบวนการรวมเงินเรียบร้อยแล้ว"
@@ -10486,11 +10658,42 @@ public class PmFocus {
 
   // POST /api/consolidation/stop
   if (req.method === "POST" && pathname === "/api/consolidation/stop") {
-    consolidationAborted = true;
-    consolidationState.running = false;
-    consolidationState.status = 'stopped';
-    addConsolidationLog('⏹️ ผู้ใช้สั่งหยุดกระบวนการรวมเงิน', 'warning');
-    return sendJSON({ success: true, message: "ยกเลิกกระบวนการรวมเงินเรียบร้อย" });
+    let body = "";
+    req.on("data", chunk => body += chunk);
+    req.on("end", () => {
+      let payload = {};
+      try { payload = JSON.parse(body || "{}"); } catch (_) {}
+      const targetTaskId = payload && payload.taskId ? String(payload.taskId) : null;
+      const targetIp = payload && payload.ip ? String(payload.ip) : null;
+
+      if (targetTaskId || targetIp) {
+        const stoppedIps = [];
+        for (const t of activeConsolidationTasks.values()) {
+          if ((targetTaskId && t.taskId === targetTaskId) || (targetIp && t.ip === targetIp)) {
+            t.aborted = true;
+            stoppedIps.push(t.ip);
+          }
+        }
+        if (stoppedIps.length > 0) {
+          addConsolidationLog(`⏹️ ผู้ใช้สั่งหยุดการรวมเงินเฉพาะวง IP [${stoppedIps.join(', ')}] (วงอื่นยังทำงานต่อตามปกติ)`, 'warning');
+          syncConsolidationGlobalState();
+          return sendJSON({ success: true, stoppedIps, message: `สั่งหยุดการรวมเงินของวง IP [${stoppedIps.join(', ')}] เรียบร้อยแล้ว` });
+        }
+      }
+
+      consolidationAborted = true;
+      for (const t of activeConsolidationTasks.values()) {
+        t.aborted = true;
+      }
+      if (activeConsolidationTasks.size === 0) {
+        consolidationState.running = false;
+        consolidationState.status = 'stopped';
+      }
+      syncConsolidationGlobalState();
+      addConsolidationLog('⏹️ ผู้ใช้สั่งหยุดกระบวนการรวมเงินทั้งหมด', 'warning');
+      return sendJSON({ success: true, message: "ยกเลิกกระบวนการรวมเงินเรียบร้อย" });
+    });
+    return;
   }
 
   // ==========================================

@@ -1861,6 +1861,21 @@
     const effThreshold = rs && rs.effectiveThreshold ? rs.effectiveThreshold : threshold;
 
     if (bagQty <= 0) {
+      if (rs && Number(rs.rawBagQty) > 0 && rs.blockedReason) {
+        const qTxt = Number(rs.rawBagQty).toLocaleString();
+        if (rs.blockedReason === 'locked') {
+          return `<span class="im-as-status reserve" title="ไอเทมในกระเป๋าถูกล็อคอยู่ (${qTxt} ชิ้น) ปลดล็อคก่อนจึงจะลงขายได้">🔒 มี ${qTxt} ชิ้น (ล็อคอยู่)</span>`;
+        }
+        if (rs.blockedReason === 'bound') {
+          return `<span class="im-as-status muted" title="ไอเทมติดตัว (Bound) ไม่สามารถลงขายตลาดกลางได้">🔗 มี ${qTxt} ชิ้น (ติดตัว)</span>`;
+        }
+        if (rs.blockedReason === 'stash') {
+          return `<span class="im-as-status reserve" title="ตั้งอยู่ในโหมดเก็บเข้าคลังอย่างเดียว">📦 มี ${qTxt} ชิ้น (เก็บเข้าคลัง)</span>`;
+        }
+        if (rs.blockedReason === 'gear') {
+          return `<span class="im-as-status reserve" title="เก็บไว้ใช้ตามแผนอุปกรณ์ (Plan)">🛡️ มี ${qTxt} ชิ้น (เก็บใช้ตามแผน)</span>`;
+        }
+      }
       return `<span class="im-as-status empty">❌ ไม่มีในตัว</span>`;
     }
     if (reserveQty > 0 && bagQty <= reserveQty) {

@@ -714,12 +714,12 @@
                   <span>ระบบรวมเงินแยกตามวง IP (IP-Group Consolidation)</span>
                   <span id="zeny-ip-groups-summary-badge" style="font-size: 11px; padding: 2px 9px; border-radius: 99px; background: rgba(168, 85, 247, 0.22); color: #e9d5ff; border: 1px solid rgba(168, 85, 247, 0.45); font-weight: 700;">0 วง IP</span>
                 </div>
-                <div class="zst-subtitle">แยกโอนเงินและไอเทมเฉพาะภายในวง Proxy IP เดียวกันเท่านั้น (ปลอดภัยสูงสุด ไม่มีการเทรดข้าม IP) — เลือกรวมเฉพาะวง หรือสั่งรันครบทุกวง IP อัตโนมัติทีละวง</div>
+                <div class="zst-subtitle">แยกโอนเงินและไอเทมเฉพาะภายในวง Proxy IP เดียวกันเท่านั้น (ปลอดภัยสูงสุด ไม่มีการเทรดข้าม IP) — รองรับโหมด Multi-Task กดรวมหลายวง IP พร้อมกันได้ทันทีหากไม่ทบกับตัวที่เทรดอยู่ (แยก Channel อัตโนมัติ)</div>
               </div>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-              <button type="button" id="btn-start-ip-groups-consolidation" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #7c3aed, #6d28d9); border-color: #a855f7; font-weight: 700; padding: 6px 14px; font-size: 12px;" title="สั่งรวมเงินแยกตามวง IP ทุกกลุ่มอัตโนมัติ (รันทีละวง IP จนครบทุกวง)">
-                🌐 รวมเงินทุกวง IP อัตโนมัติ
+              <button type="button" id="btn-start-ip-groups-consolidation" class="btn btn-primary btn-sm" style="background: linear-gradient(135deg, #7c3aed, #6d28d9); border-color: #a855f7; font-weight: 700; padding: 6px 14px; font-size: 12px;" title="สั่งรวมเงินแยกตามวง IP ทุกกลุ่มที่ว่างอยู่พร้อมกันแบบ Multi-Task (แยก Channel อัตโนมัติ)">
+                🌐 รวมเงินทุกวง IP อัตโนมัติ (Multi-Task)
               </button>
             </div>
           </div>
@@ -822,6 +822,9 @@
           <div class="zeny-progress-bar-wrap">
             <div class="zeny-progress-bar-fill" id="zeny-progress-bar-fill" style="width: 0%;"></div>
           </div>
+
+          <!-- MULTI-TASK PARALLEL IP GROUPS PROGRESS GRID -->
+          <div id="zeny-active-tasks-grid" style="display: none; grid-template-columns: repeat(auto-fill, minmax(265px, 1fr)); gap: 8px; margin-bottom: 10px;"></div>
 
           <!-- REALTIME CONSOLIDATION LOG VIEWER -->
           <div class="zeny-logs-container" id="zeny-logs-box">
@@ -1693,11 +1696,11 @@
   </div>
 
   <script src="image_board_solver.js?v=4.53.35"></script>
-  <script src="app.js?v=4.62.0"></script>
+  <script src="app.js?v=4.62.4"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.61.1"></script>
-  <script src="inventory_market.js?v=4.56.4"></script>
+  <script src="inventory_market.js?v=4.62.6"></script>
   <script src="bot_update.js?v=4.56.1"></script>
   <script src="config_copy.js?v=4.50.5"></script>
   <script src="party_manager.js?v=4.56.1"></script>
@@ -1710,7 +1713,7 @@
   <script src="device_manager.js?v=4.62.0"></script>
   <script src="fleet_dashboard.js?v=4.61.0"></script>
   <script src="support_chat.js?v=4.60.0.1"></script>
-  <script src="update_log.js?v=4.62.1"></script>
+  <script src="update_log.js?v=4.62.6"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

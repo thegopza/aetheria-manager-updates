@@ -3655,9 +3655,19 @@ function createMarketSniperService({
   function buildStockAndProfitBreakdown(onlineScreens) {
     const ourCharNamesSet = new Set();
     const onlineProfileIds = new Set();
+    const configuredProfileIds = new Set();
+    try {
+      const profList = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+      for (const p of profList) {
+        if (p && p.id) configuredProfileIds.add(String(p.id));
+      }
+    } catch (_) {}
     for (const scr of (onlineScreens || [])) {
       if (!scr) continue;
-      if (scr.profileId) onlineProfileIds.add(String(scr.profileId));
+      if (scr.profileId) {
+        onlineProfileIds.add(String(scr.profileId));
+        configuredProfileIds.add(String(scr.profileId));
+      }
       if (scr.charName) ourCharNamesSet.add(String(scr.charName).trim().toLowerCase());
       if (scr.profileName) ourCharNamesSet.add(String(scr.profileName).trim().toLowerCase());
     }
@@ -3964,7 +3974,8 @@ function createMarketSniperService({
       // Step D: Remaining units not in activePool, bagPool, or soldPool
       if (rem > 0) {
         const buyerIsOnline = Boolean(lot.buyerProfileId && onlineProfileIds.has(lot.buyerProfileId));
-        const isOfflineRecentLot = !buyerIsOnline && lot.at && ((nowMs - lot.at) < 36 * 3600 * 1000);
+        const buyerProfileStillExists = Boolean(lot.buyerProfileId && configuredProfileIds.has(lot.buyerProfileId));
+        const isOfflineRecentLot = !buyerIsOnline && buyerProfileStillExists && lot.at && ((nowMs - lot.at) < 36 * 3600 * 1000);
         if (lot.status === 'queued_flip' || isOfflineRecentLot) {
           inStockUnits += rem;
           rem = 0;
@@ -4186,6 +4197,17 @@ function createMarketSniperService({
     const details = [];
     const repricedProfileItemKeys = new Set();
 
+    const configuredProfileIds = new Set();
+    try {
+      const profList = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+      for (const p of profList) {
+        if (p && p.id) configuredProfileIds.add(String(p.id));
+      }
+    } catch (_) {}
+    for (const scr of (onlineScreens || [])) {
+      if (scr && scr.profileId) configuredProfileIds.add(String(scr.profileId));
+    }
+
     for (const scr of (onlineScreens || [])) {
       if (!scr || !Array.isArray(scr.myActiveListings) || !scr.myActiveListings.length) continue;
       const targetsOnScreen = [];
@@ -4195,8 +4217,9 @@ function createMarketSniperService({
         if (targetFilterNorm && nmLower !== targetFilterNorm) continue;
         const trueRef = getTrueRefUnitPrice(a.itemId, a.refine, a.name, 0);
         if (trueRef <= 0) continue;
-        if (a.unitPrice > Math.round(trueRef * 1.12)) {
-          const newUnitPrice = Math.max(1, trueRef - undercut);
+        const newUnitPrice = Math.max(1, trueRef - undercut);
+        const threshold = targetFilterNorm ? newUnitPrice : Math.round(trueRef * 1.12);
+        if (a.unitPrice > threshold) {
           const bCfg = getSmartFlipBatchConfig(nmLower, newUnitPrice, isSingleUnitFlipItem(a.name));
           targetsOnScreen.push({
             listingId: Number(a.listingId),
@@ -4329,8 +4352,10 @@ function createMarketSniperService({
     for (const h of (state.history || [])) {
       if (!h || !h.itemName) continue;
       const nm = String(h.itemName).trim().toLowerCase();
-      if (!repricedProfileItemKeys.has(`${String(h.buyerProfileId || '')}::${nm}`)) continue;
-      if (h.at && (nowRepriceTs - Number(h.at) > 12 * 3600 * 1000)) continue; // Never overwrite old already-sold lots
+      if (targetFilterNorm && nm !== targetFilterNorm) continue;
+      const isOrphanProfile = Boolean(h.buyerProfileId && !configuredProfileIds.has(String(h.buyerProfileId)));
+      if (!isOrphanProfile && !repricedProfileItemKeys.has(`${String(h.buyerProfileId || '')}::${nm}`)) continue;
+      if (!isOrphanProfile && h.at && (nowRepriceTs - Number(h.at) > 48 * 3600 * 1000)) continue;
       const trueRef = getTrueRefUnitPrice(h.itemId, h.refine, h.itemName, 0);
       if (trueRef > 0 && Number(h.relistUnitPrice) > Math.round(trueRef * 1.12)) {
         const q = Math.max(1, Number(h.qty) || 1);

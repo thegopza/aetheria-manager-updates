@@ -2301,12 +2301,12 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
   async function reloadCrashedClient(c, reason = 'crashed', force = false) {
     if (!c || stoppedProfiles.has(c.profileId) || clients.get(c.profileId) !== c) return false;
+    if (!force) {
+      // ปิดระบบรีเฟรชหน้าจออัตโนมัติเมื่อจอมีปัญหา/ค้าง/โหลดไม่เข้า (อนุญาตเฉพาะคำสั่งกู้คืนแบบ force เท่านั้น)
+      return false;
+    }
     const now = Date.now();
     if (c.crashReloadInFlight) return false;
-    if (!force) {
-      if ((c.crashReloadCount || 0) >= 3) return false;
-      if (now - (c.lastCrashReloadAt || 0) < 90000) return false;
-    }
     c.crashReloadInFlight = true;
     c.lastCrashReloadAt = now;
     c.crashReloadCount = (c.crashReloadCount || 0) + 1;
@@ -2817,17 +2817,6 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
             }
           } catch (_) {
             probeFailed = true;
-            if (!isRealSession) {
-              const fails = (crashedTargetFailCount.get(t.targetId) || 0) + 1;
-              crashedTargetFailCount.set(t.targetId, fails);
-              const lastAt = crashedTargetReloadAt.get(t.targetId) || 0;
-              if (fails >= 4 && Date.now() - lastAt > 90000) {
-                crashedTargetReloadAt.set(t.targetId, Date.now());
-                crashedTargetFailCount.set(t.targetId, 0);
-                await send('Page.enable', {}, sessionId, 3000).catch(() => {});
-                await send('Page.reload', { ignoreCache: false }, sessionId, 4000).catch(() => send('Page.navigate', { url: gameUrl }, sessionId, 4000).catch(() => {}));
-              }
-            }
           } finally {
             await send('Target.detachFromTarget', { sessionId }).catch(() => {});
           }

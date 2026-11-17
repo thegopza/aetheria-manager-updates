@@ -140,7 +140,7 @@
           <label class="pm-opt-toggle on" for="pm-prebuy">
             <div class="pm-opt-txt">
               <b>ซื้อเผื่อไว้รอบถัดไป</b>
-              <small>สะสม Token ล่วงหน้าตอนมี VIP</small>
+              <small>เมื่อเงินถึงเป้า ซื้อทีเดียวครบก้อนตอนมี VIP</small>
             </div>
             <span class="pm-switch"><input type="checkbox" id="pm-prebuy" data-set="prebuyNextRound" checked><span></span></span>
           </label>
@@ -205,7 +205,7 @@
       </div>
       <div class="pm-body" id="pm-body"></div>
       <footer class="pm-foot">
-        <span id="pm-gate-hint">เริ่มทำงานเมื่อ Plan Script ผ่านครบทุกเงื่อนไข · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที</span> · <span id="pm-prebuy-hint">มี Premium แล้ว → ทยอยซื้อให้ครบก่อนหมด</span> <b id="pm-lead-hint"></b>
+        <span id="pm-gate-hint">เริ่มทำงานเมื่อ Plan Script ผ่านครบทุกเงื่อนไข · จอที่ไม่ได้ใช้แผนเริ่มได้ทันที</span> · <span id="pm-prebuy-hint">รอเงินถึงเป้าแล้วซื้อทีเดียวครบแพ็กเกจ</span> <b id="pm-lead-hint"></b>
       </footer>`;
     document.body.append(tab, scrim, drawer);
 
@@ -586,7 +586,7 @@
       setText(
         prebuyHint,
         prebuyOn
-          ? 'มี VIP แล้ว → ทยอยซื้อให้ครบก่อนหมด'
+          ? 'มี VIP แล้ว → รอเงินถึงเป้าแล้วซื้อทีเดียวครบแพ็กเกจ'
           : (consOn ? `มี VIP แล้ว → รวมเงินซื้อเมื่อเหลือ < ${underHoursVal} ชม.` : 'มี VIP แล้ว → หยุดซื้อเผื่อรอบถัดไป')
       );
     }
@@ -596,7 +596,7 @@
       setText(
         hint,
         prebuyOn
-          ? (cur ? `(${cur.days} วัน → ครบใน ${Math.max(0.25, cur.days - (Number(s.leadDays) || 0))} วัน${consOn ? ` · รวมเงินเมื่อ < ${underHoursVal} ชม.` : ''})` : '')
+          ? (cur ? `(ซื้อรวดเดียว ${fmt(cur.tokens)} Token เมื่อเงินถึง${consOn ? ` · รวมเงินเมื่อ < ${underHoursVal} ชม.` : ''})` : '')
           : (consOn ? `(ดึงเงินจออื่นเหลือติดตัว ${fmt(keepZenyVal)} z)` : '(รอหมดอายุก่อนค่อยซื้อรอบใหม่)')
       );
     }

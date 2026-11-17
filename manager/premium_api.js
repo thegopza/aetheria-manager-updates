@@ -323,8 +323,10 @@ function estimateTokensZenyCost(ex, needTokens) {
 }
 
 // How many Token should the wallet hold right now?
-// No Premium → the full plan price. Premium on → grows linearly so the full price is there `leadDays` before the end
-// (or 0 while Premium is active if prebuyNextRound === false, unless consolidateBeforeExpire window is active).
+// Lump-sum mode ("ซื้อทีเดียวเมื่อเงินถึง"): always target the full package cost (`cost`)
+// so the bot waits until Zeny is enough and buys the entire package in a single purchase.
+// Returns 0 while Premium is active if `prebuyNextRound === false` (unless inside `consolidateBeforeExpire` window)
+// or if more than one full plan period remains.
 function tokenTarget(cost, days, leadDays, premiumUntilMs, nowMs, prebuyNextRound, consolidateBeforeExpire, consolidateUnderHours) {
   if (!premiumUntilMs || premiumUntilMs <= nowMs) return cost;
   const remaining = premiumUntilMs - nowMs;
@@ -333,10 +335,8 @@ function tokenTarget(cost, days, leadDays, premiumUntilMs, nowMs, prebuyNextRoun
   }
   if (prebuyNextRound === false) return 0;
   const period = days * DAY;
-  const spread = Math.max(DAY / 4, period - Math.max(0, leadDays) * DAY);
-  const elapsed = period - remaining; // negative while more than one period is left (e.g. a 30 d plan bought by hand)
-  const frac = Math.max(0, Math.min(1, elapsed / spread));
-  return Math.ceil(cost * frac);
+  if (remaining > period) return 0;
+  return cost;
 }
 
 function isGearBlockerText(b) {
@@ -407,26 +407,25 @@ function decide(snap, cfg, gateOpen, nowMs, timing) {
   if (budget <= 0) {
     const waitTxt = inConsolidateWindow && shortfallZeny > 0
       ? `รอรวมเงินซื้อ VIP (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
-      : 'เงินไม่พอ (เก็บสำรองไว้ ' + Number(cfg.reserveZeny || 0).toLocaleString() + ' z)';
+      : `รอเงินครบซื้อทีเดียว ${need.toLocaleString()} Token (ต้องใช้ ~${neededZeny.toLocaleString()} z · เก็บสำรอง ${Number(cfg.reserveZeny || 0).toLocaleString()} z)`;
     return Object.assign(base, consMeta, { action: 'wait', need, text: waitTxt });
   }
   const w = walkAsks(ex.asks, need, budget);
-  if (w.qty <= 0) {
-    const waitTxt = (ex.asks && ex.asks.length)
-      ? (inConsolidateWindow && shortfallZeny > 0
-        ? `รอรวมเงินซื้อ VIP (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
-        : 'เงินไม่พอซื้อแม้แต่ 1 Token')
-      : 'ยังไม่มีคนขาย Token';
-    return Object.assign(base, consMeta, { action: 'wait', need, text: waitTxt });
-  }
-  if (w.qty < Math.min(need, T.minBatch)) {
-    const waitTxt = inConsolidateWindow && shortfallZeny > 0
-      ? `รอรวมเงินซื้อ VIP (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`
-      : 'รอเงินพอซื้อ ' + Math.min(need, T.minBatch) + ' Token';
+  if (w.qty < need) {
+    const totalMarket = walkAsks(ex.asks, need, Infinity);
+    let waitTxt;
+    if (inConsolidateWindow && shortfallZeny > 0) {
+      waitTxt = `รอรวมเงินซื้อ VIP (< ${consUnderHours} ชม. · ขาดอีก ~${shortfallZeny.toLocaleString()} z)`;
+    } else if (totalMarket.qty < need) {
+      waitTxt = `รอคนตั้งขายให้ครบ ${need.toLocaleString()} Token (ในตลาดมี ${totalMarket.qty.toLocaleString()} Token)`;
+    } else {
+      const missingForFull = Math.max(1, neededZeny - budget);
+      waitTxt = `รอเงินครบซื้อทีเดียว ${need.toLocaleString()} Token (มีใช้ได้ ${budget.toLocaleString()} / ~${neededZeny.toLocaleString()} z · ขาดอีก ~${missingForFull.toLocaleString()} z)`;
+    }
     return Object.assign(base, consMeta, { action: 'wait', need, text: waitTxt });
   }
   const maxZeny = Math.min(budget, Math.ceil(w.zeny * 1.01));
-  return Object.assign(base, consMeta, { action: 'buy', need, qty: w.qty, maxZeny, estZeny: w.zeny, text: 'ซื้อ ' + w.qty + ' Token (~' + w.zeny.toLocaleString() + ' z)' });
+  return Object.assign(base, consMeta, { action: 'buy', need, qty: w.qty, maxZeny, estZeny: w.zeny, text: 'ซื้อทีเดียว ' + w.qty.toLocaleString() + ' Token (~' + w.zeny.toLocaleString() + ' z)' });
 }
 
 function sanitizeSettings(s) {

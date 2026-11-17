@@ -1622,6 +1622,9 @@
       if (activeTab === 'custom' && (editingTitleState || pendingDeleteState || pickerState)) {
         return;
       }
+      if (activeTab === 'unban' && document.getElementById('dv-unban-top-zone')) {
+        return;
+      }
       renderDrawerList(false);
     }
   }
@@ -1835,11 +1838,11 @@
       return 0;
     });
 
-    let html = '';
+    let topHtml = '';
     const useMobileProxy = Boolean(status.useMobileProxy);
 
     // Top summary & actions card
-    html += `
+    topHtml += `
       <div class="dv-custom-intro-card" style="border-color:rgba(16,185,129,0.35);background:linear-gradient(135deg,rgba(6,78,59,0.35),rgba(15,23,42,0.85));">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
           <div>
@@ -1851,7 +1854,7 @@
             </div>
             <div style="font-size:11px;color:#cbd5e1;margin-top:4px;line-height:1.5;">
               • จำลอง <b>มือถือ Android แท้ระดับเบราว์เซอร์</b> (ตรงทั้ง HTTP Headers, Client Hints, ความละเอียดจอ, Touch, ปุ่มบังคับมือถือ Joystick)<br>
-              • <b>ซ่อนตัวแปรระบบและร่องรอย CDP 100%</b> · <b>ปิดบอท</b> (ช่วยกรอกรหัสผ่านให้ แต่ไม่มีโค้ดบอทและไม่มี HUD บอทในจอ)<br>
+              • <b>ซ่อนตัวแปรระบบและร่องรอย CDP 100%</b> · <b>ปิดบอท</b> (ล็อกอินและเลือกตัวละครเข้าเกมให้อัตโนมัติ แต่ไม่มีโค้ดบอทและไม่มี HUD บอทในจอ)<br>
               • <b>ตรวจจับอัตโนมัติ:</b> เมื่อแอดมินปล่อยตัวออกจากคุก ระบบจะ<b>ส่งเสียงระฆังแจ้งเตือน + ปิดจอ + ถอดออกจากคิวปลดทันที</b>
             </div>
             <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
@@ -1881,7 +1884,7 @@
     `;
 
     // Pool entries (Clients added to Unban Mode)
-    html += `
+    topHtml += `
       <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px 0;">
         <div style="font-size:12.5px;font-weight:800;color:#fde68a;">
           📱 รายการ Client ในวงปลด (${poolEntries.length} จอ · กำลังเปิด ${activeSessionMap.size} จอ)
@@ -1895,7 +1898,7 @@
     `;
 
     if (poolEntries.length === 0) {
-      html += `
+      topHtml += `
         <div class="dv-empty" style="padding:20px 14px;margin-bottom:14px;">
           <div class="dv-empty-icon">📱</div>
           <div class="dv-empty-title">ยังไม่มี Client ในวงโหมดปลด</div>
@@ -1903,7 +1906,7 @@
         </div>
       `;
     } else {
-      html += `<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">`;
+      topHtml += `<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">`;
       for (const item of poolEntries) {
         const pid = item.profileId;
         const pInfo = status.profileMap?.[pid] || {};
@@ -1915,7 +1918,7 @@
         const isBotRunning = Boolean(pObj.isRunning);
         const active = item.activeSession || activeSessionMap.get(pid) || null;
 
-        html += `
+        topHtml += `
           <div class="dv-custom-ip-card" style="padding:10px 12px;border-color:${active ? 'rgba(16,185,129,0.55)' : 'rgba(148,163,184,0.22)'};background:${active ? 'rgba(6,78,59,0.18)' : 'rgba(15,23,42,0.65)'};">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
               <div>
@@ -1932,9 +1935,9 @@
                 </div>
                 ${active ? `
                   <div style="margin-top:6px;padding:6px 10px;border-radius:8px;background:rgba(15,23,42,0.75);border:1px solid rgba(16,185,129,0.3);font-size:11px;color:#e2e8f0;display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
-                    <span>🌐 IP มือถือไทย: <b style="color:#38bdf8;">${esc(active.egressIp || 'กำลังเช็ค...')}</b></span>
+                    <span>🌐 IP: <b style="color:#38bdf8;">${esc(active.egressIp || 'กำลังเช็ค...')}</b></span>
                     <span>🗺️ สถานะ/แมพ: <b style="color:${active.inJail ? '#fca5a5' : '#fde047'};">${esc(active.currentMap || 'กำลังโหลด...')}</b></span>
-                    <span>📊 เน็ตที่ใช้: <b style="color:#a7f3d0;">${formatUnbanBytes(active.bytesUsed || 0)}</b></span>
+                    ${active.useMobileProxy ? `<span>📊 เน็ตซิมที่ใช้: <b style="color:#a7f3d0;">${formatUnbanBytes(active.bytesUsed || 0)}</b></span>` : ''}
                     <span>🕐 ${active.runningMinutes || 0} นาที</span>
                   </div>
                 ` : ''}
@@ -1969,28 +1972,17 @@
           </div>
         `;
       }
-      html += `</div>`;
+      topHtml += `</div>`;
     }
 
-    // Add clients section
-    html += `
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:14px 0 8px 0;flex-wrap:wrap;">
-        <div style="font-size:12.5px;font-weight:800;color:#e2e8f0;">
-          ➕ เลือกเพิ่ม Client เข้าวงปลด (${availableProfiles.length} จอ)
-        </div>
-        <input type="text" id="dv-unban-search-input" value="${esc(unbanSearchText)}" placeholder="🔍 ค้นหาชื่อจอ / ไอดี / ตัวละคร..."
-          style="background:rgba(15,23,42,0.8);border:1px solid rgba(148,163,184,0.3);color:#f8fafc;border-radius:7px;padding:4px 10px;font-size:11.5px;width:220px;">
-      </div>
-    `;
-
+    let availHtml = '';
     if (availableProfiles.length === 0) {
-      html += `
+      availHtml = `
         <div style="font-size:11.5px;color:#64748b;text-align:center;padding:14px;">
           ไม่พบโปรไฟล์ที่ค้นหา หรือทุกจออยู่ในวงปลดแล้ว
         </div>
       `;
     } else {
-      html += `<div style="display:flex;flex-direction:column;gap:5px;max-height:300px;overflow-y:auto;padding-right:4px;">`;
       for (const p of availableProfiles) {
         const pm = status.profileMap?.[p.id] || {};
         const pName = p.name || pm.name || p.id;
@@ -1998,7 +1990,7 @@
         const charName = p.charName || p.lastCharName || pm.charName || '-';
         const isJailed = Boolean(p.isJailed || pm.isJailed);
         const isRunning = Boolean(p.isRunning);
-        html += `
+        availHtml += `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-radius:8px;background:${isJailed ? 'rgba(239,68,68,0.08)' : 'rgba(255,255,255,0.03)'};border:1px solid ${isJailed ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)'};">
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
               <span style="font-size:12px;color:#f1f5f9;font-weight:700;">${esc(pName)}</span>
@@ -2022,23 +2014,53 @@
           </div>
         `;
       }
-      html += `</div>`;
     }
 
-    bodyEl.innerHTML = html;
+    // Mount stable skeleton once so scrolling in #dv-unban-avail-list or bodyEl never resets on polling!
+    let topZone = document.getElementById('dv-unban-top-zone');
+    let availTitleEl = document.getElementById('dv-unban-avail-title');
+    let availListEl = document.getElementById('dv-unban-avail-list');
+    if (!topZone || !availListEl) {
+      bodyEl.innerHTML = `
+        <div id="dv-unban-top-zone"></div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:14px 0 8px 0;flex-wrap:wrap;">
+          <div id="dv-unban-avail-title" style="font-size:12.5px;font-weight:800;color:#e2e8f0;"></div>
+          <input type="text" id="dv-unban-search-input" value="${esc(unbanSearchText)}" placeholder="🔍 ค้นหาชื่อจอ / ไอดี / ตัวละคร..."
+            style="background:rgba(15,23,42,0.8);border:1px solid rgba(148,163,184,0.3);color:#f8fafc;border-radius:7px;padding:4px 10px;font-size:11.5px;width:220px;">
+        </div>
+        <div id="dv-unban-avail-list" style="display:flex;flex-direction:column;gap:5px;max-height:320px;overflow-y:auto;padding-right:4px;"></div>
+      `;
+      topZone = document.getElementById('dv-unban-top-zone');
+      availTitleEl = document.getElementById('dv-unban-avail-title');
+      availListEl = document.getElementById('dv-unban-avail-list');
+      const searchInput = document.getElementById('dv-unban-search-input');
+      if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+          unbanSearchText = e.target.value || '';
+          renderUnbanTabBody(bodyEl, cachedProfiles);
+        });
+      }
+    }
 
-    const searchInput = document.getElementById('dv-unban-search-input');
-    if (searchInput) {
-      searchInput.addEventListener('input', (e) => {
-        unbanSearchText = e.target.value || '';
-        renderUnbanTabBody(bodyEl, allProfiles);
-        const nextInput = document.getElementById('dv-unban-search-input');
-        if (nextInput) {
-          nextInput.focus();
-          const len = nextInput.value.length;
-          nextInput.setSelectionRange(len, len);
-        }
-      });
+    if (topZone && topZone.dataset.renderSig !== topHtml) {
+      const prevBodyScroll = bodyEl.scrollTop;
+      topZone.innerHTML = topHtml;
+      topZone.dataset.renderSig = topHtml;
+      bodyEl.scrollTop = prevBodyScroll;
+    }
+
+    const nextTitleTxt = `➕ เลือกเพิ่ม Client เข้าวงปลด (${availableProfiles.length} จอ)`;
+    if (availTitleEl && availTitleEl.textContent !== nextTitleTxt) {
+      availTitleEl.textContent = nextTitleTxt;
+    }
+
+    if (availListEl && availListEl.dataset.renderSig !== availHtml) {
+      const prevAvailScroll = availListEl.scrollTop;
+      const prevBodyScroll = bodyEl.scrollTop;
+      availListEl.innerHTML = availHtml;
+      availListEl.dataset.renderSig = availHtml;
+      availListEl.scrollTop = prevAvailScroll;
+      bodyEl.scrollTop = prevBodyScroll;
     }
   }
 

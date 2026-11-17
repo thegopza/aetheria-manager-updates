@@ -4472,31 +4472,40 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
   }
 
   function getProfileAuthCredentials(profileId) {
+    let username = '';
+    let password = '';
+    let charName = '';
     try {
       const saved = loadProfileStorage(profileId);
       const rawAuth = saved[`pelican_${profileId}__auth_cfg`] || saved['pelican_auth_cfg'] || '';
       if (rawAuth) {
         const parsed = JSON.parse(rawAuth);
-        if (parsed && parsed.username && parsed.password) {
-          return {
-            username: String(parsed.username).trim(),
-            password: String(parsed.password),
-            charName: String(parsed.charName || '').trim()
-          };
+        if (parsed && typeof parsed === 'object') {
+          if (parsed.username) username = String(parsed.username).trim();
+          if (parsed.password) password = String(parsed.password);
+          if (parsed.charName) charName = String(parsed.charName).trim();
         }
       }
     } catch (_) {}
     try {
       const list = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
       const p = list.find(item => item && String(item.id) === String(profileId));
-      if (p && p.account && p.password) {
-        return {
-          username: String(p.account).trim(),
-          password: String(p.password),
-          charName: String(p.lastCharName || '').trim()
-        };
+      if (p) {
+        if (!username && p.account) username = String(p.account).trim();
+        if (!password && p.password) password = String(p.password);
+        if (!charName && (p.lastCharName || p.charName)) charName = String(p.lastCharName || p.charName).trim();
       }
     } catch (_) {}
+    try {
+      if (!password) {
+        const credsMod = require('./credentials');
+        const pw = credsMod && typeof credsMod.getPassword === 'function' ? credsMod.getPassword(profileId) : '';
+        if (pw) password = String(pw);
+      }
+    } catch (_) {}
+    if (username && password) {
+      return { username, password, charName };
+    }
     return null;
   }
 
@@ -4663,7 +4672,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       ${authCreds ? `
       try {
         const __creds = ${JSON.stringify(authCreds)};
-        let __filledOnce = false;
+        let __lastSubmitAt = 0;
+        let __lastEnterAt = 0;
+        let __submitCount = 0;
         const __setInputVal = function(el, val) {
           if (!el) return;
           const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
@@ -4672,20 +4683,89 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           el.dispatchEvent(new Event('input', { bubbles: true }));
           el.dispatchEvent(new Event('change', { bubbles: true }));
         };
-        const __fillTimer = setInterval(function() {
-          if (__filledOnce) { clearInterval(__fillTimer); return; }
-          const passEl = document.querySelector('input[type="password"]');
-          if (!passEl) return;
-          const form = passEl.closest('form') || document.body;
-          const userEl = form.querySelector('input[type="text"], input:not([type="password"]):not([type="checkbox"]):not([type="hidden"])');
-          if (userEl && passEl) {
-            __filledOnce = true;
-            clearInterval(__fillTimer);
-            __setInputVal(userEl, __creds.username);
-            __setInputVal(passEl, __creds.password);
-          }
-        }, 700);
-        setTimeout(function() { clearInterval(__fillTimer); }, 30000);
+        const __clickEl = function(el) {
+          if (!el) return;
+          try { el.click(); } catch (_) {}
+        };
+        const __loginTimer = setInterval(function() {
+          try {
+            const hasMinimap = !!document.querySelector('.minimap, [class*="minimap"]');
+            const loginForm = document.querySelector('form.login-form');
+            const charCards = Array.from(document.querySelectorAll('.char-card:not(.empty):not(.pending-delete)')).filter(function(el) {
+              return el.offsetWidth > 0 && el.offsetHeight > 0;
+            });
+            if (hasMinimap && !loginForm && charCards.length === 0) {
+              clearInterval(__loginTimer);
+              return;
+            }
+            const now = Date.now();
+            if (loginForm) {
+              const inputs = Array.from(loginForm.querySelectorAll('input')).filter(function(el) {
+                return el.type !== 'checkbox' && el.type !== 'hidden' && el.offsetWidth > 0;
+              });
+              if (inputs.length >= 3) {
+                const toLoginBtn = Array.from(loginForm.querySelectorAll('button.login-link, button.ghost, .login-links button, button, a')).find(function(b) {
+                  const t = String(b.innerText || b.textContent || b.value || '').trim();
+                  return t.indexOf('มีบัญชีแล้ว') !== -1 || t.indexOf('เข้าสู่ระบบ') !== -1 || t.indexOf('Log in') !== -1 || t.indexOf('Sign in') !== -1;
+                });
+                if (toLoginBtn) {
+                  __clickEl(toLoginBtn);
+                  return;
+                }
+              }
+              const passEl = loginForm.querySelector('input[type="password"]');
+              const userEl = inputs.find(function(el) { return el.type !== 'password'; }) || loginForm.querySelector('input[type="text"]');
+              if (userEl && passEl && inputs.length === 2) {
+                if (userEl.value !== __creds.username) __setInputVal(userEl, __creds.username);
+                if (passEl.value !== __creds.password) __setInputVal(passEl, __creds.password);
+                if (__submitCount < 5 && (now - __lastSubmitAt > 4500)) {
+                  const submitBtn = loginForm.querySelector('button.login-go') || Array.from(loginForm.querySelectorAll('button, input[type="submit"]')).find(function(b) {
+                    if (b.disabled || b.classList.contains('ghost') || b.classList.contains('login-link')) return false;
+                    const t = String(b.innerText || b.textContent || b.value || '').trim();
+                    if (t.indexOf('เล่นทันที') !== -1 || t.indexOf('ไม่ต้องสมัคร') !== -1 || t.indexOf('สมัครบัญชีใหม่') !== -1 || t.indexOf('มีบัญชีแล้ว') !== -1) return false;
+                    return t === 'เข้าเกม' || t === 'เข้าสู่ระบบ' || t === 'Login' || t === 'Sign In' || b.type === 'submit';
+                  });
+                  if (submitBtn && !submitBtn.disabled) {
+                    __lastSubmitAt = now;
+                    __submitCount++;
+                    setTimeout(function() {
+                      try {
+                        if (typeof loginForm.requestSubmit === 'function') {
+                          loginForm.requestSubmit(submitBtn);
+                          return;
+                        }
+                      } catch (_) {}
+                      __clickEl(submitBtn);
+                    }, 350);
+                  }
+                }
+              }
+              return;
+            }
+            if (charCards.length > 0 && (now - __lastEnterAt > 3000)) {
+              let targetCard = null;
+              if (__creds.charName) {
+                targetCard = charCards.find(function(c) {
+                  return String(c.innerText || c.textContent || '').indexOf(__creds.charName) !== -1;
+                });
+              }
+              if (!targetCard) targetCard = charCards[0];
+              if (targetCard && !targetCard.classList.contains('selected')) {
+                __clickEl(targetCard);
+              }
+              const enterBtn = Array.from(document.querySelectorAll('button.char-enter:not([disabled]), button:not([disabled])')).find(function(b) {
+                if (b.offsetWidth === 0 || b.offsetHeight === 0) return false;
+                const t = String(b.innerText || b.textContent || '').trim();
+                return t.indexOf('เข้าเกมด้วย') === 0 || t === 'เข้าเกม' || t === 'เริ่มเกม' || t === 'เข้าสู่โลก' || t === 'Enter World';
+              });
+              if (enterBtn) {
+                __lastEnterAt = now;
+                setTimeout(function() { __clickEl(enterBtn); }, 350);
+              }
+            }
+          } catch (_) {}
+        }, 900);
+        setTimeout(function() { clearInterval(__loginTimer); }, 120000);
       } catch (_) {}
       ` : ''}
     })();`;

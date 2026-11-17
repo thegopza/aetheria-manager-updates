@@ -5,7 +5,10 @@ function allowLocalRequest(req, port) {
   if (!allowedHosts.has((req.headers.host || '').toLowerCase())) return false;
   const remote = req.socket.remoteAddress;
   if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remote)) return false;
-  if (req.headers['sec-fetch-site'] === 'cross-site') return false;
+  const isTopLevelDocNav = (req.method === 'GET' || req.method === 'HEAD') &&
+    req.headers['sec-fetch-mode'] === 'navigate' &&
+    !String(req.url || '').startsWith('/api/');
+  if (req.headers['sec-fetch-site'] === 'cross-site' && !isTopLevelDocNav) return false;
   const origin = req.headers.origin;
   if (origin) {
     try {

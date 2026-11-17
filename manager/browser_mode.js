@@ -1989,6 +1989,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const args = [
       `--remote-debugging-port=${CDP_PORT}`, '--remote-allow-origins=*',
       `--user-data-dir=${userDataDir}`,
+      '--disable-blink-features=AutomationControlled',
       '--disable-background-mode',
       '--disable-renderer-accessibility',
       '--disable-platform-accessibility-integration',
@@ -2143,8 +2144,85 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         window.__pmMachineId = __mintMachineId();
       }
       try {
-        if (typeof navigator !== 'undefined' && navigator.webdriver) {
+        // Scrub any stray automation/chromedriver markers on window & document
+        const __cleanAutomationProps = function(obj) {
+          if (!obj) return;
+          try {
+            const names = Object.getOwnPropertyNames(obj);
+            for (let i = 0; i < names.length; i++) {
+              const k = names[i];
+              if (k.indexOf('cdc_') !== -1 || k.indexOf('wdc_') !== -1 || k.indexOf('__webdriver') !== -1 || k.indexOf('__selenium') !== -1 || k.indexOf('__playwright') !== -1 || k.indexOf('__puppeteer') !== -1) {
+                try { delete obj[k]; } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        };
+        __cleanAutomationProps(window);
+        if (typeof document !== 'undefined') __cleanAutomationProps(document);
+      } catch (_) {}
+      try {
+        if (typeof navigator !== 'undefined') {
           Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', { get: function() { return false; }, configurable: true });
+          const __spec = window.__pmDeviceSpec;
+          if (__spec && typeof __spec === 'object') {
+            const __isAndroid = __spec.platform === 'android';
+            Object.defineProperty(Object.getPrototypeOf(navigator), 'platform', { get: function() { return __isAndroid ? 'Linux armv8l' : 'Win32'; }, configurable: true });
+            if (__spec.ua) {
+              Object.defineProperty(Object.getPrototypeOf(navigator), 'userAgent', { get: function() { return __spec.ua; }, configurable: true });
+            }
+            if (typeof __spec.touch === 'number') {
+              Object.defineProperty(Object.getPrototypeOf(navigator), 'maxTouchPoints', { get: function() { return __spec.touch; }, configurable: true });
+            }
+            if (typeof __spec.cores === 'number' && __spec.cores > 0) {
+              Object.defineProperty(Object.getPrototypeOf(navigator), 'hardwareConcurrency', { get: function() { return __spec.cores; }, configurable: true });
+            }
+            if (__spec.screen && typeof window.screen !== 'undefined') {
+              const __spParts = String(__spec.screen).split('x');
+              const __sw = parseInt(__spParts[0], 10) || (__isAndroid ? 384 : 1920);
+              const __sh = parseInt(__spParts[1], 10) || (__isAndroid ? 824 : 1080);
+              const __scrProto = Object.getPrototypeOf(window.screen) || window.screen;
+              try {
+                Object.defineProperty(__scrProto, 'width', { get: function() { return __sw; }, configurable: true });
+                Object.defineProperty(__scrProto, 'height', { get: function() { return __sh; }, configurable: true });
+                Object.defineProperty(__scrProto, 'availWidth', { get: function() { return __sw; }, configurable: true });
+                Object.defineProperty(__scrProto, 'availHeight', { get: function() { return __sh; }, configurable: true });
+                Object.defineProperty(__scrProto, 'colorDepth', { get: function() { return 24; }, configurable: true });
+                Object.defineProperty(__scrProto, 'pixelDepth', { get: function() { return 24; }, configurable: true });
+              } catch (_) {}
+            }
+            if (__isAndroid) {
+              try {
+                Object.defineProperty(window, 'devicePixelRatio', { get: function() { return 3; }, configurable: true });
+              } catch (_) {}
+              if (!('ontouchstart' in window)) window.ontouchstart = null;
+              if (!window.__pmMatchMediaHooked && typeof window.matchMedia === 'function') {
+                Object.defineProperty(window, '__pmMatchMediaHooked', { value: true, writable: true, configurable: true, enumerable: false });
+                const __origMatchMedia = window.matchMedia.bind(window);
+                window.matchMedia = function(q) {
+                  const res = __origMatchMedia(q);
+                  const qs = String(q || '').toLowerCase();
+                  if (qs.indexOf('pointer') !== -1 && qs.indexOf('coarse') !== -1) {
+                    return Object.assign({}, res, { matches: true, media: q });
+                  }
+                  if ((qs.indexOf('pointer') !== -1 && qs.indexOf('fine') !== -1) || (qs.indexOf('hover') !== -1 && qs.indexOf('hover') !== -1 && qs.indexOf('none') === -1)) {
+                    return Object.assign({}, res, { matches: false, media: q });
+                  }
+                  return res;
+                };
+              }
+              try {
+                if (window.localStorage) {
+                  const __rawM = window.localStorage.getItem('webgame.mobile');
+                  const __mob = __rawM ? JSON.parse(__rawM) : {};
+                  if (__mob.joystick !== true) {
+                    __mob.joystick = true;
+                    if (__mob.newsOnEnter !== false) __mob.newsOnEnter = false;
+                    window.localStorage.setItem('webgame.mobile', JSON.stringify(__mob));
+                  }
+                }
+              } catch (_) {}
+            }
+          }
         }
       } catch (_) {}
       if (!window.__pmConsoleDebugHookInstalled && typeof console !== 'undefined' && typeof console.debug === 'function') {
@@ -2466,7 +2544,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       }
     } catch (_) {}`;
     const cacheFlag = Boolean(effectiveAssetCache && effectiveAssetCache.isEnabled());
-    return `window.__pmProfileId = ${JSON.stringify(profileId)}; window.__pmManagedDeviceGroup = true; window.__pmDeviceId = ${JSON.stringify(deviceId)}; window.__pmMachineId = ${JSON.stringify(machineId)}; window.__pmDeviceSpec = ${JSON.stringify(deviceSpec)}; window.__pmLocalAssetCacheEnabled = ${cacheFlag}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {} ${deviceHookJs} ${restoreJs}`;
+    const hidePmPropsJs = `try { const __pmKeys = Object.getOwnPropertyNames(window); for (let i = 0; i < __pmKeys.length; i++) { const k = __pmKeys[i]; if (k.indexOf('__pm') === 0) { const d = Object.getOwnPropertyDescriptor(window, k); if (d && d.configurable && d.enumerable) { Object.defineProperty(window, k, Object.assign({}, d, { enumerable: false })); } } } } catch (_) {}`;
+    return `window.__pmProfileId = ${JSON.stringify(profileId)}; window.__pmManagedDeviceGroup = true; window.__pmDeviceId = ${JSON.stringify(deviceId)}; window.__pmMachineId = ${JSON.stringify(machineId)}; window.__pmDeviceSpec = ${JSON.stringify(deviceSpec)}; window.__pmLocalAssetCacheEnabled = ${cacheFlag}; try { window.sessionStorage && window.sessionStorage.setItem('__pmProfileId', ${JSON.stringify(profileId)}); } catch (_) {} ${deviceHookJs} ${restoreJs} ${hidePmPropsJs}`;
   };
 
   async function configureSessionAssetCache(sessionId) {
@@ -2554,9 +2633,52 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     } catch (_) {}
   }
 
+  async function applyCdpDeviceEmulation(sessionId, spec) {
+    if (!sessionId || !spec || typeof spec !== 'object') return;
+    const isAndroid = spec.platform === 'android';
+    const ua = spec.ua || (isAndroid ? ANDROID_DEVICE_PRESETS[0].ua : PC_DEVICE_PRESETS[0].ua);
+    const modelCode = isAndroid ? (String(spec.model || '').match(/\(([^)]+)\)/)?.[1] || 'SM-S928B') : '';
+    const calls = [
+      send('Emulation.setUserAgentOverride', {
+        userAgent: ua,
+        platform: isAndroid ? 'Linux armv8l' : 'Win32',
+        userAgentMetadata: {
+          brands: [
+            { brand: 'Chromium', version: '131' },
+            { brand: 'Google Chrome', version: '131' },
+            { brand: 'Not_A Brand', version: '24' }
+          ],
+          fullVersionList: [
+            { brand: 'Chromium', version: isAndroid ? '131.0.6778.135' : '131.0.6778.86' },
+            { brand: 'Google Chrome', version: isAndroid ? '131.0.6778.135' : '131.0.6778.86' },
+            { brand: 'Not_A Brand', version: '24.0.0.0' }
+          ],
+          platform: isAndroid ? 'Android' : 'Windows',
+          platformVersion: isAndroid ? '14.0.0' : '15.0.0',
+          architecture: isAndroid ? '' : 'x86',
+          model: modelCode,
+          mobile: isAndroid,
+          bitness: isAndroid ? '' : '64',
+          wow64: false
+        }
+      }, sessionId, 4000).catch(() => {}),
+      send('Emulation.setTouchEmulationEnabled', {
+        enabled: isAndroid,
+        maxTouchPoints: isAndroid ? (spec.touch || 5) : 0
+      }, sessionId, 4000).catch(() => {}),
+      send('Emulation.setEmitTouchEventsForMouse', {
+        enabled: isAndroid,
+        configuration: isAndroid ? 'mobile' : 'desktop'
+      }, sessionId, 4000).catch(() => {})
+    ];
+    await Promise.all(calls);
+  }
+
   async function ensureSessionHooks(sessionId, profileId, clientObj = null) {
     await send('Page.enable', {}, sessionId, 5000).catch(() => {});
     await configureSessionAssetCache(sessionId);
+    const spec = ensureProfileDeviceSpec(profileId);
+    await applyCdpDeviceEmulation(sessionId, spec).catch(() => {});
     const c = clientObj || clients.get(profileId) || null;
     if (c) {
       const oldIds = Array.isArray(c.initScriptIds) ? c.initScriptIds.slice() : [];
@@ -4014,8 +4136,884 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     for(const c of [...clients.values()]){stoppedProfiles.add(c.profileId);clearTimeout(c.retryTimer);drop(c);}
     if(ws){const socket=ws;ws=null;socket.close();}
     for(const entry of pending.values()){clearTimeout(entry.timer);entry.reject(Error('BROWSER_MODE_DISPOSED'));}pending.clear();
+    stopAllUnbanSessions().catch(() => {});
   }
-  return { launch, stop, stopAll, isOpen, start, dispose, findBrowser, rebalanceDeviceGroups, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, ensureProfileDeviceSpec, resolveDeviceSpec, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, getCustomIpDeviceConfig, getProfileIpIsolationMeta, mutateCustomIpDevices, pruneDeletedProfilesFromCustomGroups, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, status:()=>Object.fromEntries(diagnostics) };
+
+  // ====================== UNBAN MODE ======================
+  // Launches a separate browser window with DataImpulse Mobile Proxy (Thai IP),
+  // full CDP mobile emulation (UA override, touch, screen, joystick), NO bot injection,
+  // and monitors whether the character has exited the jail map (= unbanned).
+  // On success: plays a notification sound, clears jail status, closes the window, removes from pool.
+  const net = require('net');
+  const dataDir = isRealSession ? path.join(__dirname, 'data') : null;
+  const unbanSessions = new Map(); // profileId -> session object
+  const unbanConfigFile = dataDir ? path.join(dataDir, 'unban_config.json') : null;
+
+  function loadUnbanConfig() {
+    if (!unbanConfigFile) return { profileIds: [], devicesByProfile: {}, useMobileProxy: false };
+    try {
+      const raw = JSON.parse(fs.readFileSync(unbanConfigFile, 'utf8'));
+      const profileIds = Array.isArray(raw.profileIds)
+        ? [...new Set(raw.profileIds.filter(id => typeof id === 'string' && id.trim()).map(id => id.trim()))]
+        : [];
+      const devicesByProfile = (raw.devicesByProfile && typeof raw.devicesByProfile === 'object' && !Array.isArray(raw.devicesByProfile))
+        ? { ...raw.devicesByProfile }
+        : {};
+      return {
+        profileIds,
+        devicesByProfile,
+        useMobileProxy: raw.useMobileProxy === true
+      };
+    } catch (_) {
+      return { profileIds: [], devicesByProfile: {}, useMobileProxy: false };
+    }
+  }
+
+  function saveUnbanConfig(cfg) {
+    if (!unbanConfigFile) return;
+    try {
+      fs.mkdirSync(path.dirname(unbanConfigFile), { recursive: true });
+      const clean = {
+        profileIds: Array.isArray(cfg?.profileIds) ? [...new Set(cfg.profileIds)] : [],
+        devicesByProfile: (cfg?.devicesByProfile && typeof cfg.devicesByProfile === 'object') ? cfg.devicesByProfile : {},
+        useMobileProxy: Boolean(cfg?.useMobileProxy)
+      };
+      const tmp = unbanConfigFile + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(clean, null, 2), 'utf8');
+      try { fs.renameSync(tmp, unbanConfigFile); } catch (_) {
+        try { fs.unlinkSync(tmp); } catch (__) {}
+        fs.writeFileSync(unbanConfigFile, JSON.stringify(clean, null, 2), 'utf8');
+      }
+    } catch (_) {}
+  }
+
+  function setUnbanProxyMode(useMobileProxy) {
+    const cfg = loadUnbanConfig();
+    cfg.useMobileProxy = Boolean(useMobileProxy);
+    saveUnbanConfig(cfg);
+    return getUnbanStatus();
+  }
+
+  function ensureUnbanProfileDeviceIdentity(profileId, forceRotate = false) {
+    const cfg = loadUnbanConfig();
+    if (!cfg.devicesByProfile) cfg.devicesByProfile = {};
+    let entry = cfg.devicesByProfile[profileId];
+    if (forceRotate || !entry || !UUID_V4_RE.test(entry.deviceId || '') || !SHA256_HEX_RE.test(entry.machineId || '')) {
+      const deviceId = crypto.randomUUID();
+      const machineId = deriveMachineId('unban-mobile:' + deviceId + ':' + Date.now());
+      const sessionTag = 'unban' + crypto.randomBytes(5).toString('hex');
+      entry = {
+        deviceId,
+        machineId,
+        sessionTag,
+        updatedAt: Date.now()
+      };
+      cfg.devicesByProfile[profileId] = entry;
+      saveUnbanConfig(cfg);
+    }
+    const spec = resolveDeviceSpec(entry.deviceId, 'android');
+    return {
+      ...entry,
+      deviceSpec: {
+        platform: 'android',
+        model: spec.model,
+        gpu: spec.gpu,
+        ua: spec.ua,
+        touch: spec.touch || 5,
+        screen: spec.screen || '384x824',
+        cores: spec.cores || 8
+      }
+    };
+  }
+
+  function addProfilesToUnbanPool(profileIds = []) {
+    const list = Array.isArray(profileIds) ? profileIds : [profileIds];
+    const cfg = loadUnbanConfig();
+    const set = new Set(cfg.profileIds);
+    for (const rawId of list) {
+      const pid = String(rawId || '').trim();
+      if (!pid) continue;
+      set.add(pid);
+      ensureUnbanProfileDeviceIdentity(pid, false);
+    }
+    const freshCfg = loadUnbanConfig();
+    freshCfg.profileIds = [...set];
+    saveUnbanConfig(freshCfg);
+    return getUnbanStatus();
+  }
+
+  async function removeProfileFromUnbanPool(profileId) {
+    const pid = String(profileId || '').trim();
+    if (!pid) return getUnbanStatus();
+    if (unbanSessions.has(pid)) {
+      await stopUnbanSession(pid, 'removed-from-pool', true).catch(() => {});
+    }
+    const cfg = loadUnbanConfig();
+    cfg.profileIds = cfg.profileIds.filter(id => id !== pid);
+    saveUnbanConfig(cfg);
+    return getUnbanStatus();
+  }
+
+  function rotateUnbanDevice(profileId) {
+    const pid = String(profileId || '').trim();
+    if (!pid) throw new Error('Missing profileId');
+    const identity = ensureUnbanProfileDeviceIdentity(pid, true);
+    return {
+      success: true,
+      profileId: pid,
+      deviceId: identity.deviceId,
+      machineId: identity.machineId,
+      deviceModel: identity.deviceSpec.model,
+      deviceGpu: identity.deviceSpec.gpu
+    };
+  }
+
+  function getDataImpulseMobileCredentials() {
+    const proxySettingsFile = dataDir ? path.join(dataDir, 'proxy_settings.json') : null;
+    if (!proxySettingsFile) return null;
+    try {
+      const raw = JSON.parse(fs.readFileSync(proxySettingsFile, 'utf8'));
+      if (!raw || !raw.proxyHost || !raw.proxyUser || !raw.proxyPass) return null;
+      return {
+        host: String(raw.proxyHost).trim(),
+        port: Number(raw.proxyPort) || 823,
+        user: String(raw.proxyUser).trim(),
+        pass: String(raw.proxyPass).trim(),
+        country: String(raw.country || 'th').trim()
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function formatDataImpulseStickyUser(credentials, sessionTag) {
+    const baseUser = String(credentials.user || '').replace(/__cr[.-][a-z]{2}.*$/i, '');
+    const country = String(credentials.country || 'th').toLowerCase();
+    const cleanTag = String(sessionTag || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 28) || 'unban1';
+    if (/dataimpulse/i.test(credentials.host || '')) {
+      return `${baseUser}__cr.${country};sessid.${cleanTag};sessttl.30`;
+    }
+    return `${baseUser}__cr-${country}__session-${cleanTag}`;
+  }
+
+  function shouldRouteViaUnbanMobileProxy(hostname) {
+    const h = String(hostname || '').toLowerCase();
+    if (!h) return false;
+    return (
+      h === 'aetheria-online.in.th' ||
+      h.endsWith('.aetheria-online.in.th') ||
+      h === 'api.ipify.org' ||
+      h.includes('ipify') ||
+      h.includes('turnstile') ||
+      h.includes('challenges.cloudflare.com')
+    );
+  }
+
+  function connectUpstreamHttpProxy({ proxyHost, proxyPort, proxyUser, proxyPass, targetHost, targetPort, timeoutMs = 14000 }) {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const headers = {
+        Host: `${targetHost}:${targetPort}`,
+        'Proxy-Authorization': 'Basic ' + Buffer.from(`${proxyUser || ''}:${proxyPass || ''}`).toString('base64')
+      };
+      const req = http.request({
+        host: proxyHost,
+        port: proxyPort,
+        method: 'CONNECT',
+        path: `${targetHost}:${targetPort}`,
+        headers,
+        timeout: timeoutMs
+      });
+      const fail = err => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        req.destroy();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      };
+      const timer = setTimeout(() => fail(new Error('DATAIMPULSE_PROXY_TIMEOUT')), timeoutMs);
+      timer.unref?.();
+      req.on('connect', (res, socket, head) => {
+        if (settled) { socket.destroy(); return; }
+        if (res.statusCode !== 200) {
+          socket.destroy();
+          return fail(new Error(`DATAIMPULSE_HTTP_${res.statusCode}`));
+        }
+        settled = true;
+        clearTimeout(timer);
+        socket.setTimeout(0);
+        socket.setNoDelay(true);
+        try { socket.setKeepAlive(true, 15000); } catch (_) {}
+        resolve({ socket, head });
+      });
+      req.on('timeout', () => fail(new Error('DATAIMPULSE_PROXY_TIMEOUT')));
+      req.on('error', fail);
+      req.end();
+    });
+  }
+
+  function createUnbanLocalProxyTunnel(credentials, sessionTag) {
+    return new Promise((resolve, reject) => {
+      const upstreamUser = formatDataImpulseStickyUser(credentials, sessionTag);
+      const sockets = new Set();
+      const stats = { bytesIn: 0, bytesOut: 0 };
+
+      const server = http.createServer((clientReq, clientRes) => {
+        try {
+          const parsed = new URL(clientReq.url);
+          const targetHost = parsed.hostname;
+          const targetPort = Number(parsed.port) || 80;
+          if (!shouldRouteViaUnbanMobileProxy(targetHost)) {
+            const directReq = http.request({
+              hostname: targetHost,
+              port: targetPort,
+              path: parsed.pathname + parsed.search,
+              method: clientReq.method,
+              headers: clientReq.headers
+            }, directRes => {
+              clientRes.writeHead(directRes.statusCode || 502, directRes.headers);
+              directRes.pipe(clientRes);
+            });
+            directReq.on('error', () => { try { clientRes.writeHead(502); clientRes.end(); } catch (_) {} });
+            clientReq.pipe(directReq);
+            return;
+          }
+          const headers = { ...clientReq.headers };
+          headers['Proxy-Authorization'] = 'Basic ' + Buffer.from(`${upstreamUser}:${credentials.pass}`).toString('base64');
+          const proxyReq = http.request({
+            host: credentials.host,
+            port: credentials.port,
+            method: clientReq.method,
+            path: clientReq.url,
+            headers
+          }, proxyRes => {
+            proxyRes.on('data', chunk => { stats.bytesIn += chunk.length; });
+            clientRes.writeHead(proxyRes.statusCode || 502, proxyRes.headers);
+            proxyRes.pipe(clientRes);
+          });
+          clientReq.on('data', chunk => { stats.bytesOut += chunk.length; });
+          proxyReq.on('error', () => { try { clientRes.writeHead(502); clientRes.end(); } catch (_) {} });
+          clientReq.pipe(proxyReq);
+        } catch (_) {
+          try { clientRes.writeHead(400); clientRes.end(); } catch (__) {}
+        }
+      });
+
+      server.on('connect', async (req, clientSocket, head) => {
+        sockets.add(clientSocket);
+        clientSocket.on('close', () => sockets.delete(clientSocket));
+        clientSocket.on('error', () => {});
+        const [rawHost, rawPort] = String(req.url || '').split(':');
+        const targetHost = String(rawHost || '').trim();
+        const targetPort = Number(rawPort) || 443;
+        if (!targetHost) {
+          try { clientSocket.end('HTTP/1.1 400 Bad Request\r\n\r\n'); } catch (_) {}
+          return;
+        }
+        try {
+          if (!shouldRouteViaUnbanMobileProxy(targetHost)) {
+            const directSock = net.connect({ host: targetHost, port: targetPort }, () => {
+              try {
+                clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+                if (head && head.length) directSock.write(head);
+                directSock.pipe(clientSocket);
+                clientSocket.pipe(directSock);
+              } catch (_) { directSock.destroy(); clientSocket.destroy(); }
+            });
+            sockets.add(directSock);
+            directSock.on('close', () => sockets.delete(directSock));
+            directSock.on('error', () => { try { clientSocket.destroy(); } catch (_) {} });
+            return;
+          }
+          const { socket: upSock, head: upHead } = await connectUpstreamHttpProxy({
+            proxyHost: credentials.host,
+            proxyPort: credentials.port,
+            proxyUser: upstreamUser,
+            proxyPass: credentials.pass,
+            targetHost,
+            targetPort,
+            timeoutMs: 14000
+          });
+          sockets.add(upSock);
+          upSock.on('close', () => sockets.delete(upSock));
+          upSock.on('error', () => { try { clientSocket.destroy(); } catch (_) {} });
+          upSock.on('data', chunk => { stats.bytesIn += chunk.length; });
+          clientSocket.on('data', chunk => { stats.bytesOut += chunk.length; });
+          if (head && head.length) stats.bytesOut += head.length;
+          if (upHead && upHead.length) stats.bytesIn += upHead.length;
+          clientSocket.write('HTTP/1.1 200 Connection Established\r\n\r\n');
+          if (upHead && upHead.length) clientSocket.write(upHead);
+          if (head && head.length) upSock.write(head);
+          upSock.pipe(clientSocket);
+          clientSocket.pipe(upSock);
+        } catch (_) {
+          try { clientSocket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'); } catch (__) { clientSocket.destroy(); }
+        }
+      });
+
+      server.on('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        const addr = server.address();
+        const port = addr && typeof addr === 'object' ? addr.port : 0;
+        resolve({
+          server,
+          port,
+          proxyServerUrl: `http://127.0.0.1:${port}`,
+          upstreamUser,
+          stats,
+          close: () => {
+            for (const s of sockets) { try { s.destroy(); } catch (_) {} }
+            sockets.clear();
+            try { server.close(); } catch (_) {}
+          }
+        });
+      });
+    });
+  }
+
+  function getProfileAuthCredentials(profileId) {
+    try {
+      const saved = loadProfileStorage(profileId);
+      const rawAuth = saved[`pelican_${profileId}__auth_cfg`] || saved['pelican_auth_cfg'] || '';
+      if (rawAuth) {
+        const parsed = JSON.parse(rawAuth);
+        if (parsed && parsed.username && parsed.password) {
+          return {
+            username: String(parsed.username).trim(),
+            password: String(parsed.password),
+            charName: String(parsed.charName || '').trim()
+          };
+        }
+      }
+    } catch (_) {}
+    try {
+      const list = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+      const p = list.find(item => item && String(item.id) === String(profileId));
+      if (p && p.account && p.password) {
+        return {
+          username: String(p.account).trim(),
+          password: String(p.password),
+          charName: String(p.lastCharName || '').trim()
+        };
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function unbanInitScript(profileId, identity) {
+    const { deviceId, machineId, deviceSpec } = identity;
+    const authCreds = getProfileAuthCredentials(profileId);
+    // Pure stealth init script for unban mode:
+    // - Wrapped inside a private closure (IIFE) — ZERO __pm* properties exposed on window!
+    // - Scrubs CDP/WebDriver automation markers
+    // - Spoofs screen dimensions, devicePixelRatio, navigator, WebGL GPU, SHA-256 machineId
+    // - Enables mobile virtual joystick
+    // - NO bot.js or HUD injected!
+    // - Auto-fills login credentials once so the user doesn't have to type them manually
+    return `(function() {
+      const __devId = ${JSON.stringify(deviceId)};
+      const __machId = ${JSON.stringify(machineId)};
+      const __spec = ${JSON.stringify(deviceSpec)};
+      try {
+        const __cleanAutomationProps = function(obj) {
+          if (!obj) return;
+          try {
+            const names = Object.getOwnPropertyNames(obj);
+            for (let i = 0; i < names.length; i++) {
+              const k = names[i];
+              if (k.indexOf('cdc_') !== -1 || k.indexOf('wdc_') !== -1 || k.indexOf('__webdriver') !== -1 || k.indexOf('__selenium') !== -1 || k.indexOf('__playwright') !== -1 || k.indexOf('__puppeteer') !== -1 || k.indexOf('__pm') === 0) {
+                try { delete obj[k]; } catch (_) {}
+              }
+            }
+          } catch (_) {}
+        };
+        __cleanAutomationProps(window);
+        if (typeof document !== 'undefined') __cleanAutomationProps(document);
+      } catch (_) {}
+      try {
+        if (window.localStorage) {
+          window.localStorage.setItem('aetheria.device', __devId);
+          window.localStorage.setItem('aetheria.machine', __machId);
+          const __rawM = window.localStorage.getItem('webgame.mobile');
+          const __mob = __rawM ? JSON.parse(__rawM) : {};
+          __mob.joystick = true;
+          __mob.newsOnEnter = false;
+          window.localStorage.setItem('webgame.mobile', JSON.stringify(__mob));
+        }
+      } catch (_) {}
+      try {
+        if (typeof navigator !== 'undefined') {
+          Object.defineProperty(Object.getPrototypeOf(navigator), 'webdriver', { get: function() { return false; }, configurable: true });
+          Object.defineProperty(Object.getPrototypeOf(navigator), 'platform', { get: function() { return 'Linux armv8l'; }, configurable: true });
+          Object.defineProperty(Object.getPrototypeOf(navigator), 'userAgent', { get: function() { return __spec.ua; }, configurable: true });
+          Object.defineProperty(Object.getPrototypeOf(navigator), 'hardwareConcurrency', { get: function() { return __spec.cores || 8; }, configurable: true });
+          Object.defineProperty(Object.getPrototypeOf(navigator), 'maxTouchPoints', { get: function() { return __spec.touch || 5; }, configurable: true });
+          if (!('ontouchstart' in window)) window.ontouchstart = null;
+          if (__spec.screen && typeof window.screen !== 'undefined') {
+            const __spParts = String(__spec.screen).split('x');
+            const __sw = parseInt(__spParts[0], 10) || 384;
+            const __sh = parseInt(__spParts[1], 10) || 824;
+            const __scrProto = Object.getPrototypeOf(window.screen) || window.screen;
+            try {
+              Object.defineProperty(__scrProto, 'width', { get: function() { return __sw; }, configurable: true });
+              Object.defineProperty(__scrProto, 'height', { get: function() { return __sh; }, configurable: true });
+              Object.defineProperty(__scrProto, 'availWidth', { get: function() { return __sw; }, configurable: true });
+              Object.defineProperty(__scrProto, 'availHeight', { get: function() { return __sh; }, configurable: true });
+              Object.defineProperty(__scrProto, 'colorDepth', { get: function() { return 24; }, configurable: true });
+              Object.defineProperty(__scrProto, 'pixelDepth', { get: function() { return 24; }, configurable: true });
+            } catch (_) {}
+          }
+          try {
+            Object.defineProperty(window, 'devicePixelRatio', { get: function() { return 3; }, configurable: true });
+          } catch (_) {}
+          if (typeof window.matchMedia === 'function') {
+            const __origMatchMedia = window.matchMedia.bind(window);
+            window.matchMedia = function(q) {
+              const res = __origMatchMedia(q);
+              const qs = String(q || '').toLowerCase();
+              if (qs.indexOf('pointer') !== -1 && qs.indexOf('coarse') !== -1) {
+                return Object.assign({}, res, { matches: true, media: q });
+              }
+              if ((qs.indexOf('pointer') !== -1 && qs.indexOf('fine') !== -1) || (qs.indexOf('hover') !== -1 && qs.indexOf('none') === -1)) {
+                return Object.assign({}, res, { matches: false, media: q });
+              }
+              return res;
+            };
+          }
+        }
+      } catch (_) {}
+      try {
+        if (typeof console !== 'undefined' && typeof console.debug === 'function') {
+          const __origConsoleDebug = console.debug.bind(console);
+          console.debug = function() {
+            try {
+              for (let i = 0; i < arguments.length; i++) {
+                const arg = arguments[i];
+                if (arg && (arg instanceof Error || typeof arg === 'object')) {
+                  const desc = Object.getOwnPropertyDescriptor(arg, 'stack');
+                  if (desc && typeof desc.get === 'function') return;
+                }
+              }
+            } catch (_) {}
+            return __origConsoleDebug.apply(console, arguments);
+          };
+        }
+      } catch (_) {}
+      try {
+        const __hexToBytes = function(hex) {
+          const arr = new Uint8Array(32);
+          for (let i = 0; i < 32; i++) arr[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16) || 0;
+          return arr.buffer;
+        };
+        if (typeof crypto !== 'undefined' && crypto.subtle && typeof crypto.subtle.digest === 'function') {
+          const __origDigest = crypto.subtle.digest.bind(crypto.subtle);
+          crypto.subtle.digest = function(algo, data) {
+            try {
+              const algoName = typeof algo === 'string' ? algo : (algo && algo.name ? String(algo.name) : '');
+              if (algoName.toUpperCase() === 'SHA-256' && data && typeof TextDecoder !== 'undefined') {
+                const txt = new TextDecoder().decode(data);
+                if (txt && txt.split('|').length === 7 && (txt.endsWith('|win') || txt.endsWith('|mac') || txt.endsWith('|linux') || txt.endsWith('|android') || txt.endsWith('|ios') || txt.endsWith('|other'))) {
+                  return Promise.resolve(__hexToBytes(__machId));
+                }
+              }
+            } catch (_) {}
+            return __origDigest(algo, data);
+          };
+        }
+      } catch (_) {}
+      try {
+        const __patchWebGl = function(ctor) {
+          if (!ctor || !ctor.prototype || typeof ctor.prototype.getParameter !== 'function') return;
+          const __origGetParam = ctor.prototype.getParameter;
+          ctor.prototype.getParameter = function(pname) {
+            try {
+              if (pname === 37446 && __spec && __spec.gpu) return __spec.gpu;
+              if (pname === 37445 && __spec) return __spec.platform === 'android' ? 'Qualcomm' : 'Google Inc. (NVIDIA)';
+            } catch (_) {}
+            return __origGetParam.apply(this, arguments);
+          };
+        };
+        if (typeof WebGLRenderingContext !== 'undefined') __patchWebGl(WebGLRenderingContext);
+        if (typeof WebGL2RenderingContext !== 'undefined') __patchWebGl(WebGL2RenderingContext);
+      } catch (_) {}
+      try {
+        const __origFetch = window.fetch;
+        if (typeof __origFetch === 'function') {
+          window.fetch = function(input, init) {
+            try {
+              const url = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+              if ((url.includes('/world/enter') || url.includes('/auth/')) && init && init.body && typeof init.body === 'string') {
+                const parsed = JSON.parse(init.body);
+                if (parsed && typeof parsed === 'object') {
+                  if (url.includes('/world/enter') || 'deviceId' in parsed) parsed.deviceId = __devId;
+                  if (url.includes('/world/enter') || 'machineId' in parsed) parsed.machineId = __machId;
+                  if (__spec) {
+                    if ((url.includes('/world/enter') || 'gpu' in parsed) && __spec.gpu) parsed.gpu = __spec.gpu;
+                    if ((url.includes('/world/enter') || 'ua' in parsed) && __spec.ua) parsed.ua = __spec.ua;
+                    if ((url.includes('/world/enter') || 'touch' in parsed) && typeof __spec.touch === 'number') parsed.touch = __spec.touch;
+                  }
+                  init = Object.assign({}, init, { body: JSON.stringify(parsed) });
+                }
+              }
+            } catch (_) {}
+            return __origFetch.apply(this, arguments);
+          };
+        }
+      } catch (_) {}
+      ${authCreds ? `
+      try {
+        const __creds = ${JSON.stringify(authCreds)};
+        let __filledOnce = false;
+        const __setInputVal = function(el, val) {
+          if (!el) return;
+          const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+          if (setter) setter.call(el, val);
+          else el.value = val;
+          el.dispatchEvent(new Event('input', { bubbles: true }));
+          el.dispatchEvent(new Event('change', { bubbles: true }));
+        };
+        const __fillTimer = setInterval(function() {
+          if (__filledOnce) { clearInterval(__fillTimer); return; }
+          const passEl = document.querySelector('input[type="password"]');
+          if (!passEl) return;
+          const form = passEl.closest('form') || document.body;
+          const userEl = form.querySelector('input[type="text"], input:not([type="password"]):not([type="checkbox"]):not([type="hidden"])');
+          if (userEl && passEl) {
+            __filledOnce = true;
+            clearInterval(__fillTimer);
+            __setInputVal(userEl, __creds.username);
+            __setInputVal(passEl, __creds.password);
+          }
+        }, 700);
+        setTimeout(function() { clearInterval(__fillTimer); }, 30000);
+      } catch (_) {}
+      ` : ''}
+    })();`;
+  }
+
+  async function launchUnbanSession(profileId, opts = {}) {
+    if (!isRealSession) throw new Error('Unban mode requires real browser session');
+    const pid = String(profileId || '').trim();
+    if (!pid) throw new Error('Missing profileId');
+    if (unbanSessions.has(pid)) throw new Error('จอนี้อยู่ในโหมดปลดอยู่แล้ว');
+    if (clients.has(pid)) throw new Error('จอนี้กำลังเปิดอยู่ในโหมดบอท กรุณาปิดจอก่อนเข้าโหมดปลด');
+
+    const cfgNow = loadUnbanConfig();
+    const useMobileProxy = opts.useMobileProxy !== undefined ? Boolean(opts.useMobileProxy) : Boolean(cfgNow.useMobileProxy);
+    let credentials = null;
+    if (useMobileProxy) {
+      credentials = getDataImpulseMobileCredentials();
+      if (!credentials) throw new Error('ไม่พบข้อมูล DataImpulse Mobile Proxy — กรุณาตั้งค่า Proxy หรือสลับเป็นโหมดเน็ตบ้าน / Wi-Fi');
+    }
+
+    await connect();
+
+    const identity = ensureUnbanProfileDeviceIdentity(pid, Boolean(opts.rotateDevice));
+    const { deviceSpec, sessionTag, deviceId, machineId } = identity;
+
+    // Only start DataImpulse tunnel if explicitly enabled; otherwise use direct home internet (Wi-Fi) to save GB!
+    const tunnel = useMobileProxy ? await createUnbanLocalProxyTunnel(credentials, sessionTag) : null;
+
+    let browserContextId = null;
+    try {
+      const ctxParams = tunnel
+        ? {
+            disposeOnDetach: false,
+            proxyServer: tunnel.proxyServerUrl,
+            proxyBypassList: 'localhost,127.0.0.1'
+          }
+        : {
+            disposeOnDetach: false
+          };
+      const ctxRes = await send('Target.createBrowserContext', ctxParams);
+      browserContextId = ctxRes?.browserContextId || null;
+    } catch (e) {
+      if (tunnel) tunnel.close();
+      throw new Error(`สร้าง BrowserContext สำหรับโหมดปลดไม่สำเร็จ: ${e.message}`);
+    }
+    if (!browserContextId) {
+      if (tunnel) tunnel.close();
+      throw new Error('สร้าง BrowserContext สำหรับโหมดปลดไม่สำเร็จ');
+    }
+
+    const { targetId } = await send('Target.createTarget', {
+      url: 'about:blank',
+      newWindow: true,
+      browserContextId
+    });
+
+    const attachRes = await send('Target.attachToTarget', { targetId, flatten: true });
+    const sessionId = attachRes?.sessionId;
+    if (!sessionId) {
+      if (tunnel) tunnel.close();
+      await send('Target.closeTarget', { targetId }).catch(() => {});
+      await send('Target.disposeBrowserContext', { browserContextId }).catch(() => {});
+      throw new Error('ไม่สามารถเชื่อมต่อกับหน้าต่างโหมดปลดได้');
+    }
+
+    await applyCdpDeviceEmulation(sessionId, deviceSpec);
+    await send('Page.enable', {}, sessionId, 5000).catch(() => {});
+    await configureSessionAssetCache(sessionId);
+
+    const initScriptSrc = unbanInitScript(pid, identity);
+    const addedScript = await send('Page.addScriptToEvaluateOnNewDocument', { source: initScriptSrc }, sessionId, 5000).catch(() => null);
+
+    await send('Page.navigate', { url: gameUrl }, sessionId);
+
+    const session = {
+      profileId: pid,
+      targetId,
+      sessionId,
+      browserContextId,
+      tunnel,
+      useMobileProxy,
+      deviceId,
+      machineId,
+      deviceSpec,
+      sessionTag,
+      egressIp: useMobileProxy ? 'กำลังตรวจเช็ค IP ซิม...' : 'เน็ตบ้าน / Wi-Fi (กำลังเช็ค IP...)',
+      currentMap: 'กำลังโหลดหน้าเกม...',
+      inJail: null,
+      seenInJail: false,
+      outOfJailStreak: 0,
+      startedAt: Date.now(),
+      status: 'running', // running | unbanned | stopped
+      initScriptId: addedScript?.identifier || null,
+      monitorTimer: null,
+      checkCount: 0
+    };
+    unbanSessions.set(pid, session);
+
+    // Ensure profile is listed in unban pool
+    const cfg = loadUnbanConfig();
+    if (!cfg.profileIds.includes(pid)) {
+      cfg.profileIds.push(pid);
+      saveUnbanConfig(cfg);
+    }
+
+    // Check egress IP asynchronously inside the browser window
+    setTimeout(async () => {
+      if (session.status !== 'running') return;
+      try {
+        const ipRes = await send('Runtime.evaluate', {
+          expression: `fetch('https://api.ipify.org?format=json').then(r => r.json()).then(d => d.ip || '').catch(() => '')`,
+          returnByValue: true,
+          awaitPromise: true,
+          timeout: 10000
+        }, session.sessionId, 12000);
+        const ip = String(ipRes?.result?.value || '').trim();
+        if (ip) session.egressIp = useMobileProxy ? `${ip} (4G/5G)` : `${ip} (Wi-Fi บ้าน)`;
+      } catch (_) {}
+    }, 2500).unref?.();
+
+    startUnbanMonitor(session);
+
+    const netModeLabel = useMobileProxy ? 'DataImpulse Mobile TH' : 'เน็ตบ้าน / Wi-Fi (ไม่เสีย GB)';
+    console.log(`[UnbanMode] Started session for ${pid} via ${netModeLabel} (${deviceSpec.model})`);
+    return {
+      success: true,
+      message: `เปิดจอโหมดปลดสำเร็จ — ${deviceSpec.model} (${netModeLabel})`,
+      deviceModel: deviceSpec.model,
+      useMobileProxy,
+      deviceId,
+      machineId
+    };
+  }
+
+  function startUnbanMonitor(session) {
+    if (session.monitorTimer) clearInterval(session.monitorTimer);
+    // Check every 4 seconds whether the character has exited jail into a normal map
+    session.monitorTimer = setInterval(async () => {
+      if (session.status !== 'running' || !unbanSessions.has(session.profileId)) {
+        clearInterval(session.monitorTimer);
+        session.monitorTimer = null;
+        return;
+      }
+      session.checkCount++;
+      try {
+        const result = await send('Runtime.evaluate', {
+          expression: `(() => {
+            try {
+              const norm = s => String(s || '').replace(/⭐/g, '').replace(/\\s+/g, ' ').trim();
+              const isInvalid = t => !t || t === '--' || t === '-' || /^\\d+\\s*ms$/i.test(t) || /^ch\\.?\\s*\\d+$/i.test(t) || /^\\(\\d+\\s*,\\s*\\d+\\)$/.test(t);
+              let mapName = '';
+              const el = document.querySelector('.minimap-name, .minimap-title, [class*="map-name"], [class*="map-title"]');
+              if (el) {
+                const t = norm(el.textContent || el.innerText || '');
+                if (!isInvalid(t)) mapName = t;
+              }
+              if (!mapName) {
+                const footerEls = Array.from(document.querySelectorAll('.minimap-footer span, .minimap-footer div, .minimap-footer b, .minimap-footer strong'));
+                for (const fEl of footerEls) {
+                  if (fEl.closest && fEl.closest('.ping-badge, .ch-picker, .minimap-ch, .minimap-portal, .guide-tracker, .minimap-zoom')) continue;
+                  const t = norm(fEl.textContent || fEl.innerText || '');
+                  if (!isInvalid(t)) { mapName = t; break; }
+                }
+              }
+              const loginForm = document.querySelector('input[type="password"]');
+              const charSelect = document.querySelector('.char-card, [class*="char-select"]');
+              const hasMinimap = !!document.querySelector('.minimap, [class*="minimap"]');
+              return {
+                mapName,
+                hasLoginForm: !!loginForm,
+                hasCharSelect: !!charSelect,
+                hasMinimap
+              };
+            } catch (e) {
+              return { mapName: '', error: e.message };
+            }
+          })()`,
+          returnByValue: true,
+          awaitPromise: false,
+          timeout: 3500
+        }, session.sessionId, 4500);
+
+        const val = result?.result?.value;
+        if (!val) return;
+
+        if (val.hasLoginForm) {
+          session.currentMap = 'หน้าเข้าสู่ระบบ (Login)';
+          session.outOfJailStreak = 0;
+          return;
+        }
+        if (val.hasCharSelect && !val.mapName) {
+          session.currentMap = 'หน้าเลือกตัวละคร';
+          session.outOfJailStreak = 0;
+          return;
+        }
+
+        const mapName = String(val.mapName || '').trim();
+        if (!mapName) return;
+
+        session.currentMap = mapName;
+        const isJail = /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(mapName) && !/คุกใต้ดิน/i.test(mapName);
+        session.inJail = isJail;
+
+        if (isJail) {
+          session.seenInJail = true;
+          session.outOfJailStreak = 0;
+          return;
+        }
+
+        const isKnownValidMap = mapName.length >= 2 && !/ไม่ทราบ|unknown|loading|กำลังโหลด/i.test(mapName) && val.hasMinimap;
+        if (isKnownValidMap) {
+          session.outOfJailStreak = (session.outOfJailStreak || 0) + 1;
+          if (session.outOfJailStreak >= 2) {
+            console.log(`[UnbanMode] ✅ Character ${session.profileId} UNBANNED — now in map "${mapName}"!`);
+            session.status = 'unbanned';
+            clearInterval(session.monitorTimer);
+            session.monitorTimer = null;
+            if (typeof onUnbanDetected === 'function') {
+              try { onUnbanDetected(session.profileId, session); } catch (_) {}
+            }
+            setTimeout(() => {
+              stopUnbanSession(session.profileId, 'auto-unbanned', true).catch(() => {});
+            }, 1500);
+          }
+        }
+      } catch (e) {
+        if (isGoneError(e)) {
+          stopUnbanSession(session.profileId, 'window-closed', false).catch(() => {});
+        }
+      }
+    }, 4000);
+    session.monitorTimer.unref?.();
+  }
+
+  let onUnbanDetected = null;
+  function setUnbanCallback(fn) {
+    onUnbanDetected = typeof fn === 'function' ? fn : null;
+  }
+
+  async function stopUnbanSession(profileId, reason = 'manual', removeFromPool = false) {
+    const pid = String(profileId || '').trim();
+    const session = unbanSessions.get(pid);
+    if (session) {
+      if (session.monitorTimer) {
+        clearInterval(session.monitorTimer);
+        session.monitorTimer = null;
+      }
+      session.status = 'stopped';
+      unbanSessions.delete(pid);
+
+      if (session.tunnel && typeof session.tunnel.close === 'function') {
+        try { session.tunnel.close(); } catch (_) {}
+      }
+
+      try {
+        await connect();
+        if (session.targetId) await send('Target.closeTarget', { targetId: session.targetId }).catch(() => {});
+        if (session.browserContextId) await send('Target.disposeBrowserContext', { browserContextId: session.browserContextId }).catch(() => {});
+      } catch (_) {}
+    }
+
+    if (removeFromPool) {
+      const cfg = loadUnbanConfig();
+      cfg.profileIds = cfg.profileIds.filter(id => id !== pid);
+      saveUnbanConfig(cfg);
+    }
+
+    console.log(`[UnbanMode] Stopped session for ${pid} (reason: ${reason}, removedFromPool: ${removeFromPool})`);
+    return { success: true, message: removeFromPool ? 'ปิดจอและถอดออกจากวงปลดแล้ว' : 'ปิดหน้าต่างโหมดปลดแล้ว', profileId: pid };
+  }
+
+  async function stopAllUnbanSessions() {
+    const pids = [...unbanSessions.keys()];
+    for (const pid of pids) {
+      await stopUnbanSession(pid, 'stop-all', false).catch(() => {});
+    }
+  }
+
+  function getUnbanStatus() {
+    const cfg = loadUnbanConfig();
+    const creds = getDataImpulseMobileCredentials();
+    const sessions = [];
+    for (const [pid, s] of unbanSessions) {
+      const bytesIn = s.tunnel?.stats?.bytesIn || 0;
+      const bytesOut = s.tunnel?.stats?.bytesOut || 0;
+      sessions.push({
+        profileId: pid,
+        status: s.status,
+        useMobileProxy: Boolean(s.useMobileProxy),
+        deviceId: s.deviceId,
+        machineId: s.machineId,
+        deviceModel: s.deviceSpec?.model || '',
+        deviceGpu: s.deviceSpec?.gpu || '',
+        egressIp: s.egressIp || '',
+        currentMap: s.currentMap || '',
+        inJail: s.inJail,
+        startedAt: s.startedAt,
+        runningMinutes: Math.max(0, Math.round((Date.now() - s.startedAt) / 60000)),
+        bytesUsed: bytesIn + bytesOut
+      });
+    }
+    const poolEntries = cfg.profileIds.map(pid => {
+      const identity = ensureUnbanProfileDeviceIdentity(pid, false);
+      const active = sessions.find(s => s.profileId === pid) || null;
+      return {
+        profileId: pid,
+        deviceId: identity.deviceId,
+        machineId: identity.machineId,
+        deviceModel: identity.deviceSpec.model,
+        deviceGpu: identity.deviceSpec.gpu,
+        activeSession: active
+      };
+    });
+    return {
+      activeSessions: sessions,
+      configuredProfileIds: cfg.profileIds,
+      poolEntries,
+      useMobileProxy: Boolean(cfg.useMobileProxy),
+      hasCredentials: Boolean(creds),
+      proxyHost: creds?.host || 'gw.dataimpulse.com',
+      proxyPort: creds?.port || 823,
+      country: creds?.country || 'th'
+    };
+  }
+
+  // ====================== END UNBAN MODE ======================
+
+  return { launch, stop, stopAll, isOpen, start, dispose, findBrowser, rebalanceDeviceGroups, ensureProfileDeviceId, ensureProfileMachineId, ensureProfileDeviceGroupIndex, ensureProfileDeviceSpec, resolveDeviceSpec, getDeviceGroupsSnapshot, rotateDeviceGroup, rotateProfileDeviceId, rotateAllDeviceIds, getCustomIpDeviceConfig, getProfileIpIsolationMeta, mutateCustomIpDevices, pruneDeletedProfilesFromCustomGroups, applyProxyModeToOpenWindows, syncAssetCacheToOpenWindows, harvestAllFromBrowserLevelDb, launchUnbanSession, stopUnbanSession, stopAllUnbanSessions, getUnbanStatus, setUnbanCallback, addProfilesToUnbanPool, removeProfileFromUnbanPool, rotateUnbanDevice, setUnbanProxyMode, loadUnbanConfig, saveUnbanConfig, status:()=>Object.fromEntries(diagnostics) };
 }
 
 module.exports = { createBrowserMode, findBrowser, HEALTH_JS, MAX_SCREENS_PER_DEVICE, resolveDeviceSpec, extractPelicanStorageFromLevelDb, mergeAuthConfigString, mergeSellConfigString };

@@ -689,6 +689,15 @@
                 <span style="font-size: 11px; color: #94a3b8;">💡 ติ๊กออกเพื่อรวมเงินจากทุกจอทุก IP เข้าตัวหลักตัวเดียว</span>
               </div>
 
+              <!-- Truncate Below 100k Toggle (Near Start Consolidation Button) -->
+              <div style="background: rgba(9, 14, 26, 0.72); border: 1px solid rgba(250, 204, 21, 0.35); border-radius: 8px; padding: 8px 11px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;">
+                <label for="cb-consolidate-round-100k" style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 12px; color: #fef08a; font-weight: 600; margin: 0;">
+                  <input type="checkbox" id="cb-consolidate-round-100k" style="accent-color: #eab308; width: 15px; height: 15px; cursor: pointer;">
+                  <span>✂️ ตัดเศษหลักหมื่นออก (โอนเฉพาะหลักแสน เช่น 11,564,555 ➜ 11,500,000)</span>
+                </label>
+                <span style="font-size: 11px; color: #94a3b8;">💡 ปัดเศษหลักหมื่นลงให้เป็นเลขกลมหลักแสนทุกจอ (เศษที่เหลือเก็บติดตัวละคร)</span>
+              </div>
+
               <div class="zeny-btn-group">
                 <button type="button" id="btn-claim-market-all" class="btn btn-warning" title="ส่งคำสั่งรับของและเงินจากการขายในตลาดกลางทุกจอพร้อมกัน">
                   <span class="icon">🛒</span> รับไอเทมจากตลาดทุกจอ
@@ -840,6 +849,13 @@
               <span class="badge" id="zeny-senders-count-badge" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">0 จอ</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <div style="display: inline-flex; align-items: center; gap: 5px; background: rgba(15, 23, 42, 0.78); border: 1px solid rgba(250, 204, 21, 0.42); border-radius: 7px; padding: 2px 7px;">
+                <span style="font-size: 11px; color: #fde047; font-weight: 700; white-space: nowrap;">💰 เงิน &gt;&gt; มากกว่า:</span>
+                <input type="text" id="zeny-min-select-input" value="1,000,000" placeholder="เช่น 1,000,000 หรือ 1M" style="width: 96px; background: rgba(2, 6, 23, 0.75); border: 1px solid rgba(250, 204, 21, 0.35); color: #fef08a; font-family: var(--font-mono); font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 5px; text-align: right;" title="ระบุจำนวนเงินขั้นต่ำ (พิมพ์ตัวเลข เช่น 1,000,000 หรือพิมพ์ย่อ 1M, 5M, 500K ได้)">
+                <button type="button" id="btn-zeny-select-min" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 2px 8px; background: rgba(234, 179, 8, 0.2); border-color: rgba(250, 204, 21, 0.55); color: #fef08a; font-weight: 700;" title="ติ๊กเลือกเฉพาะจอที่มีเงินมากกว่าจำนวนที่ระบุ">
+                  ⚡ เลือกตามยอดเงิน
+                </button>
+              </div>
               <button type="button" id="btn-zeny-select-all-ips" class="btn btn-secondary btn-sm" style="font-size: 11px; padding: 3px 9px; border-color: rgba(56, 189, 248, 0.45); color: #7dd3fc;" title="ปลดล็อกตัวกรอง IP และติ๊กเลือกทุกจอที่มี Premium ออนไลน์ทั้งหมดเพื่อรวมเข้าตัวรับตัวเดียว">
                 🌐 เลือกทุกจอ (ทุกวง IP)
               </button>
@@ -1696,7 +1712,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4.53.35"></script>
-  <script src="app.js?v=4.62.4"></script>
+  <script src="app.js?v=4.62.9"></script>
   <script src="patcher_module.js?v=4.53.21"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.61.1"></script>
@@ -1710,10 +1726,10 @@
   <script src="market_sniper.js?v=4.62.1"></script>
   <script src="guild_manager.js?v=4.56.1"></script>
   <script src="jail_manager.js?v=4.56.1"></script>
-  <script src="device_manager.js?v=4.62.6.2"></script>
+  <script src="device_manager.js?v=4.62.8.1"></script>
   <script src="fleet_dashboard.js?v=4.61.0"></script>
   <script src="support_chat.js?v=4.60.0.1"></script>
-  <script src="update_log.js?v=4.62.7.0"></script>
+  <script src="update_log.js?v=4.62.9.0"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

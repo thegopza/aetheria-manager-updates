@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "42f5a14b678ce92b115bd09a5124550822a5d3a3",
+  "sourceCommit": "ea08573ac80800f952c252b06dd0ca28cf629243",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "5812ef899ec513a1df0c6e071d4ccd0f8199fed062306e0ea20ebb3dd1ec239c"
+      "sha256": "9610dac8de0d8d25a582030fa6ab106913b80b0326847de5b6ebf71832c53147"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -80,7 +80,7 @@
     },
     {
       "path": "manager/local_request_security.js",
-      "sha256": "4a999caf72d882cf9dcf72f55253d7a6688f1b57a268e2d283000edd25c0b9a3"
+      "sha256": "2248bbbac51ba138757e5f1b543025e285abc66e6196f9788b98e62d7d1c34eb"
     },
     {
       "path": "manager/manager_self_update.js",
@@ -132,7 +132,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "32ce466540565e15955dd8d868a4eb1c13e3932a9569450f04db20c3f72768d8"
+      "sha256": "6109b274221a29825b87360049b4bd33a9f713fee41d2840f3f084893a7321f7"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -164,7 +164,7 @@
     },
     {
       "path": "manager/public/device_manager.js",
-      "sha256": "79090df2107d116c0c6c1a699ae4ee3a753b4c52595b7945d20fefc94cc569cc"
+      "sha256": "0a94bcb0da77bba87806c09725b1d6ac72a88f41357d2b28f1714441d0a4a221"
     },
     {
       "path": "manager/public/fleet_dashboard.css",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "1e2574310e84adf979330715e2aa9a9274eeb34fb2686799690ed6168973b24e"
+      "sha256": "fcbb7269173889414710b25922ac1c44e81f24d464a6dfd525c3796f8dcaca68"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -272,7 +272,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "30cab16c7b5873f8b90282bffe968033f00cc0d318c14c1b48f1f2f6524f2af5"
+      "sha256": "bb6bedbe7206f76a613fb5c073443420b48c1211e816d44138bd22cd0544f135"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -304,7 +304,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "0366241a95d732ffefab398582e2b54ce4a335fa0f32e6dbd444b5d114ed512c"
+      "sha256": "54831c621e03e7c91471ad75a18902a085f9759499891e965823d1a2135cea15"
     },
     {
       "path": "manager/test_isolation.js",

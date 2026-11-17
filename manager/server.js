@@ -3807,6 +3807,20 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
   const batchCtx = (tradeItemsOpts && tradeItemsOpts.batchContext) ? tradeItemsOpts.batchContext : null;
   const premiumGoal = (tradeItemsOpts && tradeItemsOpts.premiumGoal) ? tradeItemsOpts.premiumGoal : null;
   const sameIpOnly = Boolean((tradeItemsOpts && tradeItemsOpts.sameIpOnly) || (batchCtx && batchCtx.sameIpOnly));
+  const roundHundredK = Boolean(tradeItemsOpts && tradeItemsOpts.roundHundredK);
+  const calcSenderTransferZeny = (z) => {
+    const cur = Math.max(0, Number(z) || 0);
+    const keep = Math.max(0, Number(keepZeny) || 0);
+    if (!roundHundredK) return Math.max(0, cur - keep);
+    if (keep <= 100000) {
+      let rounded = Math.floor(cur / 100000) * 100000;
+      if (keep > 0 && (cur - rounded) < 10000 && rounded >= 100000) {
+        rounded -= 100000;
+      }
+      return Math.max(0, rounded);
+    }
+    return Math.floor(Math.max(0, cur - keep) / 100000) * 100000;
+  };
   const savedItemCfg = loadConsolidationItemSettings();
   const tradeItemsEnabled = premiumGoal
     ? false
@@ -4305,7 +4319,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       const live = await queryClientState(s.debugPort);
       const charName = live?.charName || s.name;
       const zeny = (live && typeof live.zeny === 'number') ? live.zeny : 0;
-      if (!tradeItemsEnabled && Math.max(0, zeny - keepZeny) <= 0) {
+      if (!tradeItemsEnabled && calcSenderTransferZeny(zeny) <= 0) {
         logTask(`⏭️ จอ ${s.name} (${charName}) มีเงิน ${zeny.toLocaleString()} z (ไม่พอโอนหรือติดเก็บสำรอง) -> ข้ามและปล่อยกลับไปฟาร์ม`, 'warning');
         activeConsolidationProfiles.delete(s.id);
         markSenderCompleted(s.id);
@@ -4414,7 +4428,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
 
         const sLiveNow = await queryClientState(s.debugPort);
         const zenyNow = (sLiveNow && typeof sLiveNow.zeny === 'number') ? sLiveNow.zeny : 0;
-        if (Math.max(0, zenyNow - keepZeny) <= 0 && bagMatchingQty <= 0) {
+        if (calcSenderTransferZeny(zenyNow) <= 0 && bagMatchingQty <= 0) {
           return { ok: true, nothingToTrade: true, homeChannel, bagMatchingQty: 0, bagMatchingWeight: 0 };
         }
       }
@@ -4655,7 +4669,7 @@ async function runConsolidationWorkflow(receiverProfileId, senderProfileIds, kee
       const senderLive = await queryClientState(sender.debugPort);
       const senderCharName = senderLive?.charName || sender.name;
       const curZeny = (senderLive && typeof senderLive.zeny === 'number') ? senderLive.zeny : 0;
-      const zenyToTransfer = Math.max(0, curZeny - keepZeny);
+      const zenyToTransfer = calcSenderTransferZeny(curZeny);
 
       if (ready && ready.nothingToTrade) {
         logTask(`⏭️ จอ ${sender.name} (${senderCharName}): ไม่มีเงินเกินสำรองและไม่มีไอเทมในคลัง/กระเป๋า -> ข้ามและกลับไปฟาร์ม`, 'warning');
@@ -4997,6 +5011,7 @@ async function runIpGroupsConsolidationWorkflow(groups, keepZeny = 0, tradeItems
       enabled: tradeItemsEnabled,
       items: tradeItemsList,
       sameIpOnly: true,
+      roundHundredK: Boolean(tradeItemsOpts && tradeItemsOpts.roundHundredK),
       batchContext: {
         isSubBatch: true,
         sameIpOnly: true,
@@ -5785,6 +5800,38 @@ const isBrowserMode = () => {
   const st = installer.loadSettings() || {};
   return (st.launchMode || "browser") === "browser";
 };
+
+// Register unban detection callback — plays notification sound via SSE, clears jail status, and emits event
+if (typeof browserMode.setUnbanCallback === "function") {
+  browserMode.setUnbanCallback((profileId, session) => {
+    try { clearProfileJailStatus(profileId, false); } catch (_) {}
+    const profiles = loadProfiles() || [];
+    const profile = profiles.find(p => p && p.id === profileId);
+    const name = profile ? (profile.name || profileId) : profileId;
+    const charName = profile?.lastCharName ? ` (${profile.lastCharName})` : '';
+    const mapStr = session?.currentMap ? ` แมพ: ${session.currentMap}` : '';
+    console.log(`[UnbanMode] 🔔 Character "${name}"${charName} has been unbanned!${mapStr}`);
+    // Broadcast to all connected SSE clients
+    broadcastUnbanEvent({
+      type: 'unban-success',
+      profileId,
+      profileName: name,
+      charName: profile?.lastCharName || '',
+      currentMap: session?.currentMap || '',
+      deviceModel: session?.deviceSpec?.model || '',
+      message: `🔔 ปลดสำเร็จ! "${name}"${charName} ออกจากคุกแล้ว (${session?.currentMap || 'แมพปกติ'}) — ปิดจอและถอดออกจากวง DataImpulse เรียบร้อย`
+    });
+  });
+}
+
+// SSE for unban events
+const unbanSSEClients = new Set();
+function broadcastUnbanEvent(data) {
+  const msg = `data: ${JSON.stringify(data)}\n\n`;
+  for (const res of unbanSSEClients) {
+    try { res.write(msg); } catch (_) { unbanSSEClients.delete(res); }
+  }
+}
 
 async function syncScreenProxyForOpenProfiles() {
   const profiles = loadProfiles() || [];
@@ -8940,6 +8987,180 @@ const server = http.createServer(async (req, res) => {
     }
   }
 
+  // ====================== UNBAN MODE API ======================
+  // SSE /api/unban/events — Server-Sent Events for unban notifications
+  if (pathname === "/api/unban/events" && req.method === "GET") {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.write('data: {"type":"connected"}\n\n');
+    unbanSSEClients.add(res);
+    req.on('close', () => { unbanSSEClients.delete(res); });
+    return;
+  }
+
+  // GET /api/unban/status
+  if (pathname === "/api/unban/status" && req.method === "GET") {
+    try {
+      const status = typeof browserMode.getUnbanStatus === "function"
+        ? browserMode.getUnbanStatus()
+        : { activeSessions: [], configuredProfileIds: [], poolEntries: [], hasCredentials: false };
+      const profiles = loadProfiles() || [];
+      const profileMap = {};
+      for (const p of profiles) {
+        if (p && p.id) {
+          profileMap[p.id] = {
+            id: p.id,
+            name: p.name || p.id,
+            account: p.account || '',
+            charName: p.lastCharName || '',
+            isJailed: Boolean(p.isJailed),
+            jailedMap: p.jailedMap || '',
+            isBanned: Boolean(p.isBanned),
+            banReason: p.banReason || '',
+            debugPort: p.debugPort
+          };
+        }
+      }
+      return sendJSON({ success: true, ...status, profileMap });
+    } catch (e) {
+      return sendJSON({ success: false, error: e.message }, 500);
+    }
+  }
+
+  // POST /api/unban/add
+  if (pathname === "/api/unban/add" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => { body += chunk; if (Buffer.byteLength(body, "utf8") > 65536) req.destroy(); });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const ids = Array.isArray(payload.profileIds) ? payload.profileIds : (payload.profileId ? [payload.profileId] : []);
+        const status = browserMode.addProfilesToUnbanPool(ids);
+        return sendJSON({ success: true, message: `เพิ่ม ${ids.length} จอเข้าวงโหมดปลดแล้ว`, ...status });
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  // POST /api/unban/remove
+  if (pathname === "/api/unban/remove" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => { body += chunk; if (Buffer.byteLength(body, "utf8") > 65536) req.destroy(); });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const profileId = String(payload.profileId || "").trim();
+        if (!profileId) return sendJSON({ success: false, error: "Missing profileId" }, 400);
+        const status = await browserMode.removeProfileFromUnbanPool(profileId);
+        return sendJSON({ success: true, message: "ถอดออกจากวงโหมดปลดแล้ว", ...status });
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  // POST /api/unban/rotate-device
+  if (pathname === "/api/unban/rotate-device" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => { body += chunk; if (Buffer.byteLength(body, "utf8") > 65536) req.destroy(); });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const profileId = String(payload.profileId || "").trim();
+        if (!profileId) return sendJSON({ success: false, error: "Missing profileId" }, 400);
+        const res = browserMode.rotateUnbanDevice(profileId);
+        return sendJSON({ ...res, message: `สุ่มรุ่นมือถือและ IP Session ใหม่แล้ว (${res.deviceModel})` });
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  // POST /api/unban/proxy-mode
+  if (pathname === "/api/unban/proxy-mode" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => { body += chunk; if (Buffer.byteLength(body, "utf8") > 65536) req.destroy(); });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const useMobileProxy = Boolean(payload.useMobileProxy);
+        const status = browserMode.setUnbanProxyMode(useMobileProxy);
+        return sendJSON({
+          success: true,
+          message: useMobileProxy
+            ? "เปิดโหมดใช้เน็ตซิม DataImpulse Mobile สำหรับโหมดปลดแล้ว"
+            : "สลับโหมดปลดมาใช้เน็ตบ้าน / Wi-Fi ปกติ (ไม่เสีย GB DataImpulse) แล้ว",
+          ...status
+        });
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  // POST /api/unban/start
+  if (pathname === "/api/unban/start" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => { body += chunk; if (Buffer.byteLength(body, "utf8") > 65536) req.destroy(); });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const profileId = String(payload.profileId || "").trim();
+        if (!profileId) return sendJSON({ success: false, error: "Missing profileId" }, 400);
+        if (!isBrowserMode()) return sendJSON({ success: false, error: "โหมดปลดต้องใช้โหมดเบราว์เซอร์เท่านั้น" }, 400);
+        const result = await browserMode.launchUnbanSession(profileId, {
+          rotateDevice: Boolean(payload.rotateDevice),
+          ...(payload.useMobileProxy !== undefined ? { useMobileProxy: Boolean(payload.useMobileProxy) } : {})
+        });
+        return sendJSON(result);
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  // POST /api/unban/stop
+  if (pathname === "/api/unban/stop" && req.method === "POST") {
+    let body = "";
+    req.on("data", chunk => { body += chunk; if (Buffer.byteLength(body, "utf8") > 65536) req.destroy(); });
+    req.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const profileId = String(payload.profileId || "").trim();
+        if (!profileId) return sendJSON({ success: false, error: "Missing profileId" }, 400);
+        if (payload.markUnbanned) {
+          try { clearProfileJailStatus(profileId, false); } catch (_) {}
+        }
+        const result = await browserMode.stopUnbanSession(profileId, payload.reason || "manual", Boolean(payload.removeFromPool));
+        return sendJSON(result);
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
+  // POST /api/unban/stop-all
+  if (pathname === "/api/unban/stop-all" && req.method === "POST") {
+    try {
+      await browserMode.stopAllUnbanSessions();
+      return sendJSON({ success: true, message: "ปิดโหมดปลดทุกจอแล้ว" });
+    } catch (e) {
+      return sendJSON({ success: false, error: e.message }, 500);
+    }
+  }
+  // ====================== END UNBAN MODE API ======================
+
   // POST /api/device-groups/rotate
   if (req.method === "POST" && pathname === "/api/device-groups/rotate") {
     let body = "";
@@ -10523,6 +10744,7 @@ public class PmFocus {
         const payload = JSON.parse(body || "{}");
         const keepZeny = parseInt(payload.keepZeny) || 0;
         const sameIpOnly = Boolean(payload.sameIpOnly);
+        const roundHundredK = Boolean(payload.roundHundredK);
         const ipGroupsInput = Array.isArray(payload.ipGroups) ? payload.ipGroups : null;
 
         // Persist item trade preferences if supplied
@@ -10581,7 +10803,8 @@ public class PmFocus {
           }
           runIpGroupsConsolidationWorkflow(validatedGroups, keepZeny, {
             enabled: Boolean(itemCfg.tradeOnConsolidate),
-            items: itemCfg.items
+            items: itemCfg.items,
+            roundHundredK
           });
           return sendJSON({
             success: true,
@@ -10646,7 +10869,8 @@ public class PmFocus {
         runConsolidationWorkflow(receiverId, validSenders, keepZeny, {
           enabled: Boolean(itemCfg.tradeOnConsolidate),
           items: itemCfg.items,
-          sameIpOnly
+          sameIpOnly,
+          roundHundredK
         });
         return sendJSON({
           success: true,

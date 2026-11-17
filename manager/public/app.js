@@ -5577,8 +5577,63 @@ function setConsolidateSameIpOnly(val) {
   } catch (e) {}
 }
 
+function isConsolidateRound100k() {
+  const cb = document.getElementById("cb-consolidate-round-100k");
+  if (cb) return Boolean(cb.checked);
+  try {
+    return localStorage.getItem("pm_consolidate_round_100k") === "true";
+  } catch (e) {
+    return false;
+  }
+}
+
+function setConsolidateRound100k(val) {
+  const b = Boolean(val);
+  const cb = document.getElementById("cb-consolidate-round-100k");
+  if (cb) cb.checked = b;
+  try {
+    localStorage.setItem("pm_consolidate_round_100k", b ? "true" : "false");
+  } catch (e) {}
+}
+
+function computeSenderTransferZeny(zeny, keepZeny = getConsolidationKeepZeny(), round100k = isConsolidateRound100k()) {
+  const z = Math.max(0, Number(zeny) || 0);
+  const keep = Math.max(0, Number(keepZeny) || 0);
+  if (!round100k) {
+    return Math.max(0, z - keep);
+  }
+  // When "ตัดเศษหลักหมื่น" is enabled (e.g. 11,564,555 -> 11,500,000):
+  // If keepZeny <= 100,000, truncate the 10k digits directly so 11,564,555 becomes 11,500,000 (keeping the 64,555 remainder).
+  // Only subtract another 100k if the remainder is < 10,000 and keepZeny > 0 so the character isn't left with 0 zeny.
+  if (keep <= 100000) {
+    let rounded = Math.floor(z / 100000) * 100000;
+    if (keep > 0 && (z - rounded) < 10000 && rounded >= 100000) {
+      rounded -= 100000;
+    }
+    return Math.max(0, rounded);
+  }
+  return Math.floor(Math.max(0, z - keep) / 100000) * 100000;
+}
+
+function parseZenyInputAmount(raw) {
+  const s = String(raw == null ? "" : raw).trim().toLowerCase().replace(/,/g, "");
+  if (!s) return 0;
+  const m = s.match(/^([0-9]+(?:\.[0-9]+)?)\s*(m|ล้าน|k|พัน|แสน)?$/i);
+  if (m) {
+    const num = parseFloat(m[1]);
+    const unit = (m[2] || "").toLowerCase();
+    if (unit === "m" || unit === "ล้าน") return Math.round(num * 1000000);
+    if (unit === "แสน") return Math.round(num * 100000);
+    if (unit === "k" || unit === "พัน") return Math.round(num * 1000);
+    return Math.round(num);
+  }
+  const digits = parseInt(s.replace(/[^0-9]/g, ""), 10);
+  return Number.isFinite(digits) && digits > 0 ? digits : 0;
+}
+
 function buildIpConsolidationGroups() {
   const keepZeny = getConsolidationKeepZeny();
+  const round100k = isConsolidateRound100k();
   const map = new Map();
   for (const p of currentProfiles) {
     const ip = getProfileIpGroupKey(p);
@@ -5614,12 +5669,12 @@ function buildIpConsolidationGroups() {
       ipGroupReceiverMap[g.ip] = receiver.id;
     }
     const senders = receiver
-      ? g.onlinePremiumProfiles.filter(p => p.id !== receiver.id)
+      ? g.onlinePremiumProfiles.filter(p => p.id !== receiver.id && !unselectedSenderIds.has(p.id))
       : [];
     const totalZeny = g.onlineProfiles.reduce((sum, p) => sum + (Number(p.liveState?.zeny) || 0), 0);
     const transferableZeny = senders.reduce((sum, p) => {
       const z = Number(p.liveState?.zeny) || 0;
-      return sum + Math.max(0, z - keepZeny);
+      return sum + computeSenderTransferZeny(z, keepZeny, round100k);
     }, 0);
     groups.push({
       ...g,
@@ -5627,7 +5682,7 @@ function buildIpConsolidationGroups() {
       senders,
       totalZeny,
       transferableZeny,
-      canConsolidate: Boolean(receiver && receiver.isRunning && senders.length > 0)
+      canConsolidate: Boolean(receiver && receiver.isRunning && senders.length > 0 && transferableZeny > 0)
     });
   }
   return groups;
@@ -6012,7 +6067,7 @@ function updateZenyConsolidationView() {
         }
         if (isChecked) {
           checkedEligibleCount++;
-          pendingTransferSum += Math.max(0, zeny - getConsolidationKeepZeny());
+          pendingTransferSum += computeSenderTransferZeny(zeny);
         }
       }
 
@@ -6064,7 +6119,7 @@ function updateZenyConsolidationView() {
           </td>
           <td style="text-align: right; font-family: var(--font-mono); font-weight: 700; color: ${zeny > 0 ? '#facc15' : '#94a3b8'};">
             ${zenyText}
-            ${!isReceiver && isChecked && getConsolidationKeepZeny() > 0 ? `<div style="font-size: 10.5px; font-weight: 600; color: #94a3b8;">→ โอน ${Math.max(0, zeny - getConsolidationKeepZeny()).toLocaleString()} z</div>` : ''}
+            ${!isReceiver && isChecked && (getConsolidationKeepZeny() > 0 || isConsolidateRound100k()) ? `<div style="font-size: 10.5px; font-weight: 600; color: ${isConsolidateRound100k() ? '#fde047' : '#94a3b8'};">→ โอน ${computeSenderTransferZeny(zeny).toLocaleString()} z</div>` : ''}
           </td>
           <td style="text-align: center;">${statusBadge}</td>
         </tr>
@@ -6168,6 +6223,82 @@ function initZenyConsolidationEvents() {
       }
       updateZenyConsolidationView();
     };
+  }
+
+  const round100kCb = document.getElementById("cb-consolidate-round-100k");
+  if (round100kCb) {
+    try {
+      round100kCb.checked = localStorage.getItem("pm_consolidate_round_100k") === "true";
+    } catch (e) {}
+    round100kCb.onchange = (e) => {
+      const enabled = Boolean(e.target.checked);
+      setConsolidateRound100k(enabled);
+      updateZenyConsolidationView();
+      showToast(
+        enabled
+          ? "✂️ เปิดโหมดตัดเศษหลักหมื่น (โอนเฉพาะหลักแสน เช่น 11,564,555 ➜ 11,500,000) แล้ว"
+          : "💰 ปิดโหมดตัดเศษหลักหมื่น (โอนตามยอดจริงหลังหักเงินสำรอง)",
+        "info"
+      );
+    };
+  }
+
+  const minSelectInput = document.getElementById("zeny-min-select-input");
+  const btnSelectMin = document.getElementById("btn-zeny-select-min");
+  if (minSelectInput) {
+    try {
+      const savedMin = localStorage.getItem("pm_zeny_min_select_amount");
+      if (savedMin !== null && savedMin !== "") {
+        const parsed = parseZenyInputAmount(savedMin);
+        minSelectInput.value = parsed > 0 ? parsed.toLocaleString() : "1,000,000";
+      }
+    } catch (e) {}
+    minSelectInput.addEventListener("blur", () => {
+      const parsed = parseZenyInputAmount(minSelectInput.value);
+      if (parsed > 0) minSelectInput.value = parsed.toLocaleString();
+    });
+  }
+
+  const applyMinZenySelection = () => {
+    const minVal = minSelectInput ? parseZenyInputAmount(minSelectInput.value) : 1000000;
+    if (minSelectInput && minVal > 0) {
+      minSelectInput.value = minVal.toLocaleString();
+      try { localStorage.setItem("pm_zeny_min_select_amount", String(minVal)); } catch (e) {}
+    }
+    const sameIpOnly = isConsolidateSameIpOnly();
+    const rec = currentProfiles.find(p => p.id === selectedReceiverProfileId);
+    const recIp = rec ? getProfileIpGroupKey(rec) : null;
+    selectedSenderIds.clear();
+    unselectedSenderIds.clear();
+    let matchedCount = 0;
+    currentProfiles.forEach(p => {
+      if (p.id === selectedReceiverProfileId || !p.isRunning || !isProfilePremium(p)) return;
+      const sameIpOk = !sameIpOnly || !recIp || getProfileIpGroupKey(p) === recIp;
+      const z = Number(p.liveState?.zeny) || 0;
+      if (sameIpOk && z > minVal) {
+        selectedSenderIds.add(p.id);
+        matchedCount++;
+      } else {
+        unselectedSenderIds.add(p.id);
+      }
+    });
+    updateZenyConsolidationView();
+    showToast(
+      `💰 เลือกเฉพาะจอที่มีเงินมากกว่า ${minVal.toLocaleString()} z จำนวน ${matchedCount} จอ เรียบร้อยแล้ว`,
+      matchedCount > 0 ? "success" : "warning"
+    );
+  };
+
+  if (btnSelectMin) {
+    btnSelectMin.onclick = applyMinZenySelection;
+  }
+  if (minSelectInput) {
+    minSelectInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        applyMinZenySelection();
+      }
+    });
   }
 
   const recSelect = document.getElementById("zeny-receiver-select");
@@ -6359,7 +6490,7 @@ function initZenyConsolidationEvents() {
       const res = await fetch(`${API_BASE}/api/consolidation/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ ...payload, roundHundredK: isConsolidateRound100k() })
       });
       const text = await res.text();
       let data;

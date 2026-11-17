@@ -20,7 +20,7 @@
   };
 
   let isOpen = false;
-  let activeTab = 'auto'; // 'auto' | 'custom'
+  let activeTab = 'auto'; // 'auto' | 'custom' | 'unban'
   let cachedProfiles = [];
   let cachedGroups = [];
   let cachedScreensPerIp = 6;
@@ -393,6 +393,10 @@
           <span>🎯 แยก IP / Device พิเศษ</span>
           <span class="dv-mode-badge" id="dv-mode-badge-custom">0 วง</span>
         </button>
+        <button type="button" class="dv-mode-tab" id="dv-mode-tab-unban" data-dv-tab="unban" role="tab">
+          <span>🔓 โหมดปลด</span>
+          <span class="dv-mode-badge" id="dv-mode-badge-unban">0</span>
+        </button>
       </div>
 
       <div id="dv-auto-controls-wrap">
@@ -451,13 +455,15 @@
 
     drawer.querySelectorAll('[data-dv-tab]').forEach(btn => {
       btn.addEventListener('click', () => {
-        const nextTab = btn.getAttribute('data-dv-tab') === 'custom' ? 'custom' : 'auto';
+        const tabVal = btn.getAttribute('data-dv-tab');
+        const nextTab = tabVal === 'custom' ? 'custom' : (tabVal === 'unban' ? 'unban' : 'auto');
         if (activeTab !== nextTab) {
           activeTab = nextTab;
           editingTitleState = null;
           pendingDeleteState = null;
           renderDrawerList(true);
           if (activeTab === 'custom') refreshCustomIpDevices(true);
+          if (activeTab === 'unban') refreshUnbanStatus();
         }
       });
     });
@@ -1276,7 +1282,7 @@
       btn.classList.toggle('active', btn.getAttribute('data-dv-tab') === activeTab);
     });
     if (autoControlsWrap) {
-      autoControlsWrap.classList.toggle('dv-hidden', activeTab === 'custom');
+      autoControlsWrap.classList.toggle('dv-hidden', activeTab === 'custom' || activeTab === 'unban');
     }
 
     if (sumIps) sumIps.textContent = String(totalAutoIps);
@@ -1287,6 +1293,8 @@
     if (headerTitleEl) {
       if (activeTab === 'custom') {
         headerTitleEl.textContent = `แยก IP / Device พิเศษ (${customGroups.length} วง)`;
+      } else if (activeTab === 'unban') {
+        headerTitleEl.textContent = '🔓 โหมดปลด (DataImpulse Mobile)';
       } else {
         headerTitleEl.textContent = subSizes.length > 1
           ? `จัดการ Device Spoof (1 IP : ${perIp} จอ · ${subSizes.length} Device)`
@@ -1296,6 +1304,8 @@
     if (headerSubEl) {
       if (activeTab === 'custom') {
         headerSubEl.textContent = 'จอง Proxy IP แยกเฉพาะวง · เพิ่มหลาย Device ใน IP เดียว หรือแยก 1 จอต่อ 1 IP ได้อิสระ';
+      } else if (activeTab === 'unban') {
+        headerSubEl.textContent = 'เปิดจอเกมผ่าน IP มือถือไทย (DataImpulse) เพื่อขอปลดแบน · บอทปิด · ผู้ใช้เข้าเล่นเอง · ปลดสำเร็จ = ปิดจอ + แจ้งเตือน';
       } else {
         headerSubEl.textContent = subSizes.length > 1
           ? `1 IP (${perIp} จอ) แบ่งเป็น ${subSizes.length} กลุ่ม · ${subSizes.length} Device (${splitText}) · กด Random เพื่อสุ่มเลขใหม่`
@@ -1347,12 +1357,16 @@
     }
 
     if (rotateAllBtn) {
-      rotateAllBtn.classList.toggle('dv-hidden', activeTab === 'custom');
+      rotateAllBtn.classList.toggle('dv-hidden', activeTab === 'custom' || activeTab === 'unban');
       rotateAllBtn.disabled = rotatingAll || totalAutoGroups === 0;
       rotateAllBtn.textContent = rotatingAll ? '⏳ กำลังสุ่ม...' : '🎲 Random ทุกกลุ่ม';
     }
     if (!bodyEl) return;
 
+    if (activeTab === 'unban') {
+      renderUnbanTabBody(bodyEl, list);
+      return;
+    }
     if (activeTab === 'custom') {
       renderCustomTabBody(bodyEl, list);
       return;
@@ -1611,6 +1625,483 @@
       renderDrawerList(false);
     }
   }
+
+  // ====================== UNBAN MODE UI ======================
+  let cachedUnbanStatus = { activeSessions: [], configuredProfileIds: [], poolEntries: [], hasCredentials: false, profileMap: {} };
+  let unbanRefreshing = false;
+  let unbanSSE = null;
+  let unbanSearchText = '';
+
+  function formatUnbanBytes(bytes) {
+    const b = Number(bytes) || 0;
+    if (b < 1024) return `${b} B`;
+    if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+    return `${(b / (1024 * 1024)).toFixed(2)} MB`;
+  }
+
+  async function refreshUnbanStatus() {
+    if (unbanRefreshing) return;
+    unbanRefreshing = true;
+    try {
+      const res = await fetch('/api/unban/status').then(r => r.json());
+      if (res.success) {
+        cachedUnbanStatus = res;
+        const badge = document.getElementById('dv-mode-badge-unban');
+        const poolCount = res.poolEntries?.length || res.configuredProfileIds?.length || 0;
+        const activeCount = res.activeSessions?.length || 0;
+        if (badge) badge.textContent = activeCount > 0 ? `${activeCount}/${poolCount} จอ` : `${poolCount} จอ`;
+      }
+      if (activeTab === 'unban') {
+        const bodyEl = document.getElementById('dv-list-body');
+        if (bodyEl) renderUnbanTabBody(bodyEl, cachedProfiles);
+      }
+    } catch (_) {}
+    unbanRefreshing = false;
+  }
+
+  function ensureUnbanSSE() {
+    if (unbanSSE) return;
+    try {
+      unbanSSE = new EventSource('/api/unban/events');
+      unbanSSE.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (data.type === 'unban-success') {
+            playUnbanSound();
+            if (typeof showToast === 'function') {
+              showToast(data.message || `🔔 ปลดสำเร็จ! ปิดจอและถอดออกจากวงแล้ว`, 'success');
+            }
+            if (typeof fetchProfiles === 'function') {
+              try { fetchProfiles(); } catch (_) {}
+            }
+            setTimeout(() => refreshUnbanStatus(), 1200);
+          }
+        } catch (_) {}
+      };
+      unbanSSE.onerror = () => {
+        unbanSSE?.close();
+        unbanSSE = null;
+        setTimeout(() => ensureUnbanSSE(), 10000);
+      };
+    } catch (_) {}
+  }
+
+  function playUnbanSound() {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const playTone = (freq, startTime, duration, gain = 0.32) => {
+        const osc = ctx.createOscillator();
+        const g = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, startTime);
+        g.gain.setValueAtTime(gain, startTime);
+        g.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+        osc.connect(g);
+        g.connect(ctx.destination);
+        osc.start(startTime);
+        osc.stop(startTime + duration);
+      };
+      const now = ctx.currentTime;
+      playTone(523.25, now, 0.35, 0.28);
+      playTone(659.25, now + 0.14, 0.35, 0.28);
+      playTone(783.99, now + 0.28, 0.55, 0.32);
+      playTone(1046.5, now + 0.55, 0.85, 0.35);
+    } catch (_) {}
+  }
+
+  async function addProfilesToUnban(profileIds) {
+    try {
+      const ids = Array.isArray(profileIds) ? profileIds : [profileIds];
+      const res = await fetch('/api/unban/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileIds: ids })
+      }).then(r => r.json());
+      if (res.success) {
+        if (typeof showToast === 'function') showToast(res.message || '✅ เพิ่มเข้าวงโหมดปลดแล้ว', 'success');
+      } else {
+        if (typeof showToast === 'function') showToast(`❌ ${res.error || 'ไม่สำเร็จ'}`, 'error');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(`❌ เกิดข้อผิดพลาด: ${e.message}`, 'error');
+    }
+    await refreshUnbanStatus();
+  }
+
+  async function removeProfileFromUnban(profileId) {
+    try {
+      const res = await fetch('/api/unban/remove', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId })
+      }).then(r => r.json());
+      if (res.success) {
+        if (typeof showToast === 'function') showToast(res.message || '✅ ถอดออกจากวงโหมดปลดแล้ว', 'success');
+      } else {
+        if (typeof showToast === 'function') showToast(`❌ ${res.error || 'ไม่สำเร็จ'}`, 'error');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(`❌ เกิดข้อผิดพลาด: ${e.message}`, 'error');
+    }
+    await refreshUnbanStatus();
+  }
+
+  async function rotateUnbanProfileDevice(profileId) {
+    try {
+      const res = await fetch('/api/unban/rotate-device', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId })
+      }).then(r => r.json());
+      if (res.success) {
+        if (typeof showToast === 'function') showToast(res.message || '🎲 สุ่มมือถือและ IP Session ใหม่แล้ว', 'success');
+      } else {
+        if (typeof showToast === 'function') showToast(`❌ ${res.error || 'ไม่สำเร็จ'}`, 'error');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(`❌ เกิดข้อผิดพลาด: ${e.message}`, 'error');
+    }
+    await refreshUnbanStatus();
+  }
+
+  async function startUnbanSession(profileId, rotateDevice = false) {
+    try {
+      const res = await fetch('/api/unban/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId, rotateDevice })
+      }).then(r => r.json());
+      if (res.success) {
+        if (typeof showToast === 'function') showToast(res.message || '✅ เปิดโหมดปลดสำเร็จ', 'success');
+      } else {
+        if (typeof showToast === 'function') showToast(`❌ ${res.error || 'ไม่สำเร็จ'}`, 'error');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(`❌ เกิดข้อผิดพลาด: ${e.message}`, 'error');
+    }
+    await refreshUnbanStatus();
+  }
+
+  async function stopUnbanSession(profileId, removeFromPool = false, markUnbanned = false) {
+    try {
+      const res = await fetch('/api/unban/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileId, removeFromPool, markUnbanned, reason: markUnbanned ? 'manual-unbanned' : 'manual' })
+      }).then(r => r.json());
+      if (res.success) {
+        if (markUnbanned) playUnbanSound();
+        if (typeof showToast === 'function') showToast(res.message || '✅ ปิดโหมดปลดแล้ว', 'success');
+      } else {
+        if (typeof showToast === 'function') showToast(`❌ ${res.error || 'ไม่สำเร็จ'}`, 'error');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(`❌ เกิดข้อผิดพลาด: ${e.message}`, 'error');
+    }
+    await refreshUnbanStatus();
+  }
+
+  function renderUnbanTabBody(bodyEl, profiles) {
+    ensureUnbanSSE();
+    const status = cachedUnbanStatus;
+    const allProfiles = Array.isArray(profiles) ? profiles : cachedProfiles;
+    const poolEntries = Array.isArray(status.poolEntries) ? status.poolEntries : [];
+    const poolSet = new Set(poolEntries.map(e => e.profileId));
+    const activeSessionMap = new Map();
+    for (const s of (status.activeSessions || [])) {
+      activeSessionMap.set(s.profileId, s);
+    }
+
+    const jailedUnassigned = allProfiles.filter(p => {
+      if (!p || !p.id || poolSet.has(p.id)) return false;
+      const pm = status.profileMap?.[p.id];
+      return Boolean(p.isJailed || pm?.isJailed);
+    });
+
+    const availableProfiles = allProfiles.filter(p => {
+      if (!p || !p.id || poolSet.has(p.id)) return false;
+      if (!unbanSearchText) return true;
+      const pm = status.profileMap?.[p.id] || {};
+      const q = unbanSearchText.toLowerCase();
+      return (
+        String(p.name || '').toLowerCase().includes(q) ||
+        String(p.account || pm.account || '').toLowerCase().includes(q) ||
+        String(p.charName || p.lastCharName || pm.charName || '').toLowerCase().includes(q)
+      );
+    }).sort((a, b) => {
+      const aJ = Boolean(a.isJailed || status.profileMap?.[a.id]?.isJailed);
+      const bJ = Boolean(b.isJailed || status.profileMap?.[b.id]?.isJailed);
+      if (aJ !== bJ) return aJ ? -1 : 1;
+      return 0;
+    });
+
+    let html = '';
+    const useMobileProxy = Boolean(status.useMobileProxy);
+
+    // Top summary & actions card
+    html += `
+      <div class="dv-custom-intro-card" style="border-color:rgba(16,185,129,0.35);background:linear-gradient(135deg,rgba(6,78,59,0.35),rgba(15,23,42,0.85));">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+          <div>
+            <div style="font-size:13px;font-weight:800;color:#6ee7b7;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span>🔓 โหมดปลดคุก — จำลองมือถือ Android แท้ 100% (Stealth สูงสุด)</span>
+              <span class="dv-chip" style="background:${useMobileProxy ? 'rgba(245,158,11,0.2)' : 'rgba(16,185,129,0.22)'};color:${useMobileProxy ? '#fde68a' : '#a7f3d0'};border:1px solid ${useMobileProxy ? 'rgba(245,158,11,0.45)' : 'rgba(16,185,129,0.45)'};font-size:10.5px;padding:1px 8px;border-radius:999px;">
+                ${useMobileProxy ? `📱 เน็ตซิม DataImpulse (${esc(status.proxyHost || 'gw.dataimpulse.com')})` : '📶 เน็ตบ้าน / Wi-Fi ปกติ (ไม่เสีย GB DataImpulse)'}
+              </span>
+            </div>
+            <div style="font-size:11px;color:#cbd5e1;margin-top:4px;line-height:1.5;">
+              • จำลอง <b>มือถือ Android แท้ระดับเบราว์เซอร์</b> (ตรงทั้ง HTTP Headers, Client Hints, ความละเอียดจอ, Touch, ปุ่มบังคับมือถือ Joystick)<br>
+              • <b>ซ่อนตัวแปรระบบและร่องรอย CDP 100%</b> · <b>ปิดบอท</b> (ช่วยกรอกรหัสผ่านให้ แต่ไม่มีโค้ดบอทและไม่มี HUD บอทในจอ)<br>
+              • <b>ตรวจจับอัตโนมัติ:</b> เมื่อแอดมินปล่อยตัวออกจากคุก ระบบจะ<b>ส่งเสียงระฆังแจ้งเตือน + ปิดจอ + ถอดออกจากคิวปลดทันที</b>
+            </div>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span style="font-size:11px;color:#94a3b8;font-weight:700;">🌐 ช่องทางเน็ตโหมดปลด:</span>
+              <button type="button" class="dv-btn ${!useMobileProxy ? 'dv-btn-primary' : ''}" style="font-size:11px;padding:3px 10px;${!useMobileProxy ? 'background:#059669;border-color:#34d399;' : ''}"
+                onclick="window.__unbanSetProxyMode(false)">
+                📶 เน็ตบ้าน / Wi-Fi (แนะนำ · ไม่เสีย GB)
+              </button>
+              <button type="button" class="dv-btn ${useMobileProxy ? 'dv-btn-amber' : ''}" style="font-size:11px;padding:3px 10px;"
+                onclick="window.__unbanSetProxyMode(true)" title="เปิดใช้เฉพาะเมื่อต้องการสุ่ม IP มือถือ 4G/5G จาก DataImpulse">
+                📱 เน็ตซิม DataImpulse (ใช้ GB)
+              </button>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${jailedUnassigned.length > 0 ? `
+              <button type="button" class="dv-btn dv-btn-amber" onclick="window.__unbanAddAllJailed()">
+                🚨 ดึงจอติดคุกเข้าวงปลด (${jailedUnassigned.length} จอ)
+              </button>
+            ` : ''}
+            <button type="button" class="dv-btn" onclick="window.__unbanTestBell()" title="ทดสอบเสียงแจ้งเตือนเมื่อปลดสำเร็จ">
+              🔔 ทดสอบเสียง
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Pool entries (Clients added to Unban Mode)
+    html += `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 8px 0;">
+        <div style="font-size:12.5px;font-weight:800;color:#fde68a;">
+          📱 รายการ Client ในวงปลด (${poolEntries.length} จอ · กำลังเปิด ${activeSessionMap.size} จอ)
+        </div>
+        ${activeSessionMap.size > 0 ? `
+          <button type="button" class="dv-btn" style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.4);font-size:11px;padding:3px 10px;" onclick="window.__unbanStopAll()">
+            ⏹ ปิดจอที่กำลังปลดทั้งหมด
+          </button>
+        ` : ''}
+      </div>
+    `;
+
+    if (poolEntries.length === 0) {
+      html += `
+        <div class="dv-empty" style="padding:20px 14px;margin-bottom:14px;">
+          <div class="dv-empty-icon">📱</div>
+          <div class="dv-empty-title">ยังไม่มี Client ในวงโหมดปลด</div>
+          <div class="dv-empty-sub">กดปุ่ม <b>"+ เพิ่มเข้าวงปลด"</b> จากรายการด้านล่าง (หรือกดดึงจอติดคุกเข้าวงปลดด้านบน)</div>
+        </div>
+      `;
+    } else {
+      html += `<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">`;
+      for (const item of poolEntries) {
+        const pid = item.profileId;
+        const pInfo = status.profileMap?.[pid] || {};
+        const pObj = allProfiles.find(p => p && p.id === pid) || {};
+        const pName = pObj.name || pInfo.name || pid;
+        const account = pObj.account || pInfo.account || '-';
+        const charName = pObj.charName || pObj.lastCharName || pInfo.charName || '-';
+        const isJailed = Boolean(pObj.isJailed || pInfo.isJailed);
+        const isBotRunning = Boolean(pObj.isRunning);
+        const active = item.activeSession || activeSessionMap.get(pid) || null;
+
+        html += `
+          <div class="dv-custom-ip-card" style="padding:10px 12px;border-color:${active ? 'rgba(16,185,129,0.55)' : 'rgba(148,163,184,0.22)'};background:${active ? 'rgba(6,78,59,0.18)' : 'rgba(15,23,42,0.65)'};">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+              <div>
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                  <span style="font-size:13px;font-weight:800;color:#f8fafc;">${esc(pName)}</span>
+                  <span style="font-size:11px;color:#fde047;font-weight:600;">ID: ${esc(account)}</span>
+                  <span style="font-size:11px;color:#cbd5e1;">• ตัวละคร: <b>${esc(charName)}</b></span>
+                  ${isJailed ? `<span style="background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.45);font-size:10px;padding:1px 6px;border-radius:999px;font-weight:700;">🔒 ติดคุก</span>` : ''}
+                  ${active ? `<span style="background:rgba(16,185,129,0.22);color:#6ee7b7;border:1px solid rgba(16,185,129,0.5);font-size:10px;padding:1px 7px;border-radius:999px;font-weight:700;">🟢 กำลังเปิดโหมดปลด</span>` : ''}
+                </div>
+                <div style="font-size:11px;color:#94a3b8;margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <span>📱 รุ่น: <b style="color:#6ee7b7;">${esc(item.deviceModel || 'Android')}</b> (${esc(item.deviceGpu || 'Adreno')})</span>
+                  <span>🔑 Device: <code style="color:#93c5fd;">${esc((item.deviceId || '').slice(0, 13))}...</code></span>
+                </div>
+                ${active ? `
+                  <div style="margin-top:6px;padding:6px 10px;border-radius:8px;background:rgba(15,23,42,0.75);border:1px solid rgba(16,185,129,0.3);font-size:11px;color:#e2e8f0;display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+                    <span>🌐 IP มือถือไทย: <b style="color:#38bdf8;">${esc(active.egressIp || 'กำลังเช็ค...')}</b></span>
+                    <span>🗺️ สถานะ/แมพ: <b style="color:${active.inJail ? '#fca5a5' : '#fde047'};">${esc(active.currentMap || 'กำลังโหลด...')}</b></span>
+                    <span>📊 เน็ตที่ใช้: <b style="color:#a7f3d0;">${formatUnbanBytes(active.bytesUsed || 0)}</b></span>
+                    <span>🕐 ${active.runningMinutes || 0} นาที</span>
+                  </div>
+                ` : ''}
+              </div>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                ${active ? `
+                  <button type="button" class="dv-btn" style="background:rgba(16,185,129,0.25);color:#6ee7b7;border:1px solid rgba(16,185,129,0.5);font-size:11px;padding:4px 10px;"
+                    onclick="window.__unbanStop('${esc(pid)}', true, true)" title="กดเมื่อได้รับการปลดแล้ว: ปิดจอ + เคลียร์สถานะคุก + ถอดออกจากวงปลด">
+                    ✅ ปลดสำเร็จ (ปิด+ถอดออก)
+                  </button>
+                  <button type="button" class="dv-btn" style="background:#dc2626;color:#fff;font-size:11px;padding:4px 10px;"
+                    onclick="window.__unbanStop('${esc(pid)}', false, false)">
+                    ⏹ ปิดจอ
+                  </button>
+                ` : `
+                  <button type="button" class="dv-btn dv-btn-primary" style="font-size:11px;padding:4px 11px;background:linear-gradient(135deg,#059669,#10b981);border-color:#34d399;"
+                    ${isBotRunning ? 'disabled title="กรุณาปิดจอบอทปกติก่อนเปิดโหมดปลด"' : ''}
+                    onclick="window.__unbanStart('${esc(pid)}', false)">
+                    🔓 เปิดจอปลด (Android)
+                  </button>
+                  <button type="button" class="dv-btn" style="font-size:11px;padding:4px 9px;"
+                    onclick="window.__unbanRotate('${esc(pid)}')" title="สุ่มรุ่นมือถือ Android, เลขเครื่อง และ IP Session ใหม่">
+                    🎲 สุ่มใหม่
+                  </button>
+                  <button type="button" class="dv-btn" style="color:#fca5a5;border-color:rgba(239,68,68,0.35);font-size:11px;padding:4px 9px;"
+                    onclick="window.__unbanRemove('${esc(pid)}')" title="ถอดออกจากวงโหมดปลด">
+                    ✕ ถอดออก
+                  </button>
+                `}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      html += `</div>`;
+    }
+
+    // Add clients section
+    html += `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:14px 0 8px 0;flex-wrap:wrap;">
+        <div style="font-size:12.5px;font-weight:800;color:#e2e8f0;">
+          ➕ เลือกเพิ่ม Client เข้าวงปลด (${availableProfiles.length} จอ)
+        </div>
+        <input type="text" id="dv-unban-search-input" value="${esc(unbanSearchText)}" placeholder="🔍 ค้นหาชื่อจอ / ไอดี / ตัวละคร..."
+          style="background:rgba(15,23,42,0.8);border:1px solid rgba(148,163,184,0.3);color:#f8fafc;border-radius:7px;padding:4px 10px;font-size:11.5px;width:220px;">
+      </div>
+    `;
+
+    if (availableProfiles.length === 0) {
+      html += `
+        <div style="font-size:11.5px;color:#64748b;text-align:center;padding:14px;">
+          ไม่พบโปรไฟล์ที่ค้นหา หรือทุกจออยู่ในวงปลดแล้ว
+        </div>
+      `;
+    } else {
+      html += `<div style="display:flex;flex-direction:column;gap:5px;max-height:300px;overflow-y:auto;padding-right:4px;">`;
+      for (const p of availableProfiles) {
+        const pm = status.profileMap?.[p.id] || {};
+        const pName = p.name || pm.name || p.id;
+        const account = p.account || pm.account || '-';
+        const charName = p.charName || p.lastCharName || pm.charName || '-';
+        const isJailed = Boolean(p.isJailed || pm.isJailed);
+        const isRunning = Boolean(p.isRunning);
+        html += `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 12px;border-radius:8px;background:${isJailed ? 'rgba(239,68,68,0.08)' : 'rgba(255,255,255,0.03)'};border:1px solid ${isJailed ? 'rgba(239,68,68,0.3)' : 'rgba(255,255,255,0.07)'};">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <span style="font-size:12px;color:#f1f5f9;font-weight:700;">${esc(pName)}</span>
+              <span style="font-size:11px;color:#fde047;">${esc(account)}</span>
+              <span style="font-size:11px;color:#94a3b8;">• ${esc(charName)}</span>
+              ${isJailed ? `<span style="background:rgba(239,68,68,0.22);color:#fca5a5;border:1px solid rgba(239,68,68,0.45);font-size:10px;padding:1px 6px;border-radius:999px;font-weight:700;">🔒 ติดคุก</span>` : ''}
+              ${isRunning ? `<span style="font-size:10px;color:#4ade80;">(เปิดบอทอยู่)</span>` : ''}
+            </div>
+            <div style="display:flex;gap:5px;">
+              <button type="button" class="dv-btn" style="font-size:11px;padding:3px 10px;border-color:rgba(56,189,248,0.4);color:#7dd3fc;"
+                onclick="window.__unbanAdd('${esc(p.id)}')">
+                + เพิ่มเข้าวงปลด
+              </button>
+              ${!isRunning ? `
+                <button type="button" class="dv-btn dv-btn-primary" style="font-size:11px;padding:3px 10px;background:linear-gradient(135deg,#059669,#10b981);border-color:#34d399;"
+                  onclick="window.__unbanStart('${esc(p.id)}', false)">
+                  🔓 เพิ่ม+เปิดทันที
+                </button>
+              ` : ''}
+            </div>
+          </div>
+        `;
+      }
+      html += `</div>`;
+    }
+
+    bodyEl.innerHTML = html;
+
+    const searchInput = document.getElementById('dv-unban-search-input');
+    if (searchInput) {
+      searchInput.addEventListener('input', (e) => {
+        unbanSearchText = e.target.value || '';
+        renderUnbanTabBody(bodyEl, allProfiles);
+        const nextInput = document.getElementById('dv-unban-search-input');
+        if (nextInput) {
+          nextInput.focus();
+          const len = nextInput.value.length;
+          nextInput.setSelectionRange(len, len);
+        }
+      });
+    }
+  }
+
+  // Expose unban actions globally
+  window.__unbanAdd = async (profileId) => {
+    await addProfilesToUnban([profileId]);
+  };
+  window.__unbanAddAllJailed = async () => {
+    const status = cachedUnbanStatus;
+    const poolSet = new Set((status.poolEntries || []).map(e => e.profileId));
+    const list = typeof currentProfiles !== 'undefined' && Array.isArray(currentProfiles) ? currentProfiles : cachedProfiles;
+    const ids = list.filter(p => p && p.id && !poolSet.has(p.id) && (p.isJailed || status.profileMap?.[p.id]?.isJailed)).map(p => p.id);
+    if (ids.length > 0) await addProfilesToUnban(ids);
+  };
+  window.__unbanRemove = async (profileId) => {
+    await removeProfileFromUnban(profileId);
+  };
+  window.__unbanRotate = async (profileId) => {
+    await rotateUnbanProfileDevice(profileId);
+  };
+  window.__unbanStart = async (profileId, rotateDevice = false) => {
+    await startUnbanSession(profileId, rotateDevice);
+  };
+  window.__unbanStop = async (profileId, removeFromPool = false, markUnbanned = false) => {
+    await stopUnbanSession(profileId, removeFromPool, markUnbanned);
+  };
+  window.__unbanStopAll = async () => {
+    try {
+      await fetch('/api/unban/stop-all', { method: 'POST' });
+      if (typeof showToast === 'function') showToast('⏹ ปิดจอโหมดปลดทั้งหมดแล้ว', 'success');
+    } catch (_) {}
+    await refreshUnbanStatus();
+  };
+  window.__unbanSetProxyMode = async (useMobileProxy) => {
+    try {
+      const res = await fetch('/api/unban/proxy-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ useMobileProxy: Boolean(useMobileProxy) })
+      }).then(r => r.json());
+      if (res.success) {
+        if (typeof showToast === 'function') showToast(res.message || '✅ บันทึกโหมดการเชื่อมต่อแล้ว', 'success');
+      } else {
+        if (typeof showToast === 'function') showToast(`❌ ${res.error || 'ไม่สำเร็จ'}`, 'error');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(`❌ เกิดข้อผิดพลาด: ${e.message}`, 'error');
+    }
+    await refreshUnbanStatus();
+  };
+  window.__unbanTestBell = () => {
+    playUnbanSound();
+    if (typeof showToast === 'function') showToast('🔔 ทดสอบเสียงแจ้งเตือนเมื่อปลดคุกสำเร็จ!', 'success');
+  };
+
+  // Auto-refresh unban status every 5 seconds when the tab is open
+  setInterval(() => {
+    if (isOpen && activeTab === 'unban') {
+      refreshUnbanStatus();
+    }
+  }, 5000);
+
+  // ====================== END UNBAN MODE UI ======================
 
   window.updateDeviceManagerFromProfiles = updateDeviceManagerFromProfiles;
   window.toggleDeviceDrawer = toggleDrawer;

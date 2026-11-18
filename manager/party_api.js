@@ -252,6 +252,7 @@ const ACTIONS = {
   // Same idea as the zeny consolidation: moveToChannel waits for the cooldown / a free slot by itself;
   // we wait for it and report where the character REALLY is afterwards.
   moveChannelWait: (ch, waitMs) => `(async () => {
+    if (!window.__isBotRunning) return { success: false, botStopped: true, error: 'ยังไม่ได้กด Start Bot' };
     if (typeof window.moveToChannel !== 'function') return { success: false, error: 'บอทจอนี้ไม่มีระบบย้าย CH' };
     let r = null;
     try { r = await window.moveToChannel(${Number(ch)}, ${Number(waitMs)}); } catch (e) { r = { success: false, error: String(e && e.message || e) }; }
@@ -568,14 +569,14 @@ function createPartyService(opts) {
     const L = states.get(p.leaderId);
     const priest = findPartyPriest(p, profiles, states);
     let anchorSnap = null;
-    if (priest && priest.snap && priest.snap.ok && priest.snap.mapId && !isCityMapName(priest.snap.mapName)) {
+    if (priest && priest.snap && priest.snap.ok && priest.snap.botRunning !== false && priest.snap.mapId && !isCityMapName(priest.snap.mapName)) {
       anchorSnap = priest.snap;
-    } else if (L && L.ok && L.mapId && !isCityMapName(L.mapName)) {
+    } else if (L && L.ok && L.botRunning !== false && L.mapId && !isCityMapName(L.mapName)) {
       anchorSnap = L;
     } else {
       for (const mid of (p.memberIds || [])) {
         const ms = states.get(mid);
-        if (ms && ms.ok && ms.mapId && !isCityMapName(ms.mapName)) {
+        if (ms && ms.ok && ms.botRunning !== false && ms.mapId && !isCityMapName(ms.mapName)) {
           anchorSnap = ms;
           break;
         }
@@ -1013,7 +1014,7 @@ function createPartyService(opts) {
         }
       }
 
-      const anchorOnFarm = Boolean(anchorSnap && anchorSnap.mapId && !isCityMapName(anchorSnap.mapName));
+      const anchorOnFarm = Boolean(anchorSnap && anchorSnap.botRunning !== false && anchorSnap.mapId && !isCityMapName(anchorSnap.mapName));
       const anchorInPk = Boolean(anchorOnFarm && anchorSnap && anchorSnap.pkChannel);
       const desiredCh = (anchorOnFarm && !anchorInPk && rt.settledMapId === anchorSnap.mapId && typeof rt.settledChannel === 'number')
         ? rt.settledChannel
@@ -1039,7 +1040,7 @@ function createPartyService(opts) {
 
       const movers = [];
       // If Priest or another returning member is the Channel Anchor (or settledChannel is locked on this map) and the Leader is on a different CH on the same map, Leader moves too!
-      if (anchorOnFarm && !anchorInPk && L.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && (L.channel !== desiredCh || L.pkChannel) && !(L.busy && L.busy.length) && L.helpers && L.helpers.moveToChannel) {
+      if (anchorOnFarm && !anchorInPk && L.botRunning !== false && L.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && (L.channel !== desiredCh || L.pkChannel) && !(L.busy && L.busy.length) && L.helpers && L.helpers.moveToChannel) {
         if (anchorId !== party.leaderId || rt.settledMapId === anchorSnap.mapId || L.pkChannel) {
           movers.push(party.leaderId);
         }
@@ -1067,7 +1068,7 @@ function createPartyService(opts) {
           m.mapAt = now();
           await act(P, ACTIONS.setMap(leaderMap, S.botRunning), 'set-map');
         }
-        if (!(S.busy && S.busy.length) && anchorSnap && !anchorInPk && S.mapId && S.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && (S.channel !== desiredCh || S.pkChannel) && S.helpers && S.helpers.moveToChannel) {
+        if (S.botRunning !== false && !(S.busy && S.busy.length) && anchorSnap && !anchorInPk && S.mapId && S.mapId === anchorSnap.mapId && typeof desiredCh === 'number' && (S.channel !== desiredCh || S.pkChannel) && S.helpers && S.helpers.moveToChannel) {
           movers.push(id);
         }
       }
@@ -1220,7 +1221,7 @@ function createPartyService(opts) {
         : anchorSnap.channel;
 
       // Step 1: Least-crowded & non-overlapping channel selection upon entering a farm map (or when overlapping another party)
-      if (needsInitialChannelCheck && anchorP && anchorSnap && anchorSnap.mapId) {
+      if (needsInitialChannelCheck && anchorP && anchorSnap && anchorSnap.botRunning !== false && anchorSnap.mapId) {
         rt.gatherNote = anchorLabel + ' กำลังสแกนหา CH ที่คนน้อยสุด (และไม่ทับ CH ปาร์ตี้อื่น)';
         const localAvoid = avoidList.slice();
         const onlyForOverlap = Boolean(!anchorSnap.pkChannel && rt.settledMapId === anchorSnap.mapId);
@@ -1272,13 +1273,13 @@ function createPartyService(opts) {
         const S = states.get(id);
         if (!S || !S.ok || !S.name) continue;
         if (id !== party.leaderId && !inGameNow.has(S.name)) continue;
-        if (planBlocked(S) || (S.busy && S.busy.length) || !(S.helpers && S.helpers.moveToChannel)) continue;
+        if (S.botRunning === false || planBlocked(S) || (S.busy && S.busy.length) || !(S.helpers && S.helpers.moveToChannel)) continue;
         if (S.mapId === anchorSnap.mapId && S.channel !== targetCh) todoIds.push(id);
       }
       for (const id of movers || []) {
         if (!todoIds.includes(id)) {
           const S = states.get(id);
-          if (S && S.channel !== targetCh) todoIds.push(id);
+          if (S && S.botRunning !== false && S.channel !== targetCh) todoIds.push(id);
         }
       }
 
@@ -1327,7 +1328,7 @@ function createPartyService(opts) {
       const follow = [party.leaderId].concat(party.memberIds).filter(id => {
         if (id === anchorId) return false;
         const S = states.get(id);
-        return S && S.ok && S.name && (id === party.leaderId || inGame2.has(S.name)) && !planBlocked(S) && !(S.busy && S.busy.length) && S.helpers && S.helpers.moveToChannel && S.mapId === anchorSnap.mapId && S.channel !== real;
+        return S && S.ok && S.name && S.botRunning !== false && (id === party.leaderId || inGame2.has(S.name)) && !planBlocked(S) && !(S.busy && S.busy.length) && S.helpers && S.helpers.moveToChannel && S.mapId === anchorSnap.mapId && S.channel !== real;
       });
       const second = await moveAll(follow, real);
       rt.channelNote = second.ok

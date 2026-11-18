@@ -49,6 +49,7 @@ const CLIENT_PROBE_JS = `(() => {
   if (window.__priestBusyBuffing && (Date.now() - (window.__priestBusyBuffingAt || 0) < 25000)) busy.push('พระกำลังเดินไปบัฟสมาชิกปาร์ตี้');
   if (window.__isHalloweenExchanging || window.__isUsingEventItems) busy.push('กำลังแลก/เปิดใช้ของกิจกรรมลอยกระทง');
   if (window.__isRentingCompanion) busy.push('กำลังเช่าสัตว์คู่หู/สัตว์ขี่กับ Healer Mira');
+  if (window.__towerCarryActive || (typeof window.isInEndlessTowerMap === 'function' && window.isInEndlessTowerMap())) busy.push('กำลังลงดันหอคอยนิรันดร์');
   const nameEl = document.querySelector('.hud-name');
   let map = '';
   try { map = (typeof window.__getClientLiveState === 'function' && window.__getClientLiveState().map) || ''; } catch (e) {}

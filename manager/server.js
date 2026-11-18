@@ -90,6 +90,7 @@ const { createPremiumService } = require("./premium_api");
 const { createGuildService } = require("./guild_api");
 const { createCardMarketService } = require("./card_market_api");
 const { createMarketSniperService } = require("./market_sniper_api");
+const { createTowerCarryService } = require("./tower_carry");
 const { createBotAutoUpdater } = require("./bot_auto_update");
 const { createManagerSelfUpdater } = require("./manager_self_update");
 const { handleConfigCopyRoute } = require("./config_copy_api");
@@ -6006,6 +6007,14 @@ const marketSniperService = createMarketSniperService({
 });
 marketSniperService.start();
 
+// Endless Tower 100-Floor Carry System (manager/tower_carry.js)
+const towerCarryService = createTowerCarryService({
+  loadProfiles,
+  evalProfilePort,
+  dataFile: path.join(__dirname, "data", "tower_carry.json")
+});
+towerCarryService.start();
+
 function getDefaultDeviceNickname() {
   const user = String(process.env.USERNAME || (typeof os.userInfo === 'function' ? os.userInfo()?.username : '') || '').trim();
   const host = String(os.hostname() || '').trim();
@@ -7774,6 +7783,8 @@ const server = http.createServer(async (req, res) => {
   if (await cardMarketService.handleRoute(req, res, pathname, sendJSON)) return;
   // Centralized Market Misprice Sniper & Auto-Flip — see market_sniper_api.js
   if (await marketSniperService.handleRoute(req, res, pathname, sendJSON)) return;
+  // Endless Tower 100-Floor Carry System — see tower_carry.js
+  if (await towerCarryService.handleRoute(req, res, pathname, sendJSON)) return;
 
   // Discord Bot & Webhook Settings & Controls
   if (pathname === "/api/discord/settings") {

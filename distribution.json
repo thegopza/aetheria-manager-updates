@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "deb140b3c02f4bccfe13aa0c7d42bde11c1bbb97",
+  "sourceCommit": "d98f37b570d41f8a4fcd5a347051adcb90919b79",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -12,7 +12,7 @@
     },
     {
       "path": "manager/bot_auto_update.js",
-      "sha256": "0329d304ad0cd80f5be0649678a83ba5d749006bcc2d6cdc660d32316feae8b9"
+      "sha256": "ba897f77825735a69d026e2b76af2759e6e1e443f7a423a4ae6dae3f8e057f46"
     },
     {
       "path": "manager/browser_mode.js",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "6d220201df7f5f8577b23a034c20289edea763d4af090dca4f1ec5a1428e6b6f"
+      "sha256": "59eb381073a2e79b7e8971539b4ce7f4dbab983ce067a462e20ad0f8ce8654cd"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -271,8 +271,12 @@
       "sha256": "ab4d90111b31ebf81514ff3ce26ee0df3211be2e560c677102595d04f56a104b"
     },
     {
+      "path": "manager/public/tower_manager.js",
+      "sha256": "1ea169219fc0661968f16a5cf630af38c542b8e3c57cce7eb3c08b98c35f2513"
+    },
+    {
       "path": "manager/public/update_log.js",
-      "sha256": "809116b21980c0d16c1ca1ecfee1c934c58f42e9a560ce79de2a0fc49b80abe6"
+      "sha256": "f4294e1bc1e43c01874fa321885e20265aedaeda9506de145a63b9a6d25609f7"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -304,11 +308,15 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "54831c621e03e7c91471ad75a18902a085f9759499891e965823d1a2135cea15"
+      "sha256": "aba0bf6d89a314629cfcfd41b88d3f8d0fc6891de000571bef0c7a25f9dc0c36"
     },
     {
       "path": "manager/test_isolation.js",
       "sha256": "ae8ed5c6bb6fd0267b89419070654b014a806cd37a4c8a8e72b164d7d6ee3e7f"
+    },
+    {
+      "path": "manager/tower_carry.js",
+      "sha256": "6ae4c623bc4927f9ef6f1428f33e3b53eef9a37e8485dcbfaf4085278403449a"
     },
     {
       "path": "README.md",

@@ -9,7 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const { createAssetCache } = require('./asset_cache');
 
-const DAEMON_VERSION = 2;
+const DAEMON_VERSION = 3;
 const DEFAULT_CONTROL_PORT = Number(process.env.PELICAN_TUNNEL_DAEMON_PORT) || 18989;
 
 function isJailOnlyBlockRecord(obj) {
@@ -294,7 +294,7 @@ function startDaemon() {
       const rawLeases = readJson(leasesFile, null);
       if (rawLeases && rawLeases.activeLeases && typeof rawLeases.activeLeases === 'object') {
         for (const [pid, l] of Object.entries(rawLeases.activeLeases)) {
-          if (pid && l && l.assigned && (l.proxyHost || l.ip)) {
+          if (pid && l && l.assigned && (l.proxyHost || l.ip || l.useHomeIp || l.directHomeIp)) {
             activeLeases.set(pid, l);
           }
         }
@@ -407,17 +407,20 @@ function startDaemon() {
         (!cachedSettings.onlyGameTraffic || isGameOrIpCheckHost(targetHost))
       );
       let lease = cachedSettings.enabled ? getLeaseForProfile(profileId) : null;
-      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+      if (requiresProxy && !(lease?.useHomeIp || lease?.directHomeIp) && (!lease?.assigned || isProxyBlocked(lease))) {
         reloadFromDisk();
         lease = activeLeases.get(profileId) || null;
       }
-      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+      const isDirectHome = Boolean(lease && (lease.useHomeIp || lease.directHomeIp));
+      if (requiresProxy && !isDirectHome && (!lease?.assigned || !lease?.proxyHost || isProxyBlocked(lease))) {
         res.writeHead(503, { 'Content-Type': 'text/plain; charset=utf-8' });
         return res.end('Proxy lease unavailable (Fail-Closed)');
       }
       const useProxy = Boolean(
         requiresProxy &&
+        !isDirectHome &&
         lease?.assigned &&
+        lease?.proxyHost &&
         !isProxyBlocked(lease)
       );
 
@@ -502,19 +505,22 @@ function startDaemon() {
         (!cachedSettings.onlyGameTraffic || isGameOrIpCheckHost(targetHost))
       );
       let lease = cachedSettings.enabled ? getLeaseForProfile(profileId) : null;
-      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
+      if (requiresProxy && !(lease?.useHomeIp || lease?.directHomeIp) && (!lease?.assigned || isProxyBlocked(lease))) {
         reloadFromDisk();
         lease = activeLeases.get(profileId) || null;
       }
-      if (requiresProxy && (!lease?.assigned || isProxyBlocked(lease))) {
-        // Fail-Closed: never fall back to Direct Home IP when Proxy Mode is ON
+      const isDirectHome = Boolean(lease && (lease.useHomeIp || lease.directHomeIp));
+      if (requiresProxy && !isDirectHome && (!lease?.assigned || !lease?.proxyHost || isProxyBlocked(lease))) {
+        // Fail-Closed: never fall back to Direct Home IP when Proxy Mode is ON (unless ring is explicitly Home IP)
         clientSocket.destroy();
         return;
       }
 
       const shouldRouteViaProxy = Boolean(
         requiresProxy &&
+        !isDirectHome &&
         lease?.assigned &&
+        lease?.proxyHost &&
         !isProxyBlocked(lease)
       );
 
@@ -636,7 +642,7 @@ function startDaemon() {
         activeLeases.clear();
       }
       for (const [pid, l] of Object.entries(body.leases)) {
-        if (pid && l && l.assigned && (l.proxyHost || l.ip)) {
+        if (pid && l && l.assigned && (l.proxyHost || l.ip || l.useHomeIp || l.directHomeIp)) {
           activeLeases.set(pid, l);
         } else if (pid && l === null) {
           activeLeases.delete(pid);

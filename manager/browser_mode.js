@@ -963,9 +963,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           profileIds: pids
         });
       }
+      const useHomeIp = Boolean(g.useHomeIp === true || g.ipMode === 'home');
       ipGroups.push({
         id: igId,
         name: igName,
+        useHomeIp,
         createdAt,
         deviceGroups
       });
@@ -1034,6 +1036,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         return {
           id: ig.id,
           name: ig.name,
+          useHomeIp: Boolean(ig.useHomeIp),
+          ipMode: ig.useHomeIp ? 'home' : 'proxy',
           createdAt: ig.createdAt,
           memberCount: igPids.length,
           shareCount: Math.max(1, igPids.length),
@@ -1063,11 +1067,14 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const entry = customMap.get(profileId);
     if (entry) {
       const spec = resolveDeviceSpec(entry.dg.deviceId, entry.dg.platform || 'pc');
+      const useHomeIp = Boolean(entry.ig.useHomeIp);
       return {
         isCustom: true,
+        useHomeIp,
+        ipMode: useHomeIp ? 'home' : 'proxy',
         ipGroupId: entry.ig.id,
         ipGroupName: entry.ig.name,
-        ipGroupKey: `custom:${entry.ig.id}`,
+        ipGroupKey: useHomeIp ? `home:${entry.ig.id}` : `custom:${entry.ig.id}`,
         deviceGroupId: entry.dg.id,
         deviceGroupName: entry.dg.name,
         platform: spec.platform,
@@ -1210,7 +1217,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
 
     if (action === 'add_ip_group') {
       const igId = `cig_${crypto.randomBytes(4).toString('hex')}`;
-      const name = String(payload.name || '').trim().slice(0, 64) || `วง IP พิเศษ #${cfg.ipGroups.length + 1}`;
+      const useHomeIp = Boolean(payload.useHomeIp === true || payload.ipMode === 'home');
+      const defaultTitle = useHomeIp
+        ? `วง IP บ้าน #${cfg.ipGroups.length + 1}`
+        : `วง IP พิเศษ #${cfg.ipGroups.length + 1}`;
+      const name = String(payload.name || '').trim().slice(0, 64) || defaultTitle;
       const dgCount = Math.max(1, Math.min(10, Math.floor(Number(payload.deviceGroupCount) || 1)));
       const defPlat = payload.platform ? normalizeDevicePlatform(payload.platform, 'pc') : (cfg.defaultPlatformMode === 'android' ? 'android' : 'pc');
       const deviceGroups = [];
@@ -1220,10 +1231,35 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
           : defPlat;
         deviceGroups.push(createCustomDeviceGroupEntry(`Device #${i + 1}`, plat));
       }
-      const ipGroup = { id: igId, name, createdAt: Date.now(), deviceGroups };
+      const ipGroup = { id: igId, name, useHomeIp, createdAt: Date.now(), deviceGroups };
       cfg.ipGroups.push(ipGroup);
       saveCustomIpDeviceConfig(cfg);
-      return { success: true, action, ipGroupId: igId, affectedProfileIds: [], customIpConfig: getCustomIpDeviceConfig() };
+      return { success: true, action, ipGroupId: igId, useHomeIp, affectedProfileIds: [], customIpConfig: getCustomIpDeviceConfig() };
+    }
+
+    if (action === 'set_ip_group_mode') {
+      const ig = cfg.ipGroups.find(x => x.id === payload.ipGroupId);
+      if (!ig) throw new Error('CUSTOM_IP_GROUP_NOT_FOUND');
+      const nextUseHomeIp = Boolean(payload.useHomeIp === true || payload.ipMode === 'home');
+      ig.useHomeIp = nextUseHomeIp;
+      if (nextUseHomeIp && /^วง IP พิเศษ #\d+$/.test(String(ig.name || '').trim())) {
+        ig.name = String(ig.name).replace(/^วง IP พิเศษ/, 'วง IP บ้าน');
+      } else if (!nextUseHomeIp && /^วง IP บ้าน #\d+$/.test(String(ig.name || '').trim())) {
+        ig.name = String(ig.name).replace(/^วง IP บ้าน/, 'วง IP พิเศษ');
+      }
+      for (const dg of (ig.deviceGroups || [])) {
+        for (const pid of (dg.profileIds || [])) affected.add(pid);
+      }
+      saveCustomIpDeviceConfig(cfg);
+      return {
+        success: true,
+        action,
+        ipGroupId: ig.id,
+        useHomeIp: ig.useHomeIp,
+        ipMode: ig.useHomeIp ? 'home' : 'proxy',
+        affectedProfileIds: [...affected],
+        customIpConfig: getCustomIpDeviceConfig()
+      };
     }
 
     if (action === 'rename_ip_group') {

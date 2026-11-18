@@ -851,11 +851,16 @@
         <div class="dv-custom-toolbar-top">
           <div>
             <div style="font-size:12.5px;font-weight:800;color:#fef3c7;">🎯 จัดการวงแยก IP / Device พิเศษรายจอ</div>
-            <div class="dv-custom-toolbar-desc">สร้างวงจอง Proxy IP เฉพาะกิจ แล้วเพิ่มหลายกลุ่ม Device ภายใน IP เดียวกันได้ (เช่น 1 IP แยก 2 Device จอละ 1 Device)</div>
+            <div class="dv-custom-toolbar-desc">สร้างวงจอง Proxy IP เฉพาะกิจ หรือวงใช้ <b>🏠 IP บ้าน (เน็ตบ้านปกติ)</b> แล้วเพิ่มหลายกลุ่ม Device ภายในวงเดียวกันได้อิสระ</div>
           </div>
-          <button type="button" class="dv-btn dv-btn-amber" id="dv-add-custom-ip-btn" ${customMutating ? 'disabled' : ''}>
-            ${customMutating ? '⏳ กำลังบันทึก...' : '+ เพิ่มวง IP พิเศษ (จอง 1 IP)'}
-          </button>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            <button type="button" class="dv-btn dv-btn-amber" id="dv-add-custom-ip-btn" ${customMutating ? 'disabled' : ''}>
+              ${customMutating ? '⏳ กำลังบันทึก...' : '+ เพิ่มวง IP พิเศษ (จอง 1 IP)'}
+            </button>
+            <button type="button" class="dv-btn dv-btn-emerald" id="dv-add-custom-home-ip-btn" style="border-color:rgba(52,211,153,0.55);" ${customMutating ? 'disabled' : ''} title="สร้างวงแยก Device โดยใช้เน็ตบ้านปกติ (ไม่ผ่าน Proxy และไม่คิดส่วนบุญเพิ่ม)">
+              ${customMutating ? '⏳ กำลังบันทึก...' : '🏠 + เพิ่มวงใช้ IP บ้าน'}
+            </button>
+          </div>
         </div>
       </div>
     `;
@@ -867,7 +872,7 @@
           <div class="dv-empty-icon">🎯</div>
           <div class="dv-empty-title">ยังไม่มีวงแยก IP / Device พิเศษ</div>
           <div class="dv-empty-sub">
-            กดปุ่ม <b>"+ เพิ่มวง IP พิเศษ (จอง 1 IP)"</b> ด้านบน เพื่อจอง Proxy IP แยกไว้สำหรับจอเฉพาะทาง<br>
+            กดปุ่ม <b>"+ เพิ่มวง IP พิเศษ (จอง 1 IP)"</b> หรือ <b>"🏠 + เพิ่มวงใช้ IP บ้าน"</b> ด้านบน<br>
             แล้วค่อยเพิ่มกลุ่ม Device ย่อย และกดเลือก Client ที่ต้องการได้เลย
           </div>
         </div>
@@ -875,17 +880,25 @@
     } else {
       groupsHtml = customGroups.map(ig => {
         const lease = leaseMap.get(ig.id) || null;
+        const isHomeIp = Boolean(ig.useHomeIp || ig.ipMode === 'home' || (lease && lease.useHomeIp));
         const devGroups = Array.isArray(ig.deviceGroups) ? ig.deviceGroups : [];
         const totalMembers = devGroups.reduce((sum, dg) => sum + (Array.isArray(dg.profileIds) ? dg.profileIds.length : 0), 0);
         const shareCount = Math.max(1, totalMembers);
-        const surchargePct = lease && Number.isFinite(Number(lease.surchargePct))
-          ? Number(lease.surchargePct)
-          : computeSurchargePctForShare(shareCount, true);
+        const surchargePct = isHomeIp
+          ? 0
+          : (lease && Number.isFinite(Number(lease.surchargePct))
+              ? Number(lease.surchargePct)
+              : computeSurchargePctForShare(shareCount, true));
 
-        const reservedIpText = lease && lease.assigned && (lease.ip || lease.proxyHost)
-          ? `🛡️ จอง IP: ${lease.ip || lease.proxyHost}${lease.proxyPort ? `:${lease.proxyPort}` : ''}`
-          : (lease && lease.error ? `⏳ ${lease.error}` : '⏳ รอเปิด Proxy / จองคิว IP');
-        const resClass = lease && lease.assigned && (lease.ip || lease.proxyHost) ? 'is-reserved' : 'is-waiting';
+        const reservedIpText = isHomeIp
+          ? '🏠 ใช้ IP บ้าน (เน็ตบ้านปกติ · ไม่ผ่าน Proxy)'
+          : (lease && lease.assigned && (lease.ip || lease.proxyHost)
+              ? `🛡️ จอง IP: ${lease.ip || lease.proxyHost}${lease.proxyPort ? `:${lease.proxyPort}` : ''}`
+              : (lease && lease.error ? `⏳ ${lease.error}` : '⏳ รอเปิด Proxy / จองคิว IP'));
+        const resClass = (isHomeIp || (lease && lease.assigned && (lease.ip || lease.proxyHost))) ? 'is-reserved' : 'is-waiting';
+        const rateText = isHomeIp
+          ? '🏠 เน็ตบ้าน +0% (ไม่ใช้ Proxy)'
+          : `💰 ${formatSurchargeTag(surchargePct, shareCount)}`;
 
         const isEditingIp = editingTitleState && editingTitleState.kind === 'ip' && editingTitleState.ipGroupId === ig.id;
         const isDeletingIp = pendingDeleteState && pendingDeleteState.kind === 'ip' && pendingDeleteState.ipGroupId === ig.id;
@@ -1035,22 +1048,26 @@
             }).join('');
 
         return `
-          <section class="dv-custom-ip-card">
+          <section class="dv-custom-ip-card" style="${isHomeIp ? 'border-color:rgba(52,211,153,0.45);' : ''}">
             <div class="dv-custom-ip-header">
               <div class="dv-custom-ip-row">
                 <div class="dv-custom-ip-name">
-                  <span>🎯 ${esc(ig.name)}</span>
+                  <span>${isHomeIp ? '🏠' : '🎯'} ${esc(ig.name)}</span>
                   <span class="dv-ip-screens-badge">${totalMembers} จอ · ${devGroups.length} Device</span>
                 </div>
-                <div class="dv-custom-ip-actions">
+                <div class="dv-custom-ip-actions" style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+                  <div class="dv-plat-toggle" title="เลือกโหมด IP ของวงนี้ (จอง Proxy IP หรือ ใช้ IP บ้าน)">
+                    <button type="button" class="dv-plat-btn ${!isHomeIp ? 'active is-pc' : ''}" data-set-ip-mode="${esc(ig.id)}:proxy" ${customMutating ? 'disabled' : ''}>🛡️ จอง Proxy IP</button>
+                    <button type="button" class="dv-plat-btn ${isHomeIp ? 'active is-android' : ''}" data-set-ip-mode="${esc(ig.id)}:home" ${customMutating ? 'disabled' : ''}>🏠 ใช้ IP บ้าน</button>
+                  </div>
                   <button type="button" class="dv-btn dv-btn-xs dv-btn-primary" data-add-custom-dg="${esc(ig.id)}" ${customMutating ? 'disabled' : ''}>+ เพิ่มกลุ่ม Device</button>
                   <button type="button" class="dv-btn dv-btn-xs" data-rename-ip="${esc(ig.id)}" title="เปลี่ยนชื่อวง IP พิเศษ">✏️</button>
                   <button type="button" class="dv-btn dv-btn-xs dv-btn-danger-soft" data-ask-del-ip="${esc(ig.id)}" title="ลบวง IP พิเศษ">🗑️</button>
                 </div>
               </div>
               <div class="dv-custom-ip-row">
-                <span class="dv-custom-res-pill ${resClass}">${esc(reservedIpText)}</span>
-                <span class="dv-custom-rate-pill">💰 ${esc(formatSurchargeTag(surchargePct, shareCount))}</span>
+                <span class="dv-custom-res-pill ${resClass}" style="${isHomeIp ? 'background:rgba(16,185,129,0.18);color:#6ee7b7;border-color:rgba(52,211,153,0.45);' : ''}">${esc(reservedIpText)}</span>
+                <span class="dv-custom-rate-pill" style="${isHomeIp ? 'background:rgba(16,185,129,0.14);color:#a7f3d0;border-color:rgba(52,211,153,0.35);' : ''}">${esc(rateText)}</span>
               </div>
               ${editIpBar}
               ${deleteIpBar}
@@ -1065,7 +1082,28 @@
     bodyEl.innerHTML = fullHtml;
 
     document.getElementById('dv-add-custom-ip-btn')?.addEventListener('click', () => {
-      mutateCustomApi({ action: 'add_ip_group' }, '🎯 สร้างวง IP พิเศษ + จองคิว IP สำเร็จแล้ว');
+      mutateCustomApi({ action: 'add_ip_group', useHomeIp: false }, '🎯 สร้างวง IP พิเศษ + จองคิว IP สำเร็จแล้ว');
+    });
+
+    document.getElementById('dv-add-custom-home-ip-btn')?.addEventListener('click', () => {
+      mutateCustomApi({ action: 'add_ip_group', useHomeIp: true }, '🏠 สร้างวงแยก Device ใช้ IP บ้านสำเร็จแล้ว');
+    });
+
+    bodyEl.querySelectorAll('[data-set-ip-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const [ipGroupId, mode] = String(btn.getAttribute('data-set-ip-mode') || '').split(':');
+        if (!ipGroupId || !mode) return;
+        const wantHome = mode === 'home';
+        const ig = customGroups.find(x => x.id === ipGroupId);
+        const curHome = Boolean(ig && (ig.useHomeIp || ig.ipMode === 'home'));
+        if (curHome === wantHome) return;
+        mutateCustomApi(
+          { action: 'set_ip_group_mode', ipGroupId, useHomeIp: wantHome },
+          wantHome
+            ? '🏠 สลับวงนี้เป็น "ใช้ IP บ้าน (เน็ตบ้านปกติ)" แล้ว (คืน Proxy IP ให้คิวเรียบร้อย)'
+            : '🛡️ สลับวงนี้เป็น "จอง Proxy IP" แล้ว'
+        );
+      });
     });
 
     bodyEl.querySelectorAll('[data-add-custom-dg]').forEach(btn => {

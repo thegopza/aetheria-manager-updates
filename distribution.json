@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "cb82dbc8036d1f397bbb55331e6a1069c31b4b35",
+  "sourceCommit": "7b2a69b8f3df3b634e448651cee5cbac375f868e",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "ffd801a1c97ac55fd2ae6bebfcb1dd68e75096af609c56a5bb98c717102c9571"
+      "sha256": "411c8599072bb2146897f8a2260bbba493f25f491dbedbe7f0f21a0ab263634b"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -128,7 +128,7 @@
     },
     {
       "path": "manager/proxy_tunnel_daemon.js",
-      "sha256": "84626d7904a5db540ecceea81cedc79dc2ec8966848a91bf2590f28dddaa8eff"
+      "sha256": "6c08b4ff79f780082e477fa45dcbb4b7e9219761f66a8146d042d404762d2d9e"
     },
     {
       "path": "manager/public/app.js",
@@ -164,7 +164,7 @@
     },
     {
       "path": "manager/public/device_manager.js",
-      "sha256": "606e205fba5956b476d3c0821a891b6aa7c4f5cb6417ade1404a999249398ca7"
+      "sha256": "c6e8ecd28e711c8b15495c189d46c166bb7f66091be6649b1886debdb1167862"
     },
     {
       "path": "manager/public/fleet_dashboard.css",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "22df29ccccf588846533fb4efffd9f8d462af1715a5cef8f9fc1ae3834761f6e"
+      "sha256": "d5c98cb8b49a5437eef7f34ccb8c5608a8025c6443bdfce1f647d9268a178a58"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -276,7 +276,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "6f49e98c26d0e5762c653e2780e17304dcd4443c0c3e1946d63cf727483ecca4"
+      "sha256": "53d19a9626684eb4d0ddafb789390f26b64730239be54b377e6c109686f234be"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -284,7 +284,7 @@
     },
     {
       "path": "manager/screen_proxy_manager.js",
-      "sha256": "0b8cc5893ba92abd8c76e16f292e550c5cb1b473615b0f5449dd18e272f4ff27"
+      "sha256": "75f20cf323dd3cbbe65f06298837267204e9ff597336cc85768926e9d21efd42"
     },
     {
       "path": "manager/script_bootstrap.js",

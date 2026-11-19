@@ -11201,8 +11201,13 @@ if (formCount) ["input", "change"].forEach(ev => {
   formPort.addEventListener(ev, refreshCountUi);
 });
 
+let formForceAutoRegister = false;
+
 function openAddModal() {
   formId.value = "";
+  formForceAutoRegister = false;
+  const resetRow = document.getElementById("form-reset-autoreg-row");
+  if (resetRow) resetRow.style.display = "none";
   if (formCount) formCount.value = 1;
   formName.value = `Client ${currentProfiles.length + 1}`;
   formAccount.value = "";
@@ -11221,6 +11226,9 @@ function openEditModal(id) {
   const profile = currentProfiles.find(p => p.id === id);
   if (!profile) return;
   formId.value = profile.id;
+  formForceAutoRegister = false;
+  const resetRow = document.getElementById("form-reset-autoreg-row");
+  if (resetRow) resetRow.style.display = "";
   formName.value = profile.name;
   formAccount.value = profile.account || "";
   formClass.value = profile.charClass || "Hunter";
@@ -11229,12 +11237,24 @@ function openEditModal(id) {
   formNotes.value = profile.notes || "";
   if (formPassword) {
     formPassword.value = "";
-    formPassword.placeholder = profile.hasLoginPassword ? "•••••• (มีรหัสแล้ว — เว้นว่าง = ไม่เปลี่ยน)" : (profile.autoRegister ? "กำลังรอสมัครบัญชีอัตโนมัติ" : "ใส่รหัสผ่านเพื่อเปิด Auto-login");
+    formPassword.placeholder = profile.hasLoginPassword ? "•••••• (มีรหัสแล้ว — เว้นว่าง = ไม่เปลี่ยน / ลบ ID เพื่อสมัครใหม่)" : (profile.autoRegister ? "กำลังรอสมัครบัญชีอัตโนมัติ" : "เว้นว่าง = สมัครบัญชีใหม่ให้");
   }
   modalTitle.innerText = `⚙️ แก้ไขโปรไฟล์: ${profile.name}`;
   refreshCountUi();
   modalEl.classList.add("active");
 }
+
+document.getElementById("btn-form-reset-autoreg")?.addEventListener("click", () => {
+  formForceAutoRegister = true;
+  if (formAccount) formAccount.value = "";
+  if (formPassword) {
+    formPassword.value = "";
+    formPassword.placeholder = "📝 จะสุ่มสมัครบัญชีใหม่ให้อัตโนมัติเมื่อกดบันทึก";
+  }
+  if (typeof showToast === "function") {
+    showToast("📝 ตั้งค่าให้สมัครบัญชีใหม่แล้ว — กด 'บันทึกโปรไฟล์' ได้เลย", "info");
+  }
+});
 
 document.getElementById("modal-close-btn").onclick = () => {
   modalEl.classList.remove("active");
@@ -11243,14 +11263,18 @@ document.getElementById("modal-close-btn").onclick = () => {
 profileForm.onsubmit = async (e) => {
   e.preventDefault();
   const id = formId.value;
+  const acctVal = (formAccount.value || "").trim();
+  const passVal = formPassword ? (formPassword.value || "").trim() : "";
+  const shouldAutoReg = Boolean(formForceAutoRegister || (!acctVal && !passVal));
   const payload = {
     name: formName.value,
-    account: formAccount.value,
+    account: acctVal,
     charClass: formClass.value,
     targetMap: formMap.value,
     debugPort: parseInt(formPort.value),
     notes: formNotes.value,
-    loginPassword: formPassword ? formPassword.value : ""
+    loginPassword: passVal,
+    ...(shouldAutoReg ? { autoRegister: true } : {})
   };
 
   try {

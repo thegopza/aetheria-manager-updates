@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "55a7434be8bc151b10befe1ccb1e7650abdb0236",
+  "sourceCommit": "b59274097b98884353d3cff32037e59b216a1ef6",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -8,7 +8,7 @@
     },
     {
       "path": "manager/auth_sync.js",
-      "sha256": "b1657a20d03030dca48d4605e1d06e0b1a7deef0182ff7b1bf9167ab1358c183"
+      "sha256": "f5f84ba05e96eda380178f767cb33752812e17782c7849b786fef5ee4f7872df"
     },
     {
       "path": "manager/bot_auto_update.js",
@@ -132,7 +132,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "6109b274221a29825b87360049b4bd33a9f713fee41d2840f3f084893a7321f7"
+      "sha256": "9151e1305c6dcbe7f3868ce6e5d0184394cc9c764cd313e3e771aa0baaf5c03e"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "8688575d4baf4e80912eee67880f4d909e66239b66a9ccbdd657a84777a9ad4d"
+      "sha256": "73763ed538ad52b3c87095f8af2a5b7d36cf381732e96156bf3b6c8042976890"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -276,7 +276,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "7b925efb60f32c88bf7b1e6a8f600c86eef886b16d09062bcae66c367b9c03b8"
+      "sha256": "279d8720e7b7392b1ac3a73a762814b3598c76172a11fbed2c32a4c6f8b9572e"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -284,7 +284,7 @@
     },
     {
       "path": "manager/screen_proxy_manager.js",
-      "sha256": "75f20cf323dd3cbbe65f06298837267204e9ff597336cc85768926e9d21efd42"
+      "sha256": "2c4000ba529711de919580b33ff6fe701e43589f6ae47e9a4c5855b820927b9e"
     },
     {
       "path": "manager/script_bootstrap.js",
@@ -308,7 +308,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "2a762a7778dadc1d18a90ac86ad4e9f7902a56a184df12d571c6163cbb9d4a59"
+      "sha256": "cb8d08cf75bbf2d43d4584a726289dac1aa2f0905a3819fd9ba0e4282c631258"
     },
     {
       "path": "manager/test_isolation.js",

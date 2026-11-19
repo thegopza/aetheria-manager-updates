@@ -378,6 +378,14 @@ const pushJs = cfg => `(() => {
       (typeof activeEl.closest === 'function' && activeEl.closest('form.login-form'))
     )
   );
+  if (patch.forceResetAuth) {
+    delete patch.forceResetAuth;
+    c.userEditedAt = 0;
+    c.verifiedLoginAt = 0;
+    c.registerError = '';
+    c.registerDone = false;
+    try { if (window.sessionStorage) window.sessionStorage.removeItem('aetheria.session'); } catch (_) {}
+  }
   const hasManualUserCreds = Boolean(
     c.username && c.password && !c.generatedUser && !c.register &&
     (Number(c.userEditedAt) > 0 || Number(c.verifiedLoginAt) > 0)
@@ -813,11 +821,13 @@ function createAuthSync({
     );
     const manualUserEditedAt = Number(cur.userEditedAt) || 0;
     const lastManagerPushAt = Number(profile.lastAuthSyncPushAt) || 0;
+    const identityChangedAt = Number(profile.identityChangedAt) || 0;
+    const staleClientCredsAfterReset = Boolean(profile.autoRegister && identityChangedAt > 0 && manualUserEditedAt <= identityChangedAt);
     const hasClientCreds = Boolean(cur.username && cur.password && !cur.register && !cur.registerError);
     const managerMissingCreds = !profile.account || !pw(profile);
     const isSameGeneratedAccount = Boolean(profile.generatedAccount && profile.account && cur.username === profile.account);
     const isCompletedBotSignup = Boolean(profile.autoRegister && cur.registerDone && cur.generatedUser);
-    const shouldAdoptFromClient = hasClientCreds && !isCompletedBotSignup && !isSameGeneratedAccount && !ownedByOtherProfile && (
+    const shouldAdoptFromClient = !staleClientCredsAfterReset && hasClientCreds && !isCompletedBotSignup && !isSameGeneratedAccount && !ownedByOtherProfile && (
       (manualUserEditedAt > 0 && manualUserEditedAt > lastManagerPushAt) ||
       managerMissingCreds ||
       (!cur.generatedUser && (profile.autoRegister || profile.generatedAccount))
@@ -848,8 +858,8 @@ function createAuthSync({
     }
 
     if (profile.autoRegister) {
-      // NEVER auto-register over a profile that already has a character or manual credentials in HUD!
-      if (cur.username && cur.password && !cur.register && !cur.registerError && !cur.generatedUser && !isSameGeneratedAccount && !ownedByOtherProfile) {
+      // NEVER auto-register over a profile that already has a character or manual credentials in HUD (unless profile was explicitly reset to auto-register)!
+      if (!staleClientCredsAfterReset && cur.username && cur.password && !cur.register && !cur.registerError && !cur.generatedUser && !isSameGeneratedAccount && !ownedByOtherProfile) {
         if (cur.registerQueueWaiting) {
           await evalProfilePort(profile.debugPort, pushQueueOverlayJs(null), 2000);
           lastPushedQueueDigest.delete(profile.id);
@@ -868,7 +878,7 @@ function createAuthSync({
         console.log(`[AuthSync] 🔄 ${profile.name}: พบไอดี/รหัสเดิมในหน้าเกม ("${cur.username}") -> บันทึกเข้าโปรไฟล์โดยไม่สร้างไอดีบอททับ`);
         return;
       }
-      if (profile.lastCharName || ((cur.inGame || cur.charName) && !cur.registerDone)) {
+      if (profile.lastCharName || (!staleClientCredsAfterReset && (cur.inGame || cur.charName) && !cur.registerDone)) {
         if (cur.registerQueueWaiting) {
           await evalProfilePort(profile.debugPort, pushQueueOverlayJs(null), 2000);
           lastPushedQueueDigest.delete(profile.id);
@@ -950,7 +960,8 @@ function createAuthSync({
       const cred = getCandidateCreds(profile);
       const pushRes = await evalProfilePort(profile.debugPort, pushJs({
         enabled: true, autoResumeBot: true, username: cred.username, password: cred.password,
-        register: true, registerDone: false, autoCreateChar: true, generatedUser: !!cred.generatedUser
+        register: true, registerDone: false, autoCreateChar: true, generatedUser: !!cred.generatedUser,
+        ...(identityChangedAt > 0 ? { forceResetAuth: true } : {})
       }), 3000);
       if (pushRes?.success && pushRes.result?.abortedByUserCreds && pushRes.result.username && pushRes.result.password) {
         credentials.setPassword(profile.id, pushRes.result.password);
@@ -1027,6 +1038,20 @@ function createAuthSync({
     }
   }
 
+  function resetProfileRegistration(profileId) {
+    if (!profileId) return;
+    pendingCreds.delete(profileId);
+    lastPushedQueueDigest.delete(profileId);
+    waveState.admitted.delete(profileId);
+    const qIdx = waveState.queueOrder.indexOf(profileId);
+    if (qIdx !== -1) waveState.queueOrder.splice(qIdx, 1);
+    const timer = scheduledReadyTimers.get(profileId);
+    if (timer) {
+      clearTimeout(timer);
+      scheduledReadyTimers.delete(profileId);
+    }
+  }
+
   function start() {
     if (proxyRegister?.isEnabled?.()) {
       try { resetProxyFallback(); } catch (_) {}
@@ -1034,7 +1059,7 @@ function createAuthSync({
     setTimeout(() => { tick(); setInterval(tick, SYNC_MS); }, 8000);
   }
 
-  return { start, tick, syncOne, resetProxyFallback, getRegisterQueueSnapshot };
+  return { start, tick, syncOne, resetProxyFallback, resetProfileRegistration, getRegisterQueueSnapshot };
 }
 
 module.exports = { createAuthSync, genUserId, genPassword };

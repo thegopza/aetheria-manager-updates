@@ -2222,14 +2222,26 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     if (settings.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
       try {
         const excludedFilters = getExcludedProxyFilters();
-        const res = await solver.serviceRequest('/v1/aetheria/proxy/screen-lease', {
-          machineId: getMachineId(),
-          maxScreensPerIp: settings.maxScreensPerIp,
-          customIpGroups: proxyCustomIpGroups,
-          profiles: reqProfiles,
-          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined,
-          ...excludedFilters
-        });
+        let res = null;
+        let lastErr = null;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          try {
+            res = await solver.serviceRequest('/v1/aetheria/proxy/screen-lease', {
+              machineId: getMachineId(),
+              maxScreensPerIp: settings.maxScreensPerIp,
+              customIpGroups: proxyCustomIpGroups,
+              profiles: reqProfiles,
+              validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined,
+              ...excludedFilters
+            });
+            lastErr = null;
+            break;
+          } catch (err) {
+            lastErr = err;
+            if (attempt === 0) await new Promise(r => setTimeout(r, 700));
+          }
+        }
+        if (lastErr) throw lastErr;
         if (res?.success) ingestServerCustomMeta(res);
         if (res?.success && Array.isArray(res.leases)) {
           const validLeases = res.leases.filter(l => !l.assigned || !isProxyBlocked(l));

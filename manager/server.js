@@ -8598,9 +8598,11 @@ const server = http.createServer(async (req, res) => {
                 );
                 const manualUserEditedAt = Number(ca.userEditedAt) || 0;
                 const lastManagerPushAt = Number(p.lastAuthSyncPushAt) || 0;
+                const identityChangedAt = Number(p.identityChangedAt) || 0;
+                const staleClientCredsAfterReset = Boolean(p.autoRegister && identityChangedAt > 0 && manualUserEditedAt <= identityChangedAt);
                 const managerMissingCreds = !p.account || !curProfPass;
                 const isSameGeneratedAccount = Boolean(p.generatedAccount && p.account && cUser === p.account);
-                const shouldAdopt = !isSameGeneratedAccount && !ownedByOtherProfile && (
+                const shouldAdopt = !staleClientCredsAfterReset && !isSameGeneratedAccount && !ownedByOtherProfile && (
                   (manualUserEditedAt > 0 && manualUserEditedAt > lastManagerPushAt) ||
                   managerMissingCreds ||
                   (!ca.generatedUser && (p.autoRegister || p.generatedAccount))
@@ -9405,16 +9407,14 @@ const server = http.createServer(async (req, res) => {
         const nextAccount = data.account !== undefined ? data.account.trim() : (profiles[idx].account || "");
         const nextPassword = (data.loginPassword || "").trim();
         const existingPassword = credentials.getPassword(id) || "";
-        const hasExistingCharacter = Boolean(profiles[idx].lastCharName && String(profiles[idx].lastCharName).trim());
         const accountChanged = data.account !== undefined && nextAccount !== (profiles[idx].account || "");
         const wantsNewAutoRegister = data.autoRegister === true || (
           data.autoRegister !== false &&
           !nextPassword &&
-          !existingPassword &&
-          !hasExistingCharacter &&
-          data.account !== undefined &&
-          nextAccount === "" &&
-          accountChanged
+          data.account !== undefined && (
+            nextAccount === "" ||
+            (accountChanged && !existingPassword)
+          )
         );
         const changesIdentity = accountChanged || !!nextPassword || wantsNewAutoRegister;
         const wasJailedOrBanned = Boolean(profiles[idx].isJailed || profiles[idx].isBanned);
@@ -9427,9 +9427,9 @@ const server = http.createServer(async (req, res) => {
         profiles[idx] = {
           ...profiles[idx],
           name: data.name !== undefined ? data.name.trim() : profiles[idx].name,
-          account: nextAccount,
+          account: wantsNewAutoRegister && data.autoRegister === true && !accountChanged ? "" : nextAccount,
           autoRegister: nextAutoRegister,
-          ...(wantsNewAutoRegister ? { generatedAccount: false, registerError: "", proxyFallbackBrowser: undefined, proxyRegistrationState: undefined } : {}),
+          ...(wantsNewAutoRegister ? { generatedAccount: false, registerError: "", loginSyncPending: false, proxyFallbackBrowser: undefined, proxyRegistrationState: undefined } : {}),
           charClass: data.charClass || profiles[idx].charClass,
           targetMap: data.targetMap || profiles[idx].targetMap,
           debugPort: data.debugPort || profiles[idx].debugPort,
@@ -9440,7 +9440,42 @@ const server = http.createServer(async (req, res) => {
         if (wantsNewAutoRegister) {
           delete profiles[idx].proxyFallbackBrowser;
           delete profiles[idx].proxyRegistrationState;
+          delete profiles[idx].registeredAt;
+          delete profiles[idx].loginSyncPending;
           credentials.setPassword(id, "");
+          if (typeof authSync?.resetProfileRegistration === "function") {
+            authSync.resetProfileRegistration(id);
+          }
+          try {
+            const bsFile = path.join(SESSIONS_DIR, "_browser_storage", `${id}.json`);
+            if (fs.existsSync(bsFile)) {
+              const bsData = JSON.parse(fs.readFileSync(bsFile, "utf8")) || {};
+              delete bsData["__ss:aetheria.session"];
+              delete bsData["pelican_auth_cfg"];
+              delete bsData[`pelican_${id}__auth_cfg`];
+              writeJsonAtomic(bsFile, bsData);
+            }
+          } catch (_) {}
+          if (profiles[idx].debugPort) {
+            evalProfilePort(profiles[idx].debugPort, `(() => {
+              try {
+                if (window.sessionStorage) window.sessionStorage.removeItem('aetheria.session');
+                localStorage.removeItem('pelican_auth_cfg');
+              } catch (_) {}
+              if (window.__authConfig) {
+                window.__authConfig.username = '';
+                window.__authConfig.password = '';
+                window.__authConfig.charName = '';
+                window.__authConfig.register = false;
+                window.__authConfig.registerDone = false;
+                window.__authConfig.registerError = '';
+                window.__authConfig.generatedUser = true;
+                window.__authConfig.userEditedAt = 0;
+                window.__authConfig.verifiedLoginAt = 0;
+              }
+              return { success: true };
+            })()`, 2500).catch(() => {});
+          }
         }
         if (changesIdentity) {
           delete profiles[idx].isBanned;

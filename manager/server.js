@@ -9366,25 +9366,52 @@ const server = http.createServer(async (req, res) => {
     return fs.createReadStream(file).pipe(res);
   }
 
-  // GET /api/profiles/export-credentials-txt (Download all profiles' ID/Password as a human-readable .txt file)
+  // GET /api/profiles/export-credentials-txt (Download all or jailed profiles' ID/Password as a human-readable .txt file)
   if (req.method === "GET" && pathname === "/api/profiles/export-credentials-txt") {
-    const profiles = loadProfiles() || [];
+    const allProfiles = (loadProfiles() || []).filter(p => p && p.id);
+    const mode = String(parsedUrl.searchParams.get("mode") || "all").trim().toLowerCase();
+    const rawIdsParam = String(parsedUrl.searchParams.get("ids") || "").trim();
+    const explicitIdSet = new Set(rawIdsParam ? rawIdsParam.split(",").map(s => s.trim()).filter(Boolean) : []);
+
+    const getLiveForExport = (p) => {
+      const cached = p.debugPort ? clientStateCacheByPort.get(p.debugPort) : null;
+      return (cached && cached.state) || p.liveState || null;
+    };
+    const isProfileJailedForExport = (p) => {
+      if (!p) return false;
+      if (explicitIdSet.has(String(p.id))) return true;
+      if (p.isJailed) return true;
+      if (isJailMapName(p.jailedMap)) return true;
+      const live = getLiveForExport(p);
+      if (live && (live.charSelectInJail || isJailMapName(live.map))) return true;
+      return false;
+    };
+
+    const isJailedOnly = mode === "jailed";
+    const profiles = isJailedOnly ? allProfiles.filter(isProfileJailedForExport) : allProfiles;
     const deviceName = getEffectiveDeviceNickname() || os.hostname() || "PC";
     const nowStr = new Date().toLocaleString("th-TH", { timeZone: "Asia/Bangkok" });
+    const titleLabel = isJailedOnly
+      ? `📋 รายการไอดีและรหัสผ่านบอท (เฉพาะตัวที่ติดคุก) PmheeAether — เครื่อง: ${deviceName}`
+      : `📋 รายการไอดีและรหัสผ่านบอท PmheeAether — เครื่อง: ${deviceName}`;
+    const countLabel = isJailedOnly
+      ? `📅 ส่งออกเมื่อ: ${nowStr} (เฉพาะตัวที่ติดคุก ${profiles.length} / ทั้งหมด ${allProfiles.length} โปรไฟล์)`
+      : `📅 ส่งออกเมื่อ: ${nowStr} (ทั้งหมด ${profiles.length} โปรไฟล์)`;
     const lines = [
       "================================================================================",
-      `📋 รายการไอดีและรหัสผ่านบอท PmheeAether — เครื่อง: ${deviceName}`,
-      `📅 ส่งออกเมื่อ: ${nowStr} (ทั้งหมด ${profiles.length} โปรไฟล์)`,
+      titleLabel,
+      countLabel,
       "================================================================================",
       "ลำดับ | ชื่อโปรไฟล์ | ตัวละคร | อาชีพ | พอร์ต | ID (Username) | Password",
       "--------------------------------------------------------------------------------"
     ];
     profiles.forEach((p, idx) => {
       if (!p || !p.id) return;
+      const live = getLiveForExport(p);
       const num = String(idx + 1).padStart(2, "0");
       const name = String(p.name || p.id).trim();
-      const charName = String((p.liveState && p.liveState.charName) || p.lastCharName || "-").trim();
-      const cls = String((p.liveState && p.liveState.charClass) || p.charClass || "-").trim();
+      const charName = String((live && live.charName) || p.lastCharName || "-").trim();
+      const cls = String((live && live.charClass) || p.lastCharClass || p.charClass || "-").trim();
       const port = p.debugPort || "-";
       const user = String(p.account || p.username || "").trim() || "(ยังไม่มี ID)";
       const pass = String(credentials.getPassword(p.id) || "").trim() || "(ยังไม่มีรหัส)";
@@ -9395,9 +9422,10 @@ const server = http.createServer(async (req, res) => {
     lines.push("=== รูปแบบย่อ (ID:Password) สำหรับคัดลอกใช้งาน ===");
     profiles.forEach((p) => {
       if (!p || !p.id) return;
+      const live = getLiveForExport(p);
       const user = String(p.account || p.username || "").trim();
       const pass = String(credentials.getPassword(p.id) || "").trim();
-      const charName = String((p.liveState && p.liveState.charName) || p.lastCharName || p.name || p.id).trim();
+      const charName = String((live && live.charName) || p.lastCharName || p.name || p.id).trim();
       if (user || pass) {
         lines.push(`${user}:${pass}   # ${p.name || p.id} (${charName})`);
       }
@@ -9405,7 +9433,9 @@ const server = http.createServer(async (req, res) => {
     lines.push("");
     const safeDev = String(deviceName).replace(/[^a-zA-Z0-9ก-๙_-]/g, "_") || "PC";
     const dateTag = new Date().toISOString().slice(0, 10);
-    const filename = `PmheeAether_ID_Pass_${safeDev}_${dateTag}.txt`;
+    const filename = isJailedOnly
+      ? `PmheeAether_ID_Pass_JAILED_${safeDev}_${dateTag}.txt`
+      : `PmheeAether_ID_Pass_${safeDev}_${dateTag}.txt`;
     res.writeHead(200, {
       "Content-Type": "text/plain; charset=utf-8",
       "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`

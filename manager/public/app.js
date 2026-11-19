@@ -12111,8 +12111,134 @@ function exportAllPresets() {
   window.location.href = `${API_BASE}/api/presets/export`;
 }
 
+function isProfileJailedForCredExport(p) {
+  if (!p) return false;
+  if (p.isJailed) return true;
+  const checkMap = (m) => {
+    const s = String(m || '').trim();
+    if (!s || /คุกใต้ดิน/i.test(s)) return false;
+    return /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(s);
+  };
+  if (checkMap(p.jailedMap)) return true;
+  const st = p.liveState;
+  if (st && (st.charSelectInJail || checkMap(st.map))) return true;
+  return false;
+}
+
+function downloadCredentialsTxtFile(mode = 'all', jailedIds = []) {
+  const params = new URLSearchParams();
+  params.set('mode', mode);
+  if (mode === 'jailed' && Array.isArray(jailedIds) && jailedIds.length > 0) {
+    params.set('ids', jailedIds.join(','));
+  }
+  window.location.href = `${API_BASE}/api/profiles/export-credentials-txt?${params.toString()}`;
+}
+
+function closeExportCredentialsModal() {
+  const modal = document.getElementById('modal-export-credentials-choice');
+  if (modal) modal.style.display = 'none';
+}
+
 function exportCredentialsTxt() {
-  window.location.href = `${API_BASE}/api/profiles/export-credentials-txt`;
+  let modal = document.getElementById('modal-export-credentials-choice');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'modal-export-credentials-choice';
+    modal.style.cssText = 'display:none;position:fixed;inset:0;z-index:10000005;background:rgba(2,6,23,0.82);backdrop-filter:blur(6px);align-items:center;justify-content:center;padding:18px;';
+    modal.innerHTML = `
+      <div style="width:100%;max-width:480px;background:linear-gradient(155deg,#0f172a 0%,#131c31 100%);border:1px solid rgba(52,211,153,0.45);border-radius:16px;padding:20px 22px;box-shadow:0 26px 64px rgba(0,0,0,0.88),0 0 32px rgba(16,185,129,0.16);color:#f8fafc;display:flex;flex-direction:column;gap:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,0.08);">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:36px;height:36px;border-radius:10px;background:rgba(16,185,129,0.18);border:1px solid rgba(52,211,153,0.45);display:flex;align-items:center;justify-content:center;font-size:18px;">🔑</div>
+            <div>
+              <div style="font-size:15.5px;font-weight:800;color:#f8fafc;">เลือกรูปแบบ Export รหัส (.txt)</div>
+              <div style="font-size:11.5px;color:#94a3b8;margin-top:1px;">เลือกว่าต้องการส่งออกไอดี/รหัสผ่านทั้งหมด หรือเฉพาะตัวที่ติดคุก</div>
+            </div>
+          </div>
+          <button type="button" id="btn-exp-cred-close" style="background:transparent;border:none;color:#94a3b8;font-size:18px;cursor:pointer;padding:4px 8px;">✕</button>
+        </div>
+
+        <div style="display:grid;gap:10px;">
+          <button type="button" id="btn-exp-cred-all" style="text-align:left;padding:13px 15px;border-radius:12px;background:rgba(16,185,129,0.13);border:1px solid rgba(52,211,153,0.45);color:#f8fafc;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:inherit;transition:all 0.15s ease;">
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:0;">
+              <div style="font-size:14px;font-weight:800;color:#6ee7b7;display:flex;align-items:center;gap:7px;">
+                <span>📋 Export รหัสทั้งหมด</span>
+              </div>
+              <div style="font-size:11.5px;color:#cbd5e1;">ส่งออกรายการ ID / Password ของทุกโปรไฟล์ในเครื่องนี้ทั้งหมด</div>
+            </div>
+            <span id="badge-exp-cred-all" style="flex-shrink:0;padding:4px 11px;border-radius:999px;background:rgba(16,185,129,0.24);border:1px solid rgba(52,211,153,0.5);color:#a7f3d0;font-size:12px;font-weight:800;">0 จอ</span>
+          </button>
+
+          <button type="button" id="btn-exp-cred-jailed" style="text-align:left;padding:13px 15px;border-radius:12px;background:rgba(245,158,11,0.12);border:1px solid rgba(251,191,36,0.45);color:#f8fafc;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;font-family:inherit;transition:all 0.15s ease;">
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:0;">
+              <div style="font-size:14px;font-weight:800;color:#fde047;display:flex;align-items:center;gap:7px;">
+                <span>⛓️ Export เฉพาะตัวที่ติดคุก</span>
+              </div>
+              <div id="desc-exp-cred-jailed" style="font-size:11.5px;color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">ส่งออกเฉพาะรายการ ID / Password ของตัวละครที่ติดคุก</div>
+            </div>
+            <span id="badge-exp-cred-jailed" style="flex-shrink:0;padding:4px 11px;border-radius:999px;background:rgba(245,158,11,0.22);border:1px solid rgba(251,191,36,0.55);color:#fef08a;font-size:12px;font-weight:800;">0 จอ</span>
+          </button>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;padding-top:4px;">
+          <button type="button" id="btn-exp-cred-cancel" class="btn btn-secondary btn-sm" style="font-size:12px;padding:6px 16px;">ยกเลิก</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeExportCredentialsModal();
+    });
+    document.getElementById('btn-exp-cred-close').onclick = closeExportCredentialsModal;
+    document.getElementById('btn-exp-cred-cancel').onclick = closeExportCredentialsModal;
+  }
+
+  const list = Array.isArray(currentProfiles) ? currentProfiles : [];
+  const jailedList = list.filter(isProfileJailedForCredExport);
+  const jailedIds = jailedList.map(p => String(p.id));
+
+  const badgeAll = document.getElementById('badge-exp-cred-all');
+  const badgeJailed = document.getElementById('badge-exp-cred-jailed');
+  const descJailed = document.getElementById('desc-exp-cred-jailed');
+  const btnAll = document.getElementById('btn-exp-cred-all');
+  const btnJailed = document.getElementById('btn-exp-cred-jailed');
+
+  if (badgeAll) badgeAll.textContent = `${list.length} จอ`;
+  if (badgeJailed) {
+    badgeJailed.textContent = `${jailedList.length} จอ`;
+    badgeJailed.style.background = jailedList.length > 0 ? 'rgba(239,68,68,0.24)' : 'rgba(148,163,184,0.16)';
+    badgeJailed.style.borderColor = jailedList.length > 0 ? 'rgba(248,113,113,0.6)' : 'rgba(148,163,184,0.3)';
+    badgeJailed.style.color = jailedList.length > 0 ? '#fecaca' : '#94a3b8';
+  }
+  if (descJailed) {
+    if (jailedList.length > 0) {
+      const names = jailedList.slice(0, 4).map(p => (p.liveState && p.liveState.charName) || p.lastCharName || p.account || p.name).join(', ');
+      descJailed.textContent = `พบตัวติดคุก: ${names}${jailedList.length > 4 ? ` และอีก ${jailedList.length - 4} จอ` : ''}`;
+      descJailed.style.color = '#fde68a';
+    } else {
+      descJailed.textContent = 'ขณะนี้ไม่มีตัวละครที่ติดคุกในระบบ';
+      descJailed.style.color = '#94a3b8';
+    }
+  }
+  if (btnJailed) {
+    btnJailed.style.opacity = jailedList.length > 0 ? '1' : '0.55';
+    btnJailed.style.borderColor = jailedList.length > 0 ? 'rgba(248,113,113,0.55)' : 'rgba(148,163,184,0.25)';
+  }
+
+  btnAll.onclick = () => {
+    closeExportCredentialsModal();
+    downloadCredentialsTxtFile('all');
+  };
+  btnJailed.onclick = () => {
+    if (jailedList.length === 0) {
+      alert('ขณะนี้ไม่มีตัวละครที่ติดคุกในระบบครับ');
+      return;
+    }
+    closeExportCredentialsModal();
+    downloadCredentialsTxtFile('jailed', jailedIds);
+  };
+
+  modal.style.display = 'flex';
 }
 
 function parseCredentialsTxtToBackup(rawText) {

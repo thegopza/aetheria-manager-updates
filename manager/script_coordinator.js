@@ -58,7 +58,18 @@ function createScriptCoordinator({ dataDir, loadProfiles, evalProfilePort, servi
     requestTimes.push(now());return service.serviceRequest(route,body);
   }
   try { const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8')); if(saved.schema !== 1 || !Array.isArray(saved.queue) || !saved.slots || !saved.observed || !Number.isSafeInteger(saved.sequence)) throw new Error('INVALID_COORDINATOR_STATE'); state = saved; } catch(e) { if(e.code !== 'ENOENT') throw e; }
-  const write = (file, value) => { fs.mkdirSync(dataDir, { recursive:true }); fs.writeFileSync(file+'.tmp', JSON.stringify(value), {mode:0o600}); fs.renameSync(file+'.tmp',file); };
+  const write = (file, value) => {
+    const tmp = file + '.tmp';
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify(value), { mode: 0o600 });
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
+      if (e && e.code === 'ENOSPC') return;
+      throw e;
+    }
+  };
   const persist = () => write(stateFile,state);
   if (!state.managerInstanceId) { state.managerInstanceId = crypto.randomUUID(); persist(); }
   const instanceId = state.managerInstanceId;

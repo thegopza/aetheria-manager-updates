@@ -6,6 +6,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
@@ -213,11 +214,45 @@ function fetchBufferDirect(targetUrl, timeoutMs = 15000, redirectCount = 0) {
   });
 }
 
+function resolveSafeAssetFilesDir(defaultCacheDir, dataDir) {
+  const defaultFilesDir = path.join(defaultCacheDir, 'files');
+  if (process.env.PELICAN_TEST_INSTANCE === '1') return defaultFilesDir;
+  const resolvedData = path.resolve(String(dataDir || ''));
+  const tempRoot = path.resolve(os.tmpdir());
+  if (resolvedData.toLowerCase().startsWith(tempRoot.toLowerCase())) return defaultFilesDir;
+  let freeBytesOnDataDrive = Infinity;
+  try {
+    if (typeof fs.statfsSync === 'function') {
+      const st = fs.statfsSync(defaultCacheDir);
+      freeBytesOnDataDrive = Number(st.bavail || st.bfree || 0) * Number(st.bsize || 4096);
+    }
+  } catch (_) {}
+  const localAppData = process.env.LOCALAPPDATA || os.tmpdir();
+  const cDriveAlt = path.join(localAppData, 'PmheeAether', 'asset_cache', 'files');
+  const isDifferentDrive = resolvedData.slice(0, 2).toLowerCase() !== path.resolve(cDriveAlt).slice(0, 2).toLowerCase();
+  if (freeBytesOnDataDrive < 2 * 1024 * 1024 * 1024 && isDifferentDrive) {
+    return cDriveAlt;
+  }
+  return defaultFilesDir;
+}
+
+function hasEnoughDiskSpace(dirPath, minFreeBytes = 250 * 1024 * 1024) {
+  try {
+    if (typeof fs.statfsSync === 'function') {
+      const st = fs.statfsSync(dirPath);
+      const freeBytes = Number(st.bavail || st.bfree || 0) * Number(st.bsize || 4096);
+      return freeBytes >= minFreeBytes;
+    }
+  } catch (_) {}
+  return true;
+}
+
 function createAssetCache({ dataDir, fetchDirect = fetchBufferDirect, now = Date.now } = {}) {
   const cacheDir = path.join(dataDir, 'asset_cache');
-  const filesDir = path.join(cacheDir, 'files');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const filesDir = resolveSafeAssetFilesDir(cacheDir, dataDir);
   const stateFile = path.join(cacheDir, 'state.json');
-  fs.mkdirSync(filesDir, { recursive: true });
+  try { fs.mkdirSync(filesDir, { recursive: true }); } catch (_) {}
 
   // Hot in-memory LRU cache: fileName -> { buffer, base64, mimeType, size, group }
   const memoryCache = new Map();
@@ -389,11 +424,13 @@ function createAssetCache({ dataDir, fetchDirect = fetchBufferDirect, now = Date
         ? fetched.contentType
         : mimeType;
       try {
-        const tmpFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-        await fs.promises.writeFile(tmpFile, buffer);
-        await fs.promises.rename(tmpFile, filePath).catch(async () => {
-          await fs.promises.unlink(tmpFile).catch(() => {});
-        });
+        if (hasEnoughDiskSpace(filesDir)) {
+          const tmpFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+          await fs.promises.writeFile(tmpFile, buffer);
+          await fs.promises.rename(tmpFile, filePath).catch(async () => {
+            await fs.promises.unlink(tmpFile).catch(() => {});
+          });
+        }
       } catch (_) {}
 
       const entry = {

@@ -2022,9 +2022,30 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const exe = findBrowser(desiredKind);
     if (!exe) throw new Error('ไม่พบ Google Chrome หรือ Microsoft Edge ในเครื่อง');
     fs.mkdirSync(userDataDir, { recursive: true });
+    if (isRealSession) {
+      for (const bloatDir of ['component_crx_cache', 'optimization_guide_model_store', 'CertificateRevocation', 'WasmTtsEngine', 'Safe Browsing', 'Crashpad', 'segmentation_platform', 'OnDeviceHeadSuggestModel', 'GrShaderCache', 'ShaderCache']) {
+        try {
+          const bp = path.join(userDataDir, bloatDir);
+          if (fs.existsSync(bp)) fs.rmSync(bp, { recursive: true, force: true });
+        } catch (_) {}
+      }
+    }
+    const extraCacheArgs = [];
+    if (isRealSession && process.env.PELICAN_TEST_INSTANCE !== '1') {
+      try {
+        const os = require('os');
+        const cCacheDir = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'PmheeAether', 'browser_cache');
+        fs.mkdirSync(cCacheDir, { recursive: true });
+        extraCacheArgs.push(`--disk-cache-dir=${cCacheDir}`, '--disk-cache-size=104857600');
+      } catch (_) {}
+    }
     const args = [
       `--remote-debugging-port=${CDP_PORT}`, '--remote-allow-origins=*',
       `--user-data-dir=${userDataDir}`,
+      ...extraCacheArgs,
+      '--disable-component-update',
+      '--disable-domain-reliability',
+      '--disable-breakpad',
       '--disable-blink-features=AutomationControlled',
       '--disable-background-mode',
       '--disable-renderer-accessibility',

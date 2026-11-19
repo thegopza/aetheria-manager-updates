@@ -87,8 +87,15 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
   } catch (_) {}
   try{const saved=JSON.parse(fs.readFileSync(walletSnapshotFile,'utf8'));if(saved.origin===base.origin&&saved.accountId===account?.accountId&&Number.isSafeInteger(saved.balanceUnits)){balanceUnits=saved.balanceUnits;points=balanceUnits/100;if(Array.isArray(saved.topupHistory))topupHistory=saved.topupHistory;if(saved.machineMerit&&typeof saved.machineMerit==='object')machineMerit=saved.machineMerit;}}catch(_){}
   function atomicWrite(file, data) {
-    fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(file + '.tmp', file);
+    const tmp = file + '.tmp';
+    try {
+      fs.writeFileSync(tmp, JSON.stringify(data, null, 2), { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(tmp, file);
+    } catch (e) {
+      try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp); } catch (_) {}
+      if (e && e.code === 'ENOSPC') return;
+      throw e;
+    }
   }
   function applyAccessMeta(result) {
     if (!result || typeof result !== 'object') return;

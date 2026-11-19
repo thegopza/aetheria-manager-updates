@@ -115,7 +115,9 @@ const PRESETS_BACKUP_FILE = path.join(__dirname, "data", "presets.backup.json");
 
 function writeJsonAtomic(filePath, data) {
   const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (_) {}
   const text = JSON.stringify(data, null, 2);
   const tmpFile = `${filePath}.${process.pid}.${Date.now()}.tmp`;
   try {
@@ -129,7 +131,24 @@ function writeJsonAtomic(filePath, data) {
     fs.renameSync(tmpFile, filePath);
   } catch (e) {
     try { if (fs.existsSync(tmpFile)) fs.unlinkSync(tmpFile); } catch (_) {}
-    fs.writeFileSync(filePath, text, "utf8");
+    // Never overwrite/truncate an existing non-empty file if the disk is full (ENOSPC)!
+    if (e && e.code === "ENOSPC") {
+      try {
+        if (fs.existsSync(filePath) && fs.statSync(filePath).size > 0) {
+          console.warn(`[Storage] ⚠️ ไดรฟ์เต็ม (ENOSPC) ข้ามการเขียนทับ ${path.basename(filePath)} เพื่อรักษาไฟล์เดิมไว้`);
+          return;
+        }
+      } catch (_) {}
+    }
+    try {
+      fs.writeFileSync(filePath, text, "utf8");
+    } catch (e2) {
+      if (e2 && e2.code === "ENOSPC") {
+        console.warn(`[Storage] ⚠️ ไดรฟ์เต็ม (ENOSPC) บันทึกไฟล์ ${path.basename(filePath)} ไม่สำเร็จ`);
+        return;
+      }
+      throw e2;
+    }
   }
 }
 
@@ -981,7 +1000,7 @@ function saveProfiles(profiles, options = {}) {
     console.warn("[PmheeAether Manager] ⚠️ ป้องกันการเขียนทับ profiles.json ด้วยรายการว่างเปล่า (Preserved existing profiles)");
     return;
   }
-  writeJsonAtomic(PROFILES_FILE, profiles);
+  try { writeJsonAtomic(PROFILES_FILE, profiles); } catch (_) {}
   if (!isUntouchedDefaultMockProfiles(profiles)) {
     lastValidProfilesCache = profiles.map(p => ({ ...p }));
     try { writeJsonAtomic(PROFILES_BACKUP_FILE, profiles); } catch (_) {}

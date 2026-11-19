@@ -541,6 +541,26 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     if (result && typeof result === 'object') applyAccessMeta(result);
     return result;
   }
+  async function announcementRequest(route, payload = null, opts = {}) {
+    if (!/^\/v1\/aetheria\/machine\/announcements\/(?:poll|ack)(?:\?.*)?$/.test(route)) {
+      throw new Error('Unsupported announcement route');
+    }
+    if (loggedOutExplicitly || !account?.token) {
+      return {
+        success: true,
+        requiresLogin: true,
+        unackedAnnouncements: [],
+        historyAnnouncements: []
+      };
+    }
+    const result = await requestJSON(route, payload, account.token, {
+      machineHwid,
+      timeoutMs: Math.max(5000, Math.min(25000, Number(opts && opts.timeoutMs) || 12000)),
+      responseLimit: Math.max(262144, Math.min(8 * 1024 * 1024, Number(opts && opts.responseLimit) || 4 * 1024 * 1024))
+    });
+    if (result && typeof result === 'object') applyAccessMeta(result);
+    return result;
+  }
   async function solveHumanCheck(prompt, options = [], items = null, requestId = crypto.randomUUID()) {
     if (account && Date.now() - lastCatalogAttempt > 3600000) {
       lastCatalogAttempt = Date.now();
@@ -618,6 +638,7 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     logoutUserAccount,
     fleetRequest,
     supportRequest,
+    announcementRequest,
     serviceRequest: (route, payload) => {
       if (route !== '/v1/aetheria/health' && !/^\/v1\/aetheria\/(?:script|usage|billing|proxy|offline|machine)\/[a-z-]+(?:\/[a-z-]+)?$/.test(route)) throw new Error('Unsupported coordinator route');
       return call(route, payload);

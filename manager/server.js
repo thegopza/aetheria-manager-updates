@@ -7462,6 +7462,8 @@ const server = http.createServer(async (req, res) => {
     pathname.startsWith('/api/fleet/') ||
     pathname === '/api/support' ||
     pathname.startsWith('/api/support/') ||
+    pathname === '/api/announcements' ||
+    pathname.startsWith('/api/announcements/') ||
     pathname === '/api/game-install/browse' ||
     pathname === '/api/test' ||
     pathname.startsWith('/api/test/')
@@ -7744,6 +7746,64 @@ const server = http.createServer(async (req, res) => {
           success: false,
           code: e?.code || 'SUPPORT_READ_FAILED',
           error: e?.message || 'อัปเดตสถานะการอ่านไม่สำเร็จ'
+        }, e?.status && e.status >= 400 ? e.status : 400);
+      }
+    });
+    return;
+  }
+
+  // Realtime Broadcast Announcements (synced by Username ID)
+  if (pathname === '/api/announcements/poll' && req.method === 'GET') {
+    try {
+      const accessSt = typeof humanCheckSolver.getAccessState === 'function' ? humanCheckSolver.getAccessState() : {};
+      if (accessSt.requiresLogin || !accessSt.isUserAccount || !accessSt.username) {
+        return sendJSON({
+          success: true,
+          requiresLogin: true,
+          unackedAnnouncements: [],
+          historyAnnouncements: []
+        });
+      }
+      const result = await humanCheckSolver.announcementRequest('/v1/aetheria/machine/announcements/poll', null);
+      return sendJSON(result);
+    } catch (e) {
+      return sendJSON({
+        success: false,
+        code: e?.code || 'ANNOUNCEMENT_POLL_FAILED',
+        error: e?.message || 'โหลดประกาศไม่สำเร็จ'
+      }, e?.status && e.status >= 400 ? e.status : 500);
+    }
+  }
+
+  if (pathname === '/api/announcements/ack' && req.method === 'POST') {
+    let body = '';
+    let tooLarge = false;
+    req.on('data', c => {
+      if (tooLarge) return;
+      body += c;
+      if (Buffer.byteLength(body, 'utf8') > 16384) {
+        tooLarge = true;
+        sendJSON({ success: false, code: 'BODY_TOO_LARGE', error: 'คำขอมีขนาดใหญ่เกินไป' }, 413);
+        req.destroy();
+      }
+    });
+    req.on('end', async () => {
+      if (tooLarge) return;
+      try {
+        const data = JSON.parse(body || '{}');
+        const ids = Array.isArray(data.ids) ? data.ids : (data.id ? [data.id] : []);
+        const sObj = loadSettings();
+        const machineName = String(sObj.machineName || os.hostname() || '').trim().slice(0, 80);
+        const result = await humanCheckSolver.announcementRequest('/v1/aetheria/machine/announcements/ack', {
+          ids,
+          machineName
+        });
+        return sendJSON(result);
+      } catch (e) {
+        return sendJSON({
+          success: false,
+          code: e?.code || 'ANNOUNCEMENT_ACK_FAILED',
+          error: e?.message || 'บันทึกสถานะรับทราบไม่สำเร็จ'
         }, e?.status && e.status >= 400 ? e.status : 400);
       }
     });

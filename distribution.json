@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "b59274097b98884353d3cff32037e59b216a1ef6",
+  "sourceCommit": "7ba92528bd91f01994f47777c7cb3714cac5780f",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -196,7 +196,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "73763ed538ad52b3c87095f8af2a5b7d36cf381732e96156bf3b6c8042976890"
+      "sha256": "d9ea2c46b85e2180a749a6b16a8965829dd40b93c2b977c1cfe4f174ab51a8b1"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -272,11 +272,11 @@
     },
     {
       "path": "manager/public/tower_manager.js",
-      "sha256": "1ea169219fc0661968f16a5cf630af38c542b8e3c57cce7eb3c08b98c35f2513"
+      "sha256": "484745e0486b3b3980d9eb152844d0b19f26e7c37e889b530c84884ffca251b7"
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "279d8720e7b7392b1ac3a73a762814b3598c76172a11fbed2c32a4c6f8b9572e"
+      "sha256": "114d714f06585318df0db5357728e83feef192f955834eb38ef2a254d1ddbc31"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -316,7 +316,7 @@
     },
     {
       "path": "manager/tower_carry.js",
-      "sha256": "6ae4c623bc4927f9ef6f1428f33e3b53eef9a37e8485dcbfaf4085278403449a"
+      "sha256": "ec5299c113e296c826e03468791e6531c01781e1a4e629a16c623a963c72d47b"
     },
     {
       "path": "README.md",

@@ -28,13 +28,15 @@ const DEFAULTS = {
   ],
   priestProfileMode: 'safe_anchor_12',
   targetFloor: 60,
+  autoResetBeforeEnter: true,
+  autoNextBatch: true,
   kidMode: 'auto_until_boss', // 'auto_until_boss' | 'stand_still'
   carryUseQuota: false,
   resumeFarmAfterFinish: true,
   selectedKidProfileIds: []
 };
 
-// Self-contained installer for clients that haven't refreshed to bot.js v4.47.0 yet
+// Self-contained installer/upgrader (__ver: 2) for all game tabs
 const ENSURE_TOWER_CONTROL_JS = `(() => {
   if (typeof window.isInEndlessTowerMap !== 'function') {
     window.isInEndlessTowerMap = function() {
@@ -61,7 +63,13 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
     guarded.__pmTowerGuarded = true;
     window.sendRespawn = guarded;
   }
-  if (window.__towerCarryControl) return { ok: true, alreadyLoaded: true };
+  if (window.__towerCarryControl && window.__towerCarryControl.__ver >= 2) return { ok: true, alreadyLoaded: true };
+  if (window.__pmTowerCarryIntervalId) {
+    try { clearInterval(window.__pmTowerCarryIntervalId); } catch (e) {}
+    window.__pmTowerCarryIntervalId = null;
+  }
+  // Silence any legacy v1 interval if this tab had v1 injected earlier
+  window.__towerCarryConfig = null;
 
   const TILE_PX = 32;
   const DEFAULT_HOME_X = 1392;
@@ -71,7 +79,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
   const BUFF_MAX_RANGE_PX = 272;
   const BOSS_SAFE_DIST_PX = 260;
 
-  const towerRuntime = {
+  const towerRuntime = window.__pmTowerRuntime || {
     hookedRoom: null,
     currentFloor: 0,
     clearedFloor: 0,
@@ -83,6 +91,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
     latestDungeonInfo: null,
     latestDungeonInfoAt: 0,
     priestState: 'IDLE_ANCHOR',
+    priestStateV2: 'IDLE_ANCHOR',
     priestActionText: 'รอประจำจุดเริ่ม (12 ช่อง)',
     lastAutoSetAt: 0,
     lastAutoEnabledState: null,
@@ -92,6 +101,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
     lastTowerChoiceSentAt: 0,
     autoPausedByPriestAi: false
   };
+  if (!towerRuntime.priestStateV2) towerRuntime.priestStateV2 = towerRuntime.priestState || 'IDLE_ANCHOR';
   window.__pmTowerRuntime = towerRuntime;
 
   function getActiveRoom() {
@@ -106,112 +116,125 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
   }
   function ensureRoomHooks(room) {
     if (!room || typeof room.onMessage !== 'function') return;
-    if (towerRuntime.hookedRoom === room || room.__pmTowerCarryHooked) return;
-    room.__pmTowerCarryHooked = true;
-    towerRuntime.hookedRoom = room;
-    towerRuntime.dangerZones = [];
-    const floorNum = parseFloorNumber(room.state && room.state.displayName);
-    if (floorNum > 0) towerRuntime.currentFloor = floorNum;
+    if (!room.__pmTowerCarryHooked) {
+      room.__pmTowerCarryHooked = true;
+      towerRuntime.hookedRoom = room;
+      towerRuntime.dangerZones = [];
+      const floorNum = parseFloorNumber(room.state && room.state.displayName);
+      if (floorNum > 0) towerRuntime.currentFloor = floorNum;
 
-    room.onMessage('dungeon_info', info => {
-      towerRuntime.latestDungeonInfo = info;
-      towerRuntime.latestDungeonInfoAt = Date.now();
-      window.__pmLatestDungeonInfo = info;
-    });
-    room.onMessage('boss_cast', pkt => {
-      if (!pkt || !Array.isArray(pkt.areas)) return;
-      const now = Date.now();
-      const castMs = Math.max(600, Math.min(6000, Number(pkt.castMs) || 1500));
-      for (const a of pkt.areas) {
-        if (!a) continue;
-        towerRuntime.dangerZones.push({
-          monsterId: pkt.monsterId || '',
-          skill: pkt.skill || pkt.name || 'aoe',
-          x: Number(a.x) || 0,
-          y: Number(a.y) || 0,
-          toX: a.toX !== undefined ? Number(a.toX) : undefined,
-          toY: a.toY !== undefined ? Number(a.toY) : undefined,
-          radiusPx: a.radiusPx !== undefined ? Number(a.radiusPx) : undefined,
-          innerPx: a.innerPx !== undefined ? Number(a.innerPx) : undefined,
-          widthPx: a.widthPx !== undefined ? Number(a.widthPx) : undefined,
-          expiresAt: now + castMs + 380
-        });
-      }
-    });
-    room.onMessage('boss_fx', pkt => {
-      if (!pkt || !Array.isArray(pkt.areas)) return;
-      const now = Date.now();
-      const remainHits = Math.max(1, (Number(pkt.hits) || 1) - (Number(pkt.hit) || 1) + 1);
-      const lingerMs = Math.min(2200, remainHits * 420);
-      for (const a of pkt.areas) {
-        if (!a) continue;
-        towerRuntime.dangerZones.push({
-          monsterId: pkt.monsterId || '',
-          skill: pkt.skill || 'fx',
-          x: Number(a.x) || 0,
-          y: Number(a.y) || 0,
-          toX: a.toX !== undefined ? Number(a.toX) : undefined,
-          toY: a.toY !== undefined ? Number(a.toY) : undefined,
-          radiusPx: a.radiusPx !== undefined ? Number(a.radiusPx) : undefined,
-          innerPx: a.innerPx !== undefined ? Number(a.innerPx) : undefined,
-          widthPx: a.widthPx !== undefined ? Number(a.widthPx) : undefined,
-          expiresAt: now + lingerMs
-        });
-      }
-    });
-    room.onMessage('party_buffs', pkt => {
-      if (!pkt || !pkt.name || !Array.isArray(pkt.buffs)) return;
-      const key = String(pkt.name).trim().toLowerCase();
-      towerRuntime.partyBuffsByName[key] = pkt.buffs.map(b => ({
-        skillId: b.skillId,
-        name: b.name,
-        endsAt: Number(b.endsAt) || 0
-      }));
-    });
-    room.onMessage('party_life', pkt => {
-      if (!pkt || !pkt.name) return;
-      const key = String(pkt.name).trim().toLowerCase();
-      towerRuntime.partyDeadByName[key] = Boolean(pkt.dead);
-    });
-    room.onMessage('center_notice', pkt => {
-      const txt = String((pkt && pkt.text) || '').trim();
-      if (!txt) return;
-      const passMatch = txt.match(/ผ่านชั้น\\s*(\\d+)\\s*แล้ว/);
-      if (passMatch) {
-        const passed = parseInt(passMatch[1], 10) || 0;
-        if (passed > towerRuntime.clearedFloor) towerRuntime.clearedFloor = passed;
-        const cfg = window.__towerCarryConfig;
-        const targetF = (cfg && Number(cfg.targetFloor)) || 60;
-        if (passed >= targetF) {
-          towerRuntime.targetFloorCompleted = true;
-          window.__towerTargetFloorCompleted = true;
+      room.onMessage('dungeon_info', info => {
+        towerRuntime.latestDungeonInfo = info;
+        towerRuntime.latestDungeonInfoAt = Date.now();
+        window.__pmLatestDungeonInfo = info;
+      });
+      room.onMessage('boss_cast', pkt => {
+        if (!pkt || !Array.isArray(pkt.areas)) return;
+        const now = Date.now();
+        const castMs = Math.max(600, Math.min(6000, Number(pkt.castMs) || 1500));
+        for (const a of pkt.areas) {
+          if (!a) continue;
+          towerRuntime.dangerZones.push({
+            monsterId: pkt.monsterId || '',
+            skill: pkt.skill || pkt.name || 'aoe',
+            x: Number(a.x) || 0,
+            y: Number(a.y) || 0,
+            toX: a.toX !== undefined ? Number(a.toX) : undefined,
+            toY: a.toY !== undefined ? Number(a.toY) : undefined,
+            radiusPx: a.radiusPx !== undefined ? Number(a.radiusPx) : undefined,
+            innerPx: a.innerPx !== undefined ? Number(a.innerPx) : undefined,
+            widthPx: a.widthPx !== undefined ? Number(a.widthPx) : undefined,
+            expiresAt: now + castMs + 380
+          });
         }
-      }
-      const enterMatch = txt.match(/^ชั้น\\s*(\\d+)$/);
-      if (enterMatch) {
-        const entered = parseInt(enterMatch[1], 10) || 0;
-        if (entered > 0) {
-          towerRuntime.currentFloor = entered;
-          if (entered === 1) {
-            towerRuntime.clearedFloor = 0;
-            towerRuntime.targetFloorCompleted = false;
-            window.__towerTargetFloorCompleted = false;
+      });
+      room.onMessage('boss_fx', pkt => {
+        if (!pkt || !Array.isArray(pkt.areas)) return;
+        const now = Date.now();
+        const remainHits = Math.max(1, (Number(pkt.hits) || 1) - (Number(pkt.hit) || 1) + 1);
+        const lingerMs = Math.min(2200, remainHits * 420);
+        for (const a of pkt.areas) {
+          if (!a) continue;
+          towerRuntime.dangerZones.push({
+            monsterId: pkt.monsterId || '',
+            skill: pkt.skill || 'fx',
+            x: Number(a.x) || 0,
+            y: Number(a.y) || 0,
+            toX: a.toX !== undefined ? Number(a.toX) : undefined,
+            toY: a.toY !== undefined ? Number(a.toY) : undefined,
+            radiusPx: a.radiusPx !== undefined ? Number(a.radiusPx) : undefined,
+            innerPx: a.innerPx !== undefined ? Number(a.innerPx) : undefined,
+            widthPx: a.widthPx !== undefined ? Number(a.widthPx) : undefined,
+            expiresAt: now + lingerMs
+          });
+        }
+      });
+      room.onMessage('party_buffs', pkt => {
+        if (!pkt || !pkt.name || !Array.isArray(pkt.buffs)) return;
+        const key = String(pkt.name).trim().toLowerCase();
+        towerRuntime.partyBuffsByName[key] = pkt.buffs.map(b => ({
+          skillId: b.skillId,
+          name: b.name,
+          endsAt: Number(b.endsAt) || 0
+        }));
+      });
+      room.onMessage('party_life', pkt => {
+        if (!pkt || !pkt.name) return;
+        const key = String(pkt.name).trim().toLowerCase();
+        towerRuntime.partyDeadByName[key] = Boolean(pkt.dead);
+      });
+    }
+
+    if (!room.__pmTowerCarryHookedV2) {
+      room.__pmTowerCarryHookedV2 = true;
+      room.onMessage('center_notice', pkt => {
+        const txt = String((pkt && pkt.text) || '').trim();
+        if (!txt) return;
+        const passMatch = txt.match(/ผ่านชั้น\\s*(\\d+)/);
+        if (passMatch) {
+          const passed = parseInt(passMatch[1], 10) || 0;
+          if (passed > towerRuntime.clearedFloor) towerRuntime.clearedFloor = passed;
+          const cfg = window.__towerCarryConfigV2;
+          const targetF = Math.max(1, Number(cfg && cfg.targetFloor) || 60);
+          if (passed >= targetF) {
+            towerRuntime.targetFloorCompleted = true;
+            window.__towerTargetFloorCompleted = true;
           }
         }
-      }
-    });
-    room.onMessage('tower_choice', pkt => {
-      const cfg = window.__towerCarryConfig;
-      if (!cfg || !cfg.active) return;
-      const runsLeft = Number(pkt && pkt.runsLeft) || 0;
-      const wantReward = cfg.role === 'kid' ? (runsLeft > 0) : (cfg.useRewardQuota !== false && runsLeft > 0);
-      setTimeout(() => {
-        try {
-          room.send('tower_choice', { reward: Boolean(wantReward) });
-          towerRuntime.lastTowerChoiceSentAt = Date.now();
-        } catch (e) {}
-      }, 350);
-    });
+        const enterMatch = txt.match(/^ชั้น\\s*(\\d+)$/);
+        if (enterMatch) {
+          const entered = parseInt(enterMatch[1], 10) || 0;
+          if (entered > 0) {
+            towerRuntime.currentFloor = entered;
+            if (entered === 1) {
+              towerRuntime.clearedFloor = 0;
+              towerRuntime.targetFloorCompleted = false;
+              window.__towerTargetFloorCompleted = false;
+            }
+          }
+        }
+      });
+      room.onMessage('tower_choice', pkt => {
+        const cfg = window.__towerCarryConfigV2;
+        if (!cfg || !cfg.active) return;
+        const targetF = Math.max(1, Number(cfg.targetFloor) || 60);
+        const runsLeft = Number(pkt && pkt.runsLeft) || 0;
+        const wantReward = targetF < 10
+          ? false
+          : (cfg.role === 'kid' ? (runsLeft > 0) : (cfg.useRewardQuota !== false && runsLeft > 0));
+        setTimeout(() => {
+          try {
+            const modalBtns = Array.from(document.querySelectorAll('button'));
+            const rewardBtn = modalBtns.find(b => /รับรางวัล\\s*\\(ใช้\\s*1/.test(b.textContent || ''));
+            const helpBtn = modalBtns.find(b => (b.textContent || '').trim() === 'ช่วยเพื่อน');
+            const btnToClick = wantReward ? rewardBtn : helpBtn;
+            if (btnToClick) btnToClick.click();
+            else room.send('tower_choice', { reward: Boolean(wantReward) });
+            towerRuntime.lastTowerChoiceSentAt = Date.now();
+          } catch (e) {}
+        }, 350);
+      });
+    }
   }
 
   function distToSegment(px, py, x1, y1, x2, y2) {
@@ -357,18 +380,31 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
     return missing;
   }
 
-  setInterval(() => {
+  window.__pmTowerCarryIntervalId = setInterval(() => {
     try {
       const room = getActiveRoom();
       if (!room || !room.state) return;
       ensureRoomHooks(room);
       const inTower = typeof window.isInEndlessTowerMap === 'function' && window.isInEndlessTowerMap();
-      const cfg = window.__towerCarryConfig;
-      if (!inTower || !cfg || !cfg.active) { towerRuntime.priestState = 'IDLE_ANCHOR'; return; }
+      const cfg = window.__towerCarryConfigV2;
+      if (!inTower) {
+        towerRuntime.currentFloor = 0;
+        towerRuntime.clearedFloor = 0;
+        towerRuntime.targetFloorCompleted = false;
+        window.__towerTargetFloorCompleted = false;
+        towerRuntime.priestStateV2 = 'IDLE_ANCHOR';
+        towerRuntime.priestState = 'IDLE_ANCHOR';
+        return;
+      }
+      if (!cfg || !cfg.active) {
+        towerRuntime.priestStateV2 = 'IDLE_ANCHOR';
+        towerRuntime.priestState = 'IDLE_ANCHOR';
+        return;
+      }
 
       const floorNum = parseFloorNumber(room.state.displayName) || towerRuntime.currentFloor || 1;
       towerRuntime.currentFloor = floorNum;
-      const targetFloor = Math.max(10, Number(cfg.targetFloor) || 60);
+      const targetFloor = Math.max(1, Number(cfg.targetFloor) || 60);
       const now = Date.now();
       const me = room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
       if (!me) return;
@@ -383,8 +419,12 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
         const rewardBtn = modalBtns.find(b => /รับรางวัล\\s*\\(ใช้\\s*1/.test(b.textContent || ''));
         const helpBtn = modalBtns.find(b => (b.textContent || '').trim() === 'ช่วยเพื่อน');
         if (rewardBtn || helpBtn) {
-          const wantReward = cfg.role === 'kid' ? true : (cfg.useRewardQuota !== false);
-          room.send('tower_choice', { reward: Boolean(wantReward) });
+          const wantReward = targetFloor < 10
+            ? false
+            : (cfg.role === 'kid' ? true : (cfg.useRewardQuota !== false));
+          const btnToClick = wantReward ? rewardBtn : helpBtn;
+          if (btnToClick) btnToClick.click();
+          else room.send('tower_choice', { reward: Boolean(wantReward) });
           towerRuntime.lastTowerChoiceSentAt = now;
         }
       }
@@ -401,7 +441,11 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
 
       if (cfg.role === 'kid') {
         if (me.dead) return;
-        const shouldStopForBoss = cfg.kidMode === 'stand_still' || floorNum >= targetFloor || towerRuntime.clearedFloor >= (targetFloor - 1);
+        const isBossFloor = (floorNum % 10) === 0;
+        const targetIsBoss = (targetFloor % 10) === 0;
+        const shouldStopForBoss = cfg.kidMode === 'stand_still'
+          || isBossFloor
+          || (targetIsBoss && (floorNum >= targetFloor || towerRuntime.clearedFloor >= (targetFloor - 1)));
         const live = typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData() : null;
         const curAutoOn = Boolean(live && live.auto && live.auto.enabled);
         if (shouldStopForBoss) {
@@ -437,6 +481,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
         const distFromHome = Math.hypot((me.x || 0) - homeX, (me.y || 0) - homeY);
 
         if (isPointInDangerZone(me.x, me.y, 42)) {
+          towerRuntime.priestStateV2 = 'DODGE_AOE';
           towerRuntime.priestState = 'DODGE_AOE';
           towerRuntime.priestActionText = '⚡ หลบวงสกิล AoE ของบอส!';
           if (curAutoOn && now - towerRuntime.lastAutoSetAt > 400) {
@@ -459,6 +504,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
         const distToDmg = dmgPlayer ? Math.hypot((me.x || 0) - (dmgPlayer.x || 0), (me.y || 0) - (dmgPlayer.y || 0)) : 99999;
 
         if (dmgPlayer && dmgDead && Number(learned['resurrection']) > 0) {
+          towerRuntime.priestStateV2 = 'RESCUE_REVIVE';
           towerRuntime.priestState = 'RESCUE_REVIVE';
           if (curAutoOn && now - towerRuntime.lastAutoSetAt > 400) {
             towerRuntime.autoPausedByPriestAi = true;
@@ -491,6 +537,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
         const priestHpPct = (me.maxHp > 0 && typeof me.hp === 'number') ? (me.hp / me.maxHp) : 1;
 
         if (dmgPlayer && !dmgDead && missingBuffs.length > 0 && distToDmg > 250 && priestHpPct >= 0.55) {
+          towerRuntime.priestStateV2 = 'DELIVER_BUFF';
           towerRuntime.priestState = 'DELIVER_BUFF';
           if (curAutoOn && now - towerRuntime.lastAutoSetAt > 400) {
             towerRuntime.autoPausedByPriestAi = true;
@@ -520,6 +567,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
 
         if (towerRuntime.autoPausedByPriestAi || distFromHome > (PRIEST_ANCHOR_RADIUS_TILES * TILE_PX * 0.65)) {
           if (distFromHome > 72) {
+            towerRuntime.priestStateV2 = 'RETREAT_HOME';
             towerRuntime.priestState = 'RETREAT_HOME';
             towerRuntime.priestActionText = '🛡️ ถอยกลับจุดเริ่มต้น (' + Math.round(distFromHome / TILE_PX) + ' ช่อง)';
             if (curAutoOn && now - towerRuntime.lastAutoSetAt > 400) setGameAutoState(room, false, { basicAttack: false });
@@ -533,6 +581,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
           towerRuntime.autoPausedByPriestAi = false;
         }
 
+        towerRuntime.priestStateV2 = 'IDLE_ANCHOR';
         towerRuntime.priestState = 'IDLE_ANCHOR';
         towerRuntime.priestActionText = '🛡️ ประจำจุดเริ่ม (ระยะล่า 12 ช่อง · พร้อมชุบ/บัพ)';
         const curRadius = live && live.auto && live.auto.config ? live.auto.config.huntRadiusTiles : null;
@@ -555,6 +604,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
   }, 120);
 
   window.__towerCarryControl = {
+    __ver: 2,
     getAvailableSkills() {
       const live = typeof window.getLiveCharacterData === 'function' ? window.getLiveCharacterData(true) : window.__latestCharacterData;
       const cat = window.__skillCatalog;
@@ -602,6 +652,7 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
       const tw = info && info.tower ? info.tower : null;
       const me = room.state.players && room.state.players.get ? room.state.players.get(room.sessionId) : null;
       const party = typeof window.getInGamePartyState === 'function' ? window.getInGamePartyState() : null;
+      const inTowerNow = typeof window.isInEndlessTowerMap === 'function' && window.isInEndlessTowerMap();
       return {
         ok: true,
         charName: (me && me.name) || (typeof window.getCharacterName === 'function' ? window.getCharacterName() : null),
@@ -615,11 +666,11 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
         mapId: room.state.mapId || null,
         displayName: room.state.displayName || null,
         channel: room.state.channel || null,
-        inTower: typeof window.isInEndlessTowerMap === 'function' && window.isInEndlessTowerMap(),
-        currentFloor: parseFloorNumber(room.state.displayName) || towerRuntime.currentFloor || 0,
-        clearedFloor: towerRuntime.clearedFloor || 0,
-        targetFloorCompleted: Boolean(towerRuntime.targetFloorCompleted),
-        priestState: towerRuntime.priestState,
+        inTower: inTowerNow,
+        currentFloor: inTowerNow ? (parseFloorNumber(room.state.displayName) || towerRuntime.currentFloor || 0) : 0,
+        clearedFloor: inTowerNow ? (towerRuntime.clearedFloor || 0) : 0,
+        targetFloorCompleted: inTowerNow ? Boolean(towerRuntime.targetFloorCompleted) : false,
+        priestState: towerRuntime.priestStateV2 || towerRuntime.priestState,
         priestActionText: towerRuntime.priestActionText,
         party: party ? {
           leader: party.leader || null,
@@ -641,11 +692,13 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
     },
     configureRole(cfg) {
       cfg = cfg || {};
-      window.__towerCarryConfig = cfg;
+      window.__towerCarryConfig = null;
+      window.__towerCarryConfigV2 = cfg;
       window.__towerCarryActive = Boolean(cfg.active);
       if (!cfg.active) {
         towerRuntime.targetFloorCompleted = false;
         window.__towerTargetFloorCompleted = false;
+        towerRuntime.priestStateV2 = 'IDLE_ANCHOR';
         towerRuntime.priestState = 'IDLE_ANCHOR';
         towerRuntime.autoPausedByPriestAi = false;
       } else {
@@ -688,6 +741,10 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
         if (typeof window.useButterflyWing === 'function') window.useButterflyWing();
         return { ok: true, action: 'returning-to-capital', inCapital: false };
       }
+      towerRuntime.currentFloor = 0;
+      towerRuntime.clearedFloor = 0;
+      towerRuntime.targetFloorCompleted = false;
+      window.__towerTargetFloorCompleted = false;
       if (targetChannel && Number(room.state.channel) !== Number(targetChannel)) {
         room.send('channel_switch', { channel: Number(targetChannel) });
         return { ok: true, action: 'switching-channel', inCapital: true, channel: room.state.channel };
@@ -699,25 +756,30 @@ const ENSURE_TOWER_CONTROL_JS = `(() => {
       }
       return { ok: true, action: 'ready-at-gather', inCapital: true, dist: Math.round(dist), x: Math.round(me.x), y: Math.round(me.y), channel: room.state.channel };
     },
-    async resetAndEnterTower(isLeader) {
+    async resetAndEnterTower(isLeader, shouldReset = true) {
       const room = getActiveRoom();
       if (!room) return { ok: false, error: 'not-in-game' };
       ensureRoomHooks(room);
+      towerRuntime.currentFloor = 0;
       towerRuntime.clearedFloor = 0;
       towerRuntime.targetFloorCompleted = false;
       window.__towerTargetFloorCompleted = false;
-      room.send('tower_reset');
-      await new Promise(r => setTimeout(r, 450));
+      const doReset = shouldReset !== false;
+      if (doReset) {
+        room.send('tower_reset');
+        await new Promise(r => setTimeout(r, 450));
+      }
       if (isLeader) room.send('tower_enter');
-      return { ok: true, resetSent: true, enterSent: Boolean(isLeader) };
+      return { ok: true, resetSent: doReset, enterSent: Boolean(isLeader) };
     }
   };
-  return { ok: true, installed: true };
+  return { ok: true, installed: true, ver: 2 };
 })()`;
 
 function sanitizeSettings(s) {
   s = s || {};
-  const tf = Math.floor(Number(s.targetFloor) || DEFAULTS.targetFloor);
+  const rawTf = Number(s.targetFloor);
+  const tf = Number.isFinite(rawTf) && rawTf >= 1 ? Math.floor(rawTf) : DEFAULTS.targetFloor;
   const uniq = arr => [...new Set(arr.map(x => String(x || '').trim()).filter(Boolean))];
   return {
     damageProfileId: typeof s.damageProfileId === 'string' ? s.damageProfileId.trim() : DEFAULTS.damageProfileId,
@@ -726,7 +788,9 @@ function sanitizeSettings(s) {
     priestSkills: Array.isArray(s.priestSkills) ? uniq(s.priestSkills) : DEFAULTS.priestSkills.slice(),
     priestOutBuffSkills: Array.isArray(s.priestOutBuffSkills) ? uniq(s.priestOutBuffSkills) : DEFAULTS.priestOutBuffSkills.slice(),
     priestProfileMode: typeof s.priestProfileMode === 'string' && s.priestProfileMode ? s.priestProfileMode : DEFAULTS.priestProfileMode,
-    targetFloor: Math.max(10, Math.min(100, Math.round(tf / 10) * 10)),
+    targetFloor: Math.max(1, Math.min(100, tf)),
+    autoResetBeforeEnter: s.autoResetBeforeEnter !== undefined ? Boolean(s.autoResetBeforeEnter) : DEFAULTS.autoResetBeforeEnter,
+    autoNextBatch: s.autoNextBatch !== undefined ? Boolean(s.autoNextBatch) : DEFAULTS.autoNextBatch,
     kidMode: s.kidMode === 'stand_still' ? 'stand_still' : 'auto_until_boss',
     carryUseQuota: Boolean(s.carryUseQuota),
     resumeFarmAfterFinish: s.resumeFarmAfterFinish !== undefined ? Boolean(s.resumeFarmAfterFinish) : DEFAULTS.resumeFarmAfterFinish,
@@ -919,30 +983,36 @@ function createTowerCarryService(opts) {
     if (!state.running) return;
     const profiles = loadProfiles();
     const dmgProfile = profiles.find(p => String(p.id) === String(settings.damageProfileId));
-    const priestProfile = profiles.find(p => String(p.id) === String(settings.priestProfileId));
+    const hasPriestConfigured = Boolean(settings.priestProfileId);
+    const priestProfile = hasPriestConfigured
+      ? profiles.find(p => String(p.id) === String(settings.priestProfileId))
+      : null;
 
     if (!dmgProfile || !dmgProfile.debugPort) {
       state.statusText = '⚠️ รอจอตัวแบก Damage ออนไลน์...';
       return;
     }
-    if (!priestProfile || !priestProfile.debugPort) {
+    if ((hasPriestConfigured || settings.targetFloor >= 10) && (!priestProfile || !priestProfile.debugPort)) {
       state.statusText = '⚠️ รอจอตัวแบก Priest ออนไลน์...';
       return;
     }
 
     const dmgSnap = await refreshProfileSnapshot(dmgProfile);
-    const priestSnap = await refreshProfileSnapshot(priestProfile);
+    const priestSnap = priestProfile ? await refreshProfileSnapshot(priestProfile) : null;
     const dmgName = (dmgSnap && dmgSnap.charName) || dmgProfile.lastCharName || dmgProfile.name;
-    const priestName = (priestSnap && priestSnap.charName) || priestProfile.lastCharName || priestProfile.name;
+    const priestName = priestProfile ? ((priestSnap && priestSnap.charName) || priestProfile.lastCharName || priestProfile.name) : '';
+    const isQuotaRotationMode = Boolean(settings.autoNextBatch) && settings.targetFloor >= 10;
+    const doAutoReset = settings.autoResetBeforeEnter !== false;
 
     // -----------------------------------------------------------------
-    // STAGE 1: PICK_BATCH (เลือกตัวเด็กสูงสุด 4 ตัวที่ยังมีโควต้า > 0/3)
+    // STAGE 1: PICK_BATCH (เลือกตัวเด็กสูงสุด 4 ตัวเข้าตี้)
     // -----------------------------------------------------------------
     if (state.phase === 'PICK_BATCH') {
       const candidatePool = profiles.filter(p => {
         if (!p || !p.debugPort) return false;
-        if (String(p.id) === String(dmgProfile.id) || String(p.id) === String(priestProfile.id)) return false;
-        if (state.completedKidIds.includes(String(p.id))) return false;
+        if (String(p.id) === String(dmgProfile.id)) return false;
+        if (priestProfile && String(p.id) === String(priestProfile.id)) return false;
+        if (isQuotaRotationMode && state.completedKidIds.includes(String(p.id))) return false;
         if (settings.selectedKidProfileIds.length > 0 && !settings.selectedKidProfileIds.includes(String(p.id))) return false;
         return true;
       });
@@ -954,20 +1024,22 @@ function createTowerCarryService(opts) {
         if (!sn || !sn.ok) return false;
         const lv = Number(sn.baseLevel) || Number(p.lastBaseLv) || 0;
         if (lv > 0 && lv < 99) return false;
-        const runsLeft = sn.tower ? Number(sn.tower.runsLeft) : 3;
-        if (runsLeft <= 0) {
-          if (!state.completedKidIds.includes(String(p.id))) state.completedKidIds.push(String(p.id));
-          return false;
+        if (isQuotaRotationMode) {
+          const runsLeft = sn.tower ? Number(sn.tower.runsLeft) : 3;
+          if (runsLeft <= 0) {
+            if (!state.completedKidIds.includes(String(p.id))) state.completedKidIds.push(String(p.id));
+            return false;
+          }
         }
         return true;
       });
 
-      if (eligibleKids.length === 0) {
+      if (eligibleKids.length === 0 && isQuotaRotationMode) {
         state.running = false;
         setPhase('COMPLETED', '🎉 แบกหอคอยครบทุกตัวละครที่มีโควต้าเรียบร้อยแล้ว!');
         pushLog('🎉 แบกหอคอยครบทุกคิวที่มีโควต้า (0/3 ทุกตัว) เรียบร้อยแล้ว!', 'success');
         await pushRoleConfigToClient(dmgProfile, 'damage', false, dmgName, priestName);
-        await pushRoleConfigToClient(priestProfile, 'priest', false, dmgName, priestName);
+        if (priestProfile) await pushRoleConfigToClient(priestProfile, 'priest', false, dmgName, priestName);
         return;
       }
 
@@ -976,20 +1048,28 @@ function createTowerCarryService(opts) {
       state.roundInBatch = 1;
       state.currentBatchKidIds = nextBatch.map(p => String(p.id));
       const kidNames = nextBatch.map(p => (snapshots.get(String(p.id)) && snapshots.get(String(p.id)).charName) || p.lastCharName || p.name);
-      pushLog(`📦 เริ่มชุดที่ ${state.batchNumber}: ดึงตัวเด็ก ${kidNames.join(', ')} (ลงให้ครบ 3/3 รอบ ถึงชั้น ${settings.targetFloor})`, 'info');
-      setPhase('RECALL_AND_GATHER', `ชุดที่ ${state.batchNumber} (รอบ 1/3): กำลังเรียกทุกตัวกลับเมืองหลวงและรวมปาร์ตี้...`);
+      const partyDesc = kidNames.length > 0 ? `ดึงตัวเด็ก ${kidNames.join(', ')}` : 'ลุยเฉพาะตัวแบก';
+      if (isQuotaRotationMode) {
+        pushLog(`📦 เริ่มชุดที่ ${state.batchNumber}: ${partyDesc} (ลงให้ครบ 3/3 รอบ ถึงชั้น ${settings.targetFloor})`, 'info');
+        setPhase('RECALL_AND_GATHER', `ชุดที่ ${state.batchNumber} (รอบ 1/3): กำลังเรียกทุกตัวกลับเมืองหลวงและรวมปาร์ตี้...`);
+      } else {
+        const resetLabel = doAutoReset ? 'เปิดรีเซ็ตชั้น 1 ก่อนเข้า' : 'ไม่กดรีเซ็ต (เข้าทันที)';
+        pushLog(`🔁 เริ่มวนหอคอยชุดที่ ${state.batchNumber}: ${partyDesc} (วนถึงชั้น ${settings.targetFloor} แล้วกลับเมืองเข้าใหม่ · ${resetLabel})`, 'info');
+        setPhase('RECALL_AND_GATHER', `รอบที่ 1 (วนถึงชั้น ${settings.targetFloor}): กำลังเรียกทุกตัวกลับเมืองหลวงและรวมปาร์ตี้...`);
+      }
       return;
     }
 
     const batchKidProfiles = state.currentBatchKidIds
       .map(id => profiles.find(p => String(p.id) === String(id)))
       .filter(p => p && p.debugPort);
-    const allBatchProfiles = [dmgProfile, priestProfile, ...batchKidProfiles];
+    const memberProfiles = [priestProfile, ...batchKidProfiles].filter(Boolean);
+    const allBatchProfiles = [dmgProfile, ...memberProfiles];
 
     // Push active role configuration to all batch members
     await Promise.all([
       pushRoleConfigToClient(dmgProfile, 'damage', true, dmgName, priestName),
-      pushRoleConfigToClient(priestProfile, 'priest', true, dmgName, priestName),
+      ...(priestProfile ? [pushRoleConfigToClient(priestProfile, 'priest', true, dmgName, priestName)] : []),
       ...batchKidProfiles.map(kp => pushRoleConfigToClient(kp, 'kid', true, dmgName, priestName))
     ]);
 
@@ -1007,12 +1087,14 @@ function createTowerCarryService(opts) {
       const gatherY = dmgRes.y || 1480;
       state.gatherCoords = { x: gatherX, y: gatherY, channel: targetCh };
 
-      const memberProfiles = [priestProfile, ...batchKidProfiles];
       const recallResults = await Promise.all(
         memberProfiles.map(mp => evalControl(mp, `window.__towerCarryControl.recallToCapital(${gatherX}, ${gatherY}, ${targetCh})`, 7000))
       );
 
       const waitingNames = [];
+      if (dmgRes.action !== 'ready-at-gather') {
+        waitingNames.push(dmgName);
+      }
       recallResults.forEach((r, idx) => {
         const mp = memberProfiles[idx];
         const nm = (snapshots.get(String(mp.id)) && snapshots.get(String(mp.id)).charName) || mp.lastCharName || mp.name;
@@ -1021,29 +1103,37 @@ function createTowerCarryService(opts) {
         }
       });
 
-      // Also invite party members while gathering
-      const wantedPartyNames = new Set([dmgName, priestName, ...batchKidProfiles.map(p => (snapshots.get(String(p.id)) && snapshots.get(String(p.id)).charName) || p.lastCharName || '').filter(Boolean)]);
+      // Invite/kick party members if needed
+      const wantedPartyNames = new Set([dmgName, priestName, ...batchKidProfiles.map(p => (snapshots.get(String(p.id)) && snapshots.get(String(p.id)).charName) || p.lastCharName || '').filter(Boolean)].filter(Boolean));
       const curPartyMembers = (dmgSnap && dmgSnap.party && Array.isArray(dmgSnap.party.members)) ? dmgSnap.party.members : [];
       const toKick = curPartyMembers.map(m => m.name).filter(n => n && !wantedPartyNames.has(n));
-      await inviteAndAcceptParty(dmgProfile, memberProfiles, toKick);
+      const missingInParty = Array.from(wantedPartyNames).filter(n => n !== dmgName && !curPartyMembers.some(m => m.name === n));
+      if (memberProfiles.length > 0 && (toKick.length > 0 || missingInParty.length > 0)) {
+        await inviteAndAcceptParty(dmgProfile, memberProfiles, toKick);
+      }
 
       if (waitingNames.length > 0) {
         state.statusText = `กำลังเรียกกลับเมือง/รวมพลที่ CH${targetCh}: รอ ${waitingNames.join(', ')}`;
         return;
       }
 
-      const missingInParty = Array.from(wantedPartyNames).filter(n => n !== dmgName && !curPartyMembers.some(m => m.name === n));
       if (missingInParty.length > 0 && (now() - state.phaseEnteredAt < 25000)) {
         state.statusText = `กำลังชวนเข้าปาร์ตี้: รอ ${missingInParty.join(', ')} กดรับตี้...`;
         return;
       }
 
-      setPhase('RESET_AND_ENTER', `รวมตี้ครบแล้ว! กำลังกดรีเซ็ตชั้น 1 และพาเข้าหอคอย (รอบที่ ${state.roundInBatch}/3)...`);
+      state.lastEnterSentAt = 0;
+      const roundLabel = isQuotaRotationMode ? `${state.roundInBatch}/3` : `${state.roundInBatch}`;
+      if (doAutoReset) {
+        setPhase('RESET_AND_ENTER', `รวมตี้ครบแล้ว! กำลังกดรีเซ็ตชั้น 1 และพาเข้าหอคอย (รอบที่ ${roundLabel})...`);
+      } else {
+        setPhase('RESET_AND_ENTER', `รวมตี้ครบแล้ว! กำลังพาเข้าหอคอยทันทีโดยไม่กดรีเซ็ต (รอบที่ ${roundLabel})...`);
+      }
       return;
     }
 
     // -----------------------------------------------------------------
-    // STAGE 3: RESET_AND_ENTER (กดรีเซ็ตเริ่มชั้น 1 ทุกตัว + หัวตี้กดไปทันที)
+    // STAGE 3: RESET_AND_ENTER (กดรีเซ็ตเริ่มชั้น 1 ตามที่ตั้งค่า + หัวตี้กดไปทันที)
     // -----------------------------------------------------------------
     if (state.phase === 'RESET_AND_ENTER') {
       await Promise.all(allBatchProfiles.map(p => refreshProfileSnapshot(p).catch(() => null)));
@@ -1052,29 +1142,35 @@ function createTowerCarryService(opts) {
         return Boolean(sn && sn.inTower);
       });
       if (anyInTower) {
-        state.currentFloor = (dmgSnap && dmgSnap.currentFloor) || 1;
+        const latestDmg = snapshots.get(String(dmgProfile.id));
+        state.currentFloor = (latestDmg && latestDmg.currentFloor) || 1;
         state.clearedFloor = 0;
-        pushLog(`🏰 เข้าสู่หอคอยนิรันดร์สำเร็จ (ชุดที่ ${state.batchNumber} · รอบที่ ${state.roundInBatch}) — เป้าหมายชั้น ${settings.targetFloor}`, 'success');
+        const resetNote = doAutoReset ? 'รีเซ็ตชั้น 1 แล้ว' : 'ไม่กดรีเซ็ต';
+        pushLog(`🏰 เข้าสู่หอคอยนิรันดร์สำเร็จ (ชุดที่ ${state.batchNumber} · รอบที่ ${state.roundInBatch} · ${resetNote}) — เป้าหมายชั้น ${settings.targetFloor}`, 'success');
         setPhase('CLIMBING', `กำลังลุยหอคอย ชั้น ${state.currentFloor} / ${settings.targetFloor} (ชุดที่ ${state.batchNumber} · รอบที่ ${state.roundInBatch})`);
         return;
       }
 
       if (now() - state.lastEnterSentAt >= 3500) {
         state.lastEnterSentAt = now();
-        // Reset members first, then leader resets & enters
-        const memberProfiles = [priestProfile, ...batchKidProfiles];
-        await Promise.all(memberProfiles.map(mp => evalControl(mp, 'window.__towerCarryControl.resetAndEnterTower(false)', 6000)));
-        await new Promise(r => setTimeout(r, 400));
-        await evalControl(dmgProfile, 'window.__towerCarryControl.resetAndEnterTower(true)', 6000);
+        // Reset members first (only when autoResetBeforeEnter is enabled), then leader enters
+        if (memberProfiles.length > 0) {
+          await Promise.all(memberProfiles.map(mp => evalControl(mp, `window.__towerCarryControl.resetAndEnterTower(false, ${doAutoReset})`, 6000)));
+          if (doAutoReset) {
+            await new Promise(r => setTimeout(r, 400));
+          }
+        }
+        await evalControl(dmgProfile, `window.__towerCarryControl.resetAndEnterTower(true, ${doAutoReset})`, 6000);
       }
       return;
     }
 
     // -----------------------------------------------------------------
-    // STAGE 4: CLIMBING (กำลังไต่หอคอย 1 -> targetFloor)
+    // STAGE 4: CLIMBING (กำลังไต่หอคอย -> targetFloor)
     // -----------------------------------------------------------------
     if (state.phase === 'CLIMBING') {
       await Promise.all(batchKidProfiles.map(p => refreshProfileSnapshot(p).catch(() => null)));
+      const inTowerNow = Boolean((dmgSnap && dmgSnap.inTower) || (priestSnap && priestSnap.inTower));
       const curFloor = (dmgSnap && dmgSnap.currentFloor) || (priestSnap && priestSnap.currentFloor) || state.currentFloor || 1;
       const clrFloor = Math.max((dmgSnap && dmgSnap.clearedFloor) || 0, (priestSnap && priestSnap.clearedFloor) || 0);
       state.currentFloor = curFloor;
@@ -1083,7 +1179,7 @@ function createTowerCarryService(opts) {
       const priestAction = (priestSnap && priestSnap.priestActionText) ? ` · พระ: ${priestSnap.priestActionText}` : '';
       state.statusText = `⚔️ กำลังลุยชั้น ${curFloor} / ${settings.targetFloor} (ชุดที่ ${state.batchNumber} · รอบ ${state.roundInBatch})${priestAction}`;
 
-      const completedTarget = Boolean(
+      const completedTarget = inTowerNow && Boolean(
         (dmgSnap && dmgSnap.targetFloorCompleted) ||
         (priestSnap && priestSnap.targetFloorCompleted) ||
         clrFloor >= settings.targetFloor ||
@@ -1091,14 +1187,18 @@ function createTowerCarryService(opts) {
       );
 
       if (completedTarget) {
-        pushLog(`🏆 ผ่านบอสชั้น ${settings.targetFloor} สำเร็จ! (ชุดที่ ${state.batchNumber} · รอบที่ ${state.roundInBatch}) -> พาทุกตัวกลับเมืองเพื่อรีเซ็ตรอบถัดไป`, 'success');
-        setPhase('EXITING_TOWER', `ผ่านชั้น ${settings.targetFloor} แล้ว! กำลังพาทุกตัวออกจากหอคอยกลับเมืองหลวง...`);
+        const clearLabel = (settings.targetFloor % 10 === 0)
+          ? `ผ่านบอสชั้น ${settings.targetFloor}`
+          : `เคลียร์ถึงชั้น ${settings.targetFloor}`;
+        const nextAct = doAutoReset ? 'กลับเมืองแล้วกดรีเซ็ตเข้าใหม่' : 'กลับเมืองแล้วเข้าใหม่ทันที';
+        pushLog(`🏆 ${clearLabel} สำเร็จ! (ชุดที่ ${state.batchNumber} · รอบที่ ${state.roundInBatch}) -> พาทุกตัว${nextAct}`, 'success');
+        setPhase('EXITING_TOWER', `${clearLabel} แล้ว! กำลังพาทุกตัวออกจากหอคอยกลับเมืองหลวง...`);
       }
       return;
     }
 
     // -----------------------------------------------------------------
-    // STAGE 5: EXITING_TOWER (ออกจากหอคอย -> เช็คโควต้า 3/3 -> ลงรอบถัดไป หรือ เปลี่ยนชุดเด็กถัดไป)
+    // STAGE 5: EXITING_TOWER (ออกจากหอคอย -> วนซ้ำต่อเนื่อง หรือ เช็คโควต้า 3/3 เปลี่ยนชุดเด็ก)
     // -----------------------------------------------------------------
     if (state.phase === 'EXITING_TOWER') {
       const gatherX = state.gatherCoords.x || 1480;
@@ -1117,7 +1217,20 @@ function createTowerCarryService(opts) {
         return;
       }
 
-      // Check remaining weekly quota of kids in current batch
+      state.currentFloor = 0;
+      state.clearedFloor = 0;
+      state.lastEnterSentAt = 0;
+
+      // Continuous loop mode (e.g. farming floors 1-9, or autoNextBatch unchecked)
+      if (!isQuotaRotationMode) {
+        state.roundInBatch += 1;
+        const resetDesc = doAutoReset ? 'กดรีเซ็ตเริ่มชั้น 1 ก่อนเข้า' : 'ไม่กดรีเซ็ต · เข้าใหม่ทันที';
+        pushLog(`🔄 กลับเมืองครบแล้ว! เริ่มวนรอบที่ ${state.roundInBatch} (เป้าหมายถึงชั้น ${settings.targetFloor} · ${resetDesc})`, 'info');
+        setPhase('RECALL_AND_GATHER', `เตรียมเข้าหอคอยรอบที่ ${state.roundInBatch} (${resetDesc})...`);
+        return;
+      }
+
+      // Quota rotation mode (targetFloor >= 10 && autoNextBatch === true): check remaining weekly 3/3 quota
       const kidsWithQuotaLeft = batchKidProfiles.filter(kp => {
         const sn = snapshots.get(String(kp.id));
         const left = (sn && sn.tower) ? Number(sn.tower.runsLeft) : 0;
@@ -1145,7 +1258,8 @@ function createTowerCarryService(opts) {
       if (kidsWithQuotaLeft.length > 0 && state.roundInBatch < 3) {
         state.currentBatchKidIds = kidsWithQuotaLeft.map(p => String(p.id));
         state.roundInBatch += 1;
-        pushLog(`🔄 เริ่มรอบที่ ${state.roundInBatch}/3 ของชุดที่ ${state.batchNumber} (รีเซ็ตเริ่มชั้น 1 ใหม่)`, 'info');
+        const resetDesc = doAutoReset ? 'รีเซ็ตเริ่มชั้น 1 ใหม่' : 'ไม่กดรีเซ็ต · เข้าใหม่ทันที';
+        pushLog(`🔄 เริ่มรอบที่ ${state.roundInBatch}/3 ของชุดที่ ${state.batchNumber} (${resetDesc})`, 'info');
         setPhase('RECALL_AND_GATHER', `เตรียมลงรอบที่ ${state.roundInBatch}/3 ของชุดที่ ${state.batchNumber}...`);
       } else {
         pushLog(`🎉 ชุดที่ ${state.batchNumber} ลงครบ 3/3 รอบแล้ว! กำลังดึงตัวเด็กชุดถัดไปเข้าตี้โดยอัตโนมัติ...`, 'success');
@@ -1170,25 +1284,32 @@ function createTowerCarryService(opts) {
   async function startCarry() {
     const profiles = loadProfiles();
     const dmg = profiles.find(p => String(p.id) === String(settings.damageProfileId));
-    const pr = profiles.find(p => String(p.id) === String(settings.priestProfileId));
+    const hasPriest = Boolean(settings.priestProfileId);
+    const pr = hasPriest ? profiles.find(p => String(p.id) === String(settings.priestProfileId)) : null;
     if (!dmg || !dmg.debugPort) {
       return { success: false, error: 'กรุณาเลือกจอ "ตัวแบก Damage" ที่ออนไลน์อยู่ก่อนเริ่ม' };
     }
-    if (!pr || !pr.debugPort) {
+    if ((hasPriest || settings.targetFloor >= 10) && (!pr || !pr.debugPort)) {
       return { success: false, error: 'กรุณาเลือกจอ "ตัวแบก Priest (พระ)" ที่ออนไลน์อยู่ก่อนเริ่ม' };
     }
-    if (String(dmg.id) === String(pr.id)) {
+    if (pr && String(dmg.id) === String(pr.id)) {
       return { success: false, error: 'ตัวแบก Damage และ Priest ต้องเป็นคนละจอกัน' };
     }
 
     state.running = true;
     state.batchNumber = 0;
     state.roundInBatch = 0;
+    state.currentFloor = 0;
+    state.clearedFloor = 0;
+    state.lastEnterSentAt = 0;
     state.currentBatchKidIds = [];
     state.completedKidIds = [];
-    setPhase('PICK_BATCH', '🚀 เริ่มระบบแบกหอคอย: กำลังตรวจสอบโควต้า 3/3 และจัดชุดปาร์ตี้...');
-    pushLog(`🚀 เริ่มระบบแบกหอคอย (Damage: ${dmg.lastCharName || dmg.name} · Priest: ${pr.lastCharName || pr.name} · เป้าหมายชั้น ${settings.targetFloor})`, 'info');
-    setTimeout(() => tick().catch(() => {}), 80);
+    const prLabel = pr ? (pr.lastCharName || pr.name) : 'ไม่ใช้พระ';
+    const resetLabel = settings.autoResetBeforeEnter !== false ? 'เปิดรีเซ็ตก่อนเข้า' : 'ปิดรีเซ็ต (เข้าทันที)';
+    setPhase('PICK_BATCH', `🚀 เริ่มระบบหอคอย (เป้าหมายชั้น ${settings.targetFloor} · ${resetLabel}): กำลังจัดชุดปาร์ตี้...`);
+    pushLog(`🚀 เริ่มระบบหอคอย (Damage: ${dmg.lastCharName || dmg.name} · Priest: ${prLabel} · เป้าหมายถึงชั้น ${settings.targetFloor} · ${resetLabel})`, 'info');
+    const kickOff = setTimeout(() => { if (state.running) tick().catch(() => {}); }, 80);
+    if (kickOff && kickOff.unref) kickOff.unref();
     return { success: true };
   }
 
@@ -1305,6 +1426,10 @@ function createTowerCarryService(opts) {
     }
 
     if (pathname === '/api/tower/start') {
+      if (body && Object.keys(body).length > 0) {
+        settings = sanitizeSettings(Object.assign({}, settings, body));
+        save();
+      }
       const r = await startCarry();
       if (!r.success) {
         sendJSON(Object.assign(view(), r), 400);
@@ -1322,7 +1447,7 @@ function createTowerCarryService(opts) {
 
     if (pathname === '/api/tower/reset-all') {
       const profiles = loadProfiles().filter(p => p && p.debugPort);
-      await Promise.all(profiles.map(p => evalControl(p, 'window.__towerCarryControl.resetAndEnterTower(false)', 5000).catch(() => null)));
+      await Promise.all(profiles.map(p => evalControl(p, 'window.__towerCarryControl.resetAndEnterTower(false, true)', 5000).catch(() => null)));
       await scanAllQuotas();
       pushLog('🔄 สั่งกดรีเซ็ตหอคอยเริ่มชั้น 1 ให้ทุกจอที่อยู่ในเมืองเรียบร้อยแล้ว', 'info');
       sendJSON(view());
@@ -1336,7 +1461,7 @@ function createTowerCarryService(opts) {
     if (timer) return;
     timer = setInterval(() => {
       if (state.running) tick().catch(() => {});
-    }, 3000);
+    }, 2000);
     if (timer.unref) timer.unref();
   }
 

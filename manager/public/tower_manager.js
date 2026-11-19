@@ -19,6 +19,8 @@
       damageProfileId: '',
       priestProfileId: '',
       targetFloor: 60,
+      autoResetBeforeEnter: true,
+      autoNextBatch: true,
       priestProfileMode: 'safe_anchor_12',
       kidMode: 'auto_until_boss',
       carryUseQuota: false,
@@ -439,6 +441,7 @@
             <div style="font-size:11px;color:#94a3b8;display:flex;gap:14px;flex-wrap:wrap;" id="tw-status-telemetry">
               <span>ชั้นปัจจุบัน: <b id="tw-stat-floor" style="color:#38bdf8;">-</b></span>
               <span>เป้าหมายจบ: <b id="tw-stat-target" style="color:#fde047;">ชั้น 60</b></span>
+              <span>ปุ่มรีเซ็ตก่อนเข้า: <b id="tw-stat-reset-mode" style="color:#34d399;">เปิด (กดรีเซ็ต)</b></span>
               <span>รอบของชุดนี้: <b id="tw-stat-round" style="color:#34d399;">0 / 3</b></span>
               <span>สถานะ Priest AI: <b id="tw-stat-priest-ai" style="color:#c084fc;">รอเข้าหอคอย</b></span>
             </div>
@@ -539,36 +542,52 @@
           <div class="tw-card">
             <div class="tw-card-title" style="color:#fde047;">⚙️ ตั้งค่าชั้นเป้าหมาย & พฤติกรรมตัวเด็ก</div>
 
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-              <div style="display:flex;flex-direction:column;gap:4px;">
-                <label style="font-size:11px;color:#94a3b8;">ลงถึงชั้นไหนแล้วจบรอบ (ฆ่าบอสเสร็จออก):</label>
-                <select id="tw-select-target-floor" class="tw-select" style="color:#fde047;font-weight:700;">
-                  <option value="10">ชั้น 10 (บอสชั้น 10)</option>
-                  <option value="20">ชั้น 20 (บอสชั้น 20)</option>
-                  <option value="30">ชั้น 30 (บอสชั้น 30)</option>
-                  <option value="40">ชั้น 40 (บอสชั้น 40)</option>
-                  <option value="50">ชั้น 50 (บอสชั้น 50)</option>
-                  <option value="60" selected>ชั้น 60 (บอสชั้น 60 - หีบทอง แนะนำ)</option>
-                  <option value="70">ชั้น 70 (บอสชั้น 70)</option>
-                  <option value="80">ชั้น 80 (บอสชั้น 80)</option>
-                  <option value="90">ชั้น 90 (บอสชั้น 90)</option>
-                  <option value="100">ชั้น 100 (บอสชั้น 100)</option>
-                </select>
+            <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:8px;align-items:end;">
+              <div style="display:flex;flex-direction:column;gap:4px;min-width:0;">
+                <label style="font-size:11px;color:#94a3b8;">ลงถึงชั้นไหนแล้วกลับเมือง (เลือกด่วน / ระบุชั้น 1-100):</label>
+                <div style="display:flex;gap:6px;align-items:stretch;min-width:0;">
+                  <select id="tw-select-target-floor" class="tw-select" style="flex:1;min-width:0;width:100%;color:#fde047;font-weight:700;">
+                    <option value="9">ชั้น 9 (วนฟาร์ม 1-9 กลับเมืองเข้าใหม่)</option>
+                    <option value="10">ชั้น 10 (บอสชั้น 10)</option>
+                    <option value="19">ชั้น 19 (ฟาร์มถึง 19 ออกก่อนบอส 20)</option>
+                    <option value="20">ชั้น 20 (บอสชั้น 20)</option>
+                    <option value="30">ชั้น 30 (บอสชั้น 30)</option>
+                    <option value="40">ชั้น 40 (บอสชั้น 40)</option>
+                    <option value="50">ชั้น 50 (บอสชั้น 50)</option>
+                    <option value="60" selected>ชั้น 60 (บอสชั้น 60 - หีบทอง แนะนำ)</option>
+                    <option value="70">ชั้น 70 (บอสชั้น 70)</option>
+                    <option value="80">ชั้น 80 (บอสชั้น 80)</option>
+                    <option value="90">ชั้น 90 (บอสชั้น 90)</option>
+                    <option value="100">ชั้น 100 (บอสชั้น 100)</option>
+                    <option value="custom">✏️ ระบุเลขชั้นเอง (1-100)</option>
+                  </select>
+                  <div style="display:flex;align-items:center;gap:4px;background:#090d16;border:1px solid rgba(250,204,21,0.48);border-radius:7px;padding:0 7px;flex-shrink:0;" title="ระบุชั้นเป้าหมายที่ต้องการจบแล้วกลับเมือง (1 - 100) เช่น 9 เพื่อวนชั้น 1-9">
+                    <span style="font-size:11px;color:#94a3b8;white-space:nowrap;">ชั้น</span>
+                    <input type="number" id="tw-input-target-floor" min="1" max="100" step="1" value="60" style="width:44px;background:transparent;border:none;color:#fde047;font-weight:800;font-size:13px;padding:5px 2px;text-align:center;outline:none;font-family:inherit;">
+                  </div>
+                </div>
               </div>
 
-              <div style="display:flex;flex-direction:column;gap:4px;">
+              <div style="display:flex;flex-direction:column;gap:4px;min-width:0;">
                 <label style="font-size:11px;color:#94a3b8;">โหมดตัวเด็กในหอคอย:</label>
-                <select id="tw-select-kid-mode" class="tw-select">
-                  <option value="auto_until_boss" selected>เปิด Auto ชั้นปกติ → หยุด Auto เมื่อถึงห้องบอส (ชั้นเป้าหมาย)</option>
+                <select id="tw-select-kid-mode" class="tw-select" style="width:100%;min-width:0;">
+                  <option value="auto_until_boss" selected>เปิด Auto ชั้นปกติ → หยุดเมื่อถึงห้องบอส</option>
                   <option value="stand_still">ยืนเฉยๆ ทุกชั้น (กดรับรางวัลอย่างเดียว)</option>
                 </select>
               </div>
             </div>
 
             <div style="display:flex;flex-direction:column;gap:6px;margin-top:2px;font-size:11.5px;color:#cbd5e1;">
+              <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;background:rgba(250,204,21,0.09);border:1px solid rgba(250,204,21,0.35);border-radius:8px;padding:7px 10px;">
+                <input type="checkbox" id="tw-chk-auto-reset" checked style="accent-color:#facc15;margin-top:2px;">
+                <span style="line-height:1.45;">
+                  <b style="color:#fef08a;">🔄 เปิด/ปิด กดปุ่ม "รีเซ็ตเริ่มชั้น 1" ก่อนเข้าหอคอยใหม่:</b>
+                  <span id="tw-reset-mode-hint" style="display:block;font-size:11px;color:#e2e8f0;">✅ เปิดอยู่: เมื่อกลับเมืองออกมาจะทำการกดปุ่มรีเซ็ตเริ่มชั้น 1 ก่อนเข้าไปใหม่</span>
+                </span>
+              </label>
               <label style="display:flex;align-items:center;gap:7px;cursor:pointer;">
                 <input type="checkbox" id="tw-chk-auto-next-batch" checked style="accent-color:#10b981;">
-                <span><b>วนครบ 3/3 รอบแล้วดึงชุดถัดไปอัตโนมัติ:</b> เมื่อชุดปัจจุบันใช้โควต้าครบ 3 รอบ/สัปดาห์ ให้เตะออกตี้แล้วดึงตัวเด็กชุดถัดไปมาลงต่อทันที</span>
+                <span><b>วนครบ 3/3 รอบแล้วดึงชุดถัดไปอัตโนมัติ:</b> เมื่อชุดปัจจุบันใช้โควต้าครบ 3 รอบ/สัปดาห์ ให้เตะออกตี้แล้วดึงตัวเด็กชุดถัดไปมาลงต่อทันที (หากตั้งชั้น 1-9 หรือไม่ติ๊ก ระบบจะวนตี้เดิมซ้ำต่อเนื่อง)</span>
               </label>
               <label style="display:flex;align-items:center;gap:7px;cursor:pointer;">
                 <input type="checkbox" id="tw-chk-resume-bot" checked style="accent-color:#38bdf8;">
@@ -640,13 +659,17 @@
       statusDetail: document.getElementById('tw-status-detail'),
       statFloor: document.getElementById('tw-stat-floor'),
       statTarget: document.getElementById('tw-stat-target'),
+      statResetMode: document.getElementById('tw-stat-reset-mode'),
       statRound: document.getElementById('tw-stat-round'),
       statPriestAi: document.getElementById('tw-stat-priest-ai'),
       selectDamage: document.getElementById('tw-select-damage'),
       selectPriest: document.getElementById('tw-select-priest'),
       selectPriestMode: document.getElementById('tw-select-priest-mode'),
       selectTargetFloor: document.getElementById('tw-select-target-floor'),
+      inputTargetFloor: document.getElementById('tw-input-target-floor'),
       selectKidMode: document.getElementById('tw-select-kid-mode'),
+      chkAutoReset: document.getElementById('tw-chk-auto-reset'),
+      resetModeHint: document.getElementById('tw-reset-mode-hint'),
       chkAutoNextBatch: document.getElementById('tw-chk-auto-next-batch'),
       chkResumeBot: document.getElementById('tw-chk-resume-bot'),
       damageSkillMeta: document.getElementById('tw-damage-skill-meta'),
@@ -709,12 +732,71 @@
       saveSettingsQuiet();
     });
 
+    const syncTargetFloorUi = (floorNum, skipNumberInput = false) => {
+      const clamped = Math.max(1, Math.min(100, Math.floor(Number(floorNum) || 60)));
+      uiState.localSettings.targetFloor = clamped;
+      if (!skipNumberInput && dom.inputTargetFloor) {
+        dom.inputTargetFloor.value = String(clamped);
+      }
+      if (dom.selectTargetFloor) {
+        const hasOption = Array.from(dom.selectTargetFloor.options).some(o => o.value === String(clamped));
+        dom.selectTargetFloor.value = hasOption ? String(clamped) : 'custom';
+      }
+      if (dom.statTarget) {
+        dom.statTarget.textContent = clamped === 9 ? 'ชั้น 1-9 (วนกลับเมือง)' : `ชั้น ${clamped}`;
+      }
+    };
+
+    const syncResetModeUi = (enabled) => {
+      const on = enabled !== false;
+      uiState.localSettings.autoResetBeforeEnter = on;
+      if (dom.chkAutoReset) dom.chkAutoReset.checked = on;
+      if (dom.resetModeHint) {
+        dom.resetModeHint.textContent = on
+          ? '✅ เปิดอยู่: เมื่อกลับเมืองออกมาจะทำการกดปุ่ม "รีเซ็ตเริ่มชั้น 1" ก่อนเข้าไปใหม่'
+          : '⏭️ ปิดอยู่: เมื่อกลับเมืองออกมาจะเข้าไปหอคอยใหม่ทันที โดยไม่ต้องกดปุ่มรีเซ็ต';
+        dom.resetModeHint.style.color = on ? '#e2e8f0' : '#fde68a';
+      }
+      if (dom.statResetMode) {
+        dom.statResetMode.textContent = on ? 'เปิด (กดรีเซ็ต)' : 'ปิด (เข้าทันที)';
+        dom.statResetMode.style.color = on ? '#34d399' : '#facc15';
+      }
+    };
+
     dom.selectTargetFloor.addEventListener('change', () => {
-      uiState.localSettings.targetFloor = Number(dom.selectTargetFloor.value) || 60;
+      if (dom.selectTargetFloor.value === 'custom') {
+        if (dom.inputTargetFloor) {
+          dom.inputTargetFloor.focus();
+          dom.inputTargetFloor.select();
+        }
+        return;
+      }
+      syncTargetFloorUi(Number(dom.selectTargetFloor.value) || 60, false);
       uiState.dirtySettings = true;
-      dom.statTarget.textContent = `ชั้น ${uiState.localSettings.targetFloor}`;
       saveSettingsQuiet();
     });
+
+    if (dom.inputTargetFloor) {
+      dom.inputTargetFloor.addEventListener('input', () => {
+        const raw = parseInt(dom.inputTargetFloor.value, 10);
+        if (!Number.isFinite(raw) || raw < 1) return;
+        syncTargetFloorUi(raw, true);
+        uiState.dirtySettings = true;
+      });
+      dom.inputTargetFloor.addEventListener('change', () => {
+        syncTargetFloorUi(Number(dom.inputTargetFloor.value) || 60, false);
+        uiState.dirtySettings = true;
+        saveSettingsQuiet();
+      });
+    }
+
+    if (dom.chkAutoReset) {
+      dom.chkAutoReset.addEventListener('change', () => {
+        syncResetModeUi(dom.chkAutoReset.checked);
+        uiState.dirtySettings = true;
+        saveSettingsQuiet();
+      });
+    }
 
     dom.selectKidMode.addEventListener('change', () => {
       uiState.localSettings.kidMode = dom.selectKidMode.value === 'stand_still' ? 'stand_still' : 'auto_until_boss';
@@ -723,7 +805,7 @@
     });
 
     dom.chkAutoNextBatch.addEventListener('change', () => {
-      uiState.localSettings.carryUseQuota = !dom.chkAutoNextBatch.checked ? true : false;
+      uiState.localSettings.autoNextBatch = dom.chkAutoNextBatch.checked;
       uiState.dirtySettings = true;
       saveSettingsQuiet();
     });
@@ -1073,10 +1155,25 @@
         ...uiState.localSettings,
         ...data.settings
       };
-      dom.selectTargetFloor.value = String(uiState.localSettings.targetFloor || 60);
+      const tf = Math.max(1, Math.min(100, Math.floor(Number(uiState.localSettings.targetFloor) || 60)));
+      if (dom.inputTargetFloor && document.activeElement !== dom.inputTargetFloor) {
+        dom.inputTargetFloor.value = String(tf);
+      }
+      if (dom.selectTargetFloor && document.activeElement !== dom.selectTargetFloor) {
+        const hasOption = Array.from(dom.selectTargetFloor.options).some(o => o.value === String(tf));
+        dom.selectTargetFloor.value = hasOption ? String(tf) : 'custom';
+      }
       dom.selectPriestMode.value = uiState.localSettings.priestProfileMode || 'safe_anchor_12';
       dom.selectKidMode.value = uiState.localSettings.kidMode === 'stand_still' ? 'stand_still' : 'auto_until_boss';
-      dom.chkAutoNextBatch.checked = true;
+      const resetOn = uiState.localSettings.autoResetBeforeEnter !== false;
+      if (dom.chkAutoReset) dom.chkAutoReset.checked = resetOn;
+      if (dom.resetModeHint) {
+        dom.resetModeHint.textContent = resetOn
+          ? '✅ เปิดอยู่: เมื่อกลับเมืองออกมาจะทำการกดปุ่ม "รีเซ็ตเริ่มชั้น 1" ก่อนเข้าไปใหม่'
+          : '⏭️ ปิดอยู่: เมื่อกลับเมืองออกมาจะเข้าไปหอคอยใหม่ทันที โดยไม่ต้องกดปุ่มรีเซ็ต';
+        dom.resetModeHint.style.color = resetOn ? '#e2e8f0' : '#fde68a';
+      }
+      dom.chkAutoNextBatch.checked = uiState.localSettings.autoNextBatch !== false;
       dom.chkResumeBot.checked = uiState.localSettings.resumeFarmAfterFinish !== false;
     }
 
@@ -1118,9 +1215,14 @@
     dom.launcher.classList.toggle('tw-running', running);
     dom.statusBanner.classList.toggle('tw-active', running);
 
+    const tfVal = Math.max(1, Math.min(100, Math.floor(Number(uiState.localSettings.targetFloor) || 60)));
+    const isQuotaMode = (uiState.localSettings.autoNextBatch !== false) && tfVal >= 10;
+    const resetOnNow = uiState.localSettings.autoResetBeforeEnter !== false;
+
     if (running) {
-      const floorTxt = rt.currentFloor > 0 ? `ชั้น ${rt.currentFloor}/${uiState.localSettings.targetFloor || 60}` : 'กำลังเตรียมตี้';
-      dom.launcherChip.textContent = `🟢 ${floorTxt} · รอบ ${(rt.roundInBatch || 0) + 1}/3`;
+      const floorTxt = rt.currentFloor > 0 ? `ชั้น ${rt.currentFloor}/${tfVal}` : 'กำลังเตรียมตี้';
+      const roundBadge = isQuotaMode ? `รอบ ${rt.roundInBatch || 1}/3` : `รอบที่ ${rt.roundInBatch || 1}`;
+      dom.launcherChip.textContent = `🟢 ${floorTxt} · ${roundBadge}`;
       dom.headerBadge.textContent = `กำลังทำงาน · ${floorTxt}`;
       dom.statusPhase.textContent = `🏰 กำลังทำงาน (${rt.phase || 'ACTIVE'})`;
       dom.statusPhase.style.color = '#6ee7b7';
@@ -1129,7 +1231,7 @@
       dom.btnStartStop.style.borderColor = '#f87171';
       dom.btnStartStop.style.color = '#fff';
     } else {
-      dom.launcherChip.textContent = `พร้อมทำงาน (ชั้น ${uiState.localSettings.targetFloor || 60})`;
+      dom.launcherChip.textContent = `พร้อมทำงาน (ชั้น ${tfVal === 9 ? '1-9' : tfVal})`;
       dom.headerBadge.textContent = 'สถานะ: พร้อมทำงาน';
       dom.statusPhase.textContent = '⏸️ ระบบหยุดอยู่ (พร้อมเริ่มงาน)';
       dom.statusPhase.style.color = '#fde047';
@@ -1141,8 +1243,12 @@
 
     dom.statusDetail.textContent = rt.statusText || rt.stepText || 'พร้อมทำงาน';
     dom.statFloor.textContent = rt.currentFloor > 0 ? `ชั้น ${rt.currentFloor}` : '-';
-    dom.statTarget.textContent = `ชั้น ${uiState.localSettings.targetFloor || 60}`;
-    dom.statRound.textContent = `${rt.roundInBatch || 0} / 3`;
+    dom.statTarget.textContent = tfVal === 9 ? 'ชั้น 1-9 (วนกลับเมือง)' : `ชั้น ${tfVal}`;
+    if (dom.statResetMode) {
+      dom.statResetMode.textContent = resetOnNow ? 'เปิด (กดรีเซ็ต)' : 'ปิด (เข้าทันที)';
+      dom.statResetMode.style.color = resetOnNow ? '#34d399' : '#facc15';
+    }
+    dom.statRound.textContent = isQuotaMode ? `${rt.roundInBatch || 0} / 3` : `รอบที่ ${rt.roundInBatch || 0} (วนต่อเนื่อง)`;
 
     const priestClient = profiles.find(c => String(c.id) === String(uiState.localSettings.priestProfileId));
     dom.statPriestAi.textContent = (priestClient && priestClient.priestActionText) || 'รอเข้าหอคอย (ระยะ 12 ช่อง)';

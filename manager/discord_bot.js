@@ -11,6 +11,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { createHumanCheckSolver } = require('./human_check_solver.js');
+const { evaluateServerSideAutoAnswerPolicy } = require('./embedded_human_check_bridge.js');
 const IMAGE_BOARD_SOLVER_JS = (() => {
   try {
     const p = path.join(__dirname, 'image_board_solver.js');
@@ -1558,10 +1559,21 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       )
     );
 
-    const autoAnswerEnabled = (hcSettings.autoAnswer && cfg.autoAnswer !== false);
+    const autoPolicyCheck = evaluateServerSideAutoAnswerPolicy({
+      autoAnswer: Boolean(hcSettings.autoAnswer && cfg.autoAnswer !== false),
+      skipWhenAutoInFarmMap: Boolean(hcSettings.skipWhenAutoInFarmMap),
+      skipWhenBotStopped: Boolean(hcSettings.skipWhenBotStopped),
+      skipWhenInTown: Boolean(hcSettings.skipWhenInTown)
+    }, profile.liveState);
+    const autoAnswerEnabled = autoPolicyCheck.allowed;
     if (!autoAnswerEnabled) {
-      manualReason = 'ไม่ได้เปิด Auto Captcha';
-      pointMessage = 'ℹ️ **สถานะ:** ไม่ได้เปิดระบบตอบอัตโนมัติ (Auto Captcha) ไว้ — กรุณาเลือกตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+      if (!hcSettings.autoAnswer || cfg.autoAnswer === false) {
+        manualReason = 'ไม่ได้เปิด Auto Captcha';
+        pointMessage = 'ℹ️ **สถานะ:** ไม่ได้เปิดระบบตอบอัตโนมัติ (Auto Captcha) ไว้ — กรุณาเลือกตอบด้วยตนเองผ่านปุ่มด้านล่าง';
+      } else {
+        manualReason = autoPolicyCheck.reason || 'งดตอบอัตโนมัติตามตั้งค่า';
+        pointMessage = `⏸️ **สถานะ:** ${manualReason} — กรุณาเลือกตอบด้วยตนเองผ่านปุ่มด้านล่าง`;
+      }
     }
 
     // Catalog matches work offline; points are display data and never gate Humancheck.
@@ -1939,14 +1951,26 @@ function createDiscordBotService({ dataDir, loadProfiles, evalProfilePort, focus
       } else {
         try {
           const latestSettings = solver.loadSettings();
-          if (activeChecks.get(profileId) === trackedCheck && latestSettings?.autoAnswer && loadSettings().autoAnswer !== false && typeof solver.solveHumanCheck === 'function') {
+          const latestPolicy = evaluateServerSideAutoAnswerPolicy({
+            autoAnswer: Boolean(latestSettings?.autoAnswer && loadSettings().autoAnswer !== false),
+            skipWhenAutoInFarmMap: Boolean(latestSettings?.skipWhenAutoInFarmMap),
+            skipWhenBotStopped: Boolean(latestSettings?.skipWhenBotStopped),
+            skipWhenInTown: Boolean(latestSettings?.skipWhenInTown)
+          }, profile.liveState);
+          if (activeChecks.get(profileId) === trackedCheck && latestPolicy.allowed && typeof solver.solveHumanCheck === 'function') {
             trackedCheck.requestId = durableRequestId(profileId, check);
             solution = await solver.solveHumanCheck(check.prompt, check.options, check.items, trackedCheck.requestId);
             // The service bills for analysis. Game transport errors never refund that analysis.
             const optionsCountNow = resolvedOptions.length || 4;
             const authorized = solution?.success === true && [0, 1].includes(solution.charged) && solution.requestId === trackedCheck.requestId && Number.isInteger(solution.pickIndex) && solution.pickIndex >= 0 && solution.pickIndex < optionsCountNow;
             if (activeChecks.get(profileId) !== trackedCheck) return;
-            const stillEnabled = solver.loadSettings()?.autoAnswer && loadSettings().autoAnswer !== false;
+            const stillSettings = solver.loadSettings();
+            const stillEnabled = evaluateServerSideAutoAnswerPolicy({
+              autoAnswer: Boolean(stillSettings?.autoAnswer && loadSettings().autoAnswer !== false),
+              skipWhenAutoInFarmMap: Boolean(stillSettings?.skipWhenAutoInFarmMap),
+              skipWhenBotStopped: Boolean(stillSettings?.skipWhenBotStopped),
+              skipWhenInTown: Boolean(stillSettings?.skipWhenInTown)
+            }, profile.liveState).allowed;
             if (authorized && stillEnabled) {
               ansRes = await answerCheckInGame(profileId, solution.pickIndex, solution.matchedName, { id: trackedCheck.checkId, prompt: trackedCheck.prompt });
               if (ansRes && ansRes.success) {

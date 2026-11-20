@@ -229,6 +229,11 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     return {
       autoAnswer: s.autoAnswer !== false,
       answerDelayMs: Math.max(800, Math.min(10000, parseInt(s.answerDelayMs, 10) || 1800)),
+      skipWhenAutoInFarmMap: Boolean(s.skipWhenAutoInFarmMap),
+      skipWhenBotStopped: Boolean(s.skipWhenBotStopped),
+      skipWhenInTown: Boolean(s.skipWhenInTown),
+      notifyPendingOnManager: s.notifyPendingOnManager !== false,
+      soundAlertOnPending: Boolean(s.soundAlertOnPending),
       pointSystemEnabled: true, points: offlineWallet ? offlineWallet.balance()/100 : points, balanceUnits: effectiveBalanceUnits, unitScale: 100, pointsPerSolve: localMatcher.ready() ? 0 : pointsPerSolve, localCatalogReady: localMatcher.ready(), pointsPerBaht: 1,
       machineHwid, machineHwidShort, accessStatus, customRateUnits, effectiveRateUnits, accessRequestedAt, accessNote,
       username, isUserAccount, requiresLogin: computeRequiresLogin(),
@@ -244,7 +249,12 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     atomicWrite(settingsFile, {
       ...prior,
       autoAnswer: typeof s.autoAnswer === 'boolean' ? s.autoAnswer : current.autoAnswer,
-      answerDelayMs: Math.max(800, Math.min(10000, parseInt(s.answerDelayMs ?? current.answerDelayMs, 10) || 1800))
+      answerDelayMs: Math.max(800, Math.min(10000, parseInt(s.answerDelayMs ?? current.answerDelayMs, 10) || 1800)),
+      skipWhenAutoInFarmMap: typeof s.skipWhenAutoInFarmMap === 'boolean' ? s.skipWhenAutoInFarmMap : current.skipWhenAutoInFarmMap,
+      skipWhenBotStopped: typeof s.skipWhenBotStopped === 'boolean' ? s.skipWhenBotStopped : current.skipWhenBotStopped,
+      skipWhenInTown: typeof s.skipWhenInTown === 'boolean' ? s.skipWhenInTown : current.skipWhenInTown,
+      notifyPendingOnManager: typeof s.notifyPendingOnManager === 'boolean' ? s.notifyPendingOnManager : current.notifyPendingOnManager,
+      soundAlertOnPending: typeof s.soundAlertOnPending === 'boolean' ? s.soundAlertOnPending : current.soundAlertOnPending
     });
     return loadSettings();
   }
@@ -619,7 +629,8 @@ function createHumanCheckSolver({ dataDir, requestJSON: testRequest, serviceUrl:
     applyOfflineWalletSnapshot(result){if(offlineWallet&&result?.unitScale===100&&Number.isSafeInteger(result.balanceUnits))updateBalance({...result,schemaVersion:2});},
     isRemoteService: true, loadSettings, saveSettings,
     publicSettings: (s = loadSettings()) => Object.fromEntries([
-      'autoAnswer', 'answerDelayMs', 'pointSystemEnabled', 'points', 'pointsPerSolve',
+      'autoAnswer', 'answerDelayMs', 'skipWhenAutoInFarmMap', 'skipWhenBotStopped', 'skipWhenInTown',
+      'notifyPendingOnManager', 'soundAlertOnPending', 'pointSystemEnabled', 'points', 'pointsPerSolve',
       'pointsPerBaht', 'machineHwid', 'machineHwidShort', 'accessStatus', 'customRateUnits', 'effectiveRateUnits', 'accessRequestedAt', 'accessNote',
       'username', 'isUserAccount', 'requiresLogin',
       'topupHistory', 'machineMerit', 'serviceAvailable', 'serviceOrigin', 'accountId', 'balanceUnits', 'unitScale', 'localCatalogReady'

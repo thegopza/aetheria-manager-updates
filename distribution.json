@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "840d97dbc465a20dda10a9f83f6c47d16bbf076b",
+  "sourceCommit": "ede218e165f09920b73a423e38e6ceb79b998b3c",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -40,11 +40,11 @@
     },
     {
       "path": "manager/discord_bot.js",
-      "sha256": "6478c6fbd120dc523a183c37c63cbcacc43cefcce9d43c25bbe3015fe0502ad7"
+      "sha256": "053ba61350ef5f3f6281e2f4d4d5880117039a80acd4ebc62d7107d54cec15dd"
     },
     {
       "path": "manager/embedded_human_check_bridge.js",
-      "sha256": "3fabb02b8d7b2e10cdae1309684be4650cc87cfe5538ff6135abf07cd76edf0a"
+      "sha256": "6d935b8b6df8a141b2c010b817c1cd3937af637496e0e1ce581c12c55d37ed5a"
     },
     {
       "path": "manager/fleet_zeny_consolidation.js",
@@ -64,7 +64,7 @@
     },
     {
       "path": "manager/human_check_solver.js",
-      "sha256": "21cb8ab9c959eac9854f21ea0cfa110e429af84dc25d5a17da408ac5e653f416"
+      "sha256": "c1359056e17039d7239757c3691bac02ecb732277c6be28853e39933bd2d0f7f"
     },
     {
       "path": "manager/image_board_solver.js",
@@ -140,7 +140,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "669fe3fc22e2fc4dc529e6c9c90dc2dc4b7fdbb81fcda57028410873b14c1624"
+      "sha256": "e4376dddf05b9c4581704fb9f139dd5475429bb3a075646560b7af1ccda9d291"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -208,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "3ed6a924f85086765cd5af7b13359821e71a12eaf474f693fc1f7596083045dc"
+      "sha256": "8dbc05f6625ef90a07facd8382c33d98e8639cb673674947ba0b0290e78b4fd8"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -248,7 +248,7 @@
     },
     {
       "path": "manager/public/patcher_module.js",
-      "sha256": "fcf0c5d87cb14912f6f655cf535dfe7c23f139e5a97a0720902ff78b15e6aa85"
+      "sha256": "fefe4221456bdc50860a297ac293fe21d97ea1ebae0e98ab7ce4c58bd6b9c0b4"
     },
     {
       "path": "manager/public/plan_editor.css",
@@ -272,7 +272,7 @@
     },
     {
       "path": "manager/public/style.css",
-      "sha256": "e1225a255db367f7249ed53602a36ededd84da0023767665d20fc8551a193b4e"
+      "sha256": "81c25c7d664ee765371fafe2c33c904daf87dd62218e7b73650de02dfd4810c0"
     },
     {
       "path": "manager/public/support_chat.css",
@@ -288,7 +288,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "20625c80435c51d8412f53a0b3fdf66b9f93002550143c8c2c7d13a6e61a70e4"
+      "sha256": "358cf8893e87bac1aaa4eb9d2f8b9b1bb56f020aa8cd466f4b94e9dddbe726fc"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -320,7 +320,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "6dd820740814fe225264ca8a3c3186b2e823351f1037242f636ffef25cd5fcda"
+      "sha256": "7546a0567ca5b94ed343d73beafa35acc3fe646480d7b9e719a5e202a9e8f9f9"
     },
     {
       "path": "manager/test_isolation.js",

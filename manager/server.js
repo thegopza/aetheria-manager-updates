@@ -110,6 +110,7 @@ const { createScriptCoordinator } = require('./script_coordinator');
 const { loadScriptRollout, saveScriptRolloutSelection } = require('./script_rollout');
 const { createRemoteFleetService } = require('./remote_fleet');
 const { createFleetZenyConsolidationService } = require('./fleet_zeny_consolidation');
+const { createEmbeddedHumanCheckBridge, buildClientCaptchaPolicyInstallSnippet } = require('./embedded_human_check_bridge');
 const PROFILES_BACKUP_FILE = path.join(__dirname, "data", "profiles.backup.json");
 const PLANS_BACKUP_FILE = path.join(__dirname, "data", "plans.backup.json");
 const PRESETS_BACKUP_FILE = path.join(__dirname, "data", "presets.backup.json");
@@ -1042,6 +1043,48 @@ const LIVE_STATE_EVAL = `(() => {
     };
   }
   try {
+    if (!window.__pmCaptchaPolicyInstalled) {
+      let savedPol = null;
+      try {
+        const rawPol = localStorage.getItem('pelican_captcha_policy_v1');
+        if (rawPol) savedPol = JSON.parse(rawPol);
+      } catch (_) {}
+      if (savedPol && typeof savedPol === 'object') {
+        window.__pmCaptchaPolicy = savedPol;
+        window.__pmEvaluateCaptchaPolicy = window.__pmEvaluateCaptchaPolicy || function () {
+          const p = window.__pmCaptchaPolicy || {};
+          if (p.autoAnswer === false) { window.__pmHumanCheckPauseReason = 'ปิด Auto ตอบคำถามไว้'; return false; }
+          const isAuto = Boolean(window.__isBotRunning || document.querySelector('.btn-auto.active, .hud-auto.active, button.active[title*="Auto"]'));
+          let curMap = '';
+          try { if (typeof window.__getClientLiveState === 'function') curMap = String(window.__getClientLiveState()?.map || '').trim(); } catch (_) {}
+          if (!curMap) {
+            try { curMap = String(document.querySelector('.minimap-name, .minimap-title, [class*="map-name"]')?.textContent || '').trim(); } catch (_) {}
+          }
+          const hasHud = Boolean(document.querySelector('.hud, .hud-status, .hud-name'));
+          const isUnknownMap = !curMap || curMap === '--' || /ไม่ทราบแมพ|unknown|loading|กำลังโหลด/i.test(curMap);
+          const isTown = /เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน|\\bsolhaven\\b|\\btown\\b/i.test(curMap);
+          const isJail = !/คุกใต้ดิน/i.test(curMap) && /คุก|เรือนจำ|\\bprison\\b|\\bjail\\b/i.test(curMap);
+          const isTower = /หอคอย|endless\\s*tower/i.test(curMap);
+          const isFarmMap = hasHud && !isUnknownMap && !isTown && !isJail && !isTower;
+          if (p.skipWhenAutoInFarmMap && isAuto && isFarmMap) { window.__pmHumanCheckPauseReason = 'งดตอบอัตโนมัติ (บอท Auto อยู่ในแมพฟาร์ม)'; return false; }
+          if (p.skipWhenBotStopped && !isAuto) { window.__pmHumanCheckPauseReason = 'งดตอบอัตโนมัติ (บอทไม่ได้กด START)'; return false; }
+          if (p.skipWhenInTown && isTown) { window.__pmHumanCheckPauseReason = 'งดตอบอัตโนมัติ (อยู่ในเมือง)'; return false; }
+          window.__pmHumanCheckPauseReason = null;
+          return true;
+        };
+        try {
+          Object.defineProperty(window, '__autoHumanCheckEnabled', {
+            configurable: true,
+            enumerable: true,
+            get() { return window.__pmEvaluateCaptchaPolicy(); },
+            set(v) { if (!window.__pmCaptchaPolicy) window.__pmCaptchaPolicy = {}; window.__pmCaptchaPolicy.autoAnswer = Boolean(v); }
+          });
+          window.__pmCaptchaPolicyInstalled = true;
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  try {
     const isBadMap = (t) => !t || t === 'ไม่ทราบแมพ' || /^(?:\\d+|[-—–]+)\\s*ms$/i.test(t) || /\\b\\d+\\s*ms\\b/i.test(t) || /^CH\\b/i.test(t) || /▾/.test(t);
     if (isBadMap(String(s.map || '').trim())) {
       const mapEl = document.querySelector('.minimap-name, .minimap-title, [class*="map-name"], [class*="map-title"]');
@@ -1525,12 +1568,19 @@ const LIVE_STATE_EVAL = `(() => {
         ? rawMetaStr
         : ((fallbackHcStr.match(/[^\\n]*ตอบผิดได้อีก\\s*\\d+[^\\n]*/)?.[0] || '').trim() || rawMetaStr);
 
+      const pausedByPolicyNow = (window.__autoHumanCheckEnabled === false);
+      const pauseReasonNow = (pausedByPolicyNow && typeof window.__pmHumanCheckPauseReason === 'string' && window.__pmHumanCheckPauseReason)
+        ? window.__pmHumanCheckPauseReason
+        : (pausedByPolicyNow ? 'งดตอบอัตโนมัติตามตั้งค่า' : null);
+
       s.humanCheck = {
         active: true,
         id: window.__latestHumanCheck?.id ?? null,
         prompt: promptStr,
         meta: resolvedMetaStr,
         autoSolved: !!window.__lastHumanCheckSolved && window.__lastHumanCheckSolved.verified !== 'wrong' && (Date.now() - window.__lastHumanCheckSolved.timestamp < 15000),
+        pausedByPolicy: pausedByPolicyNow,
+        pauseReason: pauseReasonNow,
         lastSolved: window.__lastHumanCheckSolved || null,
         items: (window.__latestHumanCheck && Array.isArray(window.__latestHumanCheck.items)) ? window.__latestHumanCheck.items : null,
         image: (boardImg && (boardImg.getAttribute('src') || boardImg.src)) || window.__latestHumanCheck?.image || null,
@@ -6167,7 +6217,21 @@ const discordService = createDiscordBotService({
   stopAll: stopAllProfiles
 });
 
-const embeddedHumanCheckBridge=require('./embedded_human_check_bridge').createEmbeddedHumanCheckBridge({evalProfilePort,recordCaptchaSolved,getConfig:()=>{const hc=humanCheckSolver.loadSettings(),dc=discordService.loadSettings();return {autoAnswer:hc.autoAnswer!==false&&dc.autoAnswer!==false,answerDelayMs:hc.answerDelayMs};}});
+const embeddedHumanCheckBridge = createEmbeddedHumanCheckBridge({
+  evalProfilePort,
+  recordCaptchaSolved,
+  getConfig: () => {
+    const hc = humanCheckSolver.loadSettings();
+    const dc = discordService.loadSettings();
+    return {
+      autoAnswer: hc.autoAnswer !== false && dc.autoAnswer !== false,
+      answerDelayMs: hc.answerDelayMs,
+      skipWhenAutoInFarmMap: Boolean(hc.skipWhenAutoInFarmMap),
+      skipWhenBotStopped: Boolean(hc.skipWhenBotStopped),
+      skipWhenInTown: Boolean(hc.skipWhenInTown)
+    };
+  }
+});
 
 // ปิดเสียงแจ้งเตือน Captcha ระดับ OS จากตัว Manager เพื่อไม่ให้รบกวนผู้ใช้งาน
 function triggerWindowsAlertBeep() {
@@ -7428,7 +7492,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.10'
+  managerVersion: '4.63.11'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7457,7 +7521,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.10',
+  managerVersion: '4.63.11',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -8036,14 +8100,12 @@ const server = http.createServer(async (req, res) => {
               answerDelayMs: updated.answerDelayMs
             });
           }
-          // Sync autoHumanCheckEnabled into all running game clients
+          // Sync autoHumanCheckEnabled & Captcha Policy into all running game clients
+          const clientPolicyCode = buildClientCaptchaPolicyInstallSnippet(updated);
           const profiles = loadProfiles();
           for (const p of profiles) {
             if (p.debugPort) {
-              evalProfilePort(p.debugPort, `(() => {
-                window.__autoHumanCheckEnabled = ${updated.autoAnswer};
-                try { localStorage.setItem('pelican_auto_human_check', '${updated.autoAnswer}'); } catch(e){}
-              })()`).catch(() => {});
+              evalProfilePort(p.debugPort, clientPolicyCode).catch(() => {});
             }
           }
           const publicUpdated = humanCheckSolver.publicSettings(updated);
@@ -8066,13 +8128,11 @@ const server = http.createServer(async (req, res) => {
       const dCfg = discordService.loadSettings();
       discordService.saveSettings({ ...dCfg, autoAnswer: newAutoAnswer });
       // Sync into all running clients
+      const clientPolicyCode = buildClientCaptchaPolicyInstallSnippet(updated);
       const profiles = loadProfiles();
       for (const p of profiles) {
         if (p.debugPort) {
-          evalProfilePort(p.debugPort, `(() => {
-            window.__autoHumanCheckEnabled = ${newAutoAnswer};
-            try { localStorage.setItem('pelican_auto_human_check', '${newAutoAnswer}'); } catch(e){}
-          })()`).catch(() => {});
+          evalProfilePort(p.debugPort, clientPolicyCode).catch(() => {});
         }
       }
       return sendJSON({ success: true, autoAnswer: newAutoAnswer, settings: humanCheckSolver.publicSettings(updated) });

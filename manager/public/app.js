@@ -465,6 +465,9 @@ async function fetchProfiles() {
         if (hasActiveHumanCheck || hasPrisonProfile) {
           playHumanCheckAlert(hasPrisonProfile);
         }
+        if (typeof updateCaptchaPendingNotifications === 'function') {
+          updateCaptchaPendingNotifications();
+        }
       }
     } catch (err) {
       console.error("Failed to fetch profiles:", err);
@@ -1589,6 +1592,8 @@ function isProfilePremium(p) {
   return until > Date.now();
 }
 
+const captchaHighlightUntilMap = new Map();
+
 function buildProfileCard(p) {
   const isOnline = p.isRunning;
   const state = isOnline ? p.liveState : null;
@@ -1687,8 +1692,9 @@ function buildProfileCard(p) {
           <span class="gauge-val">${val}</span>
         </div>`;
 
+  const isHighlightTarget = (captchaHighlightUntilMap.get(String(p.id)) || 0) > Date.now();
   return `
-    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isActivelyFarming ? 'is-farming' : ''} ${isErrorScreen ? 'is-screen-error' : ''} ${(isJailed || isBanned) ? 'is-jailed' : ''} ${isMenuOpen ? 'menu-open' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
+    <article class="profile-card ${isOnline ? 'is-online' : 'is-offline'} ${p.isMain ? 'is-main' : ''} ${hasPremium ? 'is-premium' : ''} ${isActivelyFarming ? 'is-farming' : ''} ${isErrorScreen ? 'is-screen-error' : ''} ${(isJailed || isBanned) ? 'is-jailed' : ''} ${isMenuOpen ? 'menu-open' : ''} ${isHighlightTarget ? 'is-captcha-target-highlight' : ''}" id="card-${p.id}" data-profile-id="${p.id}" style="--h: ${hue};">
       ${isBanned ? `
       <div class="card-jail-cross-overlay" title="ตรวจพบบัญชีนี้ถูกระงับการใช้งาน ระบบได้หยุดบอทและบล็อค Proxy IP ของจอนี้เรียบร้อยแล้ว">
         <svg class="jail-cross-svg" viewBox="0 0 200 200" preserveAspectRatio="none" aria-hidden="true">
@@ -1849,15 +1855,19 @@ function buildProfileCard(p) {
 
       ${state?.humanCheck?.active ? `
       <div class="human-check-alert-box" style="margin: 8px 12px; background: rgba(239, 68, 68, 0.2); border: 2px solid #ef4444; border-radius: 8px; padding: 10px; animation: pulse 1.5s infinite;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 6px;">
           <span style="font-weight: bold; color: #fca5a5; font-size: 13px;">🚨 เช็คผู้เล่น (Human Check)!</span>
-          <div style="display: flex; gap: 6px; align-items: center;">
+          <div style="display: flex; gap: 6px; align-items: center; flex-wrap: wrap;">
             ${state.humanCheck.autoSolved ? `<span style="font-size: 11px; color: #a7f3d0; background: #065f46; padding: 2px 6px; border-radius: 4px; font-weight: bold;">🤖 ตอบอัตโนมัติแล้ว</span>` : ''}
+            ${state.humanCheck.pausedByPolicy ? `<span style="font-size: 11px; color: #fde68a; background: rgba(180, 83, 9, 0.72); border: 1px solid rgba(251, 191, 36, 0.55); padding: 2px 6px; border-radius: 4px; font-weight: 700;">⏸️ ${escapeHTML(state.humanCheck.pauseReason || 'งดตอบอัตโนมัติตามตั้งค่า')}</span>` : ''}
             <span style="font-size: 11px; color: #fecaca; background: #b91c1c; padding: 2px 6px; border-radius: 4px;">${escapeHTML(state.humanCheck.meta || 'ตอบด่วน')}</span>
           </div>
         </div>
-        <div style="font-size: 12px; color: #fff; margin-bottom: 8px; font-weight: 500;">
-          ❓ ${escapeHTML(state.humanCheck.prompt || 'กรุณาเลือกรูปภาพให้ถูกต้อง')}
+        <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;">
+          <div style="font-size: 12px; color: #fff; font-weight: 500;">
+            ❓ ${escapeHTML(state.humanCheck.prompt || 'กรุณาเลือกรูปภาพให้ถูกต้อง')}
+          </div>
+          <button type="button" class="btn btn-sm" style="font-size: 11px; padding: 3px 9px; background: rgba(251, 191, 36, 0.2); border: 1px solid rgba(251, 191, 36, 0.65); color: #fef08a; font-weight: 700; border-radius: 6px; cursor: pointer;" onclick="focusClientWindow('${p.id}', this)" title="ดึงหน้าต่างเกมของจอนี้ออกมาหน้าสุดเพื่อตอบคำถาม">🎯 ดึงจอเกมขึ้นมาตอบ</button>
         </div>
         <div style="display: grid; grid-template-columns: repeat(${Math.min(4, (state.humanCheck.options || []).length || 4)}, 1fr); gap: 6px;">
           ${((state.humanCheck.options && state.humanCheck.options.length) ? state.humanCheck.options : [0, 1, 2, 3]).map((opt, i) => {
@@ -3413,51 +3423,416 @@ async function runWeightCheck(btn) {
     btn.innerHTML = label;
   }
 }
-document.getElementById("btn-weight-check").onclick = e => runWeightCheck(e.currentTarget);
+const btnWeightCheck = document.getElementById("btn-weight-check");
+if (btnWeightCheck) btnWeightCheck.onclick = e => runWeightCheck(e.currentTarget);
 
-function updateAutoAnswerToolbarBtn(isAuto) {
-  const btn = document.getElementById("btn-toggle-auto-answer");
-  const lbl = document.getElementById("lbl-toggle-auto-answer");
-  if (!btn) return;
-  if (isAuto) {
-    if (lbl) lbl.textContent = "Auto ตอบ: เปิด";
-    btn.style.borderColor = "rgba(16, 185, 129, 0.4)";
-    btn.style.background = "rgba(16, 185, 129, 0.12)";
-    btn.style.color = "#34d399";
-    btn.title = "เปิดใช้งาน Auto ตอบคำถามเช็คผู้เล่นอยู่ — คลิกเพื่อปิด";
+// ==========================================
+// CAPTCHA SETTING MODAL & LIVE PENDING NOTIFICATION DOCK
+// ==========================================
+let currentCaptchaSettings = {
+  autoAnswer: true,
+  answerDelayMs: 1800,
+  skipWhenAutoInFarmMap: false,
+  skipWhenBotStopped: false,
+  skipWhenInTown: false,
+  notifyPendingOnManager: true,
+  soundAlertOnPending: false
+};
+
+function normalizeCaptchaSettingsLocal(input) {
+  if (typeof input === "boolean") {
+    return { ...currentCaptchaSettings, autoAnswer: input };
+  }
+  const s = (input && typeof input === "object") ? input : {};
+  return {
+    autoAnswer: s.autoAnswer !== undefined ? s.autoAnswer !== false : currentCaptchaSettings.autoAnswer,
+    answerDelayMs: s.answerDelayMs != null ? Math.max(800, Math.min(8000, parseInt(s.answerDelayMs, 10) || 1800)) : currentCaptchaSettings.answerDelayMs,
+    skipWhenAutoInFarmMap: s.skipWhenAutoInFarmMap !== undefined ? Boolean(s.skipWhenAutoInFarmMap) : currentCaptchaSettings.skipWhenAutoInFarmMap,
+    skipWhenBotStopped: s.skipWhenBotStopped !== undefined ? Boolean(s.skipWhenBotStopped) : currentCaptchaSettings.skipWhenBotStopped,
+    skipWhenInTown: s.skipWhenInTown !== undefined ? Boolean(s.skipWhenInTown) : currentCaptchaSettings.skipWhenInTown,
+    notifyPendingOnManager: s.notifyPendingOnManager !== undefined ? (s.notifyPendingOnManager !== false) : currentCaptchaSettings.notifyPendingOnManager,
+    soundAlertOnPending: s.soundAlertOnPending !== undefined ? Boolean(s.soundAlertOnPending) : currentCaptchaSettings.soundAlertOnPending
+  };
+}
+
+function updateAutoAnswerToolbarBtn(settingsOrBool) {
+  currentCaptchaSettings = normalizeCaptchaSettingsLocal(settingsOrBool);
+  const btn = document.getElementById("btn-captcha-settings");
+  const pill = document.getElementById("captcha-settings-mode-pill");
+  if (!btn || !pill) return;
+  pill.classList.remove("is-on", "is-off", "is-conditional");
+  btn.classList.remove("is-on", "is-off", "is-conditional");
+  if (currentCaptchaSettings.autoAnswer === false) {
+    pill.textContent = "ปิด Auto";
+    pill.classList.add("is-off");
+    btn.classList.add("is-off");
+  } else if (currentCaptchaSettings.skipWhenAutoInFarmMap) {
+    pill.textContent = "งดตอบแมพฟาร์ม";
+    pill.classList.add("is-conditional");
+    btn.classList.add("is-conditional");
+  } else if (currentCaptchaSettings.skipWhenBotStopped || currentCaptchaSettings.skipWhenInTown) {
+    pill.textContent = "มีเงื่อนไข";
+    pill.classList.add("is-conditional");
+    btn.classList.add("is-conditional");
   } else {
-    if (lbl) lbl.textContent = "Auto ตอบ: ปิด";
-    btn.style.borderColor = "rgba(239, 68, 68, 0.4)";
-    btn.style.background = "rgba(239, 68, 68, 0.12)";
-    btn.style.color = "#f87171";
-    btn.title = "ปิด Auto ตอบคำถามเช็คผู้เล่นอยู่ — คลิกเพื่อเปิด";
+    pill.textContent = "เปิดปกติ";
+    pill.classList.add("is-on");
+    btn.classList.add("is-on");
   }
 }
 window.updateAutoAnswerToolbarBtn = updateAutoAnswerToolbarBtn;
 
-const btnToggleAutoAnswer = document.getElementById("btn-toggle-auto-answer");
-if (btnToggleAutoAnswer) {
-  btnToggleAutoAnswer.onclick = async () => {
-    btnToggleAutoAnswer.disabled = true;
-    try {
-      const res = await fetch(`${API_BASE}/api/human-check/toggle`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }).then(r => r.json());
-      if (res && res.success) {
-        updateAutoAnswerToolbarBtn(res.autoAnswer);
-        showToast(res.autoAnswer ? "🤖 เปิด Auto ตอบคำถามเช็คผู้เล่นแล้ว" : "⏸️ ปิด Auto ตอบคำถามเช็คผู้เล่นแล้ว", res.autoAnswer ? "success" : "warning");
-        const hcGlobal = document.getElementById("hc-global-auto-answer");
-        if (hcGlobal) hcGlobal.checked = res.autoAnswer;
-        const discAuto = document.getElementById("discord-auto-answer");
-        if (discAuto) discAuto.checked = res.autoAnswer;
-      } else {
-        showToast("❌ เปลี่ยนสถานะไม่สำเร็จ: " + (res.error || "Unknown"), "error");
+function applyCaptchaSettingsToModalDom(s) {
+  const cfg = normalizeCaptchaSettingsLocal(s);
+  const elAuto = document.getElementById("cs-auto-answer");
+  const elDelay = document.getElementById("cs-answer-delay");
+  const elFarm = document.getElementById("cs-skip-farm-auto");
+  const elStop = document.getElementById("cs-skip-bot-stopped");
+  const elTown = document.getElementById("cs-skip-in-town");
+  const elNotify = document.getElementById("cs-notify-manager");
+  const elSound = document.getElementById("cs-sound-alert");
+  if (elAuto) elAuto.checked = cfg.autoAnswer !== false;
+  if (elDelay) elDelay.value = cfg.answerDelayMs || 1800;
+  if (elFarm) elFarm.checked = Boolean(cfg.skipWhenAutoInFarmMap);
+  if (elStop) elStop.checked = Boolean(cfg.skipWhenBotStopped);
+  if (elTown) elTown.checked = Boolean(cfg.skipWhenInTown);
+  if (elNotify) elNotify.checked = cfg.notifyPendingOnManager !== false;
+  if (elSound) elSound.checked = Boolean(cfg.soundAlertOnPending);
+}
+
+function closeCaptchaSettingsModal() {
+  const modal = document.getElementById("modal-captcha-settings");
+  if (modal) modal.style.display = "none";
+}
+window.closeCaptchaSettingsModal = closeCaptchaSettingsModal;
+
+async function openCaptchaSettingsModal() {
+  const modal = document.getElementById("modal-captcha-settings");
+  if (!modal) return;
+  applyCaptchaSettingsToModalDom(currentCaptchaSettings);
+  const msgEl = document.getElementById("cs-save-msg");
+  if (msgEl) msgEl.style.display = "none";
+  modal.style.display = "flex";
+  try {
+    const res = await fetch(`${API_BASE}/api/human-check/settings`).then(r => r.json());
+    if (res && res.success && res.settings) {
+      updateAutoAnswerToolbarBtn(res.settings);
+      applyCaptchaSettingsToModalDom(res.settings);
+    }
+  } catch (_) {}
+}
+window.openCaptchaSettingsModal = openCaptchaSettingsModal;
+
+function initCaptchaSettingsModal() {
+  const btnOpen = document.getElementById("btn-captcha-settings");
+  const modal = document.getElementById("modal-captcha-settings");
+  const btnClose = document.getElementById("btn-captcha-settings-close");
+  const btnCancel = document.getElementById("btn-captcha-settings-cancel");
+  const btnSave = document.getElementById("btn-captcha-settings-save");
+  const msgEl = document.getElementById("cs-save-msg");
+  if (btnOpen && !btnOpen._csBound) {
+    btnOpen._csBound = true;
+    btnOpen.addEventListener("click", openCaptchaSettingsModal);
+  }
+  if (!modal || modal._csBound) return;
+  modal._csBound = true;
+  if (btnClose) btnClose.addEventListener("click", closeCaptchaSettingsModal);
+  if (btnCancel) btnCancel.addEventListener("click", closeCaptchaSettingsModal);
+  modal.addEventListener("click", e => {
+    if (e.target === modal) closeCaptchaSettingsModal();
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && modal.style.display === "flex") closeCaptchaSettingsModal();
+  });
+  if (btnSave) {
+    btnSave.addEventListener("click", async () => {
+      const payload = {
+        autoAnswer: document.getElementById("cs-auto-answer")?.checked !== false,
+        answerDelayMs: Math.max(800, Math.min(8000, parseInt(document.getElementById("cs-answer-delay")?.value, 10) || 1800)),
+        skipWhenAutoInFarmMap: Boolean(document.getElementById("cs-skip-farm-auto")?.checked),
+        skipWhenBotStopped: Boolean(document.getElementById("cs-skip-bot-stopped")?.checked),
+        skipWhenInTown: Boolean(document.getElementById("cs-skip-in-town")?.checked),
+        notifyPendingOnManager: document.getElementById("cs-notify-manager")?.checked !== false,
+        soundAlertOnPending: Boolean(document.getElementById("cs-sound-alert")?.checked)
+      };
+      const origTxt = btnSave.textContent;
+      btnSave.disabled = true;
+      btnSave.textContent = "⏳ กำลังบันทึก...";
+      try {
+        const res = await fetch(`${API_BASE}/api/human-check/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }).then(r => r.json());
+        if (res && res.success) {
+          const saved = res.settings || payload;
+          updateAutoAnswerToolbarBtn(saved);
+          const hcGlobal = document.getElementById("hc-global-auto-answer");
+          if (hcGlobal) hcGlobal.checked = saved.autoAnswer !== false;
+          const hcDelay = document.getElementById("hc-global-answer-delay");
+          if (hcDelay) hcDelay.value = saved.answerDelayMs || 1800;
+          const discAuto = document.getElementById("discord-auto-answer");
+          if (discAuto) discAuto.checked = saved.autoAnswer !== false;
+          updateCaptchaPendingNotifications();
+          showToast("💾 บันทึก Captcha Setting แล้ว", "success");
+          closeCaptchaSettingsModal();
+        } else if (msgEl) {
+          msgEl.style.display = "block";
+          msgEl.className = "cs-save-msg is-err";
+          msgEl.textContent = "❌ บันทึกไม่สำเร็จ: " + (res?.error || "เกิดข้อผิดพลาด");
+        }
+      } catch (err) {
+        if (msgEl) {
+          msgEl.style.display = "block";
+          msgEl.className = "cs-save-msg is-err";
+          msgEl.textContent = "❌ เกิดข้อผิดพลาด: " + err.message;
+        }
+      } finally {
+        btnSave.disabled = false;
+        btnSave.textContent = origTxt;
       }
-    } catch (e) {
-      showToast("❌ เกิดข้อผิดพลาด: " + e.message, "error");
-    } finally {
-      btnToggleAutoAnswer.disabled = false;
+    });
+  }
+}
+
+const firstSeenActiveCheckAt = new Map();
+const dismissedAlertCheckKeys = new Set();
+const chimedAlertCheckKeys = new Set();
+let lastCaptchaChimeAt = 0;
+let lastCaptchaDockSig = "";
+
+function isClientMapFarmMapForUi(st) {
+  if (!st || (st.screenPhase && st.screenPhase !== "in_game")) return false;
+  const mapStr = String(st.map || "").trim();
+  if (!mapStr || mapStr === "--" || /ไม่ทราบแมพ|unknown|loading|กำลังโหลด/i.test(mapStr)) return false;
+  if (/เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน|\bsolhaven\b|\btown\b/i.test(mapStr)) return false;
+  if (!/คุกใต้ดิน/i.test(mapStr) && /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(mapStr)) return false;
+  if (/หอคอย|endless\s*tower/i.test(mapStr)) return false;
+  return true;
+}
+
+function playSoftCaptchaPendingChime() {
+  const now = Date.now();
+  if (now - lastCaptchaChimeAt < 5000) return;
+  lastCaptchaChimeAt = now;
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    if (!window.__pmManagerAudioCtx || window.__pmManagerAudioCtx.state === "closed") {
+      window.__pmManagerAudioCtx = new AudioCtx();
+    }
+    const ctx = window.__pmManagerAudioCtx;
+    if (ctx.state === "suspended" && typeof ctx.resume === "function") ctx.resume().catch(() => {});
+    [783.99, 1046.5].forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + idx * 0.14);
+      gain.gain.setValueAtTime(0.16, ctx.currentTime + idx * 0.14);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + idx * 0.14 + 0.16);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + idx * 0.14);
+      osc.stop(ctx.currentTime + idx * 0.14 + 0.17);
+    });
+  } catch (_) {}
+}
+
+function getPendingCaptchaAlertList() {
+  const now = Date.now();
+  const activeProfileIds = new Set();
+  const pending = [];
+  for (const p of currentProfiles) {
+    if (!p || !p.isRunning || !p.liveState || !p.liveState.humanCheck || !p.liveState.humanCheck.active) {
+      continue;
+    }
+    const pid = String(p.id);
+    const hc = p.liveState.humanCheck;
+    const checkKey = `${pid}:${hc.id ?? ""}:${hc.prompt || ""}`;
+    activeProfileIds.add(pid);
+
+    const prevSeen = firstSeenActiveCheckAt.get(pid);
+    const firstSeenAt = (prevSeen && prevSeen.checkKey === checkKey) ? prevSeen.firstSeenAt : now;
+    firstSeenActiveCheckAt.set(pid, { checkKey, firstSeenAt });
+
+    if (hc.autoSolved) continue;
+
+    const mapStr = String(p.liveState.map || "").trim();
+    const isTown = /เมืองหลวง|โซลเฮเวน|ตลาดคาราวาน|\bsolhaven\b|\btown\b/i.test(mapStr);
+    const pausedFarm = Boolean(currentCaptchaSettings.skipWhenAutoInFarmMap && p.liveState.isBotRunning && isClientMapFarmMapForUi(p.liveState));
+    const pausedStop = Boolean(currentCaptchaSettings.skipWhenBotStopped && !p.liveState.isBotRunning);
+    const pausedTown = Boolean(currentCaptchaSettings.skipWhenInTown && isTown);
+    const pausedGlobalOff = currentCaptchaSettings.autoAnswer === false;
+    const isPaused = Boolean(hc.pausedByPolicy || pausedFarm || pausedStop || pausedTown || pausedGlobalOff);
+    const reason = hc.pauseReason
+      || (pausedGlobalOff ? "ปิด Auto ตอบคำถามไว้"
+        : pausedFarm ? "งดตอบในแมพฟาร์ม (กำลัง Auto)"
+        : pausedStop ? "งดตอบ (บอทหยุดอยู่)"
+        : pausedTown ? "งดตอบ (อยู่ในเมือง)"
+        : null);
+
+    const elapsedMs = now - firstSeenAt;
+    if (isPaused || elapsedMs >= 4000) {
+      pending.push({
+        profile: p,
+        pid,
+        hc,
+        checkKey,
+        isPaused,
+        reason: reason || "รอผู้เล่นตรวจสอบ/ตอบคำถาม"
+      });
+    }
+  }
+
+  for (const pid of Array.from(firstSeenActiveCheckAt.keys())) {
+    if (!activeProfileIds.has(pid)) {
+      firstSeenActiveCheckAt.delete(pid);
+      for (const dk of Array.from(dismissedAlertCheckKeys)) {
+        if (dk.startsWith(pid + ":")) dismissedAlertCheckKeys.delete(dk);
+      }
+      for (const ck of Array.from(chimedAlertCheckKeys)) {
+        if (ck.startsWith(pid + ":")) chimedAlertCheckKeys.delete(ck);
+      }
+    }
+  }
+  return pending;
+}
+
+function jumpToAndFocusCaptchaClient(profileId) {
+  const pid = String(profileId || "");
+  if (!pid) return;
+  if (typeof window.switchMainTab === "function") window.switchMainTab("profiles");
+  document.body.classList.remove("cd-open", "pt-open", "pm-open", "gd-open");
+  closeCaptchaSettingsModal();
+  if (typeof closeLaunchAllPopover === "function") closeLaunchAllPopover();
+
+  let expandedAny = false;
+  for (const gk of ["problem", "stopped", "solo"]) {
+    if (collapsedCardGroups.has(gk)) {
+      collapsedCardGroups.delete(gk);
+      expandedAny = true;
+    }
+  }
+  if (typeof getPartyRoleMap === "function") {
+    const r = getPartyRoleMap().get(pid);
+    if (r && r.partyId && collapsedCardGroups.has(`party:${r.partyId}`)) {
+      collapsedCardGroups.delete(`party:${r.partyId}`);
+      expandedAny = true;
+    }
+  }
+  if (expandedAny) renderProfiles();
+
+  captchaHighlightUntilMap.set(pid, Date.now() + 4500);
+
+  const highlightAndScroll = () => {
+    const cardEl = document.getElementById(`card-${pid}`) || document.querySelector(`.profile-card[data-profile-id="${pid}"]`);
+    if (cardEl) {
+      cardEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      cardEl.classList.remove("is-captcha-target-highlight");
+      void cardEl.offsetWidth;
+      cardEl.classList.add("is-captcha-target-highlight");
     }
   };
+  setTimeout(() => {
+    if ((captchaHighlightUntilMap.get(pid) || 0) <= Date.now()) {
+      captchaHighlightUntilMap.delete(pid);
+      const el = document.getElementById(`card-${pid}`) || document.querySelector(`.profile-card[data-profile-id="${pid}"]`);
+      if (el) el.classList.remove("is-captcha-target-highlight");
+    }
+  }, 4550);
+  highlightAndScroll();
+  requestAnimationFrame(highlightAndScroll);
+
+  focusClientWindow(pid);
+  const prof = currentProfiles.find(p => String(p.id) === pid);
+  const disp = prof ? ((prof.liveState?.charName || prof.lastCharName) ? `${prof.liveState?.charName || prof.lastCharName} (${prof.name})` : prof.name) : pid;
+  showToast(`🎯 เลื่อนไปยัง ${disp} และดึงหน้าจอเกมขึ้นบนสุดแล้ว`, "info");
 }
+window.jumpToAndFocusCaptchaClient = jumpToAndFocusCaptchaClient;
+
+function updateCaptchaPendingNotifications() {
+  const list = getPendingCaptchaAlertList();
+  const badge = document.getElementById("captcha-pending-toolbar-badge");
+  if (badge) {
+    if (list.length > 0) {
+      badge.style.display = "inline-flex";
+      badge.textContent = `🚨 ${list.length}`;
+    } else {
+      badge.style.display = "none";
+    }
+  }
+
+  if (currentCaptchaSettings.soundAlertOnPending && list.some(item => !chimedAlertCheckKeys.has(item.checkKey))) {
+    list.forEach(item => chimedAlertCheckKeys.add(item.checkKey));
+    playSoftCaptchaPendingChime();
+  }
+
+  const visible = (currentCaptchaSettings.notifyPendingOnManager !== false)
+    ? list.filter(item => !dismissedAlertCheckKeys.has(item.checkKey))
+    : [];
+
+  let dock = document.getElementById("captcha-live-alert-dock");
+  if (visible.length === 0) {
+    if (dock) dock.remove();
+    lastCaptchaDockSig = "";
+    return;
+  }
+
+  const sig = visible.map(v => `${v.checkKey}|${v.reason}|${v.hc.meta || ""}|${v.profile.liveState?.map || ""}`).join(";;");
+  if (dock && sig === lastCaptchaDockSig) return;
+  lastCaptchaDockSig = sig;
+
+  if (!dock) {
+    dock = document.createElement("div");
+    dock.id = "captcha-live-alert-dock";
+    dock.className = "captcha-live-alert-dock";
+    document.body.appendChild(dock);
+  }
+
+  dock.innerHTML = `
+    <div class="clad-head">
+      <div class="clad-title">🚨 แจ้งเตือนติดตอบคำถาม (<b>${visible.length}</b> จอ)</div>
+      <button type="button" class="clad-dismiss-btn" id="btn-clad-dismiss" title="ซ่อนการแจ้งเตือนชุดนี้ชั่วคราว">ซ่อนชั่วคราว</button>
+    </div>
+    <div class="clad-list">
+      ${visible.map(item => {
+        const p = item.profile;
+        const charName = p.liveState?.charName || p.lastCharName || p.name;
+        const disp = charName && charName !== p.name ? `${charName} (${p.name})` : p.name;
+        const mapName = p.liveState?.map || p.targetMap || "ไม่ทราบแมพ";
+        return `
+          <div class="clad-item" data-captcha-jump-id="${escapeHTML(item.pid)}" role="button" tabindex="0" title="คลิกเพื่อ Slide ไปที่การ์ดและดึงจอเกมขึ้นบนสุด">
+            <div class="clad-item-top">
+              <span class="clad-char-name">👤 ${escapeHTML(disp)}</span>
+              <span class="clad-reason-pill">${item.isPaused ? "⏸️ งดตอบอัตโนมัติ" : "⏳ รอผู้เล่นตอบ"}</span>
+            </div>
+            <div class="clad-item-sub">📍 ${escapeHTML(mapName)}${item.hc.meta ? ` · ${escapeHTML(item.hc.meta)}` : ""}</div>
+            <div class="clad-item-prompt">❓ ${escapeHTML(item.hc.prompt || "ตรวจพบคำถามเช็คผู้เล่นบนจอ")}</div>
+            <div class="clad-item-cta">🎯 คลิกเพื่อ Slide ไปหา &amp; ดึงจอขึ้นบนสุด →</div>
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
+
+  dock.querySelector("#btn-clad-dismiss")?.addEventListener("click", e => {
+    e.stopPropagation();
+    visible.forEach(item => dismissedAlertCheckKeys.add(item.checkKey));
+    updateCaptchaPendingNotifications();
+  });
+
+  dock.querySelectorAll("[data-captcha-jump-id]").forEach(el => {
+    const activate = () => jumpToAndFocusCaptchaClient(el.getAttribute("data-captcha-jump-id"));
+    el.addEventListener("click", activate);
+    el.addEventListener("keydown", ev => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        activate();
+      }
+    });
+  });
+}
+window.updateCaptchaPendingNotifications = updateCaptchaPendingNotifications;
 
 // ==========================================
 // PROXY AUTO-REGISTER MODAL & TOGGLE CONTROLLER
@@ -5414,7 +5789,7 @@ function initDeviceNickname() {
     try {
       const res = await fetch(`${API_BASE}/api/human-check/settings`).then(r => r.json());
       if (res && res.success && res.settings) {
-        updateAutoAnswerToolbarBtn(res.settings.autoAnswer !== false);
+        updateAutoAnswerToolbarBtn(res.settings);
         updatePointDisplays(res.settings.points, res.settings.pointsPerSolve, res.settings.serviceAvailable, res.settings.machineMerit);
       }
     } catch (_) {}
@@ -6098,7 +6473,7 @@ function initAccountAuthModal() {
   try {
     const res = await fetch(`${API_BASE}/api/human-check/settings`).then(r => r.json());
     if (res && res.success && res.settings) {
-      updateAutoAnswerToolbarBtn(res.settings.autoAnswer !== false);
+      updateAutoAnswerToolbarBtn(res.settings);
       updatePointDisplays(res.settings.points, res.settings.pointsPerSolve, res.settings.serviceAvailable, res.settings.machineMerit);
       const isDev = !!res.isDev;
       document.querySelectorAll(".dev-only-feature").forEach(el => {
@@ -6107,7 +6482,7 @@ function initAccountAuthModal() {
     }
   } catch (e) {}
   // The modal markup follows this script; a fast/cached response can finish before parsing it.
-  const initAccountModals=()=>{initTopupCaptchaModal();initProxyRegisterControls();initScreenProxyControls();initAccountAuthModal();};
+  const initAccountModals=()=>{initCaptchaSettingsModal();initTopupCaptchaModal();initProxyRegisterControls();initScreenProxyControls();initAccountAuthModal();};
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initAccountModals, { once: true });
   else initAccountModals();
   initDeviceNickname();

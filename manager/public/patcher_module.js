@@ -352,7 +352,7 @@
           if (hcPointsVal) hcPointsVal.innerText = s.points || 0;
           if (hcPointsPerSolve) { hcPointsPerSolve.value = s.pointsPerSolve ?? 1; hcPointsPerSolve.disabled = true; }
           if (typeof window.updateAutoAnswerToolbarBtn === 'function') {
-            window.updateAutoAnswerToolbarBtn(s.autoAnswer !== false);
+            window.updateAutoAnswerToolbarBtn(s);
           }
           if (typeof window.updatePointDisplays === 'function') {
             window.updatePointDisplays(s.points, s.pointsPerSolve, s.serviceAvailable);
@@ -383,7 +383,7 @@
           if (res && res.success) {
             showHcMsg('✅ บันทึกการตั้งค่าตอบคำถามเรียบร้อยแล้ว');
             if (typeof window.updateAutoAnswerToolbarBtn === 'function') {
-              window.updateAutoAnswerToolbarBtn(payload.autoAnswer);
+              window.updateAutoAnswerToolbarBtn(res.settings || payload);
             }
             if (discordAutoAnswer) discordAutoAnswer.checked = payload.autoAnswer;
           } else {

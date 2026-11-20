@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "1d52c943396919542186183ad834957e1800a747",
+  "sourceCommit": "ffb6256d0e6b187e5676384a087e88e0b821927e",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -45,6 +45,10 @@
     {
       "path": "manager/embedded_human_check_bridge.js",
       "sha256": "3fabb02b8d7b2e10cdae1309684be4650cc87cfe5538ff6135abf07cd76edf0a"
+    },
+    {
+      "path": "manager/fleet_zeny_consolidation.js",
+      "sha256": "1ad6c14555244e9805d1f8ab91f43967d6faf88778ca89d95f5fd94dacc632d1"
     },
     {
       "path": "manager/game_loader/main.js",
@@ -136,7 +140,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "6709f5f7a95ac43c02b098c72a852e405bc92f0cf1bc6a8d81f683ad7f7963fb"
+      "sha256": "fa78acc2207029653e51cfb5823adda085b3157beca80b843f74f29a81302864"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -172,11 +176,15 @@
     },
     {
       "path": "manager/public/fleet_dashboard.css",
-      "sha256": "e2505a89eb794c28b0511735c392f2794316137de70b4bd18b487f7b979ccb24"
+      "sha256": "5b782b2fc562db89e09cebc292adef99e4ee685a814d30bad85f54c9c998477d"
     },
     {
       "path": "manager/public/fleet_dashboard.js",
-      "sha256": "8dac34c3be2a4a7cec4a94c4b3f7940e4ad4330f138b2c15ddb0e60d66b9e2ab"
+      "sha256": "ecc2701ff4bbb9ee195cfed08ac9375830a727c71e45517da8cc3891dfa6e1ce"
+    },
+    {
+      "path": "manager/public/fleet_zeny.js",
+      "sha256": "acfa08ddcd42ad45329cfd1fdc50f3d97029a678cc9f7c23d9fc40dcd3fd0668"
     },
     {
       "path": "manager/public/game-classes.json",
@@ -200,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "529151be6534f1077175df8d3971f73be28723809be960be8f1879b1657bb1f5"
+      "sha256": "a0d38e77dd962ff8f420916872b3a3e09506f9b413b39d9061f3d2f4a50b5fe0"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -280,11 +288,11 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "61f17a8fd2d29b48fda07ab6c2bc3741471365098794efea6b7ae68d229b28e4"
+      "sha256": "94321e955ea8150d372f22e94712a24ee4a847d4d77c69a9344b01557d8d7a20"
     },
     {
       "path": "manager/remote_fleet.js",
-      "sha256": "490c2764a4a386b946ebf0cb72219840bb1cf29b56e1da51528ca342c18e17bd"
+      "sha256": "95a3e9efb58e4741fc8f4f10551b054ad298ebb3ed9e54010a00a63af6643f7d"
     },
     {
       "path": "manager/screen_proxy_manager.js",
@@ -312,7 +320,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "8de34c57bf8c61c3e852e77d21291852a5d671cac5638771ddc0e000428048d0"
+      "sha256": "eed5a196ae37d459c06a07e75e83a752d5e2c0316afe65be5ebf0bfb09b69ff7"
     },
     {
       "path": "manager/test_isolation.js",

@@ -109,6 +109,7 @@ const imageBoardSolver = require('./image_board_solver');
 const { createScriptCoordinator } = require('./script_coordinator');
 const { loadScriptRollout, saveScriptRolloutSelection } = require('./script_rollout');
 const { createRemoteFleetService } = require('./remote_fleet');
+const { createFleetZenyConsolidationService } = require('./fleet_zeny_consolidation');
 const PROFILES_BACKUP_FILE = path.join(__dirname, "data", "profiles.backup.json");
 const PLANS_BACKUP_FILE = path.join(__dirname, "data", "plans.backup.json");
 const PRESETS_BACKUP_FILE = path.join(__dirname, "data", "presets.backup.json");
@@ -5792,7 +5793,7 @@ const botAutoUpdater = createBotAutoUpdater({
   getGameDir: () => installer.getEffectiveGamePath(),
   getManagedRelease: (force) => scriptCoordinator.refreshRelease ? scriptCoordinator.refreshRelease(force) : scriptCoordinator.release?.(),
   getCachedManagedRelease:()=>scriptCoordinator.release?.(),
-  isConsolidating: () => Boolean(typeof consolidationState !== 'undefined' && consolidationState && consolidationState.running),
+  isConsolidating: () => Boolean((typeof consolidationState !== 'undefined' && consolidationState && consolidationState.running) || (typeof fleetZenyService !== 'undefined' && fleetZenyService && fleetZenyService.getState()?.running)),
   dataDir: path.join(__dirname, "data")
 });
 // Auto-login / auto-register: game clients get their profile's ID + password (manager/auth_sync.js)
@@ -5894,7 +5895,7 @@ const managerUpdater = createManagerSelfUpdater({
   managerDir: __dirname,
   dataDir: path.join(__dirname, "data"),
   // Never restart in the middle of reloading game clients or a zeny consolidation run
-  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
+  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running || Boolean(typeof fleetZenyService !== 'undefined' && fleetZenyService && fleetZenyService.getState()?.running)
 });
 
 const VALID_CHANNEL_CHECK_MODES = ["no_overlap", "always", "all", "party_only", "solo_only", "off"];
@@ -5994,7 +5995,7 @@ const premiumService = createPremiumService({
     premiumGoal: consolidationState.premiumGoal || null
   }),
   dataFile: path.join(__dirname, "data", "premium.json"),
-  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
+  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running || Boolean(typeof fleetZenyService !== 'undefined' && fleetZenyService && fleetZenyService.getState()?.running)
 });
 premiumService.start();
 
@@ -6003,7 +6004,7 @@ const guildService = createGuildService({
   loadProfiles,
   evalProfilePort,
   dataFile: path.join(__dirname, "data", "guilds.json"),
-  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
+  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running || Boolean(typeof fleetZenyService !== 'undefined' && fleetZenyService && fleetZenyService.getState()?.running)
 });
 guildService.start();
 
@@ -6022,7 +6023,7 @@ cardMarketService.start();
 const marketSniperService = createMarketSniperService({
   loadProfiles,
   evalProfilePort,
-  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running
+  isBusy: () => botAutoUpdater.isBusy() || consolidationState.running || Boolean(typeof fleetZenyService !== 'undefined' && fleetZenyService && fleetZenyService.getState()?.running)
 });
 marketSniperService.start();
 
@@ -7427,9 +7428,42 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.60.0'
+  managerVersion: '4.63.8'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
+
+const fleetZenyService = createFleetZenyConsolidationService({
+  dataDir: path.join(__dirname, "data"),
+  loadProfiles,
+  queryClientState,
+  evalProfilePort,
+  getProfileIpGroupKey,
+  ensureClientConsolidationItemHelpers,
+  activeConsolidationProfiles,
+  activeConsolidationTasks,
+  activeConsolidationChannels,
+  syncConsolidationGlobalState,
+  getConsolidationState: () => consolidationState,
+  stopLocalConsolidation: () => {
+    consolidationAborted = true;
+    for (const t of activeConsolidationTasks.values()) t.aborted = true;
+    if (activeConsolidationTasks.size === 0) {
+      consolidationState.running = false;
+      consolidationState.status = 'stopped';
+    }
+    syncConsolidationGlobalState();
+  },
+  remoteFleet,
+  humanCheckSolver,
+  getEffectiveDeviceNickname,
+  os,
+  managerVersion: '4.63.8',
+  runningProcesses,
+  isProcessAlive,
+  browserMode,
+  clientStateCacheByPort,
+  clientStateLastFailureByPort
+});
 
 const server = http.createServer(async (req, res) => {
   req.setEncoding('utf8');   // request bodies are built with += (Thai split across chunks -> U+FFFD)
@@ -7819,7 +7853,9 @@ const server = http.createServer(async (req, res) => {
       (req.method === 'POST' && pathname === '/api/launch-all') ||
       (req.method === 'POST' && /^\/api\/profiles\/[^/]+\/launch$/.test(pathname)) ||
       (req.method === 'POST' && pathname === '/api/bot-control/start-all') ||
-      (req.method === 'POST' && pathname === '/api/consolidation/start')
+      (req.method === 'POST' && pathname === '/api/consolidation/start') ||
+      (req.method === 'POST' && pathname === '/api/fleet-zeny/start') ||
+      (req.method === 'POST' && pathname === '/api/fleet-zeny/run-ring')
     );
     if (isBlockedActionRoute) {
       return sendJSON({
@@ -7836,6 +7872,9 @@ const server = http.createServer(async (req, res) => {
       }, 403);
     }
   }
+
+  // Multi-PC Cross-Machine Zeny Consolidation — see fleet_zeny_consolidation.js
+  if (await fleetZenyService.handleRoute(req, res, pathname, parsedUrl, sendJSON)) return;
 
   // Plan Script live status / on-off switch per client — see plan_sync.js
   if (await planSync.handleRoute(req, res, pathname, sendJSON)) return;
@@ -10902,9 +10941,11 @@ public class PmFocus {
         const roundHundredK = Boolean(payload.roundHundredK);
         const ipGroupsInput = Array.isArray(payload.ipGroups) ? payload.ipGroups : null;
 
-        // Persist item trade preferences if supplied
+        const zenyOnly = Boolean(payload.zenyOnly);
+
+        // Persist item trade preferences if supplied (skipped for zeny-only fleet Stage 1 runs)
         let itemCfg = loadConsolidationItemSettings();
-        if (typeof payload.tradeOnConsolidate === "boolean" || Array.isArray(payload.items) || typeof payload.storeOnlyEnabled === "boolean") {
+        if (!zenyOnly && (typeof payload.tradeOnConsolidate === "boolean" || Array.isArray(payload.items) || typeof payload.storeOnlyEnabled === "boolean")) {
           itemCfg = saveConsolidationItemSettings({
             storeOnlyEnabled: typeof payload.storeOnlyEnabled === "boolean" ? payload.storeOnlyEnabled : itemCfg.storeOnlyEnabled,
             tradeOnConsolidate: typeof payload.tradeOnConsolidate === "boolean" ? payload.tradeOnConsolidate : itemCfg.tradeOnConsolidate,
@@ -10957,8 +10998,8 @@ public class PmFocus {
             }, activeConsolidationTasks.size > 0 ? 409 : 400);
           }
           runIpGroupsConsolidationWorkflow(validatedGroups, keepZeny, {
-            enabled: Boolean(itemCfg.tradeOnConsolidate),
-            items: itemCfg.items,
+            enabled: zenyOnly ? false : Boolean(itemCfg.tradeOnConsolidate),
+            items: zenyOnly ? [] : itemCfg.items,
             roundHundredK
           });
           return sendJSON({

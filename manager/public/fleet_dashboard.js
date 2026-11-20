@@ -65,6 +65,11 @@
     return Boolean(pane && pane.classList.contains("active"));
   }
 
+  function isFleetZenyTabActive() {
+    const pane = document.getElementById("fleet-zeny-pane");
+    return Boolean(pane && pane.classList.contains("active"));
+  }
+
   function getLocalFallbackInfo() {
     const st = typeof window.__getAccessUiState === "function" ? window.__getAccessUiState() : null;
     const nickEl = document.getElementById("device-nickname-input");
@@ -124,8 +129,7 @@
 
   function buildSwitcherOptionsHtml(selectedKey) {
     const list = getSwitcherMachines();
-    if (!list.length) return "";
-    return list.map(m => {
+    const machineOpts = list.map(m => {
       const name = m.deviceName || m.hostname || m.machineKey || "เครื่อง";
       const hwid = m.hwidCode && m.hwidCode !== "----" ? m.hwidCode : (m.machineKey && m.machineKey !== "__local__" ? m.machineKey : "");
       const idSuffix = hwid ? ` (${hwid})` : "";
@@ -143,6 +147,8 @@
       const canSelect = Boolean(m.isCurrentMachine || (m.isOnline && m.remoteReady) || isSel);
       return `<option value="${esc(m.machineKey)}"${isSel ? " selected" : ""}${!canSelect ? " disabled" : ""}>${esc(label)}</option>`;
     }).join("");
+    const zenySel = selectedKey === "__fleet_zeny__" ? " selected" : "";
+    return `${machineOpts}<option value="__fleet_zeny__"${zenySel}>💰 ระบบรวมเงินทุกเครื่อง</option>`;
   }
 
   function ensureGlobalTopbarMounted() {
@@ -156,6 +162,7 @@
           <button type="button" class="btn btn-sm btn-secondary fleet-nav-fleet-btn" id="fleet-global-all-btn">🖥️ หน้าเครื่องทั้งหมด</button>
           <button type="button" class="btn btn-sm fleet-home-btn" id="fleet-global-home-btn">⭐ เครื่องตัวเอง</button>
           <select class="fleet-remote-select" id="fleet-global-switcher" aria-label="สลับเครื่องที่ควบคุม"></select>
+          <button type="button" class="btn btn-sm fleet-zeny-top-btn" id="fleet-global-zeny-btn" title="เปิดหน้าระบบรวมเงินข้ามทุกเครื่อง">💰 ระบบรวมเงินทุกเครื่อง</button>
           <span class="fleet-hwid-chip" id="fleet-global-hwid" title="คลิกเพื่อคัดลอก HWID">----</span>
           <span class="fleet-local-star-pill" id="fleet-global-status-pill">⭐ เครื่องปัจจุบัน (เครื่องนี้)</span>
         </div>
@@ -171,9 +178,14 @@
       document.getElementById("fleet-global-home-btn")?.addEventListener("click", () => {
         if (typeof window.switchMainTab === "function") window.switchMainTab("profiles");
       });
+      document.getElementById("fleet-global-zeny-btn")?.addEventListener("click", () => {
+        if (typeof window.switchMainTab === "function") window.switchMainTab("fleet-zeny");
+      });
       document.getElementById("fleet-global-reload-btn")?.addEventListener("click", () => {
         fetchMachines(true);
-        if (isProfilesTabActive()) {
+        if (isFleetZenyTabActive() && window.FleetZeny && typeof window.FleetZeny.refresh === "function") {
+          window.FleetZeny.refresh();
+        } else if (isProfilesTabActive()) {
           document.getElementById("btn-refresh")?.click();
         }
       });
@@ -216,6 +228,10 @@
       if (switcher) {
         switcher.addEventListener("change", function () {
           const nextKey = this.value;
+          if (nextKey === "__fleet_zeny__") {
+            if (typeof window.switchMainTab === "function") window.switchMainTab("fleet-zeny");
+            return;
+          }
           const list = getSwitcherMachines();
           const nextTarget = list.find(x => x.machineKey === nextKey);
           const curMachine = list.find(x => x.isCurrentMachine);
@@ -240,18 +256,21 @@
 
     const allBtn = document.getElementById("fleet-global-all-btn");
     const homeBtn = document.getElementById("fleet-global-home-btn");
+    const zenyBtn = document.getElementById("fleet-global-zeny-btn");
     const switcher = document.getElementById("fleet-global-switcher");
     const hwidChip = document.getElementById("fleet-global-hwid");
     const onlinePill = document.getElementById("fleet-global-online-pill");
 
     const fleetActive = isFleetTabActive();
     const profilesActive = isProfilesTabActive();
+    const fleetZenyActive = isFleetZenyTabActive();
     if (allBtn) allBtn.classList.toggle("is-active", fleetActive);
     if (homeBtn) homeBtn.classList.toggle("is-active", profilesActive);
+    if (zenyBtn) zenyBtn.classList.toggle("is-active", fleetZenyActive);
 
     const list = getSwitcherMachines();
     const cur = list.find(m => m.isCurrentMachine) || list[0] || null;
-    const targetVal = cur ? cur.machineKey : "__local__";
+    const targetVal = fleetZenyActive ? "__fleet_zeny__" : (cur ? cur.machineKey : "__local__");
     if (switcher && document.activeElement !== switcher) {
       const optsHtml = buildSwitcherOptionsHtml(targetVal);
       if (switcher.dataset.lastOpts !== optsHtml) {
@@ -821,6 +840,11 @@
     });
     remoteSwitcher?.addEventListener("change", function () {
       const nextKey = this.value;
+      if (nextKey === "__fleet_zeny__") {
+        closeRemote();
+        if (typeof window.switchMainTab === "function") window.switchMainTab("fleet-zeny");
+        return;
+      }
       if (!nextKey || nextKey === activeRemoteKey) return;
       const nextTarget = getSwitcherMachines().find(x => x.machineKey === nextKey);
       if (nextTarget && nextTarget.isCurrentMachine) {

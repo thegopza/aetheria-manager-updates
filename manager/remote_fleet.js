@@ -70,7 +70,7 @@ function validateRelayedApiPath(rawPath) {
   if (p === "/api/auth/logout" || p === "/api/auth/login" || p === "/api/auth/register") {
     return { ok: false, status: 403, code: "REMOTE_AUTH_LOCKED", error: "ไม่สามารถออกจากระบบหรือสลับบัญชีระหว่างการควบคุมระยะไกลได้" };
   }
-  if (p === "/api/fleet" || p.startsWith("/api/fleet/") || p === "/api/support" || p.startsWith("/api/support/") || p === "/api/game-install/browse" || p === "/api/test" || p.startsWith("/api/test/")) {
+  if (p === "/api/fleet" || p.startsWith("/api/fleet/") || p === "/api/fleet-zeny" || p.startsWith("/api/fleet-zeny/") || p === "/api/support" || p.startsWith("/api/support/") || p === "/api/game-install/browse" || p === "/api/test" || p.startsWith("/api/test/")) {
     return { ok: false, status: 403, code: "REMOTE_ROUTE_BLOCKED", error: "ไม่อนุญาตให้เรียกใช้งานเส้นทางนี้จากระยะไกล" };
   }
   return { ok: true, fullPath: p + u.search };
@@ -591,63 +591,137 @@ function createRemoteFleetService(deps) {
     wakeWorker();
   }
 
+  async function listMachinesWithLocal(forceLocalSummary = true) {
+    const access = typeof humanCheckSolver.getAccessState === "function" ? humanCheckSolver.getAccessState() : {};
+    if (!access.isUserAccount || !access.username || access.requiresLogin) {
+      const err = new Error("กรุณาเข้าสู่ระบบด้วยบัญชีผู้ใช้งานก่อนดูเครื่องทั้งหมด");
+      err.code = "USER_ACCOUNT_REQUIRED";
+      err.status = 401;
+      throw err;
+    }
+    const [data, localSummary] = await Promise.all([
+      humanCheckSolver.fleetRequest("/v1/aetheria/machine/fleet/machines", null, { timeoutMs: 12000 }),
+      collectMachineSummary(forceLocalSummary)
+    ]);
+    const myKey = humanCheckSolver.getMachineHwidShort ? humanCheckSolver.getMachineHwidShort() : (data.currentMachineKey || "");
+    const machines = Array.isArray(data?.machines) ? data.machines.slice() : [];
+    const localNick = typeof getEffectiveDeviceNickname === "function" ? getEffectiveDeviceNickname() : os.hostname();
+    let foundSelf = false;
+    for (let i = 0; i < machines.length; i++) {
+      const m = machines[i];
+      if ((myKey && m.machineKey === myKey) || m.isCurrentMachine) {
+        foundSelf = true;
+        machines[i] = {
+          ...m,
+          isCurrentMachine: true,
+          isOnline: true,
+          remoteReady: true,
+          legacyOnly: false,
+          deviceName: localNick || m.deviceName,
+          hostname: m.hostname || os.hostname(),
+          managerVersion: m.managerVersion || managerVersion,
+          lastSeenAt: Date.now(),
+          summary: localSummary
+        };
+      }
+    }
+    if (!foundSelf && myKey) {
+      machines.unshift({
+        machineKey: myKey,
+        hwidCode: myKey,
+        deviceName: localNick,
+        hostname: os.hostname(),
+        managerVersion,
+        lastSeenAt: Date.now(),
+        isOnline: true,
+        remoteReady: true,
+        legacyOnly: false,
+        isCurrentMachine: true,
+        summary: localSummary
+      });
+    }
+    return {
+      username: data?.username || access.username,
+      accountId: data?.accountId || access.accountId,
+      currentMachineKey: myKey || data?.currentMachineKey || null,
+      serverTime: data?.serverTime || Date.now(),
+      ...(data?.walletSummary ? { walletSummary: data.walletSummary } : {}),
+      machines
+    };
+  }
+
+  async function requestMachineJson(targetMachineKey, method = "GET", apiPath = "/api/profiles", bodyObj = null, timeoutMs = 20000) {
+    const upperMethod = String(method || "GET").toUpperCase();
+    const checked = validateRelayedApiPath(apiPath);
+    if (!checked.ok) {
+      return {
+        ok: false,
+        status: checked.status,
+        data: { success: false, code: checked.code, error: checked.error }
+      };
+    }
+
+    let reqBuf = Buffer.alloc(0);
+    let reqCt = "";
+    if (bodyObj !== null && bodyObj !== undefined && upperMethod !== "GET" && upperMethod !== "HEAD") {
+      reqBuf = Buffer.from(typeof bodyObj === "string" ? bodyObj : JSON.stringify(bodyObj), "utf8");
+      reqCt = "application/json";
+    }
+    const encReq = encodeBody(reqBuf, reqCt);
+    const headers = {
+      accept: "application/json",
+      ...(reqCt ? { "content-type": reqCt } : {})
+    };
+    const myKey = humanCheckSolver.getMachineHwidShort ? humanCheckSolver.getMachineHwidShort() : "";
+    const normalizedKey = String(targetMachineKey || "").trim();
+    const isLocal = !normalizedKey || normalizedKey === "__local__" || (myKey && normalizedKey === myKey);
+    const cappedTimeout = Math.min(24000, Math.max(4000, Number(timeoutMs) || 20000));
+
+    let reply;
+    if (isLocal) {
+      reply = await executeLocalApiRequest({
+        requestId: "local_internal",
+        method: upperMethod,
+        path: checked.fullPath,
+        headers,
+        ...encReq
+      });
+    } else {
+      reply = await humanCheckSolver.fleetRequest("/v1/aetheria/machine/fleet/request", {
+        targetMachineKey: normalizedKey,
+        method: upperMethod,
+        path: checked.fullPath,
+        headers,
+        ...encReq,
+        timeoutMs: cappedTimeout
+      }, { timeoutMs: Math.min(26000, cappedTimeout + 2000) });
+    }
+
+    const outBuf = decodeBody(reply?.bodyEncoding, reply?.bodyData);
+    const status = Number(reply?.status || 200);
+    let data = null;
+    if (outBuf.length > 0) {
+      const txt = outBuf.toString("utf8");
+      try {
+        data = JSON.parse(txt);
+      } catch (_) {
+        data = { rawText: txt };
+      }
+    }
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      data
+    };
+  }
+
   async function handleRoute(req, res, pathname, parsedUrl, sendJSON) {
     if (pathname === "/api/fleet/machines" && req.method === "GET") {
-      const access = typeof humanCheckSolver.getAccessState === "function" ? humanCheckSolver.getAccessState() : {};
-      if (!access.isUserAccount || !access.username || access.requiresLogin) {
-        sendJSON({ success: false, code: "USER_ACCOUNT_REQUIRED", error: "กรุณาเข้าสู่ระบบด้วยบัญชีผู้ใช้งานก่อนดูเครื่องทั้งหมด" }, 401);
-        return true;
-      }
       try {
-        const [data, localSummary] = await Promise.all([
-          humanCheckSolver.fleetRequest("/v1/aetheria/machine/fleet/machines", null, { timeoutMs: 12000 }),
-          collectMachineSummary(true)
-        ]);
-        const myKey = humanCheckSolver.getMachineHwidShort ? humanCheckSolver.getMachineHwidShort() : (data.currentMachineKey || "");
-        const machines = Array.isArray(data?.machines) ? data.machines.slice() : [];
-        const localNick = typeof getEffectiveDeviceNickname === "function" ? getEffectiveDeviceNickname() : os.hostname();
-        let foundSelf = false;
-        for (let i = 0; i < machines.length; i++) {
-          const m = machines[i];
-          if ((myKey && m.machineKey === myKey) || m.isCurrentMachine) {
-            foundSelf = true;
-            machines[i] = {
-              ...m,
-              isCurrentMachine: true,
-              isOnline: true,
-              remoteReady: true,
-              legacyOnly: false,
-              deviceName: localNick || m.deviceName,
-              hostname: m.hostname || os.hostname(),
-              managerVersion: m.managerVersion || managerVersion,
-              lastSeenAt: Date.now(),
-              summary: localSummary
-            };
-          }
-        }
-        if (!foundSelf && myKey) {
-          machines.unshift({
-            machineKey: myKey,
-            hwidCode: myKey,
-            deviceName: localNick,
-            hostname: os.hostname(),
-            managerVersion,
-            lastSeenAt: Date.now(),
-            isOnline: true,
-            remoteReady: true,
-            legacyOnly: false,
-            isCurrentMachine: true,
-            summary: localSummary
-          });
-        }
+        const result = await listMachinesWithLocal(true);
         sendJSON({
           success: true,
-          username: data?.username || access.username,
-          accountId: data?.accountId || access.accountId,
-          currentMachineKey: myKey || data?.currentMachineKey || null,
-          serverTime: data?.serverTime || Date.now(),
-          ...(data?.walletSummary ? { walletSummary: data.walletSummary } : {}),
-          machines
+          ...result
         });
       } catch (e) {
         sendJSON({ success: false, code: e?.code || "FLEET_FETCH_FAILED", error: e?.message || "โหลดรายการเครื่องไม่สำเร็จ" }, e?.status && e.status >= 400 ? e.status : 502);
@@ -830,6 +904,8 @@ function createRemoteFleetService(deps) {
     stop,
     poke,
     collectMachineSummary,
+    listMachinesWithLocal,
+    requestMachineJson,
     handleRoute,
     encodeBody,
     decodeBody,

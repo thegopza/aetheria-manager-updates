@@ -6165,6 +6165,10 @@ function switchMainTab(tabName) {
     if (window.FleetDashboard && typeof window.FleetDashboard.onTabShown === "function") {
       window.FleetDashboard.onTabShown();
     }
+  } else if (tabName === "fleet-zeny") {
+    if (window.FleetZeny && typeof window.FleetZeny.onTabShown === "function") {
+      window.FleetZeny.onTabShown();
+    }
   }
   window.dispatchEvent(new CustomEvent("pm-main-tab-changed", { detail: { tabName } }));
 }

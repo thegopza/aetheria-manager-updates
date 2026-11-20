@@ -411,6 +411,7 @@ async function fetchProfiles() {
       const data = await res.json();
       if (data.success) {
         currentProfiles = data.profiles;
+        window.currentProfiles = currentProfiles;
         currentBandwidthSummary = data.bandwidthSummary || null;
         allWindowsHidden = !!data.allWindowsHidden;
         
@@ -2507,14 +2508,144 @@ function buildPartyGroupSection(party, idx, profileById, roleMap, soloAvgGpm) {
     </section>`;
 }
 
+function isProfileProblemNotInGame(p) {
+  if (!p || !p.isRunning) return false;
+  const state = p.liveState;
+  if (!state || state.error || state._syntheticLoading) return true;
+  const screenPhase = state.screenPhase || 'in_game';
+  if (screenPhase !== 'in_game') return true;
+  if (state.accountBanned || p.isBanned) return true;
+  return false;
+}
+
 function isProfileBotStopped(p) {
-  if (!p) return false;
+  if (!p || isProfileProblemNotInGame(p)) return false;
   const state = p.isRunning ? p.liveState : null;
   if (Boolean(state?.postSellOverweightStop || p.postSellOverweightStop)) return true;
   if (!p.isRunning || !state) return false;
   const screenPhase = state.screenPhase || 'in_game';
   if (screenPhase !== 'in_game') return false;
   return !state.isBotRunning;
+}
+
+async function refreshAllProblemScreens(event, btnEl) {
+  if (event) event.stopPropagation();
+  const problemProfiles = currentProfiles.filter(p => isProfileProblemNotInGame(p));
+  const origHtml = btnEl ? btnEl.innerHTML : '';
+  if (problemProfiles.length === 0) {
+    if (btnEl) {
+      btnEl.disabled = true;
+      btnEl.textContent = '⏳ กำลังเช็ก...';
+    }
+    try { await fetchProfiles(); } finally {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.innerHTML = origHtml || '🔄 รีเฟรชแถบนี้';
+      }
+    }
+    if (typeof showToast === 'function') {
+      showToast('🔄 เช็กสถานะล่าสุดแล้ว — ไม่พบจอที่ค้างนอกเกม', 'info');
+    }
+    return;
+  }
+
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.textContent = `⏳ กำลังรีเฟรช ${problemProfiles.length} จอ...`;
+  }
+  if (typeof showToast === 'function') {
+    showToast(`🔄 กำลังสั่งรีเฟรชหน้าเกม ${problemProfiles.length} จอที่มีปัญหา...`, 'info');
+  }
+
+  let okCount = 0;
+  try {
+    const batchSize = 4;
+    for (let i = 0; i < problemProfiles.length; i += batchSize) {
+      const batch = problemProfiles.slice(i, i + batchSize);
+      const results = await Promise.all(batch.map(async (p) => {
+        try {
+          const res = await fetch(`${API_BASE}/api/profiles/${p.id}/reload-page`, { method: 'POST' });
+          const data = await res.json().catch(() => null);
+          return Boolean(res.ok && data && data.success);
+        } catch (_) {
+          return false;
+        }
+      }));
+      okCount += results.filter(Boolean).length;
+      if (i + batchSize < problemProfiles.length) {
+        await new Promise(r => setTimeout(r, 150));
+      }
+    }
+    await new Promise(r => setTimeout(r, 600));
+    await fetchProfiles();
+  } finally {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.innerHTML = origHtml || `🔄 รีเฟรชแถบนี้ (${problemProfiles.length} จอ)`;
+    }
+  }
+  if (typeof showToast === 'function') {
+    showToast(
+      `🔄 สั่งรีเฟรชหน้าเกมสำเร็จ ${okCount}/${problemProfiles.length} จอ`,
+      okCount === problemProfiles.length ? 'success' : (okCount > 0 ? 'warning' : 'error')
+    );
+  }
+}
+window.refreshAllProblemScreens = refreshAllProblemScreens;
+
+function buildProblemGroupSection(problemProfiles) {
+  const groupKey = 'problem';
+  const isCollapsed = collapsedCardGroups.has(groupKey);
+  const sortedProblem = sortProfileList(problemProfiles);
+  const errPhases = new Set(['account_banned', 'char_select_error', 'char_select_online', 'char_select_limit', 'login_error', 'login_auth_error']);
+  const authCharPhases = new Set(['login', 'login_loading', 'char_select', 'char_select_loading', 'char_create', 'register', 'register_queue']);
+
+  let errCount = 0;
+  let authCharCount = 0;
+  let loadingCount = 0;
+  for (const p of sortedProblem) {
+    const st = p.liveState;
+    const sp = st?.screenPhase || '';
+    if (p.isBanned || st?.accountBanned || st?.error || errPhases.has(sp)) {
+      errCount++;
+    } else if (authCharPhases.has(sp)) {
+      authCharCount++;
+    } else {
+      loadingCount++;
+    }
+  }
+
+  return `
+    <section class="profile-group-section is-problem-group ${isCollapsed ? 'is-collapsed' : ''}" data-group-id="group-problem">
+      <header class="profile-group-header" onclick="toggleCardGroupCollapse('${groupKey}', event)">
+        <div class="pg-head-left">
+          <button type="button" class="pg-collapse-btn" title="${isCollapsed ? 'คลิกเพื่อขยายดูจอที่มีปัญหา' : 'คลิกเพื่อพับเก็บจอที่มีปัญหา'}">${isCollapsed ? '▶' : '▼'}</button>
+          <span class="pg-group-badge problem">⚠️ จอที่มีปัญหา / ไม่ได้อยู่ในเกม</span>
+          <div class="pg-title-block">
+            <div class="pg-title-main">
+              <span>จอที่ติดปัญหา / ยังไม่ได้เข้าตัวเกม (${sortedProblem.length} จอ)</span>
+              ${errCount > 0 ? `<span class="pg-top-earner-pill" style="background:rgba(245,158,11,0.22);border-color:rgba(251,191,36,0.55);color:#fde68a;">🚨 เออเร่อ/ค้างออนไลน์: <b>${errCount} จอ</b></span>` : ''}
+            </div>
+            <div class="pg-meta-pills">
+              <span class="pg-meta-chip">🖥️ ค้างนอกเกม <b>${sortedProblem.length}</b> จอ</span>
+              ${authCharCount > 0 ? `<span class="pg-meta-chip">🔑 ติดหน้าล็อกอิน/เลือกตัว <b>${authCharCount}</b> จอ</span>` : ''}
+              ${loadingCount > 0 ? `<span class="pg-meta-chip">⏳ กำลังโหลด/เชื่อมต่อ <b>${loadingCount}</b> จอ</span>` : ''}
+              ${errCount > 0 ? `<span class="pg-meta-chip" style="color:#fca5a5;">🚨 เออเร่อ/ค้างออนไลน์ <b>${errCount}</b> จอ</span>` : ''}
+            </div>
+          </div>
+        </div>
+
+        <div class="pg-head-right" onclick="event.stopPropagation()">
+          <div class="pg-head-actions">
+            <button type="button" class="btn btn-sm pg-action-btn pg-problem-refresh-btn ${sortedProblem.length > 0 ? 'has-items' : ''}" onclick="refreshAllProblemScreens(event, this)" title="สั่งรีเฟรชหน้าเว็บเกม (Reload) ทุกจอในแถบนี้ทันที">🔄 ${sortedProblem.length > 0 ? `รีเฟรชแถบนี้ (${sortedProblem.length} จอ)` : 'รีเฟรชแถบนี้'}</button>
+          </div>
+        </div>
+      </header>
+      ${isCollapsed ? '' : `
+      <div class="profile-group-grid profiles-grid">
+        ${sortedProblem.length > 0 ? sortedProblem.map(buildProfileCard).join('') : `<div class="empty-state" style="padding: 20px;"><p style="margin:0;">ไม่มีจอที่ติดปัญหาหรือค้างนอกเกมในขณะนี้ (ทุกจอที่เปิดอยู่อยู่ในตัวเกมปกติ)</p></div>`}
+      </div>`}
+    </section>`;
 }
 
 async function startAllStoppedBots(event) {
@@ -2644,9 +2775,10 @@ function renderProfiles() {
     const profileById = new Map(currentProfiles.map(p => [p.id, p]));
     const roleMap = getPartyRoleMap();
 
-    const stoppedProfilesAll = currentProfiles.filter(p => isProfileBotStopped(p));
+    const problemProfilesAll = currentProfiles.filter(p => isProfileProblemNotInGame(p));
+    const stoppedProfilesAll = currentProfiles.filter(p => !isProfileProblemNotInGame(p) && isProfileBotStopped(p));
     const partyProfilesAll = currentProfiles.filter(p => roleMap.has(p.id));
-    const soloProfilesAll = currentProfiles.filter(p => !roleMap.has(p.id) && !isProfileBotStopped(p));
+    const soloProfilesAll = currentProfiles.filter(p => !roleMap.has(p.id) && !isProfileProblemNotInGame(p) && !isProfileBotStopped(p));
     const partyStats = summarizeGroupStats(partyProfilesAll);
     const soloStats = summarizeGroupStats(soloProfilesAll);
 
@@ -2665,15 +2797,20 @@ function renderProfiles() {
     } else {
       html += parties.map((party, idx) => buildPartyGroupSection(party, idx, profileById, roleMap, soloStats.avgGpm)).join('');
     }
+    html += buildProblemGroupSection(problemProfilesAll);
     html += buildStoppedGroupSection(stoppedProfilesAll);
     html += buildSoloGroupSection(soloProfilesAll);
     tpl.innerHTML = html;
   } else {
     gridEl.classList.remove('grouped-mode');
-    const stoppedProfilesDefault = currentProfiles.filter(p => isProfileBotStopped(p));
-    const activeProfilesDefault = currentProfiles.filter(p => !isProfileBotStopped(p));
+    const problemProfilesDefault = currentProfiles.filter(p => isProfileProblemNotInGame(p));
+    const stoppedProfilesDefault = currentProfiles.filter(p => !isProfileProblemNotInGame(p) && isProfileBotStopped(p));
+    const activeProfilesDefault = currentProfiles.filter(p => !isProfileProblemNotInGame(p) && !isProfileBotStopped(p));
     const sortedActive = sortProfileList(activeProfilesDefault);
     let html = '';
+    if (problemProfilesDefault.length > 0) {
+      html += buildProblemGroupSection(problemProfilesDefault);
+    }
     if (stoppedProfilesDefault.length > 0) {
       html += buildStoppedGroupSection(stoppedProfilesDefault);
     }
@@ -2860,15 +2997,342 @@ if (btnToggleAllWindows) {
   };
 }
 
-document.getElementById("btn-launch-all").onclick = async () => {
-  if (confirm("ยืนยันเปิดจอเกมทั้งหมดพร้อมกัน?")) {
+const LAUNCH_FILTER_STORAGE_KEY = "pelican_launch_filter_v1";
+const launchPopoverState = {
+  open: false,
+  checklistExpanded: false,
+  customCheckedIds: new Set(),
+  filters: (() => {
     try {
-      const res = await fetch(`${API_BASE}/api/launch-all`, { method: "POST" });
-      const data = await res.json();
-      if (!data.success) alert("❌ เปิดจอไม่สำเร็จ: " + (data.error || "เกิดข้อผิดพลาด"));
-      else showToast(`🚀 เปิดใหม่ ${(data.launched || []).length} จอ${(data.skipped || []).length ? ` · ข้าม ${data.skipped.length} จอที่เปิดอยู่แล้ว` : ""}`, "success");
-    } catch (e) {}
-    fetchProfiles();
+      const saved = JSON.parse(localStorage.getItem(LAUNCH_FILTER_STORAGE_KEY) || "{}");
+      return {
+        jail: ["not_jailed", "all", "jailed_only"].includes(saved.jail) ? saved.jail : "not_jailed",
+        prem: ["all", "no_premium", "has_premium"].includes(saved.prem) ? saved.prem : "all",
+        group: ["all", "solo", "party"].includes(saved.group) ? saved.group : "all"
+      };
+    } catch (_) {
+      return { jail: "not_jailed", prem: "all", group: "all" };
+    }
+  })()
+};
+
+function getLaunchProfileFlags(p) {
+  const isBanned = Boolean(p && (p.isBanned || p.liveState?.accountBanned || p.liveState?.screenPhase === "account_banned"));
+  const jailMapStr = String((p && (p.jailedMap || p.liveState?.map)) || "");
+  const isJailed = Boolean(p && (p.isJailed || /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(jailMapStr) || p.liveState?.charSelectInJail));
+  return { isJailed, isBanned, isBlocked: isJailed || isBanned };
+}
+
+function getFilteredProfilesForLaunch(filters) {
+  const roleMap = typeof getPartyRoleMap === "function" ? getPartyRoleMap() : new Map();
+  const f = filters || launchPopoverState.filters;
+  return currentProfiles.filter(p => {
+    if (!p) return false;
+    const { isJailed, isBanned, isBlocked } = getLaunchProfileFlags(p);
+    if (f.jail === "not_jailed" && isBlocked) return false;
+    if (f.jail === "jailed_only" && !isJailed && !isBanned) return false;
+    const prem = isProfilePremium(p);
+    if (f.prem === "no_premium" && prem) return false;
+    if (f.prem === "has_premium" && !prem) return false;
+    const inParty = roleMap.has(p.id);
+    if (f.group === "solo" && inParty) return false;
+    if (f.group === "party" && !inParty) return false;
+    return true;
+  });
+}
+
+function resetLaunchChecklistFromFilters() {
+  launchPopoverState.customCheckedIds.clear();
+  for (const p of getFilteredProfilesForLaunch()) {
+    if (!p.isRunning) launchPopoverState.customCheckedIds.add(String(p.id));
+  }
+}
+
+async function executeLaunchProfiles(profileIdsOrNull, labelForToast) {
+  const countTxt = Array.isArray(profileIdsOrNull) ? `${profileIdsOrNull.length} จอ` : "ทุกจอ";
+  showToast(`🚀 กำลังเปิดเกม (${labelForToast || countTxt})...`, "info");
+  try {
+    const res = await fetch(`${API_BASE}/api/launch-all`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(Array.isArray(profileIdsOrNull) ? { profileIds: profileIdsOrNull } : {})
+    });
+    const data = await res.json();
+    if (!data.success) {
+      alert("❌ เปิดจอไม่สำเร็จ: " + (data.error || "เกิดข้อผิดพลาด"));
+    } else {
+      const launchedCount = (data.launched || []).length;
+      const skippedCount = (data.skipped || []).length;
+      showToast(
+        `🚀 เปิดใหม่ ${launchedCount} จอ${skippedCount ? ` · ข้าม ${skippedCount} จอที่เปิดอยู่แล้ว` : ""}`,
+        "success"
+      );
+    }
+  } catch (e) {
+    showToast("❌ เปิดจอไม่สำเร็จ: " + (e?.message || "เชื่อมต่อไม่ได้"), "error");
+  }
+  fetchProfiles();
+}
+
+function closeLaunchAllPopover() {
+  launchPopoverState.open = false;
+  const pop = document.getElementById("launch-all-popover");
+  if (pop) pop.remove();
+  document.getElementById("btn-launch-all")?.classList.remove("is-popover-open");
+}
+
+function positionLaunchAllPopover(pop, anchorBtn) {
+  if (!pop || !anchorBtn) return;
+  const rect = anchorBtn.getBoundingClientRect();
+  const popW = Math.min(440, window.innerWidth - 24);
+  const top = Math.round(rect.bottom + 8);
+  let left = Math.round(rect.left);
+  if (left + popW > window.innerWidth - 12) {
+    left = Math.max(12, Math.round(rect.right - popW));
+  }
+  if (left < 12) left = 12;
+  const maxH = Math.max(240, window.innerHeight - top - 16);
+  pop.style.top = `${top}px`;
+  pop.style.left = `${left}px`;
+  pop.style.width = `${popW}px`;
+  pop.style.maxHeight = `${maxH}px`;
+}
+
+function renderLaunchAllPopoverContent(pop) {
+  if (!pop) return;
+  const closedAll = currentProfiles.filter(p => !p.isRunning);
+  const closedNotJailed = closedAll.filter(p => !getLaunchProfileFlags(p).isBlocked);
+  const closedNoPremNotJailed = closedNotJailed.filter(p => !isProfilePremium(p));
+  const closedPremNotJailed = closedNotJailed.filter(p => isProfilePremium(p));
+
+  const matched = getFilteredProfilesForLaunch();
+  const matchedClosed = matched.filter(p => !p.isRunning);
+  const matchedOpen = matched.length - matchedClosed.length;
+  const selectedToLaunch = matchedClosed.filter(p => launchPopoverState.customCheckedIds.has(String(p.id)));
+  const skippedOther = Math.max(0, currentProfiles.length - matched.length);
+
+  pop.innerHTML = `
+    <div class="lf-head">
+      <div class="lf-title">🚀 เลือกเงื่อนไขเปิดจอเกม</div>
+      <button type="button" class="lf-close-btn" id="btn-lf-close" title="ปิดเมนู">✕</button>
+    </div>
+
+    <div class="lf-sec-title">⚡ เปิดทันที (ปุ่มด่วน)</div>
+    <div class="lf-presets">
+      <button type="button" class="lf-preset-btn is-recommended" data-lf-preset="not_jailed">
+        <span class="lf-preset-label">🛡️ เปิดเฉพาะจอไม่ติดคุก / ไม่โดนแบน <small class="lf-rec-tag">แนะนำ</small></span>
+        <span class="lf-preset-badge">${closedNotJailed.length} จอ</span>
+      </button>
+      <button type="button" class="lf-preset-btn" data-lf-preset="all">
+        <span class="lf-preset-label">🚀 เปิดทุกจอทั้งหมด</span>
+        <span class="lf-preset-badge">${closedAll.length} จอ</span>
+      </button>
+      <button type="button" class="lf-preset-btn" data-lf-preset="no_prem_not_jailed">
+        <span class="lf-preset-label">🔓 เปิดเฉพาะจอไม่มี Premium (ไม่ติดคุก)</span>
+        <span class="lf-preset-badge">${closedNoPremNotJailed.length} จอ</span>
+      </button>
+      <button type="button" class="lf-preset-btn" data-lf-preset="prem_not_jailed">
+        <span class="lf-preset-label">👑 เปิดเฉพาะจอมี VIP / Premium (ไม่ติดคุก)</span>
+        <span class="lf-preset-badge">${closedPremNotJailed.length} จอ</span>
+      </button>
+    </div>
+
+    <div class="lf-divider"></div>
+    <div class="lf-sec-title">🎛️ ระบบกรองแบบ Select & เลือกรายจอ</div>
+    <div class="lf-filter-grid">
+      <label class="lf-field">
+        <span>สถานะคุก / แบน</span>
+        <select id="lf-sel-jail" class="lf-select">
+          <option value="not_jailed"${launchPopoverState.filters.jail === "not_jailed" ? " selected" : ""}>🛡️ ไม่ติดคุกและไม่โดนแบน</option>
+          <option value="all"${launchPopoverState.filters.jail === "all" ? " selected" : ""}>🌐 ทุกสถานะ (รวมติดคุก)</option>
+          <option value="jailed_only"${launchPopoverState.filters.jail === "jailed_only" ? " selected" : ""}>🚨 เฉพาะจอที่ติดคุก</option>
+        </select>
+      </label>
+      <label class="lf-field">
+        <span>สถานะ Premium</span>
+        <select id="lf-sel-prem" class="lf-select">
+          <option value="all"${launchPopoverState.filters.prem === "all" ? " selected" : ""}>🌐 ทั้งมีและไม่มี Premium</option>
+          <option value="no_premium"${launchPopoverState.filters.prem === "no_premium" ? " selected" : ""}>🔓 เฉพาะจอไม่มี Premium</option>
+          <option value="has_premium"${launchPopoverState.filters.prem === "has_premium" ? " selected" : ""}>👑 เฉพาะจอมี VIP / Premium</option>
+        </select>
+      </label>
+      <label class="lf-field lf-field-wide">
+        <span>กลุ่มปาร์ตี้</span>
+        <select id="lf-sel-group" class="lf-select">
+          <option value="all"${launchPopoverState.filters.group === "all" ? " selected" : ""}>🌐 ทุกกลุ่ม (ตี้ + โซโล่)</option>
+          <option value="solo"${launchPopoverState.filters.group === "solo" ? " selected" : ""}>⚔️ เฉพาะฟาร์มเดี่ยว (Solo)</option>
+          <option value="party"${launchPopoverState.filters.group === "party" ? " selected" : ""}>👑 เฉพาะสมาชิกในปาร์ตี้</option>
+        </select>
+      </label>
+    </div>
+
+    <button type="button" class="lf-toggle-list-btn" id="lf-toggle-custom-list">
+      <span>📋 เลือกติ๊กรายจอเอง (เลือกอยู่ <b>${selectedToLaunch.length}</b> จอที่จะเปิดใหม่)</span>
+      <span>${launchPopoverState.checklistExpanded ? "▲" : "▼"}</span>
+    </button>
+
+    ${launchPopoverState.checklistExpanded ? `
+    <div class="lf-custom-list-wrap" id="lf-custom-list-wrap">
+      <div class="lf-list-tools">
+        <button type="button" class="lf-mini-link" id="lf-chk-select-all">☑️ เลือกทั้งหมด (${matchedClosed.length})</button>
+        <button type="button" class="lf-mini-link" id="lf-chk-clear">⬜ ล้าง</button>
+      </div>
+      <div class="lf-custom-list" id="lf-custom-list">
+        ${matched.length === 0 ? `<div class="lf-empty">ไม่พบจอที่ตรงกับเงื่อนไขที่เลือก</div>` : matched.map(p => {
+          const pid = String(p.id);
+          const isOpenNow = Boolean(p.isRunning);
+          const { isJailed, isBanned } = getLaunchProfileFlags(p);
+          const prem = isProfilePremium(p);
+          const checked = !isOpenNow && launchPopoverState.customCheckedIds.has(pid);
+          const charLabel = p.liveState?.charName || p.lastCharName || "";
+          const disp = charLabel ? `${charLabel} (${p.name})` : p.name;
+          return `
+            <label class="lf-row${isOpenNow ? " is-running" : ""}">
+              <input type="checkbox" class="lf-row-cb" data-lf-pid="${escapeHTML(pid)}"${checked ? " checked" : ""}${isOpenNow ? " disabled" : ""}>
+              <span class="lf-row-name" title="${escapeHTML(disp)}">${escapeHTML(disp)}</span>
+              <span class="lf-row-badges">
+                ${isOpenNow ? `<span class="lf-pill on">🟢 เปิดอยู่แล้ว</span>` : ""}
+                ${isBanned ? `<span class="lf-pill bad">🚫 แบน</span>` : (isJailed ? `<span class="lf-pill warn">🚨 ติดคุก</span>` : "")}
+                ${prem ? `<span class="lf-pill vip">👑 VIP</span>` : `<span class="lf-pill free">ฟรี</span>`}
+              </span>
+            </label>
+          `;
+        }).join("")}
+      </div>
+    </div>` : ""}
+
+    <div class="lf-footer">
+      <div class="lf-summary" id="lf-summary">
+        พร้อมเปิดใหม่ <b>${selectedToLaunch.length}</b> จอ · เปิดอยู่แล้ว <b>${matchedOpen}</b> จอ · ข้าม <b>${skippedOther}</b> จอ
+      </div>
+      <button type="button" class="btn btn-success lf-launch-btn" id="btn-lf-launch-selected"${selectedToLaunch.length === 0 ? " disabled" : ""}>
+        🚀 เปิดจอตามเงื่อนไขที่เลือก (${selectedToLaunch.length} จอ)
+      </button>
+    </div>
+  `;
+
+  pop.querySelector("#btn-lf-close")?.addEventListener("click", closeLaunchAllPopover);
+
+  pop.querySelectorAll("[data-lf-preset]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const kind = btn.getAttribute("data-lf-preset");
+      if (kind === "all") {
+        if (closedAll.length === 0) return showToast("🟢 เปิดครบทุกจออยู่แล้ว ไม่มีจอใหม่ให้เปิด", "info");
+        closeLaunchAllPopover();
+        return executeLaunchProfiles(null, `เปิดทุกจอ ${closedAll.length} จอ`);
+      }
+      let targets = [];
+      let label = "";
+      if (kind === "not_jailed") {
+        targets = closedNotJailed;
+        label = `ไม่ติดคุก/ไม่โดนแบน ${targets.length} จอ`;
+      } else if (kind === "no_prem_not_jailed") {
+        targets = closedNoPremNotJailed;
+        label = `ไม่มี Premium (ไม่ติดคุก) ${targets.length} จอ`;
+      } else if (kind === "prem_not_jailed") {
+        targets = closedPremNotJailed;
+        label = `มี VIP/Premium (ไม่ติดคุก) ${targets.length} จอ`;
+      }
+      if (targets.length === 0) {
+        return showToast("⚠️ ไม่มีจอที่ปิดอยู่และตรงกับเงื่อนไขนี้", "info");
+      }
+      closeLaunchAllPopover();
+      return executeLaunchProfiles(targets.map(p => String(p.id)), label);
+    });
+  });
+
+  const saveFiltersAndRefresh = () => {
+    try { localStorage.setItem(LAUNCH_FILTER_STORAGE_KEY, JSON.stringify(launchPopoverState.filters)); } catch (_) {}
+    resetLaunchChecklistFromFilters();
+    renderLaunchAllPopoverContent(pop);
+  };
+
+  pop.querySelector("#lf-sel-jail")?.addEventListener("change", e => {
+    launchPopoverState.filters.jail = e.target.value;
+    saveFiltersAndRefresh();
+  });
+  pop.querySelector("#lf-sel-prem")?.addEventListener("change", e => {
+    launchPopoverState.filters.prem = e.target.value;
+    saveFiltersAndRefresh();
+  });
+  pop.querySelector("#lf-sel-group")?.addEventListener("change", e => {
+    launchPopoverState.filters.group = e.target.value;
+    saveFiltersAndRefresh();
+  });
+
+  pop.querySelector("#lf-toggle-custom-list")?.addEventListener("click", () => {
+    launchPopoverState.checklistExpanded = !launchPopoverState.checklistExpanded;
+    renderLaunchAllPopoverContent(pop);
+  });
+
+  pop.querySelector("#lf-chk-select-all")?.addEventListener("click", () => {
+    for (const p of matchedClosed) launchPopoverState.customCheckedIds.add(String(p.id));
+    renderLaunchAllPopoverContent(pop);
+  });
+  pop.querySelector("#lf-chk-clear")?.addEventListener("click", () => {
+    for (const p of matchedClosed) launchPopoverState.customCheckedIds.delete(String(p.id));
+    renderLaunchAllPopoverContent(pop);
+  });
+
+  pop.querySelectorAll(".lf-row-cb").forEach(cb => {
+    cb.addEventListener("change", e => {
+      const pid = String(e.target.getAttribute("data-lf-pid") || "");
+      if (!pid) return;
+      if (e.target.checked) launchPopoverState.customCheckedIds.add(pid);
+      else launchPopoverState.customCheckedIds.delete(pid);
+      renderLaunchAllPopoverContent(pop);
+    });
+  });
+
+  pop.querySelector("#btn-lf-launch-selected")?.addEventListener("click", () => {
+    if (selectedToLaunch.length === 0) return;
+    const ids = selectedToLaunch.map(p => String(p.id));
+    closeLaunchAllPopover();
+    executeLaunchProfiles(ids, `ตามเงื่อนไขที่เลือก ${ids.length} จอ`);
+  });
+}
+
+function openLaunchAllPopover(anchorBtn) {
+  closeLaunchAllPopover();
+  resetLaunchChecklistFromFilters();
+  launchPopoverState.open = true;
+  anchorBtn?.classList.add("is-popover-open");
+
+  const pop = document.createElement("div");
+  pop.id = "launch-all-popover";
+  pop.className = "launch-all-popover";
+  pop.addEventListener("click", e => e.stopPropagation());
+  renderLaunchAllPopoverContent(pop);
+  document.body.appendChild(pop);
+  positionLaunchAllPopover(pop, anchorBtn);
+  requestAnimationFrame(() => pop.classList.add("is-visible"));
+}
+
+if (!window.__pmLaunchAllPopoverBound) {
+  window.__pmLaunchAllPopoverBound = true;
+  document.addEventListener("click", e => {
+    if (!launchPopoverState.open) return;
+    const pop = document.getElementById("launch-all-popover");
+    const btn = document.getElementById("btn-launch-all");
+    if ((pop && pop.contains(e.target)) || (btn && btn.contains(e.target))) return;
+    closeLaunchAllPopover();
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && launchPopoverState.open) closeLaunchAllPopover();
+  });
+  window.addEventListener("resize", () => {
+    if (!launchPopoverState.open) return;
+    positionLaunchAllPopover(document.getElementById("launch-all-popover"), document.getElementById("btn-launch-all"));
+  });
+}
+
+document.getElementById("btn-launch-all").onclick = (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  if (launchPopoverState.open) {
+    closeLaunchAllPopover();
+  } else {
+    openLaunchAllPopover(e.currentTarget);
   }
 };
 

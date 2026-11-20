@@ -1076,7 +1076,7 @@ function createCardMarketService({
       if (p.debugPort && typeof queryProfileState === 'function') {
         try { live = await queryProfileState(p); } catch (_) {}
       }
-      const online = Boolean(live && live.online);
+      const online = Boolean(live && !live.error && (live.online || live.isOnline || live.charName || live.screenPhase));
       const currentMap = (live && (live.map || live.currentMap)) || '';
       const liveTargetMap = String((live && live.targetMap) || '').replace(/\s*\(Lv\..*?\)/i, '').trim();
       const baseLv = (live && (live.baseLv || live.level)) || p.baseLv || p.level || 0;
@@ -1121,6 +1121,8 @@ function createCardMarketService({
         baseLv,
         jobLv: (live && live.jobLv) || p.jobLv || 0,
         online,
+        inGame: Boolean(online && (!live.screenPhase || live.screenPhase === 'in_game')),
+        isJailed: Boolean(p.isJailed || (live && typeof live.map === 'string' && /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(live.map))),
         isBotRunning: Boolean(live && (live.isBotRunning || live.botRunning)),
         currentMap,
         targetMap,

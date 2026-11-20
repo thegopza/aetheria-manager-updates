@@ -133,6 +133,15 @@
     return /^(priest|acolyte|พระ)$/i.test(String(cls || '').trim());
   }
 
+  function isClientOnline(cl) {
+    if (!cl) return false;
+    if (Array.isArray(window.currentProfiles) && window.currentProfiles.length > 0) {
+      const liveProf = window.currentProfiles.find(p => p && String(p.id) === String(cl.id));
+      if (liveProf) return Boolean(liveProf.isRunning);
+    }
+    return Boolean(cl.online || cl.isOnline || cl.isRunning);
+  }
+
   function buildClientPartyGrouping() {
     const liveParties =
       window.__partyManagerData &&
@@ -215,7 +224,7 @@
         leaderSlot.mapName ||
         '';
       const mapLabel = anchorMapRaw ? formatMapWithLevel(anchorMapRaw) : 'ในเมือง/ออฟไลน์';
-      const onlineCount = partyClients.filter(c => c.online).length;
+      const onlineCount = partyClients.filter(isClientOnline).length;
       const selectedCount = partyClients.filter(c => selectedProfileIds.has(String(c.id))).length;
 
       partyGroups.push({
@@ -281,7 +290,7 @@
     if (profilesInitializedForPanel && selectedProfileIds.size > 0) return;
     selectedProfileIds.clear();
     for (const c of state.clients) {
-      if (c.online) selectedProfileIds.add(String(c.id));
+      if (isClientOnline(c)) selectedProfileIds.add(String(c.id));
     }
     if (selectedProfileIds.size === 0) {
       for (const c of state.clients) selectedProfileIds.add(String(c.id));
@@ -655,7 +664,7 @@
       if (selectedCardIds.has(cid)) {
         const card = state.cards.find(c => Number(c.id) === cid);
         const m = (card && card.market) || {};
-        const anyOnline = state.clients.some(c => c.online);
+        const anyOnline = state.clients.some(isClientOnline);
         if (anyOnline && (!m.historyUpdatedAt || Date.now() - Number(m.historyUpdatedAt) > 5 * 60 * 1000)) {
           triggerSingleCardRefresh(cid, true);
         }
@@ -693,9 +702,14 @@
     document.getElementById('cd-fp-q-online').addEventListener('click', () => {
       selectedProfileIds.clear();
       for (const c of state.clients) {
-        if (c.online) selectedProfileIds.add(String(c.id));
+        if (isClientOnline(c)) selectedProfileIds.add(String(c.id));
       }
-      renderFarmPanel();
+      if (selectedProfileIds.size === 0) {
+        toast('⚠️ ขณะนี้ยังไม่มีจอที่ออนไลน์อยู่เลย', 'warning');
+      } else {
+        toast(`🟢 เลือกเฉพาะจอออนไลน์แล้ว ${selectedProfileIds.size} จอ`, 'info');
+      }
+      renderFarmPanel(true);
     });
 
     document.getElementById('cd-fp-q-all').addEventListener('click', () => {
@@ -785,7 +799,7 @@
       fetchCardsData().then(() => {
         if (!scannedOnFirstOpen) {
           scannedOnFirstOpen = true;
-          const anyOnline = state.clients.some(c => c.online);
+          const anyOnline = state.clients.some(isClientOnline);
           const stale = !state.lastFullSweepAt || Date.now() - state.lastFullSweepAt > 10 * 60 * 1000;
           if (anyOnline && stale && !state.scanning) {
             triggerFullMarketScan(true);
@@ -1437,6 +1451,16 @@
       }
     }
 
+    const onlineQBtn = document.getElementById('cd-fp-q-online');
+    if (onlineQBtn) {
+      const onlineTotal = state.clients.filter(isClientOnline).length;
+      onlineQBtn.textContent = `✅ เฉพาะจอออนไลน์ (${onlineTotal})`;
+    }
+    const allQBtn = document.getElementById('cd-fp-q-all');
+    if (allQBtn) {
+      allQBtn.textContent = `☑️ เลือกทุกจอ (${state.clients.length})`;
+    }
+
     const clientsBox = document.getElementById('cd-fp-clients');
     if (clientsBox && (force || !(window.PmUiGuard && window.PmUiGuard.deferIfInteracting('cd-fp-clients', clientsBox, () => renderFarmPanel(false))))) {
       if (!state.clients || state.clients.length === 0) {
@@ -1448,9 +1472,10 @@
         const renderClientCard = cl => {
           const pid = String(cl.id);
           const checked = selectedProfileIds.has(pid);
+          const clOnline = isClientOnline(cl);
           const dispName = cl.charName ? `${cl.charName} (${cl.name})` : cl.name;
           const lvStr = cl.level ? `Lv.${cl.level}` : '';
-          const curMap = cl.currentMap ? formatMapWithLevel(cl.currentMap) : (cl.online ? 'ในเมือง/กำลังโหลด' : 'ออฟไลน์');
+          const curMap = cl.currentMap ? formatMapWithLevel(cl.currentMap) : (clOnline ? 'ในเมือง/กำลังโหลด' : 'ออฟไลน์');
           const ovMap = String(cl.overrideFarmMap || '').trim();
           const assigned = byProfileId.get(pid);
           const autoSellCards = Array.isArray(cl.autoSellCards) ? cl.autoSellCards : [];
@@ -1471,7 +1496,7 @@
           return `
             <label class="cd-fp-client${checked ? ' checked' : ''}">
               <input type="checkbox" data-prof-id="${esc(pid)}"${checked ? ' checked' : ''}>
-              <span class="cd-fp-dot${cl.online ? ' on' : ''}"></span>
+              <span class="cd-fp-dot${clOnline ? ' on' : ''}"></span>
               <div class="cd-fp-cinfo">
                 <div class="cd-fp-cname-row">
                   <span class="cd-fp-cname">${esc(dispName)} <small style="color:#94a3b8;font-weight:500;">${esc(lvStr)}</small></span>
@@ -1544,7 +1569,7 @@
 
           const soloKey = 'solo';
           const soloCollapsed = collapsedClientGroups.has(soloKey);
-          const soloOnline = soloClients.filter(c => c.online).length;
+          const soloOnline = soloClients.filter(isClientOnline).length;
           const soloSelected = soloClients.filter(c => selectedProfileIds.has(String(c.id))).length;
           const soloAllChecked = soloClients.length > 0 && soloSelected === soloClients.length;
 

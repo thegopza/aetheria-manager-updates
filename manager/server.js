@@ -7428,7 +7428,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.9'
+  managerVersion: '4.63.10'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7457,7 +7457,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.9',
+  managerVersion: '4.63.10',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -10110,10 +10110,35 @@ const server = http.createServer(async (req, res) => {
 
   // 7. POST /api/launch-all
   if (req.method === "POST" && pathname === "/api/launch-all") {
+    let reqData = {};
+    try {
+      let rawBody = "";
+      for await (const chunk of req) {
+        rawBody += chunk;
+        if (Buffer.byteLength(rawBody, "utf8") > 65536) {
+          reqData = null;
+          break;
+        }
+      }
+      if (reqData === null) {
+        return sendJSON({ success: false, error: "Request body too large" }, 413);
+      }
+      if (rawBody && rawBody.trim()) {
+        reqData = JSON.parse(rawBody);
+      }
+    } catch (e) {
+      return sendJSON({ success: false, error: "Invalid JSON body" }, 400);
+    }
     const allProfiles = loadProfiles();
-    const openFlags = await Promise.all(allProfiles.map(p => clientAlreadyOpen(p)));
-    const skipped = allProfiles.filter((p, i) => openFlags[i]).map(p => p.name);
-    const toOpen = allProfiles.filter((p, i) => !openFlags[i]);
+    const filterSet = (reqData && Array.isArray(reqData.profileIds))
+      ? new Set(reqData.profileIds.map(String))
+      : null;
+    const targetProfiles = filterSet
+      ? allProfiles.filter(p => filterSet.has(String(p.id)))
+      : allProfiles;
+    const openFlags = await Promise.all(targetProfiles.map(p => clientAlreadyOpen(p)));
+    const skipped = targetProfiles.filter((p, i) => openFlags[i]).map(p => p.name);
+    const toOpen = targetProfiles.filter((p, i) => !openFlags[i]);
 
     const interleaveProfilesByProxyIp = list => {
       if (!Array.isArray(list) || list.length <= 1 || !screenProxy.isEnabled()) return list;

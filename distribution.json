@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "ede218e165f09920b73a423e38e6ceb79b998b3c",
+  "sourceCommit": "f497d09ec3870ceaa91fae8419886c88d66b3e5d",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "a289288223b27f8d4de30f16f4a65bb0b42b7dc062dd2cfbd4ab486e06ee9423"
+      "sha256": "d132a52e03b17eb5b1e79114cb3b92f8f96a5730f26099ab9e24defbdee5a6ef"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -140,7 +140,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "e4376dddf05b9c4581704fb9f139dd5475429bb3a075646560b7af1ccda9d291"
+      "sha256": "c7c46fc465ec7bf646d16495502b24a42a8d2f9cffbf872609c524757893df6e"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -168,11 +168,11 @@
     },
     {
       "path": "manager/public/device_manager.css",
-      "sha256": "ec73dd93adb330c5b11e8ca3e7f3879cd78e1cbba768e9ce73a73b0c19711fe7"
+      "sha256": "53bc9bfaa163525d403d409e43358376abab1da5318c369996b7466bb3f7c33e"
     },
     {
       "path": "manager/public/device_manager.js",
-      "sha256": "c6e8ecd28e711c8b15495c189d46c166bb7f66091be6649b1886debdb1167862"
+      "sha256": "e21cd3f741c97fffea8c4429caece241438d1d60ab73912b7f8d3060a826d7f8"
     },
     {
       "path": "manager/public/fleet_dashboard.css",
@@ -208,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "8dbc05f6625ef90a07facd8382c33d98e8639cb673674947ba0b0290e78b4fd8"
+      "sha256": "d18d3a36a16ec8f2157adc122c55392f9b2f7f86310b8f84f4e6593c6c63cd49"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -288,7 +288,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "358cf8893e87bac1aaa4eb9d2f8b9b1bb56f020aa8cd466f4b94e9dddbe726fc"
+      "sha256": "6264ed8f17ba928f01f8de7c242101565dfddffb0cafa78a4b0674a3b3f7d727"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -320,7 +320,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "7546a0567ca5b94ed343d73beafa35acc3fe646480d7b9e719a5e202a9e8f9f9"
+      "sha256": "36ab8389ce696593014424cb764dd2c31e007e1cc87aa35215f409dcbc1a83cc"
     },
     {
       "path": "manager/test_isolation.js",

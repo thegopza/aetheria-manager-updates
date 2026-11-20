@@ -6314,6 +6314,251 @@ function isNewCharacterSpawnJailed(profile, target, state, now = Date.now(), pri
   return false;
 }
 
+let lastJailAutoCloseEvent = null;
+const jailAutoCloseRecentByScope = new Map();
+
+function getActiveUnbanProfileIds() {
+  const out = new Set();
+  try {
+    const st = typeof browserMode !== 'undefined' && browserMode && typeof browserMode.getUnbanStatus === 'function'
+      ? browserMode.getUnbanStatus()
+      : null;
+    for (const s of (st?.activeSessions || [])) {
+      const pid = String(s?.profileId || '').trim();
+      if (pid) out.add(pid);
+    }
+  } catch (_) {}
+  return out;
+}
+
+function isProfileOpenForAutoClose(p) {
+  if (!p || !p.id) return false;
+  const proc = runningProcesses[p.id];
+  if (proc && isProcessAlive(proc.pid)) return true;
+  if (typeof browserMode !== 'undefined' && browserMode && typeof browserMode.isOpen === 'function' && browserMode.isOpen(p.id)) {
+    return true;
+  }
+  if (p.debugPort) {
+    const cached = clientStateCacheByPort.get(p.debugPort);
+    if (cached && (Date.now() - cached.ts < 60000)) return true;
+  }
+  return false;
+}
+
+function resolveSameIpGroupTargets(triggerPid, {
+  allProfiles = [],
+  customCfg = null,
+  deviceGroups = [],
+  getLeaseSnapshot = null,
+  maxScreensPerIp = 6
+} = {}) {
+  const pid = String(triggerPid || '').trim();
+  const safeProfiles = Array.isArray(allProfiles) ? allProfiles : [];
+  const targetSet = new Set(pid ? [pid] : []);
+  const readLease = (id) => {
+    try {
+      return typeof getLeaseSnapshot === 'function' ? getLeaseSnapshot(id) : null;
+    } catch (_) {
+      return null;
+    }
+  };
+  const triggerLease = pid ? readLease(pid) : null;
+  const isRealProxyLease = (l) => Boolean(
+    l && l.active && l.scheme !== 'direct' && (l.proxyHost || l.ip)
+  );
+  const sameRealProxyLease = (a, b) => {
+    if (!isRealProxyLease(a) || !isRealProxyLease(b)) return false;
+    if (a.proxyHost && b.proxyHost && a.proxyHost === b.proxyHost && Number(a.proxyPort || 0) === Number(b.proxyPort || 0)) {
+      return true;
+    }
+    if (a.ip && (b.ip === a.ip || b.proxyHost === a.ip)) {
+      return true;
+    }
+    return false;
+  };
+
+  // Case 1: Trigger profile belongs to a Custom IP Group
+  const customIpGroups = Array.isArray(customCfg?.ipGroups) ? customCfg.ipGroups : [];
+  let matchedCustomIg = null;
+  const customMemberSet = new Set();
+  for (const ig of customIpGroups) {
+    const igPids = new Set(Array.isArray(ig?.profileIds) ? ig.profileIds.map(String) : []);
+    for (const dg of (Array.isArray(ig?.deviceGroups) ? ig.deviceGroups : [])) {
+      for (const id of (Array.isArray(dg?.profileIds) ? dg.profileIds : [])) {
+        igPids.add(String(id));
+      }
+    }
+    for (const id of igPids) customMemberSet.add(id);
+    if (pid && igPids.has(pid)) {
+      matchedCustomIg = { ig, igPids };
+    }
+  }
+
+  if (matchedCustomIg) {
+    const { ig, igPids } = matchedCustomIg;
+    for (const id of igPids) targetSet.add(id);
+    if (isRealProxyLease(triggerLease)) {
+      for (const p of safeProfiles) {
+        if (!p || !p.id) continue;
+        const l = readLease(p.id);
+        if (sameRealProxyLease(triggerLease, l)) {
+          targetSet.add(String(p.id));
+        }
+      }
+    }
+    const suffix = isRealProxyLease(triggerLease)
+      ? ` (${triggerLease.ip || triggerLease.proxyHost})`
+      : (ig.useHomeIp ? ' (IP บ้าน)' : '');
+    return {
+      profileIds: Array.from(targetSet),
+      groupLabel: `${ig.name || 'วง IP พิเศษ'}${suffix}`,
+      scopeKey: `custom:${ig.id}`
+    };
+  }
+
+  // Match Auto Device/IP Group snapshot if available
+  const safeDeviceGroups = Array.isArray(deviceGroups) ? deviceGroups : [];
+  const autoGrp = safeDeviceGroups.find(g => {
+    const ipPids = Array.isArray(g?.ipProfileIds) && g.ipProfileIds.length > 0 ? g.ipProfileIds : g?.profileIds;
+    return Array.isArray(ipPids) && ipPids.map(String).includes(pid);
+  }) || null;
+
+  // Case 2: Auto Group with Active Real Proxy Lease
+  if (isRealProxyLease(triggerLease)) {
+    for (const p of safeProfiles) {
+      if (!p || !p.id) continue;
+      const l = readLease(p.id);
+      if (sameRealProxyLease(triggerLease, l)) {
+        targetSet.add(String(p.id));
+      }
+    }
+    if (autoGrp) {
+      const sameBlockIds = safeDeviceGroups
+        .filter(g => Number(g?.ipIndex) === Number(autoGrp.ipIndex))
+        .flatMap(g => Array.isArray(g?.ipProfileIds) && g.ipProfileIds.length > 0 ? g.ipProfileIds : (g?.profileIds || []));
+      for (const rawSib of sameBlockIds) {
+        const sibPid = String(rawSib || '').trim();
+        if (!sibPid || customMemberSet.has(sibPid)) continue;
+        const sibLease = readLease(sibPid);
+        if (!sibLease || !sibLease.active) {
+          targetSet.add(sibPid);
+        }
+      }
+    }
+    const ipLabel = triggerLease.ip || triggerLease.proxyHost;
+    return {
+      profileIds: Array.from(targetSet),
+      groupLabel: `${autoGrp ? `IP #${autoGrp.ipIndex} · ` : ''}${ipLabel}`,
+      scopeKey: `proxy:${triggerLease.proxyHost || triggerLease.ip}:${Number(triggerLease.proxyPort) || 0}`
+    };
+  }
+
+  // Case 3: Fallback when Proxy is OFF or no real proxy lease
+  if (autoGrp) {
+    const ipIdx = Number(autoGrp.ipIndex) || 1;
+    for (const g of safeDeviceGroups) {
+      if (Number(g?.ipIndex) !== ipIdx) continue;
+      const list = Array.isArray(g?.ipProfileIds) && g.ipProfileIds.length > 0 ? g.ipProfileIds : (g?.profileIds || []);
+      for (const rawId of list) {
+        const id = String(rawId || '').trim();
+        if (id && !customMemberSet.has(id)) targetSet.add(id);
+      }
+    }
+    return {
+      profileIds: Array.from(targetSet),
+      groupLabel: `IP #${ipIdx}${autoGrp.proxyIp ? ` (${autoGrp.proxyIp})` : ''}`,
+      scopeKey: `auto-ip:${ipIdx}`
+    };
+  }
+
+  const perIp = Math.max(1, Number(maxScreensPerIp) || 6);
+  const unisolated = safeProfiles.filter(p => p && p.id && !customMemberSet.has(String(p.id)));
+  const idx = unisolated.findIndex(p => String(p.id) === pid);
+  const chunkIdx = idx >= 0 ? Math.floor(idx / perIp) : 0;
+  if (idx >= 0) {
+    for (const p of unisolated.slice(chunkIdx * perIp, (chunkIdx + 1) * perIp)) {
+      if (p && p.id) targetSet.add(String(p.id));
+    }
+  }
+  return {
+    profileIds: Array.from(targetSet),
+    groupLabel: `IP #${chunkIdx + 1}`,
+    scopeKey: `auto-ip:${chunkIdx + 1}`
+  };
+}
+
+async function executeJailAutoClose({ mode, triggerProfile, state, mapName, sameIpTargets }) {
+  const normalizedMode = mode === 'all_ips' ? 'all_ips' : (mode === 'same_ip' ? 'same_ip' : 'off');
+  if (normalizedMode === 'off' || !triggerProfile || !triggerProfile.id) return null;
+
+  const triggerPid = String(triggerProfile.id);
+  const scopeKey = normalizedMode === 'all_ips'
+    ? 'all_ips'
+    : (sameIpTargets?.scopeKey || `same_ip:${triggerPid}`);
+  const now = Date.now();
+  const prevAt = jailAutoCloseRecentByScope.get(scopeKey) || 0;
+  if (now - prevAt < 5000) return null;
+  jailAutoCloseRecentByScope.set(scopeKey, now);
+
+  const allProfiles = loadProfiles() || [];
+  const activeUnbanIds = getActiveUnbanProfileIds();
+
+  let targetsToClose = [];
+  if (normalizedMode === 'all_ips') {
+    targetsToClose = allProfiles.filter(p =>
+      p &&
+      !activeUnbanIds.has(String(p.id)) &&
+      (String(p.id) === triggerPid || isProfileOpenForAutoClose(p))
+    );
+  } else {
+    const idSet = new Set(Array.isArray(sameIpTargets?.profileIds) ? sameIpTargets.profileIds.map(String) : [triggerPid]);
+    targetsToClose = allProfiles.filter(p =>
+      p &&
+      idSet.has(String(p.id)) &&
+      !activeUnbanIds.has(String(p.id)) &&
+      (String(p.id) === triggerPid || isProfileOpenForAutoClose(p))
+    );
+  }
+
+  if (normalizedMode === 'all_ips' && activeUnbanIds.size === 0) {
+    await stopAllProfiles().catch(() => {});
+  } else {
+    await Promise.allSettled(targetsToClose.map(p => stopSingleProfile(p.id)));
+  }
+
+  for (const p of targetsToClose) {
+    if (p && p.debugPort) {
+      clientStateCacheByPort.delete(p.debugPort);
+      clientStateLastFailureByPort.delete(p.debugPort);
+    }
+  }
+
+  const groupLabel = normalizedMode === 'all_ips'
+    ? 'ทุกวง IP ทั้งหมด'
+    : (sameIpTargets?.groupLabel || 'วง IP เดียวกัน');
+  const closedNames = targetsToClose.map(p => p.name || p.id);
+  const ev = {
+    id: `jac_${now}_${triggerPid}`,
+    ts: now,
+    mode: normalizedMode,
+    triggerProfileId: triggerPid,
+    triggerProfileName: triggerProfile.name || triggerPid,
+    triggerCharName: (state && state.charName) || triggerProfile.lastCharName || '',
+    mapName,
+    groupLabel,
+    closedCount: targetsToClose.length,
+    closedProfileNames: closedNames
+  };
+  lastJailAutoCloseEvent = ev;
+
+  console.warn(
+    `[JAIL AUTO-CLOSE] 🚨 จอ "${ev.triggerProfileName}"${ev.triggerCharName ? ` (${ev.triggerCharName})` : ''} เข้าแมพคุก (${mapName}) — ` +
+    `โหมด ${normalizedMode === 'all_ips' ? 'ปิดทุกวง IP' : `ปิดเฉพาะวง ${groupLabel}`} ` +
+    `สั่งปิดแล้ว ${ev.closedCount} จอ (${closedNames.join(', ') || 'ไม่มีจอเปิดอยู่'})`
+  );
+  return ev;
+}
+
 async function recordProfileJailedAndStop(profile, state) {
   if (!profile || !profile.id) return false;
   const pid = String(profile.id);
@@ -6366,6 +6611,29 @@ async function recordProfileJailedAndStop(profile, state) {
   if ((newlyJailed || shouldBlockIpNow) && !jailStoppingInFlight.has(pid)) {
     jailStoppingInFlight.add(pid);
     try {
+      const customCfg = typeof browserMode !== 'undefined' && browserMode && typeof browserMode.getCustomIpDeviceConfig === 'function'
+        ? browserMode.getCustomIpDeviceConfig()
+        : { ipGroups: [], jailAutoCloseMode: 'off' };
+      const rawCloseMode = String(customCfg?.jailAutoCloseMode || 'off').trim().toLowerCase();
+      const jailCloseMode = (rawCloseMode === 'same_ip' || rawCloseMode === 'all_ips') ? rawCloseMode : 'off';
+      const activeUnbanIds = getActiveUnbanProfileIds();
+      const shouldAutoClose = Boolean(newlyJailed && (jailCloseMode === 'same_ip' || jailCloseMode === 'all_ips') && !activeUnbanIds.has(pid));
+      const sameIpTargets = (shouldAutoClose && jailCloseMode === 'same_ip')
+        ? resolveSameIpGroupTargets(pid, {
+            allProfiles: loadProfiles() || [],
+            customCfg,
+            deviceGroups: typeof browserMode !== 'undefined' && browserMode && typeof browserMode.getDeviceGroupsSnapshot === 'function'
+              ? browserMode.getDeviceGroupsSnapshot()
+              : [],
+            getLeaseSnapshot: (id) => (typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.getProfileLeaseSnapshot === 'function')
+              ? screenProxy.getProfileLeaseSnapshot(id)
+              : null,
+            maxScreensPerIp: (typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.loadSettings === 'function')
+              ? (screenProxy.loadSettings().maxScreensPerIp || 6)
+              : 6
+          })
+        : null;
+
       if (shouldBlockIpNow && typeof screenProxy !== 'undefined' && screenProxy && typeof screenProxy.blockProxyForProfile === 'function') {
         console.warn(`[JAIL IP BLOCK] 🚫 ตรวจพบจอ "${profile.name || pid}" สร้างตัวใหม่แล้วเข้าคุกทันที (${mapName}) ขณะเปิด Proxy — บล็อค Proxy IP ถาวร, ย้ายจออื่นออกจาก IP นี้ และสุ่ม Device/Machine ID ใหม่!`);
         screenProxy.blockProxyForProfile(pid, {
@@ -6405,7 +6673,17 @@ async function recordProfileJailedAndStop(profile, state) {
         }).catch(() => {});
       }
       if (profile.debugPort) {
-        evalProfilePort(profile.debugPort, 'if (typeof window.stopMasterBot === "function" && window.__isBotRunning) window.stopMasterBot();', 2500).catch(() => {});
+        const stopPromise = evalProfilePort(profile.debugPort, 'if (typeof window.stopMasterBot === "function" && window.__isBotRunning) window.stopMasterBot();', 1200).catch(() => {});
+        if (shouldAutoClose) await stopPromise;
+      }
+      if (shouldAutoClose) {
+        await executeJailAutoClose({
+          mode: jailCloseMode,
+          triggerProfile: profile,
+          state,
+          mapName,
+          sameIpTargets
+        });
       }
     } catch (_) {} finally {
       setTimeout(() => jailStoppingInFlight.delete(pid), 4000);
@@ -7492,7 +7770,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.11'
+  managerVersion: '4.63.12'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7521,7 +7799,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.11',
+  managerVersion: '4.63.12',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -9014,7 +9292,8 @@ const server = http.createServer(async (req, res) => {
       gameExe: getGameExe(),
       allWindowsHidden,
       captchaStats: getCaptchaStats(),
-      channelCheckMode: getEffectiveChannelCheckMode()
+      channelCheckMode: getEffectiveChannelCheckMode(),
+      lastJailAutoCloseEvent
     });
   }
 
@@ -9113,7 +9392,7 @@ const server = http.createServer(async (req, res) => {
     const surchargeConfig = typeof screenProxy.getSurchargeConfig === "function"
       ? screenProxy.getSurchargeConfig()
       : null;
-    return sendJSON({ success: true, maxScreensPerDevice: 3, screensPerIp, groups, customIpConfig, customGroupLeases, surchargeConfig });
+    return sendJSON({ success: true, maxScreensPerDevice: 3, screensPerIp, groups, customIpConfig, customGroupLeases, surchargeConfig, lastJailAutoCloseEvent });
   }
 
   // GET / POST /api/custom-ip-devices
@@ -9130,7 +9409,8 @@ const server = http.createServer(async (req, res) => {
           customGroupLeases: typeof screenProxy.getCustomGroupLeases === "function" ? screenProxy.getCustomGroupLeases() : [],
           surchargeConfig: typeof screenProxy.getSurchargeConfig === "function" ? screenProxy.getSurchargeConfig() : null,
           deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : [],
-          screensPerIp: screenProxy.loadSettings().maxScreensPerIp || 6
+          screensPerIp: screenProxy.loadSettings().maxScreensPerIp || 6,
+          lastJailAutoCloseEvent
         });
       } catch (e) {
         return sendJSON({ success: false, error: e.message }, 500);
@@ -9153,7 +9433,8 @@ const server = http.createServer(async (req, res) => {
               delete windowStates[pid].syncedMachineId;
             }
           }
-          const resv = typeof screenProxy.reserveCustomIpGroupsNow === "function"
+          const skipReserve = payload?.action === "set_jail_auto_close_mode";
+          const resv = (!skipReserve && typeof screenProxy.reserveCustomIpGroupsNow === "function")
             ? await screenProxy.reserveCustomIpGroupsNow().catch(() => ({}))
             : {};
           if (screenProxy.isEnabled() && affected.length > 0) {
@@ -9168,7 +9449,8 @@ const server = http.createServer(async (req, res) => {
             customIpConfig: mutated.customIpConfig || browserMode.getCustomIpDeviceConfig(),
             customGroupLeases: resv.customGroupLeases || screenProxy.getCustomGroupLeases(),
             surchargeConfig: resv.surchargeConfig || screenProxy.getSurchargeConfig(),
-            deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : []
+            deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : [],
+            lastJailAutoCloseEvent
           });
         } catch (e) {
           return sendJSON({ success: false, error: e.message }, 400);

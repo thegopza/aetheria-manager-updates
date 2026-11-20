@@ -403,6 +403,8 @@ let topHudZIndex = 10000;
 // INITIALIZATION & POLLING
 // ==========================================
 let fetchProfilesInFlight = null;
+let hasSeededJailAutoCloseEvent = false;
+let seenJailAutoCloseEventId = null;
 async function fetchProfiles() {
   if (fetchProfilesInFlight) return fetchProfilesInFlight;
   fetchProfilesInFlight = (async () => {
@@ -444,9 +446,26 @@ async function fetchProfiles() {
             {
               customIpConfig: data.customIpConfig,
               customGroupLeases: data.customGroupLeases,
-              ipSurchargeConfig: data.ipSurchargeConfig || (data.screenProxySummary ? data.screenProxySummary.surchargeConfig : undefined)
+              ipSurchargeConfig: data.ipSurchargeConfig || (data.screenProxySummary ? data.screenProxySummary.surchargeConfig : undefined),
+              lastJailAutoCloseEvent: data.lastJailAutoCloseEvent
             }
           );
+        }
+        if (data.lastJailAutoCloseEvent && data.lastJailAutoCloseEvent.id) {
+          if (!hasSeededJailAutoCloseEvent) {
+            seenJailAutoCloseEventId = data.lastJailAutoCloseEvent.id;
+            hasSeededJailAutoCloseEvent = true;
+          } else if (data.lastJailAutoCloseEvent.id !== seenJailAutoCloseEventId) {
+            seenJailAutoCloseEventId = data.lastJailAutoCloseEvent.id;
+            const ev = data.lastJailAutoCloseEvent;
+            const charPart = ev.triggerCharName ? ` (${ev.triggerCharName})` : '';
+            const modeDesc = ev.mode === 'all_ips' ? 'ทุกวง IP' : `วง ${ev.groupLabel || 'IP เดียวกัน'}`;
+            if (typeof showToast === 'function') {
+              showToast(`🚨 ${ev.triggerProfileName || ev.triggerProfileId}${charPart} ติดคุก — สั่งปิด ${modeDesc} (${ev.closedCount || 0} จอ) แล้ว`, 'warning');
+            }
+          }
+        } else if (!hasSeededJailAutoCloseEvent) {
+          hasSeededJailAutoCloseEvent = true;
         }
 
         if (data.captchaStats && typeof data.captchaStats.totalSolved === 'number') {

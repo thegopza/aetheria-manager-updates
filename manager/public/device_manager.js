@@ -24,8 +24,9 @@
   let cachedProfiles = [];
   let cachedGroups = [];
   let cachedScreensPerIp = 6;
-  let cachedCustomConfig = { ipGroups: [] };
+  let cachedCustomConfig = { ipGroups: [], jailAutoCloseMode: 'off' };
   let cachedCustomLeases = [];
+  let cachedLastJailAutoCloseEvent = null;
   let cachedSurchargeConfig = JSON.parse(JSON.stringify(DEFAULT_SURCHARGE_CFG));
 
   let rotatingGroups = new Set();
@@ -240,6 +241,7 @@
       if (res && res.success) {
         if (res.customIpConfig) cachedCustomConfig = res.customIpConfig;
         if (Array.isArray(res.customGroupLeases)) cachedCustomLeases = res.customGroupLeases;
+        if (res.lastJailAutoCloseEvent) cachedLastJailAutoCloseEvent = res.lastJailAutoCloseEvent;
         if (res.surchargeConfig) mergeSurchargeConfig(res.surchargeConfig);
         if (Array.isArray(res.deviceGroups)) cachedGroups = res.deviceGroups;
         if (Number.isFinite(Number(res.screensPerIp)) && Number(res.screensPerIp) >= 1) {
@@ -265,6 +267,7 @@
       }
       if (res.customIpConfig) cachedCustomConfig = res.customIpConfig;
       if (Array.isArray(res.customGroupLeases)) cachedCustomLeases = res.customGroupLeases;
+      if (res.lastJailAutoCloseEvent) cachedLastJailAutoCloseEvent = res.lastJailAutoCloseEvent;
       if (res.surchargeConfig) mergeSurchargeConfig(res.surchargeConfig);
       if (Array.isArray(res.deviceGroups)) cachedGroups = res.deviceGroups;
       if (typeof fetchProfiles === 'function') {
@@ -399,6 +402,18 @@
         </button>
       </div>
 
+      <div class="dv-jail-stop-bar" id="dv-jail-stop-bar">
+        <div class="dv-jail-stop-row">
+          <span class="dv-jail-stop-lbl">🚨 ระบบปิดจอเมื่อติดคุก:</span>
+          <div class="dv-jail-stop-group" id="dv-jail-stop-group">
+            <button type="button" class="dv-jail-stop-btn active" data-dv-jail-stop-mode="off" title="ปิดระบบ: หยุดเฉพาะบอทในตัวที่ติดคุก ไม่ปิดหน้าต่างจออื่น">⚪ ปิดไว้</button>
+            <button type="button" class="dv-jail-stop-btn" data-dv-jail-stop-mode="same_ip" title="เมื่อมีตัวใดตัวหนึ่งในวง IP ติดคุก จะปิดทุกจอในวง IP นั้นทันที">🌐 ปิดเฉพาะวง IP นั้น</button>
+            <button type="button" class="dv-jail-stop-btn" data-dv-jail-stop-mode="all_ips" title="เมื่อมีตัวใดตัวหนึ่งติดคุก จะปิดทุกจอในทุกวง IP ทั้งหมดทันที">🛑 ปิดทุกวง IP</button>
+          </div>
+        </div>
+        <div class="dv-jail-stop-hint" id="dv-jail-stop-hint">เมื่อมีตัวติดคุก จะหยุดเฉพาะบอทในจอนั้น (ไม่สั่งปิดหน้าต่างจออื่น)</div>
+      </div>
+
       <div id="dv-auto-controls-wrap">
         <div class="dv-ip-config-bar">
           <div class="dv-ip-config-left">
@@ -487,6 +502,18 @@
         const mode = btn.getAttribute('data-dv-platform-mode') || 'pc';
         const modeLabel = mode === 'android' ? '📱 Android ทั้งหมด' : (mode === 'mixed' ? '🔀 ผสม PC + Android' : '🖥️ PC ทั้งหมด');
         mutateCustomApi({ action: 'set_default_platform_mode', mode, clearOverrides: true }, `✅ ตั้งโหมดจำลองอุปกรณ์เป็น "${modeLabel}" เรียบร้อย`);
+      });
+    });
+
+    drawer.querySelectorAll('[data-dv-jail-stop-mode]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-dv-jail-stop-mode') || 'off';
+        const toastMsg = mode === 'same_ip'
+          ? '🌐 เปิดระบบปิดจอเมื่อติดคุก: ปิดทุกจอในวง IP นั้นทันที'
+          : (mode === 'all_ips'
+            ? '🛑 เปิดระบบปิดจอเมื่อติดคุก: ปิดทุกจอในทุกวง IP ทันที'
+            : '⚪ ปิดระบบปิดจออัตโนมัติเมื่อติดคุกแล้ว');
+        mutateCustomApi({ action: 'set_jail_auto_close_mode', mode }, toastMsg);
       });
     });
 
@@ -1308,6 +1335,8 @@
     const splitBannerEl = document.getElementById('dv-ip-split-banner');
     const surchargeHintEl = document.getElementById('dv-auto-surcharge-hint');
     const autoControlsWrap = document.getElementById('dv-auto-controls-wrap');
+    const jailStopBar = document.getElementById('dv-jail-stop-bar');
+    const jailStopHintEl = document.getElementById('dv-jail-stop-hint');
     const badgeAuto = document.getElementById('dv-mode-badge-auto');
     const badgeCustom = document.getElementById('dv-mode-badge-custom');
     const bodyEl = document.getElementById('dv-list-body');
@@ -1319,6 +1348,33 @@
     document.querySelectorAll('[data-dv-tab]').forEach(btn => {
       btn.classList.toggle('active', btn.getAttribute('data-dv-tab') === activeTab);
     });
+    if (jailStopBar) {
+      jailStopBar.classList.toggle('dv-hidden', activeTab === 'unban');
+      const jailStopMode = String(cachedCustomConfig?.jailAutoCloseMode || 'off').toLowerCase();
+      jailStopBar.classList.toggle('is-same-ip', jailStopMode === 'same_ip');
+      jailStopBar.classList.toggle('is-all-ips', jailStopMode === 'all_ips');
+      document.querySelectorAll('[data-dv-jail-stop-mode]').forEach(btn => {
+        const m = btn.getAttribute('data-dv-jail-stop-mode');
+        btn.classList.toggle('active', m === jailStopMode);
+        btn.disabled = customMutating;
+      });
+      if (jailStopHintEl) {
+        let baseHint = 'เมื่อมีตัวติดคุก จะหยุดเฉพาะบอทในจอนั้น (ไม่สั่งปิดหน้าต่างจออื่น)';
+        if (jailStopMode === 'same_ip') {
+          baseHint = 'ทำงานอยู่: หากมีตัวใดตัวหนึ่งในวง IP ติดคุก ระบบจะสั่งปิดทุกจอในวง IP นั้นทันที (ยกเว้นจอในโหมดปลด)';
+        } else if (jailStopMode === 'all_ips') {
+          baseHint = 'ทำงานอยู่: หากมีตัวใดตัวหนึ่งติดคุก ระบบจะสั่งปิดทุกจอในทุกวง IP ทั้งหมดทันที (ยกเว้นจอในโหมดปลด)';
+        }
+        const ev = cachedLastJailAutoCloseEvent;
+        const recentEv = ev && Number(ev.ts) > 0 && (Date.now() - Number(ev.ts) < 12 * 3600 * 1000);
+        if (recentEv) {
+          const hhmm = new Date(ev.ts).toLocaleTimeString('th-TH', { hour12: false });
+          const charPart = ev.triggerCharName ? ` (${ev.triggerCharName})` : '';
+          baseHint += ` · ล่าสุด ${hhmm}: "${ev.triggerProfileName || ev.triggerProfileId}"${charPart} ปิดไป ${ev.closedCount || 0} จอ (${ev.groupLabel || '-'})`;
+        }
+        jailStopHintEl.textContent = baseHint;
+      }
+    }
     if (autoControlsWrap) {
       autoControlsWrap.classList.toggle('dv-hidden', activeTab === 'custom' || activeTab === 'unban');
     }
@@ -1647,6 +1703,9 @@
       }
       if (extra.ipSurchargeConfig) {
         mergeSurchargeConfig(extra.ipSurchargeConfig);
+      }
+      if (extra.lastJailAutoCloseEvent) {
+        cachedLastJailAutoCloseEvent = extra.lastJailAutoCloseEvent;
       }
     }
     mountShell();

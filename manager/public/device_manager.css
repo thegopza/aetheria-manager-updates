@@ -1243,3 +1243,92 @@ body.dv-open #dv-drawer {
   border-color: rgba(52, 211, 153, 0.38);
 }
 
+/* Jail Auto-Close Control Bar inside Device Spoof Drawer */
+.dv-jail-stop-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 16px;
+  background: linear-gradient(90deg, rgba(30, 41, 59, 0.85), rgba(15, 23, 42, 0.94));
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  flex-shrink: 0;
+  transition: background 0.16s ease, border-color 0.16s ease;
+}
+.dv-jail-stop-bar.is-same-ip {
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.16), rgba(15, 23, 42, 0.94));
+  border-bottom-color: rgba(251, 191, 36, 0.4);
+}
+.dv-jail-stop-bar.is-all-ips {
+  background: linear-gradient(90deg, rgba(239, 68, 68, 0.2), rgba(15, 23, 42, 0.94));
+  border-bottom-color: rgba(248, 113, 113, 0.45);
+}
+.dv-jail-stop-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.dv-jail-stop-lbl {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: #fde68a;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.dv-jail-stop-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.dv-jail-stop-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  font-family: inherit;
+  border-radius: 7px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(15, 23, 42, 0.88);
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.dv-jail-stop-btn:hover:not(:disabled) {
+  border-color: rgba(251, 191, 36, 0.6);
+  color: #f8fafc;
+}
+.dv-jail-stop-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+.dv-jail-stop-btn.active[data-dv-jail-stop-mode="off"] {
+  background: rgba(51, 65, 85, 0.72);
+  border-color: rgba(148, 163, 184, 0.65);
+  color: #f8fafc;
+}
+.dv-jail-stop-btn.active[data-dv-jail-stop-mode="same_ip"] {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.38), rgba(180, 83, 9, 0.55));
+  border-color: #fbbf24;
+  color: #fef3c7;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.28);
+}
+.dv-jail-stop-btn.active[data-dv-jail-stop-mode="all_ips"] {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.42), rgba(185, 28, 28, 0.6));
+  border-color: #f87171;
+  color: #fee2e2;
+  box-shadow: 0 2px 8px rgba(239, 68, 68, 0.32);
+}
+.dv-jail-stop-hint {
+  font-size: 10.5px;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+.dv-jail-stop-bar.is-same-ip .dv-jail-stop-hint {
+  color: #fde68a;
+}
+.dv-jail-stop-bar.is-all-ips .dv-jail-stop-hint {
+  color: #fecaca;
+}
+

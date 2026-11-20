@@ -71,6 +71,12 @@ function normalizeDefaultPlatformMode(val) {
   return 'pc';
 }
 
+function normalizeJailAutoCloseMode(v) {
+  const s = String(v || '').trim().toLowerCase();
+  if (s === 'same_ip' || s === 'all_ips') return s;
+  return 'off';
+}
+
 function resolveDeviceSpec(deviceId, platform = 'pc') {
   const plat = normalizeDevicePlatform(platform, 'pc');
   const presets = plat === 'android' ? ANDROID_DEVICE_PRESETS : PC_DEVICE_PRESETS;
@@ -884,6 +890,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       } catch (_) {}
     }
     const defaultPlatformMode = normalizeDefaultPlatformMode(raw?.defaultPlatformMode);
+    const jailAutoCloseMode = normalizeJailAutoCloseMode(raw?.jailAutoCloseMode);
     const autoGroupPlatforms = {};
     if (raw && raw.autoGroupPlatforms && typeof raw.autoGroupPlatforms === 'object') {
       for (const [k, v] of Object.entries(raw.autoGroupPlatforms)) {
@@ -973,7 +980,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       });
     }
 
-    const normalized = { version: 1, defaultPlatformMode, autoGroupPlatforms, ipGroups };
+    const normalized = { version: 1, defaultPlatformMode, jailAutoCloseMode, autoGroupPlatforms, ipGroups };
     customIpConfigCache = normalized;
     if (changed && customIpFile && fs.existsSync(customIpFile)) {
       saveCustomIpDeviceConfig(normalized);
@@ -985,6 +992,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     const clean = {
       version: 1,
       defaultPlatformMode: normalizeDefaultPlatformMode(cfg?.defaultPlatformMode),
+      jailAutoCloseMode: normalizeJailAutoCloseMode(cfg?.jailAutoCloseMode),
       autoGroupPlatforms: (cfg?.autoGroupPlatforms && typeof cfg.autoGroupPlatforms === 'object' && !Array.isArray(cfg.autoGroupPlatforms))
         ? { ...cfg.autoGroupPlatforms }
         : {},
@@ -1027,6 +1035,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
     return {
       version: 1,
       defaultPlatformMode: cfg.defaultPlatformMode || 'pc',
+      jailAutoCloseMode: normalizeJailAutoCloseMode(cfg.jailAutoCloseMode),
       autoGroupPlatforms: { ...(cfg.autoGroupPlatforms || {}) },
       ipGroups: cfg.ipGroups.map(ig => {
         const igPids = [];
@@ -1151,6 +1160,19 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         success: true,
         action,
         defaultPlatformMode: cfg.defaultPlatformMode,
+        affectedProfileIds: [],
+        customIpConfig: getCustomIpDeviceConfig()
+      };
+    }
+
+    if (action === 'set_jail_auto_close_mode') {
+      const nextMode = normalizeJailAutoCloseMode(payload.mode || payload.jailAutoCloseMode);
+      cfg.jailAutoCloseMode = nextMode;
+      saveCustomIpDeviceConfig(cfg);
+      return {
+        success: true,
+        action,
+        jailAutoCloseMode: cfg.jailAutoCloseMode,
         affectedProfileIds: [],
         customIpConfig: getCustomIpDeviceConfig()
       };

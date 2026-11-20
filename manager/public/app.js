@@ -4308,6 +4308,153 @@ function initTopupCaptchaModal() {
 
   let cachedFullHwid = "";
 
+  const SHOWN_PAID_POPUPS_KEY = "pelican_shown_paid_topup_orders";
+  const shownPaidPopupOrderIds = new Set();
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SHOWN_PAID_POPUPS_KEY) || "[]");
+    if (Array.isArray(saved)) saved.forEach(id => id && shownPaidPopupOrderIds.add(String(id)));
+  } catch (_) {}
+
+  function hasShownPaidPopup(orderId) {
+    return Boolean(orderId) && shownPaidPopupOrderIds.has(String(orderId));
+  }
+
+  function markPaidPopupShown(orderId) {
+    if (!orderId) return;
+    shownPaidPopupOrderIds.add(String(orderId));
+    try {
+      sessionStorage.setItem(SHOWN_PAID_POPUPS_KEY, JSON.stringify(Array.from(shownPaidPopupOrderIds).slice(-30)));
+    } catch (_) {}
+  }
+
+  function formatPopupNum(v) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return String(v ?? "0.00");
+    return n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function resolveTotalPointsForPopup(explicitTotal) {
+    if (explicitTotal != null && Number.isFinite(Number(explicitTotal))) {
+      return Number(explicitTotal);
+    }
+    const ptsText = document.getElementById("topup-points-val")?.innerText?.replace(/,/g, "").trim();
+    if (ptsText && Number.isFinite(Number(ptsText))) {
+      return Number(ptsText);
+    }
+    return null;
+  }
+
+  function showTopupSuccessPopup({ amountBaht, pointsAdded, totalPoints, channelLabel, orderId } = {}) {
+    if (orderId && hasShownPaidPopup(orderId)) return;
+    if (orderId) markPaidPopupShown(orderId);
+
+    const existing = document.getElementById("pm-topup-success-popup");
+    if (existing) existing.remove();
+
+    const amtVal = Number(amountBaht ?? pointsAdded ?? 0);
+    const ptsVal = Number(pointsAdded ?? amountBaht ?? 0);
+    const resolvedTotal = resolveTotalPointsForPopup(totalPoints);
+
+    const overlay = document.createElement("div");
+    overlay.id = "pm-topup-success-popup";
+    overlay.style.cssText = [
+      "position:fixed", "inset:0", "z-index:10000050",
+      "display:flex", "align-items:center", "justify-content:center",
+      "padding:20px", "background:rgba(4, 10, 24, 0.78)",
+      "backdrop-filter:blur(6px)", "animation:fadeIn 0.18s ease-out"
+    ].join(";");
+
+    const card = document.createElement("div");
+    card.style.cssText = [
+      "width:100%", "max-width:420px", "border-radius:16px",
+      "background:linear-gradient(165deg, #0f1f3d 0%, #091326 100%)",
+      "border:1.5px solid rgba(52, 211, 153, 0.55)",
+      "box-shadow:0 24px 60px rgba(0, 0, 0, 0.65), 0 0 40px rgba(16, 185, 129, 0.2)",
+      "padding:26px 24px 22px", "text-align:center", "color:#e2e8f0"
+    ].join(";");
+
+    const iconWrap = document.createElement("div");
+    iconWrap.style.cssText = [
+      "width:64px", "height:64px", "margin:0 auto 14px", "border-radius:50%",
+      "display:flex", "align-items:center", "justify-content:center", "font-size:34px",
+      "background:rgba(16, 185, 129, 0.16)", "border:2px solid rgba(52, 211, 153, 0.6)",
+      "box-shadow:0 0 24px rgba(16, 185, 129, 0.35)"
+    ].join(";");
+    iconWrap.textContent = "✅";
+
+    const titleEl = document.createElement("div");
+    titleEl.style.cssText = "font-size:20px; font-weight:800; color:#34d399; margin-bottom:4px;";
+    titleEl.textContent = "เติมส่วนบุญสำเร็จ!";
+
+    const channelEl = document.createElement("div");
+    channelEl.style.cssText = "font-size:12px; color:#94a3b8; margin-bottom:16px;";
+    channelEl.textContent = channelLabel ? `ช่องทาง: ${channelLabel}` : "ได้รับยอดโอนเข้าบัญชีเรียบร้อยแล้ว";
+
+    const amountBox = document.createElement("div");
+    amountBox.style.cssText = [
+      "padding:14px 16px", "border-radius:12px", "margin-bottom:14px",
+      "background:rgba(16, 185, 129, 0.1)", "border:1px solid rgba(52, 211, 153, 0.3)"
+    ].join(";");
+
+    const amtLine = document.createElement("div");
+    amtLine.style.cssText = "font-size:24px; font-weight:800; color:#facc15; letter-spacing:0.3px;";
+    amtLine.textContent = `+${formatPopupNum(ptsVal)} ส่วนบุญ`;
+
+    const bahtLine = document.createElement("div");
+    bahtLine.style.cssText = "font-size:12px; color:#a7f3d0; margin-top:4px;";
+    bahtLine.textContent = `ยอดเงินที่โอน ${formatPopupNum(amtVal)} บาท`;
+
+    amountBox.append(amtLine, bahtLine);
+
+    if (resolvedTotal != null) {
+      const balLine = document.createElement("div");
+      balLine.style.cssText = "font-size:13px; color:#cbd5e1; margin-bottom:18px;";
+      const balLabel = document.createTextNode("ยอดส่วนบุญคงเหลือปัจจุบัน: ");
+      const balStrong = document.createElement("strong");
+      balStrong.style.color = "#34d399";
+      balStrong.textContent = `${formatPopupNum(resolvedTotal)} ส่วนบุญ`;
+      balLine.append(balLabel, balStrong);
+      card.append(iconWrap, titleEl, channelEl, amountBox, balLine);
+    } else {
+      card.append(iconWrap, titleEl, channelEl, amountBox);
+    }
+
+    const okBtn = document.createElement("button");
+    okBtn.id = "btn-pm-topup-success-ok";
+    okBtn.type = "button";
+    okBtn.textContent = "รับทราบ / ตกลง";
+    okBtn.style.cssText = [
+      "width:100%", "padding:11px 18px", "border-radius:10px", "border:none",
+      "cursor:pointer", "font-size:14px", "font-weight:700", "color:#042f2e",
+      "background:linear-gradient(135deg, #34d399 0%, #10b981 100%)",
+      "box-shadow:0 6px 18px rgba(16, 185, 129, 0.35)"
+    ].join(";");
+
+    function closePopup() {
+      document.removeEventListener("keydown", onKey);
+      overlay.remove();
+    }
+
+    function onKey(ev) {
+      if (ev.key === "Escape" || ev.key === "Enter") {
+        ev.preventDefault();
+        closePopup();
+      }
+    }
+
+    okBtn.addEventListener("click", closePopup);
+    overlay.addEventListener("click", (ev) => {
+      if (ev.target === overlay) closePopup();
+    });
+    document.addEventListener("keydown", onKey);
+
+    card.appendChild(okBtn);
+    overlay.appendChild(card);
+    document.body.appendChild(overlay);
+    setTimeout(() => { try { okBtn.focus(); } catch (_) {} }, 0);
+  }
+  window.showTopupSuccessPopup = showTopupSuccessPopup;
+
   if (!btnTopup || !modal) return;
 
   function showVoucherMsg(text, isError = false) {
@@ -4398,6 +4545,13 @@ function initTopupCaptchaModal() {
         showVoucherMsg(typeof res.message === 'string' && res.message ? res.message.replace(/\bpoints?\b/gi, 'ส่วนบุญ') : `🎉 แลกซองสำเร็จ! ได้รับ ${res.amount} บาท (+${res.pointsAdded} ส่วนบุญ)`);
         showToast(`🧧 เติมเงินสำเร็จ: +${res.amount} บ. (+${res.pointsAdded} ส่วนบุญ)`, "success");
         await refreshTopupData();
+        showTopupSuccessPopup({
+          amountBaht: res.amount,
+          pointsAdded: res.pointsAdded,
+          totalPoints: res.totalPoints ?? res.balance ?? null,
+          channelLabel: "ซองอั่งเปา TrueMoney Wallet",
+          orderId: res.receiptId ? `tm:${res.receiptId}` : ""
+        });
       } else {
         showVoucherMsg("❌ " + (res.message || res.error || "แลกซองไม่สำเร็จ"), true);
       }
@@ -4506,15 +4660,25 @@ function initTopupCaptchaModal() {
       return;
     }
     if (ppQrPanel) ppQrPanel.style.display = "block";
-    if (ppQrSvg && order.qrSvg) {
-      ppQrSvg.innerHTML = order.qrSvg;
-    }
     const amtFormatted = order.amountFormatted || Number(order.amountBaht || 0).toFixed(2);
     if (ppExactAmount) ppExactAmount.innerText = amtFormatted;
     if (ppPointsPreview) ppPointsPreview.innerText = `ได้รับส่วนบุญเต็มจำนวน: +${amtFormatted} ส่วนบุญ`;
+    const btnPpCancelEl = document.getElementById("btn-topup-pp-cancel");
 
     if (order.state === "paid") {
       stopPpTimers();
+      if (ppQrSvg) {
+        ppQrSvg.innerHTML = `
+          <div style="width:168px; min-height:168px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:14px 10px; box-sizing:border-box; border-radius:10px; background:linear-gradient(160deg, rgba(16,185,129,0.16), rgba(5,150,105,0.08)); border:1px solid rgba(16,185,129,0.45); color:#065f46;">
+            <div style="font-size:38px; line-height:1; margin-bottom:8px;">✅</div>
+            <div style="font-size:14px; font-weight:800; color:#047857; margin-bottom:4px;">ชำระเงินเรียบร้อย</div>
+            <div style="font-size:13px; font-weight:700; color:#059669; margin-bottom:6px;">+${amtFormatted} ส่วนบุญ</div>
+            <div style="font-size:11px; color:#065f46; opacity:0.85;">ไม่ต้องสแกน QR นี้ซ้ำ</div>
+          </div>
+        `;
+      }
+      if (btnPpCheck) btnPpCheck.style.display = "none";
+      if (btnPpCancelEl) btnPpCancelEl.style.display = "none";
       if (ppStatusLine) {
         ppStatusLine.style.background = "rgba(16, 185, 129, 0.22)";
         ppStatusLine.style.borderColor = "rgba(16, 185, 129, 0.48)";
@@ -4522,6 +4686,12 @@ function initTopupCaptchaModal() {
         ppStatusLine.innerText = `✅ ชำระเงินสำเร็จ! เติม +${amtFormatted} ส่วนบุญ เข้าเครื่องเรียบร้อยแล้ว`;
       }
       return;
+    }
+
+    if (btnPpCheck) btnPpCheck.style.display = "";
+    if (btnPpCancelEl) btnPpCancelEl.style.display = "";
+    if (ppQrSvg && order.qrSvg) {
+      ppQrSvg.innerHTML = order.qrSvg;
     }
 
     const updateCountdown = () => {
@@ -4570,11 +4740,18 @@ function initTopupCaptchaModal() {
       if (res && res.success && res.order) {
         const prevState = activePpOrder?.state;
         renderPpOrder(res.order);
-        if (res.order.state === "paid" && prevState !== "paid") {
+        if (res.order.state === "paid" && (prevState !== "paid" || !hasShownPaidPopup(res.order.orderId))) {
           const added = res.order.amountFormatted || Number(res.order.amountBaht || 0).toFixed(2);
           showPpMsg(`🎉 ชำระเงินพร้อมเพย์สำเร็จ! ได้รับ +${added} ส่วนบุญ`);
           showToast(`💚 พร้อมเพย์เข้าแล้ว: +${added} บ. (+${added} ส่วนบุญ)`, "success");
           await refreshTopupData();
+          showTopupSuccessPopup({
+            amountBaht: res.order.amountBaht ?? added,
+            pointsAdded: res.order.pointsAdded ?? added,
+            totalPoints: res.order.totalPoints ?? res.totalPoints ?? null,
+            channelLabel: "สแกน QR พร้อมเพย์ (กสิกรไทย)",
+            orderId: res.order.orderId
+          });
         } else if (manual && res.order.state === "pending") {
           showPpMsg(`⏳ ยังไม่พบยอดโอน ${res.order.amountFormatted} บาท (หากโอนแล้วระบบจะปรับยอดใน 2-5 วินาที)`);
         }
@@ -4591,13 +4768,34 @@ function initTopupCaptchaModal() {
 
   async function syncActivePromptPayOrder() {
     try {
+      const targetOrderId = activePpOrder?.orderId || undefined;
       const res = await fetch(`${API_BASE}/api/human-check/promptpay-order`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "status", orderId: activePpOrder?.orderId || undefined })
+        body: JSON.stringify({ action: "status", orderId: targetOrderId })
       }).then(r => r.json());
-      if (res && res.success && res.order && res.order.state === "pending") {
-        renderPpOrder(res.order);
+      if (res && res.success && res.order) {
+        if (res.order.state === "pending") {
+          renderPpOrder(res.order);
+        } else if (res.order.state === "paid") {
+          const isRecentPaid = res.order.paidAt && (Date.now() - Number(res.order.paidAt)) < 5 * 60 * 1000;
+          if ((targetOrderId && activePpOrder?.orderId === res.order.orderId) || isRecentPaid) {
+            renderPpOrder(res.order);
+          }
+          if (!hasShownPaidPopup(res.order.orderId) && (targetOrderId || isRecentPaid)) {
+            const added = res.order.amountFormatted || Number(res.order.amountBaht || 0).toFixed(2);
+            showPpMsg(`🎉 ชำระเงินพร้อมเพย์สำเร็จ! ได้รับ +${added} ส่วนบุญ`);
+            showToast(`💚 พร้อมเพย์เข้าแล้ว: +${added} บ. (+${added} ส่วนบุญ)`, "success");
+            await refreshTopupData();
+            showTopupSuccessPopup({
+              amountBaht: res.order.amountBaht ?? added,
+              pointsAdded: res.order.pointsAdded ?? added,
+              totalPoints: res.order.totalPoints ?? res.totalPoints ?? null,
+              channelLabel: "สแกน QR พร้อมเพย์ (กสิกรไทย)",
+              orderId: res.order.orderId
+            });
+          }
+        }
       }
     } catch (_) {}
   }

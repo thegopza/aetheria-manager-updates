@@ -7428,7 +7428,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.8'
+  managerVersion: '4.63.9'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7457,7 +7457,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.8',
+  managerVersion: '4.63.9',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -8209,7 +8209,7 @@ const server = http.createServer(async (req, res) => {
             }
           }
           const orderId = String(result.order.orderId || "");
-          const notifiedFile = path.join(DATA_DIR, "notified_promptpay_orders.json");
+          const notifiedFile = path.join(__dirname, "data", "notified_promptpay_orders.json");
           if (!global.__pmNotifiedPromptPayOrders) {
             global.__pmNotifiedPromptPayOrders = new Set();
             try {

@@ -25,6 +25,13 @@ function calcTransferZeny(zeny, keepZeny = 0, roundHundredK = false) {
   return Math.floor(Math.max(0, cur - keep) / 100000) * 100000;
 }
 
+function isKnownBrokenFleetActorVersion(ver) {
+  const m = String(ver || "").trim().match(/^v?(\d+)\.(\d+)\.(\d+)/);
+  if (!m) return false;
+  const maj = Number(m[1]), min = Number(m[2]), pat = Number(m[3]);
+  return maj === 4 && min === 63 && pat >= 7 && pat <= 12;
+}
+
 function parseCompositeKey(key) {
   const s = String(key || "").trim();
   const idx = s.indexOf("::");
@@ -1156,6 +1163,21 @@ function createFleetZenyConsolidationService(deps = {}) {
     }];
   }
 
+  const remoteUpdateNudgeAtByMachine = new Map();
+  function nudgeRemoteManagerSelfUpdate(machineKey) {
+    if (!remoteFleet || typeof remoteFleet.requestMachineJson !== "function") return;
+    const now = Date.now();
+    const last = Number(remoteUpdateNudgeAtByMachine.get(machineKey) || 0);
+    if (now - last < 180000) return;
+    remoteUpdateNudgeAtByMachine.set(machineKey, now);
+    (async () => {
+      const chk = await remoteFleet.requestMachineJson(machineKey, "POST", "/api/manager-update/check", {}, 15000);
+      if (chk && chk.ok && Number(chk.data?.pending) > 0) {
+        await remoteFleet.requestMachineJson(machineKey, "POST", "/api/manager-update/apply", {}, 25000);
+      }
+    })().catch(() => {});
+  }
+
   async function fetchSingleMachineSnapshot(m) {
     const key = String(m.machineKey || "__local__");
     const online = Boolean(m.isCurrentMachine || (m.isOnline && m.remoteReady));
@@ -1192,23 +1214,27 @@ function createFleetZenyConsolidationService(deps = {}) {
       };
     }
 
-    // Remote machine: try new fleet-actor/snapshot first
+    // Remote machine: try new fleet-actor/snapshot first (unless known broken v4.63.7-v4.63.12)
     try {
-      const snapRes = await remoteFleet.requestMachineJson(key, "GET", "/api/consolidation/fleet-actor/snapshot", null, 18000);
-      if (snapRes.ok && snapRes.data && snapRes.data.success === true && snapRes.data.actorReady === true) {
-        return {
-          machineKey: key,
-          hwidCode: m.hwidCode || key,
-          deviceName: m.deviceName || snapRes.data.deviceName || key,
-          isCurrentMachine: false,
-          isOnline: true,
-          remoteReady: true,
-          actorReady: true,
-          managerVersion: snapRes.data.managerVersion || m.managerVersion || null,
-          profiles: Array.isArray(snapRes.data.profiles) ? snapRes.data.profiles : [],
-          consolidation: snapRes.data.consolidation || null,
-          error: null
-        };
+      if (isKnownBrokenFleetActorVersion(m.managerVersion)) {
+        nudgeRemoteManagerSelfUpdate(key);
+      } else {
+        const snapRes = await remoteFleet.requestMachineJson(key, "GET", "/api/consolidation/fleet-actor/snapshot", null, 18000);
+        if (snapRes.ok && snapRes.data && snapRes.data.success === true && snapRes.data.actorReady === true) {
+          return {
+            machineKey: key,
+            hwidCode: m.hwidCode || key,
+            deviceName: m.deviceName || snapRes.data.deviceName || key,
+            isCurrentMachine: false,
+            isOnline: true,
+            remoteReady: true,
+            actorReady: true,
+            managerVersion: snapRes.data.managerVersion || m.managerVersion || null,
+            profiles: Array.isArray(snapRes.data.profiles) ? snapRes.data.profiles : [],
+            consolidation: snapRes.data.consolidation || null,
+            error: null
+          };
+        }
       }
 
       // Legacy fallback: GET /api/profiles + GET /api/consolidation/status
@@ -1979,15 +2005,20 @@ function createFleetZenyConsolidationService(deps = {}) {
   }
 
   async function handleRoute(req, res, pathname, parsedUrl, sendJSON) {
+    const reply = (data, statusCode = 200) => {
+      sendJSON(data, statusCode);
+      return true;
+    };
+
     // ---------------------------------------------------------
     // 1. LOCAL ACTOR ROUTES (/api/consolidation/fleet-actor/*)
     // ---------------------------------------------------------
     if (req.method === "GET" && pathname === "/api/consolidation/fleet-actor/snapshot") {
       try {
         const snap = await buildLocalSnapshot();
-        return sendJSON(snap);
+        return reply(snap);
       } catch (e) {
-        return sendJSON({ success: false, error: e.message }, 500);
+        return reply({ success: false, error: e.message }, 500);
       }
     }
 
@@ -1995,25 +2026,25 @@ function createFleetZenyConsolidationService(deps = {}) {
       try {
         const body = await readJsonBody(req);
         if (!body || !body.action) {
-          return sendJSON({ success: false, error: "Missing action" }, 400);
+          return reply({ success: false, error: "Missing action" }, 400);
         }
         const jobId = startActorJob(body.action, body.payload || {});
-        return sendJSON({ success: true, jobId });
+        return reply({ success: true, jobId });
       } catch (e) {
-        return sendJSON({ success: false, error: e.message }, e?.status || 400);
+        return reply({ success: false, error: e.message }, e?.status || 400);
       }
     }
 
     if (req.method === "GET" && pathname === "/api/consolidation/fleet-actor/job-status") {
       const jobId = String(parsedUrl?.searchParams?.get("jobId") || "").trim();
       const job = actorJobs.get(jobId);
-      if (!job) return sendJSON({ success: false, error: "Job not found" }, 404);
-      return sendJSON({ success: true, job });
+      if (!job) return reply({ success: false, error: "Job not found" }, 404);
+      return reply({ success: true, job: { ...job } });
     }
 
     if (req.method === "POST" && pathname === "/api/consolidation/fleet-actor/abort") {
       const result = await abortAllLocalActorJobs();
-      return sendJSON({ success: true, ...result });
+      return reply({ success: true, ...result });
     }
 
     // ---------------------------------------------------------
@@ -2022,9 +2053,9 @@ function createFleetZenyConsolidationService(deps = {}) {
     if (req.method === "GET" && pathname === "/api/fleet-zeny/overview") {
       try {
         const overview = await buildOverview();
-        return sendJSON(overview);
+        return reply(overview);
       } catch (e) {
-        return sendJSON({ success: false, error: e?.message || "โหลดข้อมูลรวมเงินทุกเครื่องไม่สำเร็จ" }, 500);
+        return reply({ success: false, error: e?.message || "โหลดข้อมูลรวมเงินทุกเครื่องไม่สำเร็จ" }, 500);
       }
     }
 
@@ -2032,19 +2063,19 @@ function createFleetZenyConsolidationService(deps = {}) {
       try {
         const body = await readJsonBody(req);
         const saved = saveConfig(body || {});
-        return sendJSON({ success: true, config: saved });
+        return reply({ success: true, config: saved });
       } catch (e) {
-        return sendJSON({ success: false, error: e.message }, e?.status || 400);
+        return reply({ success: false, error: e.message }, e?.status || 400);
       }
     }
 
     if (req.method === "GET" && pathname === "/api/fleet-zeny/status") {
-      return sendJSON({ success: true, ...orchestratorState });
+      return reply({ success: true, ...orchestratorState });
     }
 
     if (req.method === "POST" && pathname === "/api/fleet-zeny/start") {
       if (orchestratorState.running) {
-        return sendJSON({ success: false, error: "ระบบรวมเงินทุกเครื่องกำลังทำงานอยู่แล้วในขณะนี้" }, 409);
+        return reply({ success: false, error: "ระบบรวมเงินทุกเครื่องกำลังทำงานอยู่แล้วในขณะนี้" }, 409);
       }
       try {
         const body = await readJsonBody(req);
@@ -2061,10 +2092,10 @@ function createFleetZenyConsolidationService(deps = {}) {
           }
         }
         if (!master) {
-          return sendJSON({ success: false, error: "ไม่พบตัวหลักรับเงินปลายทางที่ออนไลน์และมี 👑 Premium" }, 400);
+          return reply({ success: false, error: "ไม่พบตัวหลักรับเงินปลายทางที่ออนไลน์และมี 👑 Premium" }, 400);
         }
         if (!master.actorReady) {
-          return sendJSON({ success: false, error: `เครื่องของตัวหลัก (${master.deviceName}) ยังเป็นเวอร์ชันเก่า — กรุณาอัปเดตก่อนเริ่มรวมเงินข้ามเครื่อง` }, 400);
+          return reply({ success: false, error: `เครื่องของตัวหลัก (${master.deviceName}) ยังเป็นเวอร์ชันเก่า — กรุณาอัปเดตก่อนเริ่มรวมเงินข้ามเครื่อง` }, 400);
         }
 
         // Kick off in background
@@ -2074,9 +2105,9 @@ function createFleetZenyConsolidationService(deps = {}) {
           orchestratorState.step = err?.message || "เกิดข้อผิดพลาดระหว่างรวมเงินทุกเครื่อง";
           orchestratorState.endTime = Date.now();
         });
-        return sendJSON({ success: true, message: "เริ่มต้นรวมเงินทุกเครื่องเรียบร้อยแล้ว", state: orchestratorState });
+        return reply({ success: true, message: "เริ่มต้นรวมเงินทุกเครื่องเรียบร้อยแล้ว", state: orchestratorState });
       } catch (e) {
-        return sendJSON({ success: false, error: e?.message || "ไม่สามารถเริ่มรวมเงินทุกเครื่องได้" }, e?.status || 400);
+        return reply({ success: false, error: e?.message || "ไม่สามารถเริ่มรวมเงินทุกเครื่องได้" }, e?.status || 400);
       }
     }
 
@@ -2086,7 +2117,7 @@ function createFleetZenyConsolidationService(deps = {}) {
         const machineKey = String(body?.machineKey || "").trim();
         const ip = String(body?.ip || "").trim();
         if (!machineKey || !ip) {
-          return sendJSON({ success: false, error: "กรุณาระบุเครื่องและวง IP ที่ต้องการรวมเงิน" }, 400);
+          return reply({ success: false, error: "กรุณาระบุเครื่องและวง IP ที่ต้องการรวมเงิน" }, 400);
         }
         const cfg = loadConfig();
         const keepZeny = body.keepZeny !== undefined ? clampInt(body.keepZeny, 0, 0) : cfg.keepZeny;
@@ -2100,7 +2131,7 @@ function createFleetZenyConsolidationService(deps = {}) {
         const machine = ov.machines.find(m => m.machineKey === machineKey);
         const grp = machine && machine.ipGroups.find(g => g.ip === ip);
         if (!grp || !grp.canConsolidateInRing || !grp.receiver) {
-          return sendJSON({ success: false, error: `วง IP [${ip}] ยังไม่มีตัวรับและผู้ส่งสถานะ 👑 Premium ออนไลน์ในวงเดียวกัน` }, 400);
+          return reply({ success: false, error: `วง IP [${ip}] ยังไม่มีตัวรับและผู้ส่งสถานะ 👑 Premium ออนไลน์ในวงเดียวกัน` }, 400);
         }
         const resRemote = await remoteFleet.requestMachineJson(machineKey, "POST", "/api/consolidation/start", {
           keepZeny,
@@ -2114,17 +2145,17 @@ function createFleetZenyConsolidationService(deps = {}) {
           }]
         }, 18000);
         if (!resRemote.ok || !resRemote.data?.success) {
-          return sendJSON({ success: false, error: resRemote.data?.error || "สั่งรวมเงินเฉพาะวงนี้ไม่สำเร็จ" }, resRemote.status || 400);
+          return reply({ success: false, error: resRemote.data?.error || "สั่งรวมเงินเฉพาะวงนี้ไม่สำเร็จ" }, resRemote.status || 400);
         }
-        return sendJSON({ success: true, message: `เริ่มรวมเงินเฉพาะวง [${ip}] บนเครื่อง ${machine.deviceName} แล้ว` });
+        return reply({ success: true, message: `เริ่มรวมเงินเฉพาะวง [${ip}] บนเครื่อง ${machine.deviceName} แล้ว` });
       } catch (e) {
-        return sendJSON({ success: false, error: e?.message || "สั่งรวมเงินเฉพาะวงนี้ไม่สำเร็จ" }, e?.status || 400);
+        return reply({ success: false, error: e?.message || "สั่งรวมเงินเฉพาะวงนี้ไม่สำเร็จ" }, e?.status || 400);
       }
     }
 
     if (req.method === "POST" && pathname === "/api/fleet-zeny/stop") {
       const result = await stopAllCrossMachine();
-      return sendJSON(result);
+      return reply(result);
     }
 
     return false;

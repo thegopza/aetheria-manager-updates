@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "f497d09ec3870ceaa91fae8419886c88d66b3e5d",
+  "sourceCommit": "8c116f51196f287a6bdcbac0b399738768e927da",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -48,7 +48,7 @@
     },
     {
       "path": "manager/fleet_zeny_consolidation.js",
-      "sha256": "1ad6c14555244e9805d1f8ab91f43967d6faf88778ca89d95f5fd94dacc632d1"
+      "sha256": "6e9bac450b2437bc06f35d9fe92cb9ec0758fe85a00ee0835b169744ee732935"
     },
     {
       "path": "manager/game_loader/main.js",
@@ -184,7 +184,7 @@
     },
     {
       "path": "manager/public/fleet_zeny.js",
-      "sha256": "acfa08ddcd42ad45329cfd1fdc50f3d97029a678cc9f7c23d9fc40dcd3fd0668"
+      "sha256": "ad36c7cff8360d1052e26ae17996556f5f28f8614470a541a8ed1a4c055ae3ec"
     },
     {
       "path": "manager/public/game-classes.json",
@@ -208,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "d18d3a36a16ec8f2157adc122c55392f9b2f7f86310b8f84f4e6593c6c63cd49"
+      "sha256": "d3236f39a5703af48e6bfd5d7bea60b78c1b852855ead93824ac678ec352c545"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -288,7 +288,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "6264ed8f17ba928f01f8de7c242101565dfddffb0cafa78a4b0674a3b3f7d727"
+      "sha256": "87aa994756750d362910c6c58e6ef3542ea4854d7026e1fe23c21314090fc84b"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -320,7 +320,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "36ab8389ce696593014424cb764dd2c31e007e1cc87aa35215f409dcbc1a83cc"
+      "sha256": "4fb4aa81a5a17aaaa1692b5fc936f5991890188eb72bcd2ededee0522fa071fd"
     },
     {
       "path": "manager/test_isolation.js",

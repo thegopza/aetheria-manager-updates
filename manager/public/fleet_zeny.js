@@ -832,4 +832,16 @@
     onTabShown,
     refresh: () => fetchOverview(true)
   };
+
+  function init() {
+    if (isPaneActive()) {
+      onTabShown();
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
 })();

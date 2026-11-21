@@ -7770,7 +7770,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.12'
+  managerVersion: '4.63.13'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7799,7 +7799,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.12',
+  managerVersion: '4.63.13',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -7826,8 +7826,10 @@ const server = http.createServer(async (req, res) => {
 
   // JSON helper
   const sendJSON = (data, code = 200) => {
+    if (res.headersSent || res.writableEnded) return true;
     res.writeHead(code, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(data));
+    return true;
   };
 
   if (req.headers['x-pmhee-remote-relay'] === '1' && (
@@ -12312,11 +12314,13 @@ public class PmFocus {
 
   // STATIC FILE SERVING
   // ==========================================
+  if (res.headersSent || res.writableEnded) return;
   let filePath = path.join(PUBLIC_DIR, pathname === "/" ? "index.html" : pathname);
   if (!filePath.startsWith(PUBLIC_DIR + path.sep)) return sendJSON({ success: false }, 403);
   const ext = path.extname(filePath).toLowerCase();
 
   fs.stat(filePath, (err, stats) => {
+    if (res.headersSent || res.writableEnded) return;
     if (err || !stats.isFile()) {
       filePath = path.join(PUBLIC_DIR, "index.html");
     }
@@ -12324,6 +12328,7 @@ public class PmFocus {
     const contentType = mimeTypes[finalExt] || "application/octet-stream";
 
     fs.readFile(filePath, (readErr, content) => {
+      if (res.headersSent || res.writableEnded) return;
       if (readErr) {
         res.writeHead(404, { "Content-Type": "text/plain" });
         res.end("404 Not Found");

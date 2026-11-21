@@ -340,12 +340,50 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   const JAIL_IP_COOLDOWN_MS = 30 * 60 * 1000;
   let customGroupsProvider = null;
   const customGroupLeasesMap = new Map();
+  let lastRemoteFreeIps = null;
+  const recentRotatedHistory = new Map(); // scopeKey -> Array<{ proxyId, ip, ts }>
+  const rotatedStickyOverrides = new Set(); // profileId -> honor stickyHistory over deterministic block index in local-pool
+  const ROTATE_HISTORY_TTL_MS = 20 * 60 * 1000;
   let lastSurchargeConfig = {
     enabled: true,
     baseline: 6,
     tiers: { '6': 0, '5': 5, '4': 10, '3': 15, '2': 20, '1': 25 },
     customExtraPct: 0
   };
+
+  function recordRotatedProxy(scopeKey, proxyId, ip) {
+    const key = String(scopeKey || 'global').trim() || 'global';
+    const pid = String(proxyId || '').trim();
+    const cleanIp = String(ip || '').trim().toLowerCase();
+    if (!pid && !cleanIp) return;
+    const nowMs = now();
+    const list = (recentRotatedHistory.get(key) || []).filter(
+      x => x && (nowMs - (Number(x.ts) || 0) < ROTATE_HISTORY_TTL_MS) && (x.proxyId !== pid || x.ip !== cleanIp)
+    );
+    list.push({ proxyId: pid, ip: cleanIp, ts: nowMs });
+    while (list.length > 12) list.shift();
+    recentRotatedHistory.set(key, list);
+  }
+
+  function getAvoidRotatedFilters(scopeKey) {
+    const nowMs = now();
+    const keys = Array.from(new Set(['global', String(scopeKey || 'global').trim() || 'global']));
+    const proxyIds = new Set();
+    const ips = new Set();
+    for (const k of keys) {
+      const list = (recentRotatedHistory.get(k) || []).filter(x => x && (nowMs - (Number(x.ts) || 0) < ROTATE_HISTORY_TTL_MS));
+      if (list.length > 0) recentRotatedHistory.set(k, list);
+      else recentRotatedHistory.delete(k);
+      for (const item of list) {
+        if (item.proxyId) proxyIds.add(item.proxyId);
+        if (item.ip) ips.add(item.ip);
+      }
+    }
+    return {
+      avoidProxyIds: Array.from(proxyIds),
+      avoidIps: Array.from(ips)
+    };
+  }
 
   function computeLocalSurchargePct(shareCount, isCustom = false, cfg = lastSurchargeConfig) {
     if (!cfg || cfg.enabled === false) return 0;
@@ -478,6 +516,11 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
   function ingestServerCustomMeta(res) {
     if (!res || typeof res !== 'object') return;
+    if (Number.isFinite(Number(res.freeIps)) && Number(res.freeIps) >= 0) {
+      lastRemoteFreeIps = Math.floor(Number(res.freeIps));
+    } else if (Number.isFinite(Number(res.freeIpsRemaining)) && Number(res.freeIpsRemaining) >= 0) {
+      lastRemoteFreeIps = Math.floor(Number(res.freeIpsRemaining));
+    }
     if (res.surchargeConfig && typeof res.surchargeConfig === 'object') {
       lastSurchargeConfig = {
         ...lastSurchargeConfig,
@@ -1866,7 +1909,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       }
 
       const orderIdx = profileOrderMap.has(pid) ? profileOrderMap.get(pid) : -1;
-      const preferredBlockProxy = (!chosenProxy && orderIdx >= 0 && Math.floor(orderIdx / maxPerIp) < autoEnabledPool.length)
+      const preferredBlockProxy = (!chosenProxy && !rotatedStickyOverrides.has(pid) && orderIdx >= 0 && Math.floor(orderIdx / maxPerIp) < autoEnabledPool.length)
         ? autoEnabledPool[Math.floor(orderIdx / maxPerIp)]
         : null;
       const preferredSlotInBlock = orderIdx >= 0 ? ((orderIdx % maxPerIp) + 1) : 1;
@@ -2679,6 +2722,17 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     return updated;
   }
 
+  function computeLocalFreeIpCount(enabledPool) {
+    const usedIds = new Set();
+    for (const l of activeLeases.values()) {
+      if (l && l.assigned && !l.useHomeIp && l.proxyId) usedIds.add(l.proxyId);
+    }
+    for (const cl of customGroupLeasesMap.values()) {
+      if (cl && cl.assigned && !cl.useHomeIp && cl.proxyId) usedIds.add(cl.proxyId);
+    }
+    return enabledPool.filter(p => !usedIds.has(p.proxyId) && !isProxyOnJailCooldown(p)).length;
+  }
+
   function publicSettings() {
     const settings = loadSettings();
     const { rawText, proxies } = loadPool();
@@ -2686,11 +2740,15 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const maxPerIp = settings.maxScreensPerIp || DEFAULT_MAX_SCREENS_PER_IP;
     const totalSlots = enabledPool.length * maxPerIp;
     const activeLeaseCount = activeLeases.size;
+    const freeIps = settings.mode === 'owner-queue'
+      ? lastRemoteFreeIps
+      : computeLocalFreeIpCount(enabledPool);
     return {
       ...settings,
       poolCount: enabledPool.length,
       totalPoolCount: proxies.length,
       blockedCount: blockedProxies.size,
+      freeIps,
       totalSlots,
       activeLeaseCount,
       freeSlots: Math.max(0, totalSlots - activeLeaseCount),
@@ -2989,6 +3047,9 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     });
 
     const traffic = getTrafficStats();
+    const effectiveFreeIps = remoteSummary && Number.isFinite(Number(remoteSummary.freeIps))
+      ? Math.floor(Number(remoteSummary.freeIps))
+      : (pub.mode === 'owner-queue' ? lastRemoteFreeIps : computeLocalFreeIpCount(enabledPool));
 
     return {
       success: true,
@@ -2997,12 +3058,14 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         poolCount: totalIps,
         totalPoolCount: proxies.length,
         blockedCount: blockedProxies.size,
+        freeIps: effectiveFreeIps,
         totalSlots: totalCapacity,
         activeLeaseCount: activeCount,
         freeSlots: Math.max(0, totalCapacity - activeCount)
       },
       pool: {
         totalIps,
+        freeIps: effectiveFreeIps,
         totalPoolCount: proxies.length,
         blockedCount: blockedProxies.size,
         maxScreensPerIp: maxPerIp,
@@ -3030,6 +3093,411 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       assetCache: traffic.assetCache,
       surchargeConfig: getSurchargeConfig(),
       customGroupLeases: getCustomGroupLeases()
+    };
+  }
+
+  async function rotateIp(opts = {}) {
+    const settings = loadSettings();
+    if (!settings.enabled) {
+      return {
+        success: false,
+        code: 'PROXY_DISABLED',
+        error: 'กรุณาเปิดใช้งานระบบ Proxy IP (ปุ่ม 🛡️ ตั้งค่า Proxy IP) ก่อนกด Re-IP'
+      };
+    }
+
+    const scope = opts.scope === 'custom_group'
+      ? 'custom_group'
+      : (opts.scope === 'all' ? 'all' : 'auto_block');
+    const maxPerIp = settings.maxScreensPerIp || DEFAULT_MAX_SCREENS_PER_IP;
+    const { customIpGroups, profileGroupMap } = readCustomIpGroupsState();
+    overlayHomeCustomGroupLeases(customIpGroups);
+    const proxyCustomIpGroups = customIpGroups.filter(g => !g.useHomeIp);
+    const allProfiles = typeof loadProfiles === 'function' ? (loadProfiles() || []) : [];
+    const validProfileIds = allProfiles
+      .map(p => p && p.id)
+      .filter(pid => pid && !profileGroupMap.get(pid)?.useHomeIp);
+
+    const customGroupId = String(opts.customGroupId || opts.ipGroupId || '').trim();
+    if (scope === 'custom_group') {
+      if (!customGroupId) {
+        return { success: false, code: 'INVALID_CUSTOM_GROUP_ID', error: 'ไม่พบรหัสวง IP พิเศษที่ต้องการเปลี่ยน IP' };
+      }
+      const targetCg = customIpGroups.find(g => g.id === customGroupId);
+      if (targetCg && targetCg.useHomeIp) {
+        return { success: false, code: 'HOME_IP_GROUP', error: 'วงนี้ตั้งค่าเป็นโหมดใช้ IP บ้าน (ไม่ได้ใช้ Proxy IP)' };
+      }
+    }
+
+    const ipIndex = Number.isFinite(Number(opts.ipIndex)) && Number(opts.ipIndex) > 0 ? Math.floor(Number(opts.ipIndex)) : null;
+    const scopeKey = scope === 'custom_group'
+      ? `custom:${customGroupId}`
+      : (scope === 'all' ? 'all' : `auto:${ipIndex || 1}`);
+    const { avoidProxyIds, avoidIps } = getAvoidRotatedFilters(scopeKey);
+
+    let currentProxyId = String(opts.currentProxyId || '').trim();
+    let currentIp = String(opts.currentIp || '').trim();
+    if (scope === 'custom_group') {
+      const existingCl = customGroupLeasesMap.get(customGroupId);
+      if (!currentProxyId && existingCl?.proxyId) currentProxyId = String(existingCl.proxyId);
+      if (!currentIp && existingCl?.ip) currentIp = String(existingCl.ip);
+    } else if (scope === 'auto_block' && Array.isArray(opts.profileIds)) {
+      for (const pid of opts.profileIds) {
+        const l = activeLeases.get(pid);
+        if (l && l.assigned && !l.useHomeIp) {
+          if (!currentProxyId && l.proxyId) currentProxyId = String(l.proxyId);
+          if (!currentIp && l.ip) currentIp = String(l.ip);
+          if (currentProxyId && currentIp) break;
+        }
+      }
+    }
+
+    // ---------------------------------------------------------
+    // MODE A: OWNER-QUEUE (Central Server Pool)
+    // ---------------------------------------------------------
+    if (settings.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
+      const hasAnyActiveProxyLease = Array.from(activeLeases.values()).some(l => l && l.assigned && !l.useHomeIp);
+      if (scope === 'all' && !hasAnyActiveProxyLease && proxyCustomIpGroups.length === 0) {
+        for (const [pid, pxId] of stickyHistory.entries()) {
+          recordRotatedProxy('global', pxId, '');
+          stickyHistory.delete(pid);
+        }
+        saveStickyHistory();
+        await reserveCustomIpGroupsNow().catch(() => {});
+        return {
+          success: true,
+          rotated: [],
+          changedProfileIds: [],
+          clearedStickyOnly: true,
+          freeIpsRemaining: lastRemoteFreeIps,
+          customGroupLeases: getCustomGroupLeases(),
+          surchargeConfig: getSurchargeConfig(),
+          message: 'ล้างค่าจำ IP เดิมของทุกวงเรียบร้อย — เมื่อเปิดจอระบบจะดึง IP ว่างชุดใหม่ให้อัตโนมัติ'
+        };
+      }
+
+      try {
+        const excludedFilters = getExcludedProxyFilters();
+        const res = await solver.serviceRequest('/v1/aetheria/proxy/screen-rotate', {
+          machineId: getMachineId(),
+          maxScreensPerIp: maxPerIp,
+          customIpGroups: proxyCustomIpGroups,
+          validProfileIds: validProfileIds.length > 0 ? validProfileIds : undefined,
+          scope,
+          ...(ipIndex ? { ipIndex } : {}),
+          ...(Array.isArray(opts.profileIds) && opts.profileIds.length > 0 ? { profileIds: opts.profileIds } : {}),
+          ...(customGroupId ? { customGroupId } : {}),
+          ...(currentProxyId ? { currentProxyId } : {}),
+          ...(currentIp ? { currentIp } : {}),
+          ...(Array.isArray(opts.autoBlocks) && opts.autoBlocks.length > 0 ? { autoBlocks: opts.autoBlocks } : {}),
+          ...(avoidProxyIds.length > 0 ? { avoidProxyIds } : {}),
+          ...(avoidIps.length > 0 ? { avoidIps } : {}),
+          ...excludedFilters
+        });
+
+        if (res && typeof res === 'object') ingestServerCustomMeta(res);
+        if (!res || !res.success) {
+          return {
+            success: false,
+            code: res?.code || 'ROTATE_FAILED',
+            error: res?.error || 'ไม่สามารถเปลี่ยนเป็น IP ใหม่ได้ในขณะนี้',
+            freeIpsRemaining: res?.freeIpsRemaining ?? lastRemoteFreeIps
+          };
+        }
+
+        const rotatedList = Array.isArray(res.rotated) ? res.rotated : [];
+        for (const r of rotatedList) {
+          const itemScope = r.scope === 'custom_group'
+            ? `custom:${r.customGroupId}`
+            : `auto:${r.ipIndex || ipIndex || 1}`;
+          if (r.oldProxyId || r.oldIp) {
+            recordRotatedProxy(itemScope, r.oldProxyId, r.oldIp);
+            recordRotatedProxy('global', r.oldProxyId, r.oldIp);
+          }
+        }
+
+        const changedProfileIds = [];
+        if (Array.isArray(res.leases)) {
+          for (const l of res.leases) {
+            if (!l || !l.assigned || isProxyBlocked(l)) continue;
+            const cm = profileGroupMap.get(l.profileId);
+            if (cm && cm.useHomeIp) continue;
+            const prev = activeLeases.get(l.profileId);
+            const effGroupKey = cm ? cm.ipGroupKey : (l.ipGroupKey || 'auto');
+            const isCustomIp = Boolean(cm || (effGroupKey && String(effGroupKey).startsWith('custom:')));
+            const changed = !prev || prev.useHomeIp || prev.proxyId !== l.proxyId || prev.ip !== l.ip;
+            activeLeases.set(l.profileId, {
+              ...prev,
+              ...l,
+              useHomeIp: false,
+              directHomeIp: false,
+              ipMode: 'proxy',
+              ipGroupKey: effGroupKey,
+              isCustomIp,
+              groupCap: cm ? cm.groupCap : (l.maxScreens || maxPerIp),
+              source: 'owner-queue',
+              renewedAt: now()
+            });
+            stickyHistory.set(l.profileId, l.proxyId);
+            if (changed) changedProfileIds.push(l.profileId);
+          }
+        }
+
+        saveStickyHistory();
+        await syncDaemonState().catch(() => {});
+        for (const pid of changedProfileIds) {
+          resetProfileSockets(pid);
+        }
+
+        return {
+          success: true,
+          rotated: rotatedList,
+          changedProfileIds,
+          freeIpsRemaining: res.freeIpsRemaining ?? lastRemoteFreeIps,
+          customGroupLeases: getCustomGroupLeases(),
+          surchargeConfig: getSurchargeConfig()
+        };
+      } catch (e) {
+        return {
+          success: false,
+          code: e?.code || 'OWNER_QUEUE_UNAVAILABLE',
+          error: e?.message || 'ติดต่อเซิร์ฟเวอร์คิว Proxy ไม่ได้ชั่วคราว'
+        };
+      }
+    }
+
+    // ---------------------------------------------------------
+    // MODE B: LOCAL-POOL (Machine Local Proxy Pool)
+    // ---------------------------------------------------------
+    const { proxies } = loadPool();
+    const enabledPool = proxies.filter(p => p.enabled !== false && !isProxyBlocked(p));
+    const poolMap = new Map(enabledPool.map(p => [p.proxyId, p]));
+    syncLocalCustomGroupReservations(enabledPool, poolMap, customIpGroups);
+
+    const occupiedIds = new Set();
+    for (const l of activeLeases.values()) {
+      if (l && l.assigned && !l.useHomeIp && l.proxyId) occupiedIds.add(l.proxyId);
+    }
+    for (const cl of customGroupLeasesMap.values()) {
+      if (cl && cl.assigned && !cl.useHomeIp && cl.proxyId) occupiedIds.add(cl.proxyId);
+    }
+    const cleanFreePool = enabledPool.filter(p => !occupiedIds.has(p.proxyId) && !isProxyOnJailCooldown(p));
+    if (cleanFreePool.length === 0) {
+      return {
+        success: false,
+        code: enabledPool.length === 0 ? 'IP_POOL_EMPTY' : 'NO_FREE_IP_AVAILABLE',
+        error: enabledPool.length === 0
+          ? 'ยังไม่ได้ใส่รายการ Proxy IP ในคิว'
+          : 'ขณะนี้ไม่มี IP ว่างอื่นในคิว Proxy ให้เปลี่ยนใหม่ — ระบบคง IP เดิมไว้ให้เพื่อไม่ให้จอหลุด',
+        freeIpsRemaining: 0
+      };
+    }
+
+    const avoidIdSet = new Set(avoidProxyIds);
+    const avoidIpLowerSet = new Set(avoidIps);
+    const claimedLocalIds = new Set();
+    const pickLocalFree = (curId, curIpRaw) => {
+      const curIpLower = String(curIpRaw || '').trim().toLowerCase();
+      let cand = cleanFreePool.find(p =>
+        !claimedLocalIds.has(p.proxyId) &&
+        p.proxyId !== curId &&
+        (!curIpLower || String(p.labelIp || '').toLowerCase() !== curIpLower) &&
+        !avoidIdSet.has(p.proxyId) &&
+        !avoidIpLowerSet.has(String(p.labelIp || '').toLowerCase())
+      );
+      if (!cand) {
+        cand = cleanFreePool.find(p =>
+          !claimedLocalIds.has(p.proxyId) &&
+          p.proxyId !== curId &&
+          (!curIpLower || String(p.labelIp || '').toLowerCase() !== curIpLower)
+        ) || null;
+      }
+      if (cand) claimedLocalIds.add(cand.proxyId);
+      return cand || null;
+    };
+
+    const rotated = [];
+    const changedProfileIds = [];
+    const savedCustomRes = readJson(localCustomGroupsFile, { reservations: {} });
+    const nextCustomRes = (savedCustomRes && savedCustomRes.reservations && typeof savedCustomRes.reservations === 'object')
+      ? { ...savedCustomRes.reservations }
+      : {};
+    let customResDirty = false;
+
+    const rotateLocalCustom = (cid, hintId = '', hintIp = '') => {
+      const cg = customIpGroups.find(g => g.id === cid);
+      if (!cg || cg.useHomeIp) return null;
+      const curCl = customGroupLeasesMap.get(cid);
+      const oldId = curCl?.proxyId || nextCustomRes[cid] || hintId || '';
+      const oldIp = curCl?.ip || (oldId && poolMap.get(oldId)?.labelIp) || hintIp || '';
+      const cand = pickLocalFree(oldId, oldIp);
+      if (!cand) return null;
+      nextCustomRes[cid] = cand.proxyId;
+      customResDirty = true;
+      const memberPids = Array.isArray(cg.profileIds) ? cg.profileIds : [];
+      const cap = Math.max(1, memberPids.length);
+      memberPids.forEach((pid, idx) => {
+        if (!activeLeases.has(pid)) return;
+        activeLeases.set(pid, {
+          assigned: true,
+          profileId: pid,
+          proxyId: cand.proxyId,
+          ip: cand.labelIp,
+          scheme: cand.scheme,
+          proxyHost: cand.host,
+          proxyPort: cand.port,
+          proxyUser: cand.user,
+          proxyPass: cand.pass,
+          slotNo: idx + 1,
+          maxScreens: cap,
+          groupCap: cap,
+          activeOnIp: memberPids.filter(x => activeLeases.has(x)).length || 1,
+          ipGroupKey: `custom:${cid}`,
+          isCustomIp: true,
+          source: 'local-pool',
+          expiresAt: now() + LEASE_TTL_MS
+        });
+        stickyHistory.set(pid, cand.proxyId);
+        changedProfileIds.push(pid);
+      });
+      if (oldId || oldIp) {
+        recordRotatedProxy(`custom:${cid}`, oldId, oldIp);
+        recordRotatedProxy('global', oldId, oldIp);
+      }
+      return {
+        scope: 'custom_group',
+        customGroupId: cid,
+        ipGroupKey: `custom:${cid}`,
+        oldProxyId: oldId || null,
+        oldIp: oldIp || null,
+        newProxyId: cand.proxyId,
+        newIp: cand.labelIp,
+        profileIds: [...memberPids]
+      };
+    };
+
+    const rotateLocalAuto = (reqPids, blockIdx = null, hintId = '', hintIp = '') => {
+      const cleanPids = (Array.isArray(reqPids) ? reqPids : [])
+        .map(x => String(x || '').trim())
+        .filter(pid => pid && !profileGroupMap.has(pid));
+      if (cleanPids.length === 0) return null;
+      let oldId = hintId || '';
+      for (const pid of cleanPids) {
+        const l = activeLeases.get(pid);
+        if (l && l.assigned && !l.useHomeIp && l.proxyId) {
+          oldId = l.proxyId;
+          break;
+        }
+      }
+      const oldIp = (oldId && poolMap.get(oldId)?.labelIp) || hintIp || '';
+      const cand = pickLocalFree(oldId, oldIp);
+      if (!cand) return null;
+
+      const targetPids = cleanPids.slice(0, maxPerIp);
+      targetPids.forEach((pid, idx) => {
+        activeLeases.set(pid, {
+          assigned: true,
+          profileId: pid,
+          proxyId: cand.proxyId,
+          ip: cand.labelIp,
+          scheme: cand.scheme,
+          proxyHost: cand.host,
+          proxyPort: cand.port,
+          proxyUser: cand.user,
+          proxyPass: cand.pass,
+          slotNo: idx + 1,
+          maxScreens: maxPerIp,
+          activeOnIp: targetPids.length,
+          ipGroupKey: 'auto',
+          isCustomIp: false,
+          source: 'local-pool',
+          expiresAt: now() + LEASE_TTL_MS
+        });
+        stickyHistory.set(pid, cand.proxyId);
+        rotatedStickyOverrides.add(pid);
+        changedProfileIds.push(pid);
+      });
+      if (oldId || oldIp) {
+        recordRotatedProxy(`auto:${blockIdx || 1}`, oldId, oldIp);
+        recordRotatedProxy('global', oldId, oldIp);
+      }
+      return {
+        scope: 'auto_block',
+        ipIndex: blockIdx,
+        oldProxyId: oldId || null,
+        oldIp: oldIp || null,
+        newProxyId: cand.proxyId,
+        newIp: cand.labelIp,
+        profileIds: targetPids
+      };
+    };
+
+    if (scope === 'custom_group') {
+      const r = rotateLocalCustom(customGroupId, currentProxyId, currentIp);
+      if (!r) {
+        return {
+          success: false,
+          code: 'NO_FREE_IP_AVAILABLE',
+          error: 'ขณะนี้ไม่มี IP ว่างอื่นในคิว Proxy ให้เปลี่ยนใหม่ — ระบบคง IP เดิมไว้ให้เพื่อไม่ให้จอหลุด',
+          freeIpsRemaining: 0
+        };
+      }
+      rotated.push(r);
+    } else if (scope === 'auto_block') {
+      const r = rotateLocalAuto(opts.profileIds, ipIndex, currentProxyId, currentIp);
+      if (!r) {
+        return {
+          success: false,
+          code: 'NO_FREE_IP_AVAILABLE',
+          error: 'ขณะนี้ไม่มี IP ว่างอื่นในคิว Proxy ให้เปลี่ยนใหม่ — ระบบคง IP เดิมไว้ให้เพื่อไม่ให้จอหลุด',
+          freeIpsRemaining: 0
+        };
+      }
+      rotated.push(r);
+    } else {
+      for (const cg of proxyCustomIpGroups) {
+        const r = rotateLocalCustom(cg.id);
+        if (r) rotated.push(r);
+      }
+      const autoByProxy = new Map();
+      for (const [pid, l] of activeLeases.entries()) {
+        if (l && l.assigned && !l.useHomeIp && !l.isCustomIp && l.proxyId) {
+          if (!autoByProxy.has(l.proxyId)) autoByProxy.set(l.proxyId, []);
+          autoByProxy.get(l.proxyId).push(pid);
+        }
+      }
+      let idxCounter = 1;
+      for (const [pxId, pids] of autoByProxy.entries()) {
+        const r = rotateLocalAuto(pids, idxCounter++, pxId, poolMap.get(pxId)?.labelIp || '');
+        if (r) rotated.push(r);
+      }
+      if (rotated.length === 0) {
+        return {
+          success: false,
+          code: 'NO_ACTIVE_IP_RINGS',
+          error: 'ยังไม่มีวง IP ที่กำลังใช้งานอยู่ (กดปุ่ม 🔄 Re-IP ที่การ์ด IP รายวงได้ทันที)',
+          freeIpsRemaining: cleanFreePool.length
+        };
+      }
+    }
+
+    if (customResDirty) {
+      try { writeJson(localCustomGroupsFile, { reservations: nextCustomRes, updatedAt: now() }); } catch (_) {}
+      syncLocalCustomGroupReservations(enabledPool, poolMap, customIpGroups);
+    }
+    saveStickyHistory();
+    await syncDaemonState().catch(() => {});
+    for (const pid of changedProfileIds) {
+      resetProfileSockets(pid);
+    }
+
+    return {
+      success: true,
+      rotated,
+      changedProfileIds,
+      freeIpsRemaining: computeLocalFreeIpCount(enabledPool),
+      customGroupLeases: getCustomGroupLeases(),
+      surchargeConfig: getSurchargeConfig()
     };
   }
 
@@ -3090,6 +3558,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const pTraffic = trafficState.byProfile[profileId] || { proxyRxBytes: 0, proxyTxBytes: 0 };
     return {
       active: true,
+      proxyId: l.proxyId || null,
       ip: l.ip,
       proxyHost: l.proxyHost,
       proxyPort: l.proxyPort,
@@ -3132,6 +3601,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     setEnabled,
     acquireForProfile,
     acquireLeasesForProfiles,
+    rotateIp,
     releaseProfile,
     releaseAll,
     stopAllTunnels,

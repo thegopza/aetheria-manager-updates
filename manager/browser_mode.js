@@ -1715,6 +1715,16 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
       const machineId = firstPid ? ensureProfileMachineId(firstPid) : '';
       const platform = resolveAutoGroupPlatform(customCfg, grp.groupIndex, grp.deviceIndexInIp, grp.devicesPerIp);
       const spec = resolveDeviceSpec(deviceId, platform);
+      let activeSnap = null;
+      if (screenProxy && typeof screenProxy.getProfileLeaseSnapshot === 'function') {
+        for (const pid of (grp.ipProfileIds || grp.profileIds || [])) {
+          const snap = screenProxy.getProfileLeaseSnapshot(pid);
+          if (snap && snap.active && snap.ip) {
+            activeSnap = snap;
+            break;
+          }
+        }
+      }
       const poolItem = poolItems[grp.ipIndex - 1] || null;
       return {
         groupIndex: grp.groupIndex,
@@ -1725,8 +1735,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, pr
         deviceSubSizes: grp.deviceSubSizes,
         ipSlotStart: grp.ipSlotStart,
         ipProfileIds: grp.ipProfileIds,
-        proxyIp: poolItem ? (poolItem.labelIp || poolItem.host || null) : null,
-        proxyPort: poolItem ? (poolItem.port || null) : null,
+        proxyId: (activeSnap && activeSnap.proxyId) || (poolItem ? (poolItem.proxyId || null) : null),
+        proxyIp: (activeSnap && activeSnap.ip) || (poolItem ? (poolItem.labelIp || poolItem.host || null) : null),
+        proxyPort: (activeSnap && activeSnap.proxyPort) || (poolItem ? (poolItem.port || null) : null),
         platform: spec.platform,
         platformOverride: (customCfg.autoGroupPlatforms && customCfg.autoGroupPlatforms[String(grp.groupIndex)]) || null,
         defaultPlatformMode: customCfg.defaultPlatformMode || 'pc',

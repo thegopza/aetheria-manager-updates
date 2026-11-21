@@ -27,14 +27,20 @@
   let cachedCustomConfig = { ipGroups: [], jailAutoCloseMode: 'off' };
   let cachedCustomLeases = [];
   let cachedLastJailAutoCloseEvent = null;
+  let cachedScreenProxySummary = null;
   let cachedSurchargeConfig = JSON.parse(JSON.stringify(DEFAULT_SURCHARGE_CFG));
 
   let rotatingGroups = new Set();
   let rotatingCustomDevices = new Set();
   let rotatingAll = false;
+  let rotatingIpBlocks = new Set();
+  let rotatingCustomIps = new Set();
+  let rotatingAllIps = false;
   let savingScreensPerIp = false;
   let customMutating = false;
   let justRotatedGroupSet = new Set();
+  let justRotatedIpBlocks = new Set();
+  let justRotatedCustomIps = new Set();
 
   let pickerState = null; // { ipGroupId, deviceGroupId, ipGroupName, deviceGroupName, search, initialIds: Set, selected: Set }
   let editingTitleState = null; // { kind: 'ip'|'device', ipGroupId, deviceGroupId, value }
@@ -175,6 +181,7 @@
             screensPerIp,
             deviceSubSizes: subSizes,
             ipSlotStart: Number(g.ipSlotStart) || 1,
+            proxyId: g.proxyId || null,
             proxyIp: g.proxyIp || null,
             proxyPort: g.proxyPort || null,
             platform: g.platform || (members[0].profile && members[0].profile.devicePlatform) || 'pc',
@@ -242,6 +249,7 @@
         if (res.customIpConfig) cachedCustomConfig = res.customIpConfig;
         if (Array.isArray(res.customGroupLeases)) cachedCustomLeases = res.customGroupLeases;
         if (res.lastJailAutoCloseEvent) cachedLastJailAutoCloseEvent = res.lastJailAutoCloseEvent;
+        if (res.screenProxySummary) cachedScreenProxySummary = res.screenProxySummary;
         if (res.surchargeConfig) mergeSurchargeConfig(res.surchargeConfig);
         if (Array.isArray(res.deviceGroups)) cachedGroups = res.deviceGroups;
         if (Number.isFinite(Number(res.screensPerIp)) && Number(res.screensPerIp) >= 1) {
@@ -382,6 +390,7 @@
           </div>
         </div>
         <div class="dv-header-actions">
+          <button type="button" class="dv-btn dv-btn-reip-header" id="dv-reip-all-btn" title="หา IP ว่างชุดใหม่ในระบบแล้วสลับให้ทุกวง IP ที่เปิดใช้งานอยู่พร้อมกัน">🔄 Re-IP ทุกวง</button>
           <button type="button" class="dv-btn dv-btn-primary" id="dv-rotate-all-btn" title="สุ่มเลข Device ID และ Machine ID ใหม่ให้ทุกกลุ่มอัตโนมัติพร้อมกัน">🎲 Random ทุกกลุ่ม</button>
           <button type="button" class="dv-btn" id="dv-close-btn" title="ปิดแถบ (Esc)">✕</button>
         </div>
@@ -449,6 +458,7 @@
         <div class="dv-summary-bar">
           <div class="dv-summary-pills">
             <span class="dv-summary-pill">🌐 บล็อก IP: <b id="dv-summary-ips">0</b> IP</span>
+            <span class="dv-summary-pill dv-summary-pill-free" id="dv-summary-free-ips-pill" style="display:none;" title="จำนวน Proxy IP ที่ว่างพร้อมสลับใช้งานในระบบขณะนี้">✨ IP ว่าง: <b id="dv-summary-free-ips">0</b> IP</span>
             <span class="dv-summary-pill">📦 กลุ่ม Device: <b id="dv-summary-groups">0</b> กลุ่ม</span>
             <span class="dv-summary-pill">🖥️ จออัตโนมัติ: <b id="dv-summary-profiles">0</b> จอ</span>
             <span class="dv-summary-pill">🟢 ออนไลน์: <b id="dv-summary-online">0</b> จอ</span>
@@ -467,6 +477,7 @@
 
     document.getElementById('dv-close-btn').addEventListener('click', () => setOpen(false));
     document.getElementById('dv-rotate-all-btn').addEventListener('click', () => rotateAllGroups());
+    document.getElementById('dv-reip-all-btn').addEventListener('click', () => reIpAllRings());
 
     drawer.querySelectorAll('[data-dv-tab]').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -566,7 +577,20 @@
     if (isOpen) {
       renderDrawerList(true);
       refreshCustomIpDevices(activeTab === 'custom');
+      refreshProxyFreeIpSummary();
     }
+  }
+
+  async function refreshProxyFreeIpSummary() {
+    try {
+      const st = await fetch('/api/screen-proxy/status').then(r => r.json());
+      if (st && st.success && st.settings) {
+        cachedScreenProxySummary = st.settings;
+        if (Array.isArray(st.customGroupLeases)) cachedCustomLeases = st.customGroupLeases;
+        if (st.surchargeConfig) mergeSurchargeConfig(st.surchargeConfig);
+        if (isOpen) renderDrawerList(true);
+      }
+    } catch (_) {}
   }
 
   function toggleDrawer(force) {
@@ -691,6 +715,197 @@
     } finally {
       rotatingAll = false;
       renderDrawerList();
+    }
+  }
+
+  function applyReIpResponseState(data) {
+    if (!data || typeof data !== 'object') return;
+    if (Array.isArray(data.deviceGroups)) cachedGroups = data.deviceGroups;
+    if (data.customIpConfig) cachedCustomConfig = data.customIpConfig;
+    if (Array.isArray(data.customGroupLeases)) cachedCustomLeases = data.customGroupLeases;
+    if (data.surchargeConfig) mergeSurchargeConfig(data.surchargeConfig);
+    if (data.screenProxySummary) cachedScreenProxySummary = data.screenProxySummary;
+
+    const list = typeof currentProfiles !== 'undefined' && Array.isArray(currentProfiles) ? currentProfiles : cachedProfiles;
+    const rotatedList = Array.isArray(data.rotated) ? data.rotated : [];
+    for (const r of rotatedList) {
+      if (!r || !r.newIp || !Array.isArray(r.profileIds)) continue;
+      for (const p of list) {
+        if (p && r.profileIds.includes(p.id)) {
+          p.screenProxy = {
+            ...(p.screenProxy || {}),
+            active: true,
+            ip: r.newIp,
+            proxyId: r.newProxyId || null
+          };
+        }
+      }
+    }
+    if (typeof fetchProfiles === 'function') {
+      try { fetchProfiles(); } catch (_) {}
+    }
+  }
+
+  async function reIpAutoBlock(ipIndex, profileIds, currentIp, currentProxyId, event) {
+    if (event) event.stopPropagation();
+    const ipIdx = Number(ipIndex) || 1;
+    if (rotatingIpBlocks.has(ipIdx) || rotatingAllIps) return;
+    rotatingIpBlocks.add(ipIdx);
+    renderDrawerList(true);
+    try {
+      const res = await fetch('/api/screen-proxy/re-ip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'auto_block',
+          ipIndex: ipIdx,
+          profileIds: Array.isArray(profileIds) ? profileIds : [],
+          currentIp: currentIp || '',
+          currentProxyId: currentProxyId || ''
+        })
+      }).then(r => r.json());
+
+      applyReIpResponseState(res);
+      if (!res || !res.success) {
+        if (typeof showToast === 'function') {
+          showToast(`⚠️ ${(res && res.error) || 'ไม่สามารถเปลี่ยน IP ใหม่ได้'}`, 'warning');
+        }
+        return;
+      }
+
+      const item = Array.isArray(res.rotated) && res.rotated[0] ? res.rotated[0] : null;
+      justRotatedIpBlocks.add(ipIdx);
+      setTimeout(() => {
+        justRotatedIpBlocks.delete(ipIdx);
+        if (isOpen) renderDrawerList(true);
+      }, 2600);
+
+      if (typeof showToast === 'function') {
+        const fromIp = (item && item.oldIp) || currentIp || 'IP เดิม';
+        const toIp = (item && item.newIp) || 'IP ใหม่';
+        const freePart = Number.isFinite(Number(res.freeIpsRemaining)) ? ` (ว่างอีก ${res.freeIpsRemaining} IP)` : '';
+        showToast(`🔄 Re-IP วง IP #${ipIdx} สำเร็จ: ${fromIp} ➜ ${toIp}${freePart}`, 'success');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') {
+        showToast(`❌ Re-IP ไม่สำเร็จ: ${e.message}`, 'error');
+      }
+    } finally {
+      rotatingIpBlocks.delete(ipIdx);
+      renderDrawerList(true);
+    }
+  }
+
+  async function reIpCustomGroup(ipGroupId, groupName, currentIp, currentProxyId, event) {
+    if (event) event.stopPropagation();
+    const gid = String(ipGroupId || '').trim();
+    if (!gid || rotatingCustomIps.has(gid) || rotatingAllIps) return;
+    rotatingCustomIps.add(gid);
+    renderDrawerList(true);
+    try {
+      const res = await fetch('/api/screen-proxy/re-ip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'custom_group',
+          customGroupId: gid,
+          currentIp: currentIp || '',
+          currentProxyId: currentProxyId || ''
+        })
+      }).then(r => r.json());
+
+      applyReIpResponseState(res);
+      if (!res || !res.success) {
+        if (typeof showToast === 'function') {
+          showToast(`⚠️ ${(res && res.error) || 'ไม่สามารถเปลี่ยน IP ใหม่ได้'}`, 'warning');
+        }
+        return;
+      }
+
+      const item = Array.isArray(res.rotated) && res.rotated[0] ? res.rotated[0] : null;
+      justRotatedCustomIps.add(gid);
+      setTimeout(() => {
+        justRotatedCustomIps.delete(gid);
+        if (isOpen) renderDrawerList(true);
+      }, 2600);
+
+      if (typeof showToast === 'function') {
+        const fromIp = (item && item.oldIp) || currentIp || 'IP เดิม';
+        const toIp = (item && item.newIp) || 'IP ใหม่';
+        const freePart = Number.isFinite(Number(res.freeIpsRemaining)) ? ` (ว่างอีก ${res.freeIpsRemaining} IP)` : '';
+        showToast(`🔄 Re-IP "${groupName || gid}" สำเร็จ: ${fromIp} ➜ ${toIp}${freePart}`, 'success');
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') {
+        showToast(`❌ Re-IP ไม่สำเร็จ: ${e.message}`, 'error');
+      }
+    } finally {
+      rotatingCustomIps.delete(gid);
+      renderDrawerList(true);
+    }
+  }
+
+  async function reIpAllRings() {
+    if (rotatingAllIps) return;
+    rotatingAllIps = true;
+    renderDrawerList(true);
+    try {
+      const list = typeof currentProfiles !== 'undefined' && Array.isArray(currentProfiles) ? currentProfiles : cachedProfiles;
+      const groups = buildGroupsFromProfiles(list, cachedGroups);
+      const byIp = new Map();
+      groups.forEach(g => {
+        const idx = g.ipIndex || 1;
+        if (!byIp.has(idx)) byIp.set(idx, []);
+        g.members.forEach(m => {
+          if (m && m.profile && m.profile.id && !byIp.get(idx).includes(m.profile.id)) {
+            byIp.get(idx).push(m.profile.id);
+          }
+        });
+      });
+      const autoBlocks = Array.from(byIp.entries()).map(([ipIndex, profileIds]) => ({ ipIndex, profileIds }));
+
+      const res = await fetch('/api/screen-proxy/re-ip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scope: 'all', autoBlocks })
+      }).then(r => r.json());
+
+      applyReIpResponseState(res);
+      if (!res || !res.success) {
+        if (typeof showToast === 'function') {
+          showToast(`⚠️ ${(res && res.error) || 'ไม่สามารถ Re-IP ทุกวงได้'}`, 'warning');
+        }
+        return;
+      }
+
+      const rotatedList = Array.isArray(res.rotated) ? res.rotated : [];
+      rotatedList.forEach(r => {
+        if (r.scope === 'custom_group' && r.customGroupId) justRotatedCustomIps.add(r.customGroupId);
+        if (r.scope === 'auto_block' && r.ipIndex) justRotatedIpBlocks.add(Number(r.ipIndex));
+      });
+      if (rotatedList.length > 0) {
+        setTimeout(() => {
+          justRotatedIpBlocks.clear();
+          justRotatedCustomIps.clear();
+          if (isOpen) renderDrawerList(true);
+        }, 2600);
+      }
+
+      if (typeof showToast === 'function') {
+        if (res.clearedStickyOnly && res.message) {
+          showToast(`🔄 ${res.message}`, 'info');
+        } else {
+          const freePart = Number.isFinite(Number(res.freeIpsRemaining)) ? ` · ว่างอีก ${res.freeIpsRemaining} IP` : '';
+          showToast(`🔄 Re-IP สลับเป็น IP ว่างชุดใหม่สำเร็จ ${rotatedList.length} วง${freePart}`, 'success');
+        }
+      }
+    } catch (e) {
+      if (typeof showToast === 'function') {
+        showToast(`❌ Re-IP ทุกวงไม่สำเร็จ: ${e.message}`, 'error');
+      }
+    } finally {
+      rotatingAllIps = false;
+      renderDrawerList(true);
     }
   }
 
@@ -1074,8 +1289,11 @@
               `;
             }).join('');
 
+        const isCustomReIpBusy = rotatingCustomIps.has(ig.id) || rotatingAllIps;
+        const isJustRotCustomIp = justRotatedCustomIps.has(ig.id);
+
         return `
-          <section class="dv-custom-ip-card" style="${isHomeIp ? 'border-color:rgba(52,211,153,0.45);' : ''}">
+          <section class="dv-custom-ip-card ${isJustRotCustomIp ? 'dv-ip-just-rotated' : ''}" style="${isHomeIp ? 'border-color:rgba(52,211,153,0.45);' : ''}">
             <div class="dv-custom-ip-header">
               <div class="dv-custom-ip-row">
                 <div class="dv-custom-ip-name">
@@ -1087,6 +1305,7 @@
                     <button type="button" class="dv-plat-btn ${!isHomeIp ? 'active is-pc' : ''}" data-set-ip-mode="${esc(ig.id)}:proxy" ${customMutating ? 'disabled' : ''}>🛡️ จอง Proxy IP</button>
                     <button type="button" class="dv-plat-btn ${isHomeIp ? 'active is-android' : ''}" data-set-ip-mode="${esc(ig.id)}:home" ${customMutating ? 'disabled' : ''}>🏠 ใช้ IP บ้าน</button>
                   </div>
+                  ${!isHomeIp ? `<button type="button" class="dv-reip-btn" data-reip-custom="${esc(ig.id)}" ${isCustomReIpBusy || customMutating ? 'disabled' : ''} title="หา IP ว่างตัวใหม่ในระบบมาเปลี่ยนให้วง ${esc(ig.name)} ทันที">${isCustomReIpBusy ? '⏳ กำลังหา IP...' : '🔄 Re-IP'}</button>` : ''}
                   <button type="button" class="dv-btn dv-btn-xs dv-btn-primary" data-add-custom-dg="${esc(ig.id)}" ${customMutating ? 'disabled' : ''}>+ เพิ่มกลุ่ม Device</button>
                   <button type="button" class="dv-btn dv-btn-xs" data-rename-ip="${esc(ig.id)}" title="เปลี่ยนชื่อวง IP พิเศษ">✏️</button>
                   <button type="button" class="dv-btn dv-btn-xs dv-btn-danger-soft" data-ask-del-ip="${esc(ig.id)}" title="ลบวง IP พิเศษ">🗑️</button>
@@ -1106,6 +1325,7 @@
     }
 
     const fullHtml = toolbarHtml + groupsHtml;
+    delete bodyEl.__pmLastHtml;
     bodyEl.innerHTML = fullHtml;
 
     document.getElementById('dv-add-custom-ip-btn')?.addEventListener('click', () => {
@@ -1137,6 +1357,15 @@
       btn.addEventListener('click', () => {
         const ipGroupId = btn.getAttribute('data-add-custom-dg');
         mutateCustomApi({ action: 'add_device_group', ipGroupId }, '🖥️ เพิ่มกลุ่ม Device ย่อยในวง IP แล้ว');
+      });
+    });
+
+    bodyEl.querySelectorAll('[data-reip-custom]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const ipGroupId = btn.getAttribute('data-reip-custom');
+        const ig = customGroups.find(x => x.id === ipGroupId);
+        const cl = leaseMap.get(ipGroupId) || null;
+        reIpCustomGroup(ipGroupId, ig ? ig.name : ipGroupId, cl?.ip || cl?.proxyHost || '', cl?.proxyId || '', e);
       });
     });
 
@@ -1325,10 +1554,13 @@
 
     const tabCount = document.getElementById('dv-tab-count');
     const sumIps = document.getElementById('dv-summary-ips');
+    const sumFreePill = document.getElementById('dv-summary-free-ips-pill');
+    const sumFreeIps = document.getElementById('dv-summary-free-ips');
     const sumGroups = document.getElementById('dv-summary-groups');
     const sumProfiles = document.getElementById('dv-summary-profiles');
     const sumOnline = document.getElementById('dv-summary-online');
     const rotateAllBtn = document.getElementById('dv-rotate-all-btn');
+    const reIpAllBtn = document.getElementById('dv-reip-all-btn');
     const headerTitleEl = document.getElementById('dv-header-title-text');
     const headerSubEl = document.getElementById('dv-header-sub-text');
     const perIpInput = document.getElementById('dv-screens-per-ip-input');
@@ -1380,6 +1612,17 @@
     }
 
     if (sumIps) sumIps.textContent = String(totalAutoIps);
+    if (sumFreePill && sumFreeIps) {
+      const proxyMeta = cachedScreenProxySummary || (typeof currentScreenProxySettings !== 'undefined' ? currentScreenProxySettings : null);
+      const isProxyOn = Boolean(proxyMeta && proxyMeta.enabled);
+      const freeCount = proxyMeta && Number.isFinite(Number(proxyMeta.freeIps)) ? Math.max(0, Math.floor(Number(proxyMeta.freeIps))) : null;
+      if (isProxyOn && freeCount !== null) {
+        sumFreePill.style.display = 'inline-flex';
+        sumFreeIps.textContent = String(freeCount);
+      } else {
+        sumFreePill.style.display = 'none';
+      }
+    }
     if (sumGroups) sumGroups.textContent = String(totalAutoGroups);
     if (sumProfiles) sumProfiles.textContent = String(totalAutoProfiles);
     if (sumOnline) sumOnline.textContent = String(totalAutoOnline);
@@ -1455,6 +1698,11 @@
       rotateAllBtn.disabled = rotatingAll || totalAutoGroups === 0;
       rotateAllBtn.textContent = rotatingAll ? '⏳ กำลังสุ่ม...' : '🎲 Random ทุกกลุ่ม';
     }
+    if (reIpAllBtn) {
+      reIpAllBtn.classList.toggle('dv-hidden', activeTab === 'unban');
+      reIpAllBtn.disabled = rotatingAllIps || (totalAutoGroups === 0 && customGroups.length === 0);
+      reIpAllBtn.textContent = rotatingAllIps ? '⏳ กำลังหา IP...' : '🔄 Re-IP ทุกวง';
+    }
     if (!bodyEl) return;
 
     if (activeTab === 'unban') {
@@ -1507,14 +1755,21 @@
         : `1 กลุ่ม · 1 Device (${firstGrp.maxScreens} จอ)`;
 
       let activeProxyIp = firstGrp.proxyIp || null;
+      let activeProxyId = firstGrp.proxyId || null;
+      const ipBlockProfileIds = [];
       for (const g of ipGroups) {
         for (const m of g.members) {
+          if (m.profile && m.profile.id && !ipBlockProfileIds.includes(m.profile.id)) {
+            ipBlockProfileIds.push(m.profile.id);
+          }
           if (m.profile && m.profile.screenProxy && m.profile.screenProxy.active && m.profile.screenProxy.ip) {
             activeProxyIp = m.profile.screenProxy.ip;
-            break;
+            if (m.profile.screenProxy.proxyId) activeProxyId = m.profile.screenProxy.proxyId;
           }
         }
       }
+      const isReIpBusy = rotatingIpBlocks.has(ipIdx) || rotatingAllIps;
+      const isIpJustRot = justRotatedIpBlocks.has(ipIdx);
 
       const subGroupsHtml = ipGroups.map(grp => {
         const gIdx = grp.groupIndex;
@@ -1619,7 +1874,7 @@
       }).join('');
 
       return `
-        <section class="dv-ip-block">
+        <section class="dv-ip-block ${isIpJustRot ? 'dv-ip-just-rotated' : ''}" data-ip-index="${ipIdx}">
           <div class="dv-ip-block-header">
             <div class="dv-ip-block-left">
               <span class="dv-ip-badge">🌐 IP #${ipIdx}</span>
@@ -1629,6 +1884,9 @@
             <div class="dv-ip-block-right">
               ${activeProxyIp ? `<span class="dv-ip-addr-pill" title="Proxy IP ของกลุ่มนี้">🛡️ ${esc(activeProxyIp)}</span>` : ''}
               ${ipOnlineCount > 0 ? `<span class="dv-group-online-badge">🟢 ${ipOnlineCount} จอ</span>` : ''}
+              <button type="button" class="dv-reip-btn" data-reip-auto="${ipIdx}" data-reip-pids="${esc(ipBlockProfileIds.join(','))}" data-reip-cur-ip="${esc(activeProxyIp || '')}" data-reip-cur-id="${esc(activeProxyId || '')}" ${isReIpBusy ? 'disabled' : ''} title="หา IP ว่างตัวใหม่ในระบบมาเปลี่ยนให้ทุกจอในวง IP #${ipIdx} ทันที">
+                ${isReIpBusy ? '⏳ กำลังหา IP...' : '🔄 Re-IP'}
+              </button>
             </div>
           </div>
           <div class="dv-ip-block-groups">
@@ -1640,6 +1898,17 @@
 
     const changed = window.PmUiGuard ? window.PmUiGuard.setHtmlIfChanged(bodyEl, ipBlocksHtml) : (bodyEl.innerHTML = ipBlocksHtml, true);
     if (!changed) return;
+
+    bodyEl.querySelectorAll('[data-reip-auto]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const ipIdx = Number(btn.getAttribute('data-reip-auto'));
+        const pids = String(btn.getAttribute('data-reip-pids') || '').split(',').map(x => x.trim()).filter(Boolean);
+        const curIp = btn.getAttribute('data-reip-cur-ip') || '';
+        const curId = btn.getAttribute('data-reip-cur-id') || '';
+        reIpAutoBlock(ipIdx, pids, curIp, curId, e);
+      });
+    });
 
     bodyEl.querySelectorAll('[data-rotate-group]').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -1706,6 +1975,9 @@
       }
       if (extra.lastJailAutoCloseEvent) {
         cachedLastJailAutoCloseEvent = extra.lastJailAutoCloseEvent;
+      }
+      if (extra.screenProxySummary) {
+        cachedScreenProxySummary = extra.screenProxySummary;
       }
     }
     mountShell();
@@ -2118,6 +2390,7 @@
     let availTitleEl = document.getElementById('dv-unban-avail-title');
     let availListEl = document.getElementById('dv-unban-avail-list');
     if (!topZone || !availListEl) {
+      delete bodyEl.__pmLastHtml;
       bodyEl.innerHTML = `
         <div id="dv-unban-top-zone"></div>
         <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin:14px 0 8px 0;flex-wrap:wrap;">

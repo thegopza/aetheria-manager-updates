@@ -175,6 +175,24 @@ body.dv-open #dv-drawer {
   background: linear-gradient(135deg, rgba(14, 165, 233, 0.42), rgba(37, 99, 235, 0.48));
   border-color: #7dd3fc;
 }
+.dv-btn-reip-header {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.24), rgba(6, 95, 70, 0.42));
+  border-color: rgba(52, 211, 153, 0.55);
+  color: #d1fae5;
+}
+.dv-btn-reip-header:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.4), rgba(5, 150, 105, 0.52));
+  border-color: #6ee7b7;
+  box-shadow: 0 4px 12px rgba(16, 185, 129, 0.28);
+}
+.dv-summary-pill-free {
+  border-color: rgba(52, 211, 153, 0.42);
+  background: rgba(6, 78, 59, 0.35);
+  color: #d1fae5;
+}
+.dv-summary-pill-free b {
+  color: #34d399;
+}
 
 .dv-summary-bar {
   display: flex;
@@ -628,6 +646,39 @@ body.dv-open #dv-drawer {
   display: flex;
   flex-direction: column;
   gap: 9px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.dv-ip-block.dv-ip-just-rotated,
+.dv-custom-ip-card.dv-ip-just-rotated {
+  border-color: #34d399 !important;
+  box-shadow: 0 0 0 2px rgba(52, 211, 153, 0.38), 0 8px 24px rgba(16, 185, 129, 0.28);
+}
+.dv-reip-btn {
+  border: 1px solid rgba(52, 211, 153, 0.52);
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.24), rgba(4, 120, 87, 0.36));
+  color: #d1fae5;
+  border-radius: 6px;
+  padding: 2.5px 8.5px;
+  font-size: 10.5px;
+  font-weight: 800;
+  cursor: pointer;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+.dv-reip-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.42), rgba(5, 150, 105, 0.56));
+  border-color: #6ee7b7;
+  color: #ffffff;
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(16, 185, 129, 0.32);
+}
+.dv-reip-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
 }
 .dv-ip-block-header {
   display: flex;

@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "8c116f51196f287a6bdcbac0b399738768e927da",
+  "sourceCommit": "fe81c0d932750cd78d20f7f437255aa5377267a9",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "d132a52e03b17eb5b1e79114cb3b92f8f96a5730f26099ab9e24defbdee5a6ef"
+      "sha256": "21691c28334912e19f3c43b38fa56da5003165afec74f4d290eef110bfb6674c"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -140,7 +140,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "c7c46fc465ec7bf646d16495502b24a42a8d2f9cffbf872609c524757893df6e"
+      "sha256": "c4e9b1afd92028eadd62fdcf6495664cd19c4ded6eac12d86ff33db573ce19de"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -168,11 +168,11 @@
     },
     {
       "path": "manager/public/device_manager.css",
-      "sha256": "53bc9bfaa163525d403d409e43358376abab1da5318c369996b7466bb3f7c33e"
+      "sha256": "a32d134d3bd65edd3b78b515e7891c86a47469107528c9fce11b45b4330aef9b"
     },
     {
       "path": "manager/public/device_manager.js",
-      "sha256": "e21cd3f741c97fffea8c4429caece241438d1d60ab73912b7f8d3060a826d7f8"
+      "sha256": "a35f662eb393ede30319c4836fee38ec150e03664bbeadfcb2a5f14a92de78f1"
     },
     {
       "path": "manager/public/fleet_dashboard.css",
@@ -208,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "d3236f39a5703af48e6bfd5d7bea60b78c1b852855ead93824ac678ec352c545"
+      "sha256": "8d9ef50556c633e28a4037e1be7fbcee33bfe37c3c89c8102963ebe99425a678"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -288,7 +288,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "87aa994756750d362910c6c58e6ef3542ea4854d7026e1fe23c21314090fc84b"
+      "sha256": "a2900448bbb2fe271097d8471364c324807c45409475378fee4c3537b515b287"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -296,7 +296,7 @@
     },
     {
       "path": "manager/screen_proxy_manager.js",
-      "sha256": "2c4000ba529711de919580b33ff6fe701e43589f6ae47e9a4c5855b820927b9e"
+      "sha256": "7377e448d6c94b7cd4f09c3c39785c4e4fd0a3aa451f11d68e59c94d4ff2b1e6"
     },
     {
       "path": "manager/script_bootstrap.js",
@@ -320,7 +320,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "4fb4aa81a5a17aaaa1692b5fc936f5991890188eb72bcd2ededee0522fa071fd"
+      "sha256": "f87df122ce9940901a7b7da1845bc984952f3cc84198989e95f1ede610bea90c"
     },
     {
       "path": "manager/test_isolation.js",

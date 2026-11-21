@@ -447,6 +447,7 @@ async function fetchProfiles() {
               customIpConfig: data.customIpConfig,
               customGroupLeases: data.customGroupLeases,
               ipSurchargeConfig: data.ipSurchargeConfig || (data.screenProxySummary ? data.screenProxySummary.surchargeConfig : undefined),
+              screenProxySummary: data.screenProxySummary,
               lastJailAutoCloseEvent: data.lastJailAutoCloseEvent
             }
           );
@@ -4280,7 +4281,8 @@ function renderScreenProxyModal(statusData) {
       {
         customIpConfig: statusData.customIpConfig,
         customGroupLeases: statusData.customGroupLeases,
-        ipSurchargeConfig: statusData.surchargeConfig || (statusData.settings && statusData.settings.surchargeConfig)
+        ipSurchargeConfig: statusData.surchargeConfig || (statusData.settings && statusData.settings.surchargeConfig),
+        screenProxySummary: statusData.settings || s
       }
     );
   }

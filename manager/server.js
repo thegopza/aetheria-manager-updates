@@ -7770,7 +7770,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.13'
+  managerVersion: '4.63.14'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7799,7 +7799,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.13',
+  managerVersion: '4.63.14',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -8892,6 +8892,63 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (pathname === "/api/screen-proxy/re-ip" && req.method === "POST") {
+    let body = "";
+    req.on("data", c => {
+      body += c;
+      if (Buffer.byteLength(body, "utf8") > 65536) req.destroy();
+    });
+    req.on("end", async () => {
+      try {
+        const data = JSON.parse(body || "{}");
+        const rotRes = await screenProxy.rotateIp(data);
+        if (!rotRes || !rotRes.success) {
+          return sendJSON({
+            ...(rotRes || { success: false, error: "ไม่สามารถเปลี่ยน IP ใหม่ได้" }),
+            screenProxySummary: screenProxy.publicSettings()
+          }, rotRes?.code === "PROXY_DISABLED" || rotRes?.code === "HOME_IP_GROUP" ? 400 : 200);
+        }
+        const changedIds = Array.isArray(rotRes.changedProfileIds) ? rotRes.changedProfileIds : [];
+        if (changedIds.length > 0 && screenProxy.isEnabled()) {
+          const allProfiles = loadProfiles() || [];
+          const byId = new Map(allProfiles.map(p => [p.id, p]));
+          let knownTargets = {};
+          try {
+            const ktFile = path.join(SESSIONS_DIR, "_browser_targets.json");
+            if (fs.existsSync(ktFile)) {
+              knownTargets = JSON.parse(fs.readFileSync(ktFile, "utf8")) || {};
+            }
+          } catch (_) {}
+          const openChangedIds = [];
+          for (const pid of changedIds) {
+            const p = byId.get(pid);
+            if (!p) continue;
+            const isOpen = browserMode.isOpen(p.id) || Boolean(knownTargets[p.id]) || (runningProcesses[p.id] && isProcessAlive(runningProcesses[p.id].pid));
+            if (isOpen) {
+              openChangedIds.push(p.id);
+              await screenProxy.ensureProfileTunnel(p.id, p.debugPort).catch(() => {});
+            }
+          }
+          if (openChangedIds.length > 0 && isBrowserMode() && typeof browserMode.applyProxyModeToOpenWindows === "function") {
+            await browserMode.applyProxyModeToOpenWindows({ onlyProfileIds: openChangedIds }).catch(() => {});
+          }
+        }
+        return sendJSON({
+          ...rotRes,
+          success: true,
+          deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : [],
+          customIpConfig: typeof browserMode.getCustomIpDeviceConfig === "function" ? browserMode.getCustomIpDeviceConfig() : { ipGroups: [] },
+          customGroupLeases: rotRes.customGroupLeases || screenProxy.getCustomGroupLeases(),
+          surchargeConfig: rotRes.surchargeConfig || screenProxy.getSurchargeConfig(),
+          screenProxySummary: screenProxy.publicSettings()
+        });
+      } catch (e) {
+        return sendJSON({ success: false, error: e.message }, 400);
+      }
+    });
+    return;
+  }
+
   if (pathname === "/api/screen-proxy/block" && req.method === "POST") {
     let body = "";
     req.on("data", c => {
@@ -9412,6 +9469,7 @@ const server = http.createServer(async (req, res) => {
           surchargeConfig: typeof screenProxy.getSurchargeConfig === "function" ? screenProxy.getSurchargeConfig() : null,
           deviceGroups: typeof browserMode.getDeviceGroupsSnapshot === "function" ? browserMode.getDeviceGroupsSnapshot() : [],
           screensPerIp: screenProxy.loadSettings().maxScreensPerIp || 6,
+          screenProxySummary: screenProxy.publicSettings(),
           lastJailAutoCloseEvent
         });
       } catch (e) {

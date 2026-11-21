@@ -4013,7 +4013,8 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
             existing.minQty = ${minQty};
             existing.enabled = true;
           } else {
-            c.rules.push({ id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), itemName: name, minQty: ${minQty}, sellMode: 'all', enabled: true });
+            const defMode = /\\bcard\\b|การ์ด/i.test(name) ? 'min' : 'all';
+            c.rules.push({ id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), itemName: name, minQty: ${minQty}, sellMode: defMode, enabled: true });
           }
           c.enabled = true;
           delete c.__userClearedAt;

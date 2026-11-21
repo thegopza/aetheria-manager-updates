@@ -1212,7 +1212,8 @@
       }
       const name = ${JSON.stringify(name)};
       if (c.rules.some(r => r && String(r.itemName || '').trim().toLowerCase() === name.toLowerCase())) return { success: true, exists: true };
-      c.rules.push({ id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), itemName: name, minQty: ${minQty}, sellMode: 'all', enabled: true });
+      const defMode = /\\bcard\\b|การ์ด/i.test(name) ? 'min' : 'all';
+      c.rules.push({ id: 'rule_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), itemName: name, minQty: ${minQty}, sellMode: defMode, enabled: true });
       delete c.__userClearedAt;
       try { localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(c)); } catch (e) { return { success: false, error: e.message }; }
       try { const box = document.getElementById('p-autosell-hud-rules-container'); if (box && typeof window.renderAutoSellHudRulesHtml === 'function') box.innerHTML = window.renderAutoSellHudRulesHtml(); } catch (e) {}
@@ -1788,20 +1789,26 @@
     }
   }
 
-  function addAutoSellRuleFromBar(customName, customMin) {
+  function addAutoSellRuleFromBar(customName, customMin, customMode) {
     const st = hub.autoSell;
-    const name = String(customName !== undefined ? customName : st.newName || '').trim();
+    const isQuickPick = customName !== undefined;
+    const name = String(isQuickPick ? customName : st.newName || '').trim();
     if (!name) {
       toast('⚠️ กรุณาพิมพ์หรือเลือกชื่อไอเทมที่จะตั้งขายอัตโนมัติ', 'warn');
       return;
     }
+    const isCard = /\bcard\b|การ์ด/i.test(name);
     const minQty = Math.max(1, parseInt(customMin !== undefined ? customMin : st.newMin, 10) || 1);
-    const sellMode = st.newMode === 'min' ? 'min' : 'all';
+    const sellMode = customMode !== undefined
+      ? (customMode === 'min' ? 'min' : 'all')
+      : (st.newMode === 'min' ? 'min' : (isQuickPick && isCard ? 'min' : 'all'));
     if (!Array.isArray(st.config.rules)) st.config.rules = [];
     const existing = st.config.rules.find(r => r && String(r.itemName || '').trim().toLowerCase() === name.toLowerCase());
     if (existing) {
       existing.minQty = minQty;
-      existing.sellMode = sellMode;
+      if (!isQuickPick) {
+        existing.sellMode = sellMode;
+      }
       existing.enabled = true;
       toast(`ℹ️ อัปเดต "${name}" ในรายการ Auto Sell (ครบ ≥ ${minQty} ชิ้น)`);
     } else {
@@ -1814,7 +1821,7 @@
       });
       toast(`➕ เพิ่ม "${name}" เข้ารายการ Auto Sell แล้ว (ครบ ≥ ${minQty} ชิ้น)`);
     }
-    if (customName === undefined) st.newName = '';
+    if (!isQuickPick) st.newName = '';
     saveAutoSellHub(false);
     renderAutoSellHub();
   }
@@ -2497,7 +2504,10 @@
     const asPickBag = e.target.closest('[data-as-pick-bag]');
     if (asPickBag) {
       const nm = asPickBag.dataset.asPickBag;
-      if (nm) addAutoSellRuleFromBar(nm, hub.autoSell.newMin || 1);
+      if (nm) {
+        const isCard = /\bcard\b|การ์ด/i.test(nm);
+        addAutoSellRuleFromBar(nm, isCard ? 1 : (hub.autoSell.newMin || 1), isCard ? 'min' : undefined);
+      }
       return;
     }
 

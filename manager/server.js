@@ -7770,7 +7770,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.14'
+  managerVersion: '4.63.15'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7799,7 +7799,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.14',
+  managerVersion: '4.63.15',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -11281,6 +11281,24 @@ public class PmFocus {
             if (payload.config.forceSellList !== undefined) target.forceSellList = String(payload.config.forceSellList || '');
             saveProfiles(fresh);
           }
+        }
+        if (payload.type === 'update-autosell' && payload.config && typeof payload.config === 'object') {
+          try {
+            const asStorePath = path.join(__dirname, 'data', 'autosell_configs.json');
+            let allAs = {};
+            if (fs.existsSync(asStorePath)) {
+              try { allAs = JSON.parse(fs.readFileSync(asStorePath, 'utf8')) || {}; } catch (_) { allAs = {}; }
+            }
+            const prevAs = (allAs[profile.id] && typeof allAs[profile.id] === 'object') ? allAs[profile.id] : { enabled: false, priceStrategy: 'median', rules: [] };
+            const patchAs = Object.assign({}, payload.config);
+            if (Array.isArray(patchAs.rules) && patchAs.rules.length === 0 && Array.isArray(prevAs.rules) && prevAs.rules.length > 0 && !patchAs.__userClearedAt) {
+              delete patchAs.rules;
+            }
+            const nextAs = Object.assign({}, prevAs, patchAs, { updatedAt: Date.now() });
+            allAs[profile.id] = nextAs;
+            fs.mkdirSync(path.dirname(asStorePath), { recursive: true });
+            fs.writeFileSync(asStorePath, JSON.stringify(allAs, null, 2), 'utf8');
+          } catch (_) {}
         }
         const r = await enqueueProfileClientAction(profile.id, () => evalProfilePort(profile.debugPort, codeToRun, 15000));
         if (r && r.success === false && !('result' in r)) return sendJSON({ success: false, error: r.error || 'สั่งงานจอเกมไม่สำเร็จ' }, 502);

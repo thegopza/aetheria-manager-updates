@@ -19,7 +19,12 @@ const path = require('path');
 const CACHE_FILE = path.join(__dirname, 'data', 'card_market_cache.json');
 const OVERRIDES_FILE = path.join(__dirname, 'data', 'card_farm_overrides.json');
 const AUTOSELL_STORE_PATH = path.join(__dirname, 'data', 'autosell_configs.json');
+const CARD_SELLMODE_MIGRATION_FILE = path.join(__dirname, 'data', 'card_sellmode_migrated_v1.json');
 const BROWSER_STORAGE_DIR = path.join(__dirname, '..', 'sessions', '_browser_storage');
+
+function isCardItemName(name) {
+  return /\bcard\b|การ์ด/i.test(String(name || '').trim());
+}
 
 function normMapName(s) {
   return String(s || '').replace(/\s*\(Lv\..*?\)/i, '').trim().toLowerCase();
@@ -115,93 +120,137 @@ function sanitizeAutoSellConfig(raw) {
     if (itemName) seen.add(key);
     rules.push({ id, itemName, minQty, sellMode, enabled });
   });
-  return {
+  const dh = Number(cfg.durationHours);
+  const out = {
     enabled: Boolean(cfg.enabled),
     priceStrategy: String(cfg.priceStrategy || 'median'),
     checkIntervalSec: Number(cfg.checkIntervalSec) || 25,
     maxActiveListings: Number(cfg.maxActiveListings) || 10,
     rules
   };
+  if ([12, 24, 48].includes(dh)) out.durationHours = dh;
+  if (cfg.userClearedAt) out.userClearedAt = cfg.userClearedAt;
+  if (cfg.__userClearedAt) out.__userClearedAt = cfg.__userClearedAt;
+  return out;
 }
 
-function loadAllAutoSellStore() {
+function loadAllAutoSellStore(storePath = AUTOSELL_STORE_PATH) {
   try {
-    if (fs.existsSync(AUTOSELL_STORE_PATH)) {
-      const parsed = JSON.parse(fs.readFileSync(AUTOSELL_STORE_PATH, 'utf8'));
+    if (fs.existsSync(storePath)) {
+      const parsed = JSON.parse(fs.readFileSync(storePath, 'utf8'));
       if (parsed && typeof parsed === 'object') return parsed;
     }
   } catch (_) {}
   return {};
 }
 
-function ensureCardsInProfileAutoSellStore(profileId, cardNames, preloadedAllStore = null) {
+function ensureCardsInProfileAutoSellStore(profileId, cardNames, preloadedAllStore = null, options = {}) {
   const pid = String(profileId || '').trim();
   const targetCards = Array.isArray(cardNames) ? cardNames.map(s => String(s || '').trim()).filter(Boolean) : [];
   if (!pid || targetCards.length === 0) return { changed: false, addedCards: [], config: null };
 
-  const allStore = preloadedAllStore || loadAllAutoSellStore();
-  let baseRaw = allStore[pid];
-  const bsFile = path.join(BROWSER_STORAGE_DIR, `${pid}.json`);
+  const storePath = options.autoSellStorePath || AUTOSELL_STORE_PATH;
+  const browserStorageDir = options.browserStorageDir || BROWSER_STORAGE_DIR;
+  const explicitAssign = Boolean(options.explicitAssign);
+
+  const allStore = preloadedAllStore || loadAllAutoSellStore(storePath);
+  const storeEntry = (allStore[pid] && typeof allStore[pid] === 'object') ? allStore[pid] : null;
+  const bsFile = path.join(browserStorageDir, `${pid}.json`);
   let bsData = null;
-  if (!baseRaw) {
-    try {
-      if (fs.existsSync(bsFile)) {
-        bsData = JSON.parse(fs.readFileSync(bsFile, 'utf8')) || {};
-        const rawStr = bsData[`pelican_${pid}__auto_market_sell_cfg`] || bsData.pelican_auto_market_sell_cfg;
-        if (rawStr) baseRaw = JSON.parse(rawStr);
+  let bsCfg = null;
+  let bsMtimeMs = 0;
+  try {
+    if (fs.existsSync(bsFile)) {
+      bsMtimeMs = Number(fs.statSync(bsFile).mtimeMs) || 0;
+      bsData = JSON.parse(fs.readFileSync(bsFile, 'utf8')) || {};
+      const rawStr = bsData[`pelican_${pid}__auto_market_sell_cfg`] || bsData.pelican_auto_market_sell_cfg;
+      if (rawStr) {
+        const parsed = JSON.parse(rawStr);
+        if (parsed && typeof parsed === 'object') bsCfg = parsed;
       }
-    } catch (_) {}
+    }
+  } catch (_) {}
+
+  let baseRaw = storeEntry || bsCfg || null;
+  // If browser storage was modified more recently than autosell_configs.json (e.g. user edited inside game HUD),
+  // preserve rule-level sellMode/minQty/enabled from browser storage so stale autosell_configs.json never overwrites it.
+  if (storeEntry && bsCfg && Array.isArray(bsCfg.rules) && bsMtimeMs > (Number(storeEntry.updatedAt) || 0)) {
+    const bsByName = new Map();
+    for (const br of bsCfg.rules) {
+      if (br && br.itemName) bsByName.set(String(br.itemName).trim().toLowerCase(), br);
+    }
+    const mergedRules = Array.isArray(storeEntry.rules) ? storeEntry.rules.map(sr => {
+      if (!sr || !sr.itemName) return sr;
+      const newer = bsByName.get(String(sr.itemName).trim().toLowerCase());
+      return newer ? Object.assign({}, sr, {
+        minQty: newer.minQty !== undefined ? newer.minQty : sr.minQty,
+        sellMode: newer.sellMode === 'min' ? 'min' : (newer.sellMode === 'all' ? 'all' : sr.sellMode),
+        enabled: newer.enabled !== undefined ? newer.enabled : sr.enabled
+      }) : sr;
+    }) : [];
+    for (const [k, br] of bsByName.entries()) {
+      if (!mergedRules.some(sr => sr && String(sr.itemName || '').trim().toLowerCase() === k)) {
+        mergedRules.push(br);
+      }
+    }
+    baseRaw = Object.assign({}, storeEntry, bsCfg, { rules: mergedRules });
+  }
+
+  if (!explicitAssign && baseRaw && (baseRaw.userClearedAt || baseRaw.__userClearedAt)) {
+    return { changed: false, addedCards: [], config: sanitizeAutoSellConfig(baseRaw) };
   }
 
   const cfg = sanitizeAutoSellConfig(baseRaw || { enabled: true, priceStrategy: 'median', rules: [] });
   let changed = !baseRaw;
   const addedCards = [];
 
-  if (!cfg.enabled) {
-    cfg.enabled = true;
-    changed = true;
+  if (explicitAssign) {
+    delete cfg.userClearedAt;
+    delete cfg.__userClearedAt;
+    if (!cfg.enabled) {
+      cfg.enabled = true;
+      changed = true;
+    }
   }
 
   for (const cardName of targetCards) {
     const norm = cardName.toLowerCase();
     const existing = cfg.rules.find(r => r && String(r.itemName || '').trim().toLowerCase() === norm);
     if (existing) {
-      if (Number(existing.minQty) !== 1 || existing.sellMode !== 'all' || existing.enabled === false) {
-        existing.minQty = 1;
-        existing.sellMode = 'all';
-        existing.enabled = true;
-        changed = true;
-      }
-    } else {
-      cfg.rules.push({
-        id: `rule_card_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-        itemName: cardName,
-        minQty: 1,
-        sellMode: 'all',
-        enabled: true
-      });
-      addedCards.push(cardName);
-      changed = true;
+      // NEVER overwrite an existing rule's sellMode ('min' vs 'all'), minQty, or enabled state!
+      continue;
     }
+    cfg.rules.push({
+      id: `rule_card_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      itemName: cardName,
+      minQty: 1,
+      sellMode: 'min',
+      enabled: true
+    });
+    addedCards.push(cardName);
+    changed = true;
   }
 
   if (changed) {
-    allStore[pid] = Object.assign({}, cfg, { updatedAt: Date.now() });
+    const cleanToSave = Object.assign({}, cfg);
+    delete cleanToSave.userClearedAt;
+    delete cleanToSave.__userClearedAt;
+    allStore[pid] = Object.assign({}, cleanToSave, { updatedAt: Date.now() });
     if (!preloadedAllStore) {
       try {
-        fs.mkdirSync(path.dirname(AUTOSELL_STORE_PATH), { recursive: true });
-        fs.writeFileSync(AUTOSELL_STORE_PATH, JSON.stringify(allStore, null, 2), 'utf8');
+        fs.mkdirSync(path.dirname(storePath), { recursive: true });
+        fs.writeFileSync(storePath, JSON.stringify(allStore, null, 2), 'utf8');
       } catch (_) {}
     }
     try {
-      fs.mkdirSync(BROWSER_STORAGE_DIR, { recursive: true });
+      fs.mkdirSync(browserStorageDir, { recursive: true });
       if (!bsData) {
         bsData = {};
         if (fs.existsSync(bsFile)) {
           try { bsData = JSON.parse(fs.readFileSync(bsFile, 'utf8')) || {}; } catch (_) { bsData = {}; }
         }
       }
-      const serialized = JSON.stringify(cfg);
+      const serialized = JSON.stringify(cleanToSave);
       bsData[`pelican_${pid}__auto_market_sell_cfg`] = serialized;
       bsData.pelican_auto_market_sell_cfg = serialized;
       fs.writeFileSync(bsFile, JSON.stringify(bsData, null, 2), 'utf8');
@@ -211,26 +260,42 @@ function ensureCardsInProfileAutoSellStore(profileId, cardNames, preloadedAllSto
   return { changed, addedCards, config: cfg };
 }
 
-function buildEnsureCardAutoSellSnippet(cardNames) {
+function buildEnsureCardAutoSellSnippet(cardNames, options = {}) {
   const cleanNames = Array.isArray(cardNames) ? cardNames.map(s => String(s || '').trim()).filter(Boolean) : [];
+  const explicitAssign = Boolean(options && options.explicitAssign);
   return `(() => {
     const targetCards = ${JSON.stringify(cleanNames)};
+    const explicitAssign = ${JSON.stringify(explicitAssign)};
     if (!targetCards.length) return { changed: false, added: [], rulesCount: 0 };
     const defaultCfg = { enabled: true, priceStrategy: 'median', checkIntervalSec: 25, maxActiveListings: 10, rules: [] };
-    if (!window.__autoMarketSellConfig || typeof window.__autoMarketSellConfig !== 'object') {
+    let hadExistingCfg = Boolean(window.__autoMarketSellConfig && typeof window.__autoMarketSellConfig === 'object');
+    if (!hadExistingCfg) {
       try {
-        const stored = JSON.parse(localStorage.getItem('pelican_auto_market_sell_cfg') || '{}');
-        window.__autoMarketSellConfig = Object.assign({}, defaultCfg, stored);
+        const pid = window.__pmProfileId;
+        const raw = (pid && localStorage.getItem('pelican_' + pid + '__auto_market_sell_cfg')) || localStorage.getItem('pelican_auto_market_sell_cfg') || '';
+        if (raw) {
+          const stored = JSON.parse(raw);
+          window.__autoMarketSellConfig = Object.assign({}, defaultCfg, stored);
+          hadExistingCfg = true;
+        } else {
+          window.__autoMarketSellConfig = Object.assign({}, defaultCfg);
+        }
       } catch (e) {
         window.__autoMarketSellConfig = Object.assign({}, defaultCfg);
       }
     }
     const cfg = window.__autoMarketSellConfig;
     if (!Array.isArray(cfg.rules)) cfg.rules = [];
+    if (!explicitAssign && cfg.__userClearedAt) {
+      return { changed: false, added: [], enabled: Boolean(cfg.enabled), rulesCount: cfg.rules.length };
+    }
     let changed = false;
-    if (!cfg.enabled) {
-      cfg.enabled = true;
-      changed = true;
+    if (explicitAssign) {
+      delete cfg.__userClearedAt;
+      if (!cfg.enabled) {
+        cfg.enabled = true;
+        changed = true;
+      }
     }
     const added = [];
     for (const rawName of targetCards) {
@@ -239,34 +304,38 @@ function buildEnsureCardAutoSellSnippet(cardNames) {
       const norm = nm.toLowerCase();
       const existing = cfg.rules.find(r => r && String(r.itemName || '').trim().toLowerCase() === norm);
       if (existing) {
-        if (Number(existing.minQty) !== 1 || existing.sellMode !== 'all' || existing.enabled === false) {
-          existing.minQty = 1;
-          existing.sellMode = 'all';
-          existing.enabled = true;
-          changed = true;
-        }
-      } else {
-        cfg.rules.push({
-          id: 'rule_card_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-          itemName: nm,
-          minQty: 1,
-          sellMode: 'all',
-          enabled: true
-        });
-        added.push(nm);
-        changed = true;
+        // Preserve user's configured sellMode ('min' vs 'all'), minQty, and enabled state!
+        continue;
       }
+      cfg.rules.push({
+        id: 'rule_card_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        itemName: nm,
+        minQty: 1,
+        sellMode: 'min',
+        enabled: true
+      });
+      added.push(nm);
+      changed = true;
+    }
+    if (changed && !hadExistingCfg && !cfg.enabled) {
+      cfg.enabled = true;
     }
     if (changed) {
       try {
         if (typeof window.saveAutoMarketSellConfig === 'function') window.saveAutoMarketSellConfig();
-        else localStorage.setItem('pelican_auto_market_sell_cfg', JSON.stringify(cfg));
+        else {
+          const pid = window.__pmProfileId;
+          const rawStr = JSON.stringify(cfg);
+          localStorage.setItem('pelican_auto_market_sell_cfg', rawStr);
+          if (pid) localStorage.setItem('pelican_' + pid + '__auto_market_sell_cfg', rawStr);
+        }
       } catch (e) {}
       try {
+        const en = Boolean(cfg.enabled);
         const t1 = document.getElementById('p-autosell-toggle');
-        if (t1) t1.checked = true;
+        if (t1) t1.checked = en;
         const t2 = document.getElementById('p-autosell-toggle-hud');
-        if (t2) t2.checked = true;
+        if (t2) t2.checked = en;
         const badge = document.getElementById('p-subtab-autosell-count');
         if (badge) badge.innerText = String(cfg.rules.length);
         if (typeof window.renderAutoSellHudRulesHtml === 'function') {
@@ -286,6 +355,156 @@ function buildEnsureCardAutoSellSnippet(cardNames) {
     }
     return { changed, added, enabled: Boolean(cfg.enabled), rulesCount: cfg.rules.length };
   })()`;
+}
+
+function buildHealCardSellModeSnippet() {
+  return `(() => {
+    let cfg = (window.__autoMarketSellConfig && typeof window.__autoMarketSellConfig === 'object') ? window.__autoMarketSellConfig : null;
+    if (!cfg) {
+      try {
+        const pid = window.__pmProfileId;
+        const raw = (pid && localStorage.getItem('pelican_' + pid + '__auto_market_sell_cfg')) || localStorage.getItem('pelican_auto_market_sell_cfg') || '';
+        if (raw) cfg = JSON.parse(raw);
+      } catch (e) {}
+    }
+    if (!cfg || !Array.isArray(cfg.rules)) return { healedCount: 0 };
+    let healedCount = 0;
+    for (const r of cfg.rules) {
+      if (!r || !r.itemName) continue;
+      if (/\\bcard\\b|การ์ด/i.test(String(r.itemName).trim()) && (Number(r.minQty) || 1) === 1 && r.sellMode === 'all') {
+        r.sellMode = 'min';
+        healedCount++;
+      }
+    }
+    if (healedCount > 0) {
+      window.__autoMarketSellConfig = cfg;
+      try {
+        if (typeof window.saveAutoMarketSellConfig === 'function') window.saveAutoMarketSellConfig();
+        else {
+          const pid = window.__pmProfileId;
+          const rawStr = JSON.stringify(cfg);
+          localStorage.setItem('pelican_auto_market_sell_cfg', rawStr);
+          if (pid) localStorage.setItem('pelican_' + pid + '__auto_market_sell_cfg', rawStr);
+        }
+      } catch (e) {}
+      try {
+        if (typeof window.renderAutoSellHudRulesHtml === 'function') {
+          const hudBox = document.getElementById('p-autosell-hud-rules-container');
+          if (hudBox) hudBox.innerHTML = window.renderAutoSellHudRulesHtml();
+        }
+        if (typeof window.renderAutoSellRulesHtml === 'function') {
+          const modBox = document.getElementById('p-autosell-rules-container');
+          if (modBox) modBox.innerHTML = window.renderAutoSellRulesHtml();
+        }
+      } catch (e) {}
+    }
+    return { healedCount };
+  })()`;
+}
+
+function migrateCorruptedCardSellModesOnce({
+  autoSellStorePath = AUTOSELL_STORE_PATH,
+  browserStorageDir = BROWSER_STORAGE_DIR,
+  migrationFilePath = CARD_SELLMODE_MIGRATION_FILE
+} = {}) {
+  let migState = { storeMigratedAt: 0, affectedProfileIds: [], healedOnlineProfiles: {} };
+  try {
+    if (fs.existsSync(migrationFilePath)) {
+      const parsed = JSON.parse(fs.readFileSync(migrationFilePath, 'utf8'));
+      if (parsed && typeof parsed === 'object') {
+        migState = {
+          storeMigratedAt: Number(parsed.storeMigratedAt) || 0,
+          affectedProfileIds: Array.isArray(parsed.affectedProfileIds) ? parsed.affectedProfileIds : [],
+          healedOnlineProfiles: (parsed.healedOnlineProfiles && typeof parsed.healedOnlineProfiles === 'object') ? parsed.healedOnlineProfiles : {}
+        };
+      }
+    }
+  } catch (_) {}
+
+  if (migState.storeMigratedAt > 0) {
+    return { alreadyMigrated: true, healedRulesCount: 0, state: migState };
+  }
+
+  let healedRulesCount = 0;
+  const affectedSet = new Set();
+
+  // 1. Heal manager/data/autosell_configs.json
+  try {
+    if (fs.existsSync(autoSellStorePath)) {
+      const allStore = JSON.parse(fs.readFileSync(autoSellStorePath, 'utf8'));
+      if (allStore && typeof allStore === 'object') {
+        let storeDirty = false;
+        for (const [pid, cfg] of Object.entries(allStore)) {
+          if (!cfg || !Array.isArray(cfg.rules)) continue;
+          let pidDirty = false;
+          for (const r of cfg.rules) {
+            if (!r || !r.itemName) continue;
+            if (isCardItemName(r.itemName) && (Number(r.minQty) || 1) === 1 && r.sellMode === 'all') {
+              r.sellMode = 'min';
+              healedRulesCount++;
+              pidDirty = true;
+            }
+          }
+          if (pidDirty) {
+            cfg.updatedAt = Date.now();
+            affectedSet.add(pid);
+            storeDirty = true;
+          }
+        }
+        if (storeDirty) {
+          fs.writeFileSync(autoSellStorePath, JSON.stringify(allStore, null, 2), 'utf8');
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 2. Heal sessions/_browser_storage/*.json
+  try {
+    if (fs.existsSync(browserStorageDir)) {
+      for (const fn of fs.readdirSync(browserStorageDir)) {
+        if (!fn.endsWith('.json')) continue;
+        const pid = fn.slice(0, -5);
+        const bsFile = path.join(browserStorageDir, fn);
+        try {
+          const bsData = JSON.parse(fs.readFileSync(bsFile, 'utf8'));
+          if (!bsData || typeof bsData !== 'object') continue;
+          let bsDirty = false;
+          for (const key of [`pelican_${pid}__auto_market_sell_cfg`, 'pelican_auto_market_sell_cfg']) {
+            if (typeof bsData[key] !== 'string' || !bsData[key]) continue;
+            try {
+              const parsed = JSON.parse(bsData[key]);
+              if (parsed && Array.isArray(parsed.rules)) {
+                let kDirty = false;
+                for (const r of parsed.rules) {
+                  if (r && r.itemName && isCardItemName(r.itemName) && (Number(r.minQty) || 1) === 1 && r.sellMode === 'all') {
+                    r.sellMode = 'min';
+                    kDirty = true;
+                  }
+                }
+                if (kDirty) {
+                  bsData[key] = JSON.stringify(parsed);
+                  affectedSet.add(pid);
+                  bsDirty = true;
+                }
+              }
+            } catch (_) {}
+          }
+          if (bsDirty) {
+            fs.writeFileSync(bsFile, JSON.stringify(bsData, null, 2), 'utf8');
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
+  migState.storeMigratedAt = Date.now();
+  migState.affectedProfileIds = Array.from(affectedSet);
+  try {
+    fs.mkdirSync(path.dirname(migrationFilePath), { recursive: true });
+    fs.writeFileSync(migrationFilePath, JSON.stringify(migState, null, 2), 'utf8');
+  } catch (_) {}
+
+  return { alreadyMigrated: false, healedRulesCount, state: migState };
 }
 
 const BUSY_FLAGS = [
@@ -658,7 +877,7 @@ function buildHistoryBatchCode(cardItems, alsoSearchListingsForSingle = false) {
 
 // In-page snippet to switch the farm map once (one-time switch, never locks/overrides subsequent map changes or party sync)
 function buildSetOverrideMapCode(mapName, autoSellCards = []) {
-  const autoSellSnippet = buildEnsureCardAutoSellSnippet(autoSellCards);
+  const autoSellSnippet = buildEnsureCardAutoSellSnippet(autoSellCards, { explicitAssign: true });
   return `(() => {
     const rawMap = ${JSON.stringify(String(mapName || ''))};
     const clean = rawMap.replace(/\\s*\\(Lv\\..*?\\)/i, '').trim();
@@ -754,11 +973,25 @@ function createCardMarketService({
 }) {
   let localCache = loadLocalCache();
   let overridesStore = loadOverridesStore();
+  const cardSellModeMig = migrateCorruptedCardSellModesOnce();
+  const pendingLiveHealProfileIds = new Set(
+    (cardSellModeMig.state.affectedProfileIds || []).filter(pid => !cardSellModeMig.state.healedOnlineProfiles[pid])
+  );
   let scanning = false;
   let lastCentralSyncAt = 0;
   let lastManualRefreshAt = 0;
   let timer = null;
   const lastSyncedLiveAutoSell = new Map();
+
+  function markProfileLiveHealed(pid) {
+    if (!pid || !pendingLiveHealProfileIds.has(pid)) return;
+    pendingLiveHealProfileIds.delete(pid);
+    cardSellModeMig.state.healedOnlineProfiles[pid] = Date.now();
+    try {
+      fs.mkdirSync(path.dirname(CARD_SELLMODE_MIGRATION_FILE), { recursive: true });
+      fs.writeFileSync(CARD_SELLMODE_MIGRATION_FILE, JSON.stringify(cardSellModeMig.state, null, 2), 'utf8');
+    } catch (_) {}
+  }
 
   function mergePriceRows(rows) {
     if (!Array.isArray(rows) || rows.length === 0) return;
@@ -1100,14 +1333,24 @@ function createCardMarketService({
       const activeFarmMaps = [overrideFarmMap, targetMap, currentMap].filter(Boolean);
       const autoSellCards = resolveCardsForFarmMap(rawCards, activeFarmMaps, storedOv.cardId, storedOv.cardName);
 
+      if (online && p.debugPort && pendingLiveHealProfileIds.has(p.id)) {
+        evalProfilePort(p.debugPort, buildHealCardSellModeSnippet(), 4500)
+          .then((r) => {
+            if (r && r.result && typeof r.result.healedCount === 'number') {
+              markProfileLiveHealed(p.id);
+            }
+          })
+          .catch(() => {});
+      }
+
       if (autoSellCards.length > 0) {
-        const storeRes = ensureCardsInProfileAutoSellStore(p.id, autoSellCards, allAutoSellStore);
+        const storeRes = ensureCardsInProfileAutoSellStore(p.id, autoSellCards, allAutoSellStore, { explicitAssign: false });
         if (storeRes.changed) autoSellStoreDirty = true;
         if (online && p.debugPort) {
           const sig = `${p.debugPort}:${autoSellCards.join('|')}`;
           if (storeRes.changed || lastSyncedLiveAutoSell.get(p.id) !== sig) {
             lastSyncedLiveAutoSell.set(p.id, sig);
-            evalProfilePort(p.debugPort, buildEnsureCardAutoSellSnippet(autoSellCards), 4500).catch(() => {});
+            evalProfilePort(p.debugPort, buildEnsureCardAutoSellSnippet(autoSellCards, { explicitAssign: false }), 4500).catch(() => {});
           }
         }
       }
@@ -1244,7 +1487,7 @@ function createCardMarketService({
           };
           p.overrideFarmMap = cleanMap;
           if (autoSellCards.length > 0) {
-            const storeRes = ensureCardsInProfileAutoSellStore(p.id, autoSellCards, allAutoSellStore);
+            const storeRes = ensureCardsInProfileAutoSellStore(p.id, autoSellCards, allAutoSellStore, { explicitAssign: true });
             if (storeRes.changed) autoSellStoreDirty = true;
           }
         }
@@ -1399,4 +1642,10 @@ function createCardMarketService({
   };
 }
 
-module.exports = { createCardMarketService };
+module.exports = {
+  createCardMarketService,
+  ensureCardsInProfileAutoSellStore,
+  buildEnsureCardAutoSellSnippet,
+  migrateCorruptedCardSellModesOnce,
+  buildHealCardSellModeSnippet
+};

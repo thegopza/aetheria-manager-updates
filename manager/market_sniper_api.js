@@ -1486,11 +1486,13 @@ function createMarketSniperService({
             if (window.__autoMarketSellConfig.rules.length !== beforeLen) changedCardRule = true;
             for (const r of window.__autoMarketSellConfig.rules) {
               if (!r) continue;
+              const rid = String(r.id || '');
               const rName = String(r.itemName || r.name || '').trim();
               const rNorm = rName.toLowerCase();
-              const rKey = r.id || rNorm;
+              const rKey = rid || rNorm;
               const isCardOrStone = /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(rName);
-              if (isCardOrStone && (r.sellMode !== 'min' || Number(r.minQty) !== 1)) {
+              const isSniperManaged = rid.startsWith('rule_sniper_') || rid.startsWith('rule_relist_') || Boolean(activeFlipMap[rNorm]);
+              if (isSniperManaged && isCardOrStone && (r.sellMode !== 'min' || Number(r.minQty) !== 1)) {
                 r.sellMode = 'min';
                 r.minQty = 1;
                 changedCardRule = true;

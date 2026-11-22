@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "32f4b51b4c9ce0e6084d82c18ab5dfd6f305a576",
+  "sourceCommit": "320cc19c5f4282c1812b46c612958a8e3f1b25aa",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -24,7 +24,7 @@
     },
     {
       "path": "manager/card_market_api.js",
-      "sha256": "f8f079f5e3038573602c2327eaac40e3f2459dbf7b25e24fa4f27f4fa0949f44"
+      "sha256": "a0ab0605da473729214816d04f7c73041cc0e859549d0984d54b21ce29c5b6dd"
     },
     {
       "path": "manager/config_copy_api.js",
@@ -76,7 +76,7 @@
     },
     {
       "path": "manager/inventory_market_api.js",
-      "sha256": "7c32f2aac0db2bcf061b18f75117c04601256527ad1f525324b51fd17af7d4a0"
+      "sha256": "b8174634d38904159250f3665beef501e52aa92a1eb9edfb8bed89c925a00c0c"
     },
     {
       "path": "manager/local_human_check.js",
@@ -92,7 +92,7 @@
     },
     {
       "path": "manager/market_sniper_api.js",
-      "sha256": "ccb6ccfb5f3b5d2d3afc2281039ca6abac2ea7b4e00786ddc271e93b612f9f5a"
+      "sha256": "31cd779aa4346456ff87b534746c982969fe6ad94e78fd7a9547ea268c510c3f"
     },
     {
       "path": "manager/offline_coordinator.js",
@@ -208,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "c95113009d470aaefdd8c9b4b51883753908d1d36235cfbc715215d302637029"
+      "sha256": "3448517e63ec08988f1d3767f35f3655b355265a072b938bb73c3be41b136bd5"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -216,7 +216,7 @@
     },
     {
       "path": "manager/public/inventory_market.js",
-      "sha256": "38ffe1aae522174ce221b8aaa2aafc5d70632a4aabf8801fe8453fd9743175c8"
+      "sha256": "49bb033445cf0a625052fa19fe78c97cf71b8e6154a9b3a229c40d1196a0b759"
     },
     {
       "path": "manager/public/jail_manager.css",
@@ -288,7 +288,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "592094ba83f1c970d0b5775704b939237f37418ca54a99cb6c86e13df80d3875"
+      "sha256": "0ab57d69bf19b633352e2a79c176f55af3fe0ba4da9429de5a63380f8e4cbe61"
     },
     {
       "path": "manager/remote_fleet.js",

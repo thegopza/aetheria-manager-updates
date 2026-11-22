@@ -229,6 +229,16 @@ function buildAutoSellReadCode() {
         bagSummaryMap.set(key, cur);
       }
     }
+    const activeCountByNorm = {};
+    if (window.__lastMarketMine && Array.isArray(window.__lastMarketMine.active)) {
+      for (const a of window.__lastMarketMine.active) {
+        if (!a) continue;
+        const anm = String((a.item && a.item.name) || a.name || '').trim().toLowerCase();
+        if (anm) activeCountByNorm[anm] = (activeCountByNorm[anm] || 0) + 1;
+      }
+    } else if (window.__myMarketActiveNameCounts && typeof window.__myMarketActiveNameCounts === 'object') {
+      Object.assign(activeCountByNorm, window.__myMarketActiveNameCounts);
+    }
     const ruleStates = {};
     for (const r of rules) {
       if (!r || !r.id) continue;
@@ -265,7 +275,8 @@ function buildAutoSellReadCode() {
       const effectiveThreshold = reserveQty > 0
         ? ((r.sellMode === 'min' || threshold <= reserveQty) ? (reserveQty + threshold) : threshold)
         : threshold;
-      const ready = Boolean(nm && totalCount >= effectiveThreshold && sellableQty > 0);
+      const activeListedCount = Number(activeCountByNorm[norm]) || 0;
+      const ready = Boolean(nm && totalCount >= effectiveThreshold && sellableQty > 0 && !(r.sellMode === 'min' && activeListedCount >= 1));
       ruleStates[r.id] = {
         bagQty: totalCount,
         rawBagQty: rawBagCount,
@@ -273,6 +284,7 @@ function buildAutoSellReadCode() {
         reserveQty,
         sellableQty,
         effectiveThreshold,
+        activeListedCount,
         ready,
         icon: iconByName.get(norm) || ''
       };
@@ -2143,25 +2155,190 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
     const durSel2 = document.getElementById('p-autosell-duration-select-hud');
     if (durSel2) durSel2.value = String(gs.durationHours);
 
+    window.__pmUpdateMarketMineSnapshot = function(msg) {
+      if (!msg || !Array.isArray(msg.active)) return;
+      window.__lastMarketMine = msg;
+      window.__lastMarketMineCheckTs = Date.now();
+      window.__myMarketMineVerified = true;
+      window.__myMarketActiveCount = msg.active.length;
+      const counts = {};
+      for (const a of msg.active) {
+        if (!a) continue;
+        const nm = String((a.item && a.item.name) || a.name || '').trim().toLowerCase();
+        if (nm) counts[nm] = (counts[nm] || 0) + 1;
+      }
+      window.__myMarketActiveNameCounts = counts;
+    };
+
+    window.__pmRecordOptimisticMarketList = function(norm, itemName, qty, price, slotNum) {
+      if (!norm) return;
+      if (!window.__pmOptimisticListDedup) window.__pmOptimisticListDedup = {};
+      const dKey = norm + ':' + String(slotNum ?? '');
+      const nowTs = Date.now();
+      if ((window.__pmOptimisticListDedup[dKey] || 0) > nowTs) return;
+      window.__pmOptimisticListDedup[dKey] = nowTs + 3000;
+      if (!window.__myMarketActiveNameCounts) window.__myMarketActiveNameCounts = {};
+      window.__myMarketActiveNameCounts[norm] = (window.__myMarketActiveNameCounts[norm] || 0) + 1;
+      if (!window.__pmRecentMinListedUntil) window.__pmRecentMinListedUntil = {};
+      window.__pmRecentMinListedUntil[norm] = nowTs + 30000;
+      if (window.__lastMarketMine && Array.isArray(window.__lastMarketMine.active)) {
+        window.__lastMarketMine.active.push({
+          listingId: -nowTs,
+          qty: Number(qty) || 1,
+          price: Number(price) || 0,
+          item: { name: itemName || norm }
+        });
+        window.__myMarketActiveCount = window.__lastMarketMine.active.length;
+      }
+    };
+
     window.__pmHookMarketRoomSend = function(rm) {
-      if (!rm || typeof rm.send !== 'function' || rm.__pmMarketDurationHooked) return;
+      if (!rm || typeof rm.send !== 'function') return;
+      if (typeof rm.onMessage === 'function' && !rm.__pmMineSnapshotHooked) {
+        rm.__pmMineSnapshotHooked = true;
+        try {
+          rm.onMessage('market_mine', function(msg) {
+            if (typeof window.__pmUpdateMarketMineSnapshot === 'function') {
+              window.__pmUpdateMarketMineSnapshot(msg);
+            }
+          });
+        } catch (_) {}
+      }
+      if (rm.__pmMarketSendGuardHookedV2) return;
+      const hadDurationHook = Boolean(rm.__pmMarketDurationHooked);
       const origSend = rm.send.bind(rm);
       rm.send = function(type, payload, ...rest) {
         try {
-          if (type === 'market' && payload && typeof payload === 'object' && payload.op === 'list' && !window.__pmExplicitHoursOnce) {
-            const gHours = Number((window.__pmMarketGlobalSettings && window.__pmMarketGlobalSettings.durationHours) || (window.__autoMarketSellConfig && window.__autoMarketSellConfig.durationHours));
-            if ([12, 24, 48].includes(gHours)) {
-              payload = Object.assign({}, payload, { hours: gHours });
+          if (type === 'market' && payload && typeof payload === 'object' && payload.op === 'list') {
+            if (!hadDurationHook && !window.__pmExplicitHoursOnce) {
+              const gHours = Number((window.__pmMarketGlobalSettings && window.__pmMarketGlobalSettings.durationHours) || (window.__autoMarketSellConfig && window.__autoMarketSellConfig.durationHours));
+              if ([12, 24, 48].includes(gHours)) {
+                payload = Object.assign({}, payload, { hours: gHours });
+              }
+            }
+            const bag = (typeof window.getBagItems === 'function') ? window.getBagItems() : [];
+            const slotItem = bag.find(b => b && Number(b.slot) === Number(payload.slot));
+            const itemName = String((slotItem && slotItem.name) || '').trim();
+            const norm = itemName.toLowerCase();
+            if (norm && window.__isAutoSellingNow && !window.__pmAllowManualSingleRuleList) {
+              const rules = (window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) ? window.__autoMarketSellConfig.rules : [];
+              const matchedRule = rules.find(r => r && r.enabled !== false && String(r.itemName || '').trim().toLowerCase() === norm);
+              if (matchedRule && matchedRule.sellMode === 'min') {
+                const activeSame = (window.__myMarketActiveNameCounts && Number(window.__myMarketActiveNameCounts[norm])) || 0;
+                const recentUntil = (window.__pmRecentMinListedUntil && Number(window.__pmRecentMinListedUntil[norm])) || 0;
+                if (!window.__myMarketMineVerified || activeSame >= 1 || recentUntil > Date.now()) {
+                  console.log('%c[PmheeAether AutoSell] ⏸️ ข้ามการลงขายซ้ำ ' + itemName + ' (ตั้งขายทีละชิ้น: มีวางขายในตลาดอยู่แล้ว รอขายออกก่อน)', 'color: #f59e0b;');
+                  return;
+                }
+              }
+            }
+            if (norm && typeof window.__pmRecordOptimisticMarketList === 'function') {
+              window.__pmRecordOptimisticMarketList(norm, itemName, payload.qty, payload.price, payload.slot);
             }
           }
         } catch (_) {}
         return origSend(type, payload, ...rest);
       };
       rm.__pmMarketDurationHooked = true;
+      rm.__pmMarketSendGuardHookedV2 = true;
     };
 
     const curRoom = ${ROOM_JS};
     if (curRoom) window.__pmHookMarketRoomSend(curRoom);
+
+    if (window.__pmMinSellRuntimePatchVer !== 1) {
+      window.__pmMinSellRuntimePatchVer = 1;
+      window.fetchMyMarketActiveCount = async function() {
+        const room = ${ROOM_JS};
+        if (room) window.__pmHookMarketRoomSend(room);
+        if (!room || !room.connection?.isOpen) return window.__myMarketActiveCount || 0;
+        return await new Promise((resolve) => {
+          let done = false;
+          const timer = setTimeout(() => {
+            if (!done) {
+              done = true;
+              if (typeof unsub === 'function') unsub();
+              if (Date.now() - (Number(window.__lastMarketMineCheckTs) || 0) > 90000) {
+                window.__myMarketMineVerified = false;
+              }
+              resolve(window.__myMarketActiveCount || 0);
+            }
+          }, 3500);
+          const unsub = room.onMessage('market_mine', (msg) => {
+            if (!done) {
+              done = true;
+              clearTimeout(timer);
+              if (typeof unsub === 'function') unsub();
+              const active = (msg && Array.isArray(msg.active)) ? msg.active : [];
+              if (typeof window.__pmUpdateMarketMineSnapshot === 'function') {
+                window.__pmUpdateMarketMineSnapshot(msg || { active });
+              }
+              const maxQuota = (typeof window.getEffectiveMarketMaxListings === 'function') ? window.getEffectiveMarketMaxListings() : 3;
+              const badge = document.getElementById('p-autosell-quota-badge');
+              if (badge) badge.innerText = 'โควตา: ' + active.length + '/' + maxQuota + ' รายการ';
+              const badgeHud = document.getElementById('p-autosell-quota-badge-hud');
+              if (badgeHud) badgeHud.innerText = 'โควตา: ' + active.length + '/' + maxQuota;
+              resolve(active.length);
+            }
+          });
+          room.send('market', { op: 'mine' });
+        });
+      };
+
+      if (typeof window.sellSingleRuleNow === 'function' && !window.sellSingleRuleNow.__pmManualWrapped) {
+        const origSingle = window.sellSingleRuleNow;
+        const wrappedSingle = async function(ruleId) {
+          window.__pmAllowManualSingleRuleList = true;
+          try {
+            return await origSingle.apply(this, arguments);
+          } finally {
+            window.__pmAllowManualSingleRuleList = false;
+          }
+        };
+        wrappedSingle.__pmManualWrapped = true;
+        window.sellSingleRuleNow = wrappedSingle;
+      }
+
+      if (typeof window.runAutoMarketSellCycle === 'function' && !window.runAutoMarketSellCycle.__pmMinWrapped) {
+        const origCycle = window.runAutoMarketSellCycle;
+        const wrappedCycle = async function(manual = false) {
+          const room = ${ROOM_JS};
+          if (room) window.__pmHookMarketRoomSend(room);
+          const cfg = window.__autoMarketSellConfig;
+          if (cfg && (cfg.enabled || manual) && (manual || window.__isBotRunning) && !window.__isAutoSellingNow) {
+            try { await window.fetchMyMarketActiveCount(); } catch (_) {}
+            if (!window.__autoSellRuleBackoffUntil) window.__autoSellRuleBackoffUntil = {};
+            if (!(window.__pmMinHoldBackoffKeys instanceof Set)) window.__pmMinHoldBackoffKeys = new Set();
+            const nowTs = Date.now();
+            const counts = window.__myMarketActiveNameCounts || {};
+            const recentMap = window.__pmRecentMinListedUntil || {};
+            for (const r of (cfg.rules || [])) {
+              if (!r || !r.itemName || r.enabled === false) continue;
+              const norm = String(r.itemName).trim().toLowerCase();
+              const rKey = r.id || norm;
+              if (r.sellMode === 'min') {
+                const alreadyActive = !window.__myMarketMineVerified || (Number(counts[norm]) || 0) >= 1 || (Number(recentMap[norm]) || 0) > nowTs;
+                if (alreadyActive) {
+                  if ((window.__autoSellRuleBackoffUntil[rKey] || 0) < nowTs + 22000) {
+                    window.__autoSellRuleBackoffUntil[rKey] = nowTs + 22000;
+                    window.__pmMinHoldBackoffKeys.add(rKey);
+                  }
+                } else if (window.__pmMinHoldBackoffKeys.has(rKey)) {
+                  delete window.__autoSellRuleBackoffUntil[rKey];
+                  window.__pmMinHoldBackoffKeys.delete(rKey);
+                }
+              } else if (window.__pmMinHoldBackoffKeys.has(rKey)) {
+                delete window.__autoSellRuleBackoffUntil[rKey];
+                window.__pmMinHoldBackoffKeys.delete(rKey);
+              }
+            }
+          }
+          return await origCycle.call(this, manual);
+        };
+        wrappedCycle.__pmMinWrapped = true;
+        window.runAutoMarketSellCycle = wrappedCycle;
+      }
+    }
 
     if (!window.__pmSniperProtectedItems) window.__pmSniperProtectedItems = new Set();
     if (typeof window.isSellWhitelisted === 'function' && !window.__pmSniperWlHooked) {
@@ -2568,7 +2745,12 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
               })
             : null;
 
-          const maxConcurrent = isSingle ? 2 : (userRule ? 20 : 3);
+          const isCardName = /\\bcard\\b|การ์ด/i.test(String(sampleItem.name || entry.itemName || ''));
+          const isMinRule = Boolean(userRule && userRule.sellMode === 'min') || (isCardName && !(userRule && userRule.sellMode === 'all'));
+          const maxConcurrent = isMinRule ? 1 : (isSingle ? 2 : (userRule ? 20 : 3));
+          if (isMinRule && activeSameCount >= 1) {
+            continue;
+          }
           // If Sniper already manages this flipped item and at least 1 active batch is up, or if activeSameCount >= maxConcurrent,
           // do NOT post duplicate batches from the cancelled-relist queue (Sniper's 3b drip-restock handles remaining stock).
           if (!userRule && (activeSameCount >= maxConcurrent || (!isSingle && sniperRef > 0 && activeSameCount >= 1))) {
@@ -2583,9 +2765,11 @@ function buildMarketGlobalRuntimeSnippet(globalSettings) {
                     ? (unitPrice >= 20000 ? 10 : (unitPrice >= 8000 ? 25 : (unitPrice >= 1800 ? 50 : 100)))
                     : Math.max(1, Number(entry.qty) || sellableTotal)));
 
-          const postsWanted = isSingle
-            ? Math.min(Math.max(0, maxConcurrent - activeSameCount), sellableTotal)
-            : 1;
+          const postsWanted = isMinRule
+            ? (activeSameCount >= 1 ? 0 : 1)
+            : (isSingle
+                ? Math.min(Math.max(0, maxConcurrent - activeSameCount), sellableTotal)
+                : 1);
 
           if (postsWanted <= 0) {
             continue;
@@ -4176,6 +4360,7 @@ async function handleInventoryMarketRoute(req, res, pathname, ctx) {
           await evalProfilePort(profile.debugPort, buildAutoSellSaveCode(cleanCfg, { allowEmptyOverwrite: false }), 4000).catch(() => {});
         }
         const checkCode = `(async () => {
+          ${buildMarketGlobalRuntimeSnippet(loadGlobalMarketSettings())};
           if (typeof window.runAutoMarketSellCycle === 'function') {
             await window.runAutoMarketSellCycle(true);
           }

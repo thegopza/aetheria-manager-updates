@@ -271,8 +271,12 @@ function isNpcVendorTrashItem(itemOrObj) {
 // - Ores & refine stones (< 1,800 z/unit, e.g. Enriched Elunium, Enriched Oridecon, Oridecon, Elunium, Mythril Ore): qty 100, up to 3 concurrent
 function getSmartFlipBatchConfig(itemName, unitPrice, isSingle = false) {
   const norm = String(itemName || '').trim().toLowerCase();
-  const single = Boolean(isSingle || /\bcard\b|\bstone\s*\(|การ์ด|ศิลา/i.test(norm));
+  const isCard = /\bcard\b|การ์ด/i.test(norm);
+  const single = Boolean(isSingle || isCard || /\bstone\s*\(|ศิลา/i.test(norm));
   const u = Math.max(1, Number(unitPrice) || 1);
+  if (isCard) {
+    return { batchQty: 1, maxConcurrent: 1, isSingle: true };
+  }
   if (single || u >= 100000) {
     return { batchQty: 1, maxConcurrent: 2, isSingle: true };
   }
@@ -1036,7 +1040,16 @@ function createMarketSniperService({
       };
       window.__pmGetSmartFlipBatchConfig = function (itemName, unitPrice, isSingle, fromSniperFlip) {
         const norm = String(itemName || '').trim().toLowerCase();
-        const single = Boolean(isSingle || /\\bcard\\b|\\bstone\\s*\\(|การ์ด|ศิลา/i.test(norm));
+        const isCard = /\\bcard\\b|การ์ด/i.test(norm);
+        const single = Boolean(isSingle || isCard || /\\bstone\\s*\\(|ศิลา/i.test(norm));
+        const asRules = (window.__autoMarketSellConfig && Array.isArray(window.__autoMarketSellConfig.rules)) ? window.__autoMarketSellConfig.rules : [];
+        const userRule = norm ? asRules.find(r => r && r.enabled !== false && String(r.itemName || r.name || '').trim().toLowerCase() === norm) : null;
+        if (userRule && userRule.sellMode === 'min') {
+          return { batchQty: Math.max(1, Number(userRule.minQty) || 1), maxConcurrent: 1, isSingle: single };
+        }
+        if (isCard && !(userRule && userRule.sellMode === 'all')) {
+          return { batchQty: 1, maxConcurrent: 1, isSingle: true };
+        }
         if (!single && !fromSniperFlip) {
           if (!window.__pmSniperAutoFlipEnabled || (typeof window.__pmHasUserAutoSellRule === 'function' && window.__pmHasUserAutoSellRule(norm))) {
             return { batchQty: 999999, maxConcurrent: 20, isSingle: false };

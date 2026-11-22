@@ -15,6 +15,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { loadGlobalMarketSettings, buildMarketGlobalRuntimeSnippet } = require('./inventory_market_api');
 
 const CACHE_FILE = path.join(__dirname, 'data', 'card_market_cache.json');
 const OVERRIDES_FILE = path.join(__dirname, 'data', 'card_farm_overrides.json');
@@ -263,7 +264,9 @@ function ensureCardsInProfileAutoSellStore(profileId, cardNames, preloadedAllSto
 function buildEnsureCardAutoSellSnippet(cardNames, options = {}) {
   const cleanNames = Array.isArray(cardNames) ? cardNames.map(s => String(s || '').trim()).filter(Boolean) : [];
   const explicitAssign = Boolean(options && options.explicitAssign);
+  const globalRuntimeSnippet = buildMarketGlobalRuntimeSnippet(loadGlobalMarketSettings());
   return `(() => {
+    try { ${globalRuntimeSnippet}; } catch (_) {}
     const targetCards = ${JSON.stringify(cleanNames)};
     const explicitAssign = ${JSON.stringify(explicitAssign)};
     if (!targetCards.length) return { changed: false, added: [], rulesCount: 0 };
@@ -358,7 +361,9 @@ function buildEnsureCardAutoSellSnippet(cardNames, options = {}) {
 }
 
 function buildHealCardSellModeSnippet() {
+  const globalRuntimeSnippet = buildMarketGlobalRuntimeSnippet(loadGlobalMarketSettings());
   return `(() => {
+    try { ${globalRuntimeSnippet}; } catch (_) {}
     let cfg = (window.__autoMarketSellConfig && typeof window.__autoMarketSellConfig === 'object') ? window.__autoMarketSellConfig : null;
     if (!cfg) {
       try {

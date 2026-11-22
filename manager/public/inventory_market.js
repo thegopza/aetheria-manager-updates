@@ -1864,8 +1864,16 @@
     const bagQty = rs ? (Number(rs.bagQty) || 0) : 0;
     const reserveQty = rs ? (Number(rs.reserveQty) || 0) : 0;
     const sellableQty = rs ? (Number(rs.sellableQty) || 0) : bagQty;
+    const activeListedCount = rs ? (Number(rs.activeListedCount) || 0) : 0;
     const threshold = Math.max(1, Number(rule.minQty) || 1);
     const effThreshold = rs && rs.effectiveThreshold ? rs.effectiveThreshold : threshold;
+
+    if (rule.sellMode === 'min' && activeListedCount >= 1) {
+      if (bagQty > 0) {
+        return `<span class="im-as-status wait" title="วางขายในตลาดอยู่แล้ว ${activeListedCount} รายการ — ระบบจะรอให้ขายออกก่อนแล้วค่อยลงชิ้นถัดไปอัตโนมัติ">🏷️ วางขายอยู่ ${activeListedCount} (ในตัวเหลือ ${bagQty.toLocaleString()} • รอขายออก)</span>`;
+      }
+      return `<span class="im-as-status wait" title="กำลังวางขายอยู่ในตลาดกลาง ${activeListedCount} รายการ">🏷️ กำลังวางขายในตลาด (${activeListedCount} รายการ)</span>`;
+    }
 
     if (bagQty <= 0) {
       if (rs && Number(rs.rawBagQty) > 0 && rs.blockedReason) {

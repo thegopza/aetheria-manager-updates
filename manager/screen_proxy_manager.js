@@ -324,6 +324,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   const poolFile = path.join(dataDir, 'screen_proxy_pool.json');
   const leasesFile = path.join(dataDir, 'screen_proxy_leases.json');
   const blockedFile = path.join(dataDir, 'screen_proxy_blocked.json');
+  const cooldownsFile = path.join(dataDir, 'screen_proxy_cooldowns.json');
   const billingFile = path.join(dataDir, 'screen_proxy_billing.json');
   const localCustomGroupsFile = path.join(dataDir, 'screen_proxy_custom_groups.json');
   const assetCache = providedAssetCache || createAssetCache({ dataDir, now });
@@ -655,12 +656,83 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     return Boolean(getProxyBlockInfo(proxyOrLease));
   }
 
+  const pendingJailCooldownSync = new Map(); // syncKey -> payload for owner-host when offline during jail
+
+  function saveJailCooldowns() {
+    try {
+      const nowMs = now();
+      const entries = {};
+      for (const [k, untilMs] of Array.from(jailCooldowns.entries())) {
+        if (untilMs && untilMs > nowMs) entries[k] = untilMs;
+        else jailCooldowns.delete(k);
+      }
+      const pending = {};
+      for (const [k, item] of Array.from(pendingJailCooldownSync.entries())) {
+        if (item && Number(item.cooldownUntilMs) > nowMs) pending[k] = item;
+        else pendingJailCooldownSync.delete(k);
+      }
+      writeJson(cooldownsFile, {
+        machineHwid: currentMachineHwid,
+        updatedAt: nowMs,
+        entries,
+        pending
+      });
+    } catch (_) {}
+  }
+
+  try {
+    const savedCd = readJson(cooldownsFile, null);
+    if (savedCd && typeof savedCd === 'object' && (!savedCd.machineHwid || savedCd.machineHwid === currentMachineHwid)) {
+      const nowMs = now();
+      if (savedCd.entries && typeof savedCd.entries === 'object') {
+        for (const [k, untilMs] of Object.entries(savedCd.entries)) {
+          if (k && Number(untilMs) > nowMs) jailCooldowns.set(k, Number(untilMs));
+        }
+      }
+      if (savedCd.pending && typeof savedCd.pending === 'object') {
+        for (const [k, item] of Object.entries(savedCd.pending)) {
+          if (k && item && typeof item === 'object' && Number(item.cooldownUntilMs) > nowMs) {
+            pendingJailCooldownSync.set(k, item);
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  async function flushPendingJailCooldownSync() {
+    if (pendingJailCooldownSync.size === 0 || typeof solver?.serviceRequest !== 'function') return;
+    const nowMs = now();
+    let changed = false;
+    for (const [k, item] of Array.from(pendingJailCooldownSync.entries())) {
+      if (!item || Number(item.cooldownUntilMs) <= nowMs) {
+        pendingJailCooldownSync.delete(k);
+        changed = true;
+        continue;
+      }
+      try {
+        const res = await solver.serviceRequest('/v1/aetheria/proxy/screen-block', item.payload);
+        if (res && res.success) {
+          pendingJailCooldownSync.delete(k);
+          changed = true;
+        }
+      } catch (_) {
+        break;
+      }
+    }
+    if (changed) saveJailCooldowns();
+  }
+
   function isProxyOnJailCooldown(proxyOrLease) {
     if (!proxyOrLease || jailCooldowns.size === 0) return false;
     const nowMs = now();
+    let expiredAny = false;
     for (const [k, untilMs] of Array.from(jailCooldowns.entries())) {
-      if (!untilMs || untilMs <= nowMs) jailCooldowns.delete(k);
+      if (!untilMs || untilMs <= nowMs) {
+        jailCooldowns.delete(k);
+        expiredAny = true;
+      }
     }
+    if (expiredAny) saveJailCooldowns();
     if (jailCooldowns.size === 0) return false;
     const proxyId = String(proxyOrLease.proxyId || '').trim();
     const ip = String(proxyOrLease.labelIp || proxyOrLease.ip || proxyOrLease.host || proxyOrLease.proxyHost || '').trim().toLowerCase();
@@ -672,7 +744,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   }
 
   function getExcludedProxyFilters() {
-    if (blockedProxies.size === 0) return {};
+    if (blockedProxies.size === 0 && jailCooldowns.size === 0) return {};
     const excludeProxyIds = [];
     const excludeHosts = [];
     for (const b of blockedProxies.values()) {
@@ -685,6 +757,29 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       const port = Number(b.port) || 0;
       if (host) excludeHosts.push(port ? `${host}:${port}` : host);
       if (ip && ip !== host) excludeHosts.push(ip);
+    }
+    if (jailCooldowns.size > 0) {
+      const nowMs = now();
+      const activeIds = new Set();
+      const activeIps = new Set();
+      for (const l of activeLeases.values()) {
+        if (!l) continue;
+        if (l.proxyId) activeIds.add(String(l.proxyId).trim());
+        const lIp = String(l.ip || l.proxyHost || '').trim().toLowerCase();
+        if (lIp) activeIps.add(lIp);
+      }
+      for (const [k, untilMs] of Array.from(jailCooldowns.entries())) {
+        if (!untilMs || untilMs <= nowMs) {
+          jailCooldowns.delete(k);
+          continue;
+        }
+        if (k.startsWith('ip:')) {
+          const ip = k.slice(3).trim().toLowerCase();
+          if (ip && !activeIps.has(ip)) excludeHosts.push(ip);
+        } else if (/^[A-Za-z0-9_-]{1,128}$/.test(k) && !activeIds.has(k)) {
+          excludeProxyIds.push(k);
+        }
+      }
     }
     const out = {};
     if (excludeProxyIds.length > 0) out.excludeProxyIds = Array.from(new Set(excludeProxyIds));
@@ -1386,6 +1481,14 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
           host: found.host || found.labelIp || '',
           port: Number(found.port) || 0
         };
+      } else if (sId) {
+        // In owner-queue mode, local proxies[] is empty, so preserve sId directly so owner-host can cool down this proxy_id!
+        targetProxy = {
+          proxyId: String(sId).trim(),
+          labelIp: String(meta?.ip || meta?.host || '').trim(),
+          host: String(meta?.host || meta?.ip || '').trim(),
+          port: Number(meta?.port) || 0
+        };
       }
     } else if (meta && (meta.proxyId || meta.ip || meta.host)) {
       targetProxy = {
@@ -1417,23 +1520,35 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     if (targetProxy.host) jailCooldowns.set(`ip:${String(targetProxy.host).toLowerCase()}`, cooldownUntilMs);
 
     const reasonText = String(meta.reason || 'ตัวละครถูกดึงเข้าคุก').trim();
+    const blockPayload = {
+      machineId: getMachineId(),
+      proxyId: targetProxy.proxyId || undefined,
+      ip: targetProxy.labelIp || targetProxy.host || undefined,
+      labelIp: targetProxy.labelIp || targetProxy.host || undefined,
+      host: targetProxy.host || targetProxy.labelIp || undefined,
+      proxyHost: targetProxy.host || targetProxy.labelIp || undefined,
+      port: targetProxy.port || undefined,
+      proxyPort: targetProxy.port || undefined,
+      reason: reasonText,
+      trigger: 'jailed',
+      triggerType: 'jailed',
+      profileId: pid || undefined,
+      charName: String(meta.charName || '').trim() || undefined
+    };
+    const syncKey = targetProxy.proxyId || `ip:${String(targetProxy.labelIp || targetProxy.host || '').toLowerCase()}`;
+    let syncedToServer = false;
     if (typeof solver?.serviceRequest === 'function') {
-      await solver.serviceRequest('/v1/aetheria/proxy/screen-block', {
-        machineId: getMachineId(),
-        proxyId: targetProxy.proxyId || undefined,
-        ip: targetProxy.labelIp || targetProxy.host,
-        labelIp: targetProxy.labelIp || targetProxy.host,
-        host: targetProxy.host || targetProxy.labelIp,
-        proxyHost: targetProxy.host || targetProxy.labelIp,
-        port: targetProxy.port || undefined,
-        proxyPort: targetProxy.port || undefined,
-        reason: reasonText,
-        trigger: 'jailed',
-        triggerType: 'jailed',
-        profileId: pid || undefined,
-        charName: String(meta.charName || '').trim() || undefined
-      }).catch(() => {});
+      try {
+        const srvRes = await solver.serviceRequest('/v1/aetheria/proxy/screen-block', blockPayload);
+        syncedToServer = Boolean(srvRes && srvRes.success);
+      } catch (_) {
+        syncedToServer = false;
+      }
     }
+    if (!syncedToServer && syncKey) {
+      pendingJailCooldownSync.set(syncKey, { cooldownUntilMs, payload: blockPayload });
+    }
+    saveJailCooldowns();
 
     return {
       success: true,
@@ -2264,6 +2379,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
     if (settings.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
       try {
+        await flushPendingJailCooldownSync().catch(() => {});
         const excludedFilters = getExcludedProxyFilters();
         let res = null;
         let lastErr = null;
@@ -2667,13 +2783,21 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     };
   }
 
-  async function releaseProfile(profileId) {
+  async function releaseProfile(profileId, reason = '') {
+    const isDeleted = reason === 'deleted' || reason === 'identity_changed';
     const hadLease = activeLeases.has(profileId);
+    const hadSticky = stickyHistory.has(profileId);
     activeLeases.delete(profileId);
+    if (isDeleted) {
+      stickyHistory.delete(profileId);
+      rotatedStickyOverrides.delete(profileId);
+    }
     saveStickyHistory();
     syncDaemonState().catch(() => {});
     resetProfileSockets(profileId);
-    if (hadLease && typeof solver?.serviceRequest === 'function') {
+    const settings = loadSettings();
+    const shouldNotifyServer = hadLease || (isDeleted && (hadSticky || (settings.enabled && settings.mode === 'owner-queue')));
+    if (shouldNotifyServer && typeof solver?.serviceRequest === 'function') {
       solver.serviceRequest('/v1/aetheria/proxy/screen-release', {
         machineId: getMachineId(),
         profileIds: [profileId]
@@ -3517,6 +3641,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
     if (settings.mode === 'owner-queue' && typeof solver?.serviceRequest === 'function') {
       try {
+        await flushPendingJailCooldownSync().catch(() => {});
         const excludedFilters = getExcludedProxyFilters();
         const r = await solver.serviceRequest('/v1/aetheria/proxy/screen-status', {
           machineId: getMachineId(),

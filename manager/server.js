@@ -540,6 +540,67 @@ function recordDeletedProfileIds(ids) {
     writeJsonAtomic(DELETED_PROFILES_FILE, Array.from(set));
   } catch (_) {}
 }
+function removeDeletedProfileIds(ids) {
+  if (!Array.isArray(ids) || !ids.length) return;
+  try {
+    const set = loadDeletedProfileIds();
+    let changed = false;
+    for (const id of ids) {
+      if (id && set.delete(String(id))) changed = true;
+    }
+    if (changed) writeJsonAtomic(DELETED_PROFILES_FILE, Array.from(set));
+  } catch (_) {}
+}
+function isProfileMarkedJailedOrBanned(p) {
+  if (!p || typeof p !== "object") return false;
+  if (p.isJailed || p.isBanned) return true;
+  const checkMap = (m) => {
+    const s = String(m || "").trim();
+    if (!s || /คุกใต้ดิน/i.test(s)) return false;
+    return /คุก|เรือนจำ|\bprison\b|\bjail\b/i.test(s);
+  };
+  if (checkMap(p.jailedMap)) return true;
+  if (p.liveState && (p.liveState.accountBanned || p.liveState.charSelectInJail || checkMap(p.liveState.map))) return true;
+  return false;
+}
+function writeCleanProfileAuthStorage(pid, { username = "", password = "", charName = "", generatedUser = false } = {}) {
+  if (!pid) return;
+  try {
+    const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
+    fs.mkdirSync(bsDir, { recursive: true });
+    const bsFile = path.join(bsDir, `${pid}.json`);
+    let bsData = {};
+    if (fs.existsSync(bsFile)) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(bsFile, "utf8"));
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) bsData = parsed;
+      } catch (_) {}
+    }
+    delete bsData["__ss:aetheria.session"];
+    delete bsData["pelican_auth_cfg"];
+    const now = Date.now();
+    const u = String(username || "").trim();
+    const pw = String(password || "").trim();
+    if (u || pw) {
+      bsData[`pelican_${pid}__auth_cfg`] = JSON.stringify({
+        enabled: Boolean(u && pw),
+        username: u,
+        password: pw,
+        charName: String(charName || "").trim(),
+        register: false,
+        registerDone: Boolean(u && pw),
+        generatedUser: Boolean(generatedUser),
+        lastManagerPushAt: now,
+        forceManagerAuthAt: now,
+        userEditedAt: 0,
+        verifiedLoginAt: 0
+      });
+    } else {
+      delete bsData[`pelican_${pid}__auth_cfg`];
+    }
+    writeJsonAtomic(bsFile, bsData);
+  } catch (_) {}
+}
 
 function isVerifiedAuthConfig(auth) {
   if (!auth || typeof auth !== "object") return false;
@@ -5855,7 +5916,7 @@ const screenProxy = createScreenProxyManager({
   loadProfiles
 });
 // Browser mode: game windows in one real Chrome / Edge instead of one Electron app each (manager/browser_mode.js)
-const browserMode = createBrowserMode({ rootDir: path.resolve(__dirname, ".."), sessionsDir: SESSIONS_DIR, getSettings: () => installer.loadSettings(), loadProfiles, ...(TEST_INSTANCE?{cdpPort:testCdpPort,browserUserDataDir:path.join(SESSIONS_DIR,'_isolated_test_browser')}:{ }), profileScriptSource:id=>scriptCoordinator.profileScriptSource(id), screenProxy });
+const browserMode = createBrowserMode({ rootDir: path.resolve(__dirname, ".."), sessionsDir: SESSIONS_DIR, getSettings: () => installer.loadSettings(), loadProfiles, isProfileDeleted: id => loadDeletedProfileIds().has(String(id)), ...(TEST_INSTANCE?{cdpPort:testCdpPort,browserUserDataDir:path.join(SESSIONS_DIR,'_isolated_test_browser')}:{ }), profileScriptSource:id=>scriptCoordinator.profileScriptSource(id), screenProxy });
 if (typeof screenProxy.setCustomIpGroupsProvider === "function") {
   screenProxy.setCustomIpGroupsProvider(() => browserMode.getCustomIpDeviceConfig());
 }
@@ -7008,31 +7069,59 @@ function buildLocalProfileBackupPayload() {
 function applyProfileBackupPayload(data, options = {}) {
   if (!data || typeof data !== "object") return { restoredProfiles: 0, restoredCredentials: 0 };
   const replaceExisting = Boolean(options && options.replaceExisting);
+  const explicitUserImport = Boolean(options && options.explicitUserImport);
   const rawList = Array.isArray(data.profiles) ? data.profiles : [];
   if (rawList.length === 0) return { restoredProfiles: 0, restoredCredentials: 0 };
   const existing = loadProfiles() || [];
   const existingById = new Map(existing.map(p => [p.id, p]));
   const deletedIds = loadDeletedProfileIds();
+  const unpurgedIds = [];
+  const taintedReplacedIds = [];
   const merged = [];
   const seenIds = new Set();
   let restoredCredentials = 0;
   const credsObj = (data.credentials && typeof data.credentials === "object") ? data.credentials : {};
+  const now = Date.now();
 
   for (const item of rawList) {
     if (!item || typeof item !== "object") continue;
     const base = (item.profile && typeof item.profile === "object") ? { ...item.profile } : { ...item };
     const id = String(base.id || item.id || item.profileId || "").trim();
-    if (!id || seenIds.has(id) || deletedIds.has(id)) continue;
+    if (!id || seenIds.has(id)) continue;
+    if (deletedIds.has(id)) {
+      if (!explicitUserImport) continue;
+      deletedIds.delete(id);
+      unpurgedIds.push(id);
+    }
     const prev = replaceExisting ? {} : (existingById.get(id) || {});
     const username = String(item.username || item.account || base.account || base.username || (credsObj[id] && credsObj[id].username) || prev.account || prev.username || "").trim();
     const password = String(item.password || (credsObj[id] && credsObj[id].password) || "").trim();
-    const charName = String(item.characterName || base.lastCharName || prev.lastCharName || "").trim();
+    const prevAccount = String(prev.account || prev.username || "").trim();
+    const accountReplaced = Boolean(username && prevAccount && username.toLowerCase() !== prevAccount.toLowerCase());
+    if (accountReplaced && isProfileMarkedJailedOrBanned(prev)) {
+      taintedReplacedIds.push(id);
+    }
+    const charName = accountReplaced
+      ? String(item.characterName || base.lastCharName || "").trim()
+      : String(item.characterName || base.lastCharName || prev.lastCharName || "").trim();
     const finalName = String(item.name || base.name || prev.name || id).trim();
     // Skip blank unconfigured Client X shells when restoring from backup
     if (!username && !charName && /^Client \d+$/i.test(finalName)) continue;
     seenIds.add(id);
     delete base.password;
     delete base.liveState;
+    if (explicitUserImport || accountReplaced) {
+      delete base.isJailed;
+      delete base.jailedAt;
+      delete base.jailedMap;
+      delete base.jailAutoStopped;
+      delete base.jailDismissedAt;
+      delete base.jailIpBlocked;
+      delete base.isBanned;
+      delete base.bannedAt;
+      delete base.banReason;
+      delete base.banDismissedAt;
+    }
     const finalProfile = {
       ...prev,
       ...base,
@@ -7042,11 +7131,44 @@ function applyProfileBackupPayload(data, options = {}) {
       ...(username ? { account: username, username } : {}),
       ...(charName ? { lastCharName: charName } : {})
     };
+    if (explicitUserImport || accountReplaced) {
+      delete finalProfile.isJailed;
+      delete finalProfile.jailedAt;
+      delete finalProfile.jailedMap;
+      delete finalProfile.jailAutoStopped;
+      delete finalProfile.jailDismissedAt;
+      delete finalProfile.jailIpBlocked;
+      delete finalProfile.isBanned;
+      delete finalProfile.bannedAt;
+      delete finalProfile.banReason;
+      delete finalProfile.banDismissedAt;
+      if (accountReplaced && !charName) delete finalProfile.lastCharName;
+      if (username && (password || credentials.getPassword(id))) {
+        finalProfile.autoRegister = false;
+        finalProfile.loginSyncPending = true;
+        finalProfile.lastAuthSyncPushAt = now;
+        finalProfile.identityChangedAt = now;
+      }
+    }
     merged.push(finalProfile);
     if (password) {
       credentials.setPassword(id, password);
       restoredCredentials++;
     }
+    const effectivePw = password || credentials.getPassword(id) || "";
+    if ((explicitUserImport || accountReplaced) && username && effectivePw) {
+      writeCleanProfileAuthStorage(id, {
+        username,
+        password: effectivePw,
+        charName: finalProfile.lastCharName || "",
+        generatedUser: Boolean(finalProfile.generatedAccount)
+      });
+    }
+  }
+
+  if (unpurgedIds.length > 0) {
+    removeDeletedProfileIds(unpurgedIds);
+    try { browserMode?.unpurgeProfiles?.(unpurgedIds); } catch (_) {}
   }
 
   for (const [id, cred] of Object.entries(credsObj)) {
@@ -7054,18 +7176,44 @@ function applyProfileBackupPayload(data, options = {}) {
     if (cred && cred.password && seenIds.has(id) && !credentials.getPassword(id)) {
       credentials.setPassword(id, String(cred.password));
       restoredCredentials++;
+      if (explicitUserImport) {
+        const targetProf = merged.find(x => x && x.id === id);
+        if (targetProf && targetProf.account) {
+          writeCleanProfileAuthStorage(id, {
+            username: targetProf.account,
+            password: String(cred.password),
+            charName: targetProf.lastCharName || "",
+            generatedUser: Boolean(targetProf.generatedAccount)
+          });
+        }
+      }
     }
   }
 
+  if (taintedReplacedIds.length > 0) {
+    for (const tid of taintedReplacedIds) {
+      try {
+        screenProxy?.markProxyJailCooldownForProfile?.(tid, { reason: "นำเข้าไอดีใหม่ทับโปรไฟล์ที่เคยติดคุก/โดนแบน" })?.catch?.(() => {});
+        screenProxy?.releaseProfile?.(tid, "identity_changed")?.catch?.(() => {});
+      } catch (_) {}
+    }
+    try { browserMode?.markProfilesDeviceTainted?.(taintedReplacedIds); } catch (_) {}
+  }
+
   if (replaceExisting) {
+    const purgedOldIds = [];
     for (const oldP of existing) {
       if (oldP && oldP.id && !seenIds.has(oldP.id)) {
+        purgedOldIds.push(oldP.id);
         try { credentials.setPassword(oldP.id, ""); } catch (_) {}
         try {
           const bsFile = path.join(SESSIONS_DIR, "_browser_storage", `${oldP.id}.json`);
           if (fs.existsSync(bsFile)) fs.unlinkSync(bsFile);
         } catch (_) {}
       }
+    }
+    if (purgedOldIds.length > 0) {
+      try { browserMode?.purgeProfilesStorage?.(purgedOldIds)?.catch?.(() => {}); } catch (_) {}
     }
   } else if (!isUntouchedDefaultMockProfiles(existing)) {
     // Keep any existing non-mock profiles that were not in the backup
@@ -7099,6 +7247,7 @@ async function syncProfileBackupToCentral() {
     const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/profile-backup', {
       machineId: payload.machineId,
       machineName: payload.machineName,
+      hwidCode: payload.hwidCode,
       profiles: payload.profiles,
       deletedProfileIds
     });
@@ -7128,9 +7277,12 @@ async function restoreProfilesFromCentral(options = {}) {
     }
     if (!accountSettings || !accountSettings.accountId) return { success: false, error: 'NO_ACCOUNT' };
     const deviceId = getEffectiveDeviceNickname();
+    const hwidCode = String(accountSettings.hwidCode || '').trim() || undefined;
     const deletedProfileIds = Array.from(loadDeletedProfileIds());
     const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/profile-restore', {
-      machineId: deviceId,
+      machineId: hwidCode || deviceId,
+      machineName: deviceId,
+      hwidCode,
       deletedProfileIds
     });
     if (res && res.success && Array.isArray(res.profiles) && res.profiles.length > 0) {
@@ -7394,8 +7546,12 @@ async function healDuplicateClobberedProfiles(current) {
   try {
     const accountSettings = humanCheckSolver.loadSettings();
     if (accountSettings && accountSettings.accountId) {
+      const hwidCode = String(accountSettings.hwidCode || "").trim() || undefined;
+      const devNick = getEffectiveDeviceNickname();
       const restoreRes = await humanCheckSolver.serviceRequest("/v1/aetheria/machine/profile-restore", {
-        machineId: getEffectiveDeviceNickname(),
+        machineId: hwidCode || devNick,
+        machineName: devNick,
+        hwidCode,
         deletedProfileIds: Array.from(loadDeletedProfileIds())
       }).catch(() => null);
       if (restoreRes && restoreRes.success && Array.isArray(restoreRes.profiles)) {
@@ -7612,7 +7768,12 @@ async function recoverAndEnrichProfilesFromBrowserAndLocal() {
           if (auth && typeof auth === "object") {
             const verified = isVerifiedAuthConfig(auth);
             const manualUserEditedAt = Number(auth.userEditedAt) || 0;
-            const managerPushStamp = Number(auth.lastManagerPushAt) || 0;
+            const managerPushStamp = Math.max(
+              Number(auth.lastManagerPushAt) || 0,
+              Number(auth.forceManagerAuthAt) || 0,
+              Number(p.lastAuthSyncPushAt) || 0,
+              Number(p.identityChangedAt) || 0
+            );
             const candUser = auth.username ? String(auth.username).trim() : "";
             const ownedByOtherProfile = Boolean(
               candUser &&
@@ -7770,7 +7931,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.15'
+  managerVersion: '4.63.17'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7799,7 +7960,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.15',
+  managerVersion: '4.63.17',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -9895,19 +10056,24 @@ const server = http.createServer(async (req, res) => {
         const nextPort = Math.max(49875, ...profiles.map(p => p.debugPort || 49876)) + 1;
         let newId = "profile_" + Date.now();
         while (profiles.some(p => p.id === newId)) newId = "profile_" + Date.now() + "_" + Math.floor(Math.random() * 1000);
+        const cleanPass = (data.loginPassword || "").trim();
+        const now = Date.now();
         const newProfile = {
           id: newId,
           name: (data.name || "New Client").trim(),
           account: (data.account || "").trim(),
-          autoRegister: !(data.loginPassword || "").trim(),
+          autoRegister: !cleanPass,
+          ...(cleanPass && (data.account || "").trim() ? { loginSyncPending: true, lastAuthSyncPushAt: now, identityChangedAt: now } : {}),
           charClass: data.charClass || "Archer",
           targetMap: data.targetMap || "ถนนต้นหลิว",
           debugPort: data.debugPort || nextPort,
           autoStart: data.autoStart !== false,
           notes: data.notes || "",
           whitelist: data.whitelist || "Phracon, Rough Elunium, Enchant Rune, Composite Bow, Crossbow, Gakkung, Hunter Bow",
-          createdAt: Date.now()
+          createdAt: now
         };
+        removeDeletedProfileIds([newProfile.id]);
+        try { browserMode.unpurgeProfiles?.([newProfile.id]); } catch (_) {}
         profiles.push(newProfile);
         saveProfiles(profiles);
 
@@ -9915,7 +10081,12 @@ const server = http.createServer(async (req, res) => {
         const sessionFolder = path.join(SESSIONS_DIR, newProfile.id);
         if (!fs.existsSync(sessionFolder)) fs.mkdirSync(sessionFolder, { recursive: true });
 
-        if ((data.loginPassword || "").trim()) credentials.setPassword(newProfile.id, data.loginPassword.trim());
+        if (cleanPass) {
+          credentials.setPassword(newProfile.id, cleanPass);
+          if (newProfile.account) {
+            writeCleanProfileAuthStorage(newProfile.id, { username: newProfile.account, password: cleanPass, generatedUser: false });
+          }
+        }
         sendJSON({ success: true, profile: newProfile });
       } catch (err) {
         sendJSON({ success: false, error: err.message }, 400);
@@ -9948,7 +10119,7 @@ const server = http.createServer(async (req, res) => {
           )
         );
         const changesIdentity = accountChanged || !!nextPassword || wantsNewAutoRegister;
-        const wasJailedOrBanned = Boolean(profiles[idx].isJailed || profiles[idx].isBanned);
+        const wasJailedOrBanned = isProfileMarkedJailedOrBanned(profiles[idx]);
         if (changesIdentity) await scriptCoordinator.prepareCredentialChange(profiles[idx]);
 
         const nextAutoRegister = nextPassword
@@ -10009,6 +10180,7 @@ const server = http.createServer(async (req, res) => {
           }
         }
         if (changesIdentity) {
+          const now = Date.now();
           delete profiles[idx].isBanned;
           delete profiles[idx].bannedAt;
           delete profiles[idx].banReason;
@@ -10021,17 +10193,42 @@ const server = http.createServer(async (req, res) => {
           delete profiles[idx].jailIpBlocked;
           delete profiles[idx].lastCharName;
           delete profiles[idx].charFirstSeenAt;
-          profiles[idx].identityChangedAt = Date.now();
-          recentCharCreationByProfile.set(String(id), Date.now());
+          profiles[idx].identityChangedAt = now;
+          if (!wantsNewAutoRegister && profiles[idx].account) {
+            profiles[idx].generatedAccount = false;
+            profiles[idx].loginSyncPending = true;
+            profiles[idx].lastAuthSyncPushAt = now;
+            const effPw = nextPassword || existingPassword;
+            if (effPw) {
+              writeCleanProfileAuthStorage(id, {
+                username: profiles[idx].account,
+                password: effPw,
+                charName: "",
+                generatedUser: false
+              });
+            }
+          }
+          recentCharCreationByProfile.set(String(id), now);
         }
         saveProfiles(profiles);
         if (nextPassword) credentials.setPassword(id, nextPassword);
-        if (changesIdentity && wasJailedOrBanned && typeof screenProxy !== 'undefined' && screenProxy && screenProxy.isEnabled()) {
-          await screenProxy.releaseProfile(id).catch(() => {});
-          const isOpenNow = await clientAlreadyOpen(profiles[idx]).catch(() => false);
-          if (isOpenNow) {
-            await screenProxy.acquireForProfile(id, { debugPort: profiles[idx].debugPort }).catch(() => {});
+        if (changesIdentity && wasJailedOrBanned) {
+          if (typeof screenProxy !== 'undefined' && screenProxy) {
+            await screenProxy.markProxyJailCooldownForProfile?.(id, {
+              reason: "เปลี่ยนไอดีทับโปรไฟล์ที่เคยติดคุก/โดนแบน",
+              profileName: profiles[idx].name || id,
+              account: profiles[idx].account || ""
+            }).catch(() => {});
+            if (screenProxy.isEnabled()) {
+              await screenProxy.releaseProfile(id, "identity_changed").catch(() => {});
+              const isOpenNow = await clientAlreadyOpen(profiles[idx]).catch(() => false);
+              if (isOpenNow) {
+                await screenProxy.acquireForProfile(id, { debugPort: profiles[idx].debugPort }).catch(() => {});
+              }
+            }
           }
+          try { browserMode.markProfilesDeviceTainted?.([id]); } catch (_) {}
+          await browserMode.rotateProfileDeviceId?.(id).catch(() => {});
         }
         if (profiles[idx].debugPort) {
           setImmediate(() => authSync.syncOne(profiles[idx]).catch(() => {}));
@@ -10293,11 +10490,11 @@ const server = http.createServer(async (req, res) => {
       try {
         const parsed = JSON.parse(body || "{}");
         const target = (parsed && parsed.backup && typeof parsed.backup === "object") ? parsed.backup : parsed;
-        const result = applyProfileBackupPayload(target);
+        const result = applyProfileBackupPayload(target, { explicitUserImport: true });
         if (result.restoredProfiles === 0) {
           return sendJSON({ success: false, error: "ไม่พบรายการโปรไฟล์ในไฟล์สำรองที่เลือก" }, 400);
         }
-        scheduleCentralProfileBackupSync(1000);
+        scheduleCentralProfileBackupSync(250);
         return sendJSON({
           success: true,
           restoredProfiles: result.restoredProfiles,
@@ -10337,10 +10534,25 @@ const server = http.createServer(async (req, res) => {
         const toDelete = profiles.filter(p => targetSet.has(String(p.id)));
         const remaining = profiles.filter(p => !targetSet.has(String(p.id)));
         const deletedIds = toDelete.map(p => String(p.id));
+        const jailedOrBannedDeletedIds = toDelete.filter(isProfileMarkedJailedOrBanned).map(p => String(p.id));
 
         recordDeletedProfileIds(deletedIds);
 
-        for (const id of deletedIds) {
+        // Mark tainted Device/Machine IDs BEFORE purging storage files so disk device identities are captured
+        if (jailedOrBannedDeletedIds.length > 0) {
+          try { browserMode.markProfilesDeviceTainted?.(jailedOrBannedDeletedIds); } catch (_) {}
+        }
+
+        for (const p of toDelete) {
+          const id = String(p.id);
+          if (isProfileMarkedJailedOrBanned(p)) {
+            await screenProxy.markProxyJailCooldownForProfile?.(id, {
+              reason: "ลบโปรไฟล์ที่ติดคุก/โดนแบน",
+              profileName: p.name || id,
+              charName: p.lastCharName || "",
+              account: p.account || ""
+            }).catch(() => {});
+          }
           screenProxy.releaseProfile(id, "deleted").catch(() => {});
           try { credentials.setPassword(id, ""); } catch (_) {}
           try {
@@ -10358,10 +10570,11 @@ const server = http.createServer(async (req, res) => {
         }
 
         saveProfiles(remaining, { allowEmpty: true });
+        await browserMode.purgeProfilesStorage?.(deletedIds).catch(() => {});
         try { browserMode.pruneDeletedProfilesFromCustomGroups?.(remaining.map(p => p.id)); } catch (_) {}
         screenProxy.reserveCustomIpGroupsNow?.().catch(() => {});
         try { writeJsonAtomic(PROFILES_BACKUP_FILE, remaining); } catch (_) {}
-        scheduleCentralProfileBackupSync(1000);
+        scheduleCentralProfileBackupSync(250);
         return sendJSON({
           success: true,
           deletedCount: deletedIds.length,
@@ -10382,6 +10595,17 @@ const server = http.createServer(async (req, res) => {
     const idx = profiles.findIndex(p => p.id === id);
     if (idx === -1) return sendJSON({ success: false, error: "Profile not found" }, 404);
 
+    const targetProf = profiles[idx];
+    const wasJailedOrBanned = isProfileMarkedJailedOrBanned(targetProf);
+    if (wasJailedOrBanned) {
+      try { browserMode.markProfilesDeviceTainted?.([id]); } catch (_) {}
+      await screenProxy.markProxyJailCooldownForProfile?.(id, {
+        reason: "ลบโปรไฟล์ที่ติดคุก/โดนแบน",
+        profileName: targetProf.name || id,
+        charName: targetProf.lastCharName || "",
+        account: targetProf.account || ""
+      }).catch(() => {});
+    }
     screenProxy.releaseProfile(id, "deleted").catch(() => {});
     recordDeletedProfileId(id);
     try { credentials.setPassword(id, ""); } catch (_) {}
@@ -10401,10 +10625,11 @@ const server = http.createServer(async (req, res) => {
 
     profiles.splice(idx, 1);
     saveProfiles(profiles, { allowEmpty: true });
+    await browserMode.purgeProfilesStorage?.([id]).catch(() => {});
     try { browserMode.pruneDeletedProfilesFromCustomGroups?.(profiles.map(p => p.id)); } catch (_) {}
     screenProxy.reserveCustomIpGroupsNow?.().catch(() => {});
     try { writeJsonAtomic(PROFILES_BACKUP_FILE, profiles); } catch (_) {}
-    scheduleCentralProfileBackupSync(1000);
+    scheduleCentralProfileBackupSync(250);
     return sendJSON({ success: true });
   }
 

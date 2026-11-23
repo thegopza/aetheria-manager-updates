@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "320cc19c5f4282c1812b46c612958a8e3f1b25aa",
+  "sourceCommit": "3b9a8c35802b6df1fdd38fa3a301e815b8dcf5bf",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -8,7 +8,7 @@
     },
     {
       "path": "manager/auth_sync.js",
-      "sha256": "f5f84ba05e96eda380178f767cb33752812e17782c7849b786fef5ee4f7872df"
+      "sha256": "3b4f5a82f9e081fb295b095b0446a01c17ec25aa745f2e734c93771ba3faff3d"
     },
     {
       "path": "manager/bot_auto_update.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "21691c28334912e19f3c43b38fa56da5003165afec74f4d290eef110bfb6674c"
+      "sha256": "5055d8a82db80f219f010fc3634d8bd0859493ad21a509e4553e6a0d68cf1662"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -36,7 +36,7 @@
     },
     {
       "path": "manager/credentials.js",
-      "sha256": "02e922dbb0a119ac804abe06e5204ef93a39e3a4fd9f229bddcda4db2161f783"
+      "sha256": "158828ca3ad7c269de5a744635de4fca1c56076f099a8552bb88a6886d391077"
     },
     {
       "path": "manager/discord_bot.js",
@@ -140,7 +140,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "c4e9b1afd92028eadd62fdcf6495664cd19c4ded6eac12d86ff33db573ce19de"
+      "sha256": "43f9d5fc1bf610bfe2b6ad109634a49d0d0cfdd5f8d24038798f6d52d094a160"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -208,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "3448517e63ec08988f1d3767f35f3655b355265a072b938bb73c3be41b136bd5"
+      "sha256": "306c59c3dcd31f01b8514a04b102351876c328b3a45cb9bfebe3126c0421d0fe"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -288,7 +288,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "0ab57d69bf19b633352e2a79c176f55af3fe0ba4da9429de5a63380f8e4cbe61"
+      "sha256": "29df6663ff886adb10353937d3e86083f6de44e1a51aad27739d06b0889fd020"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -296,7 +296,7 @@
     },
     {
       "path": "manager/screen_proxy_manager.js",
-      "sha256": "7377e448d6c94b7cd4f09c3c39785c4e4fd0a3aa451f11d68e59c94d4ff2b1e6"
+      "sha256": "ee37527817f9c52b879d31fbd71beec32f5b935d29d5996872148efb0248b1a6"
     },
     {
       "path": "manager/script_bootstrap.js",
@@ -320,7 +320,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "bd9ee2504def80745947d78d4991ff79a0d3f2c4d07ef795d08b95cc2468ca7f"
+      "sha256": "87195edbf103e013f278bcb32d8e5ef45eeffaf82e6dc1ca9b8d4eb58a1a7a1c"
     },
     {
       "path": "manager/test_isolation.js",

@@ -13308,6 +13308,21 @@ function parseCredentialsTxtToBackup(rawText) {
   const lines = rawText.replace(/^\uFEFF/, '').split(/\r?\n/);
   const profiles = [];
   const existingList = Array.isArray(currentProfiles) ? currentProfiles : [];
+  const usedIds = new Set(existingList.map(p => p && p.id).filter(Boolean));
+  const usedPorts = new Set(existingList.map(p => Number(p && p.debugPort) || 0).filter(n => n >= 1024));
+  let nextPortCursor = Math.max(49876, ...(Array.from(usedPorts).length ? Array.from(usedPorts) : [49875]));
+  const allocPort = (preferred) => {
+    if (preferred >= 1024 && !usedPorts.has(preferred)) {
+      usedPorts.add(preferred);
+      if (preferred >= nextPortCursor) nextPortCursor = preferred + 1;
+      return preferred;
+    }
+    while (usedPorts.has(nextPortCursor)) nextPortCursor++;
+    const p = nextPortCursor++;
+    usedPorts.add(p);
+    return p;
+  };
+  const baseNow = Date.now();
   for (const line of lines) {
     const t = line.trim();
     if (!t || t.startsWith('=') || t.startsWith('-') || t.startsWith('📋') || t.startsWith('📅') || t.startsWith('ลำดับ')) continue;
@@ -13317,8 +13332,24 @@ function parseCredentialsTxtToBackup(rawText) {
       const username = userRaw === '(ยังไม่มี ID)' ? '' : userRaw;
       const password = passRaw === '(ยังไม่มีรหัส)' ? '' : passRaw;
       const port = parseInt(portStr, 10) || 0;
-      const match = existingList.find(p => p && ((port && Number(p.debugPort) === port) || p.name === profName || (charName !== '-' && p.lastCharName === charName)));
-      const id = match ? match.id : `profile_txt_${port || (profiles.length + 1)}`;
+      const uLower = username.toLowerCase();
+      // Only reuse an existing profile ID when it is the SAME game account or an empty unconfigured shell —
+      // never overwrite a different old/jailed account's profileId (which would inherit tainted Device/Sticky IP or LevelDB state)
+      const match = existingList.find(p => {
+        if (!p || !p.id) return false;
+        const pAcc = String(p.account || '').trim().toLowerCase();
+        if (uLower && pAcc && uLower === pAcc) return true;
+        if (!pAcc && !p.lastCharName && ((port && Number(p.debugPort) === port) || p.name === profName)) return true;
+        return false;
+      });
+      let id = match ? match.id : `profile_${baseNow + profiles.length}`;
+      while (!match && usedIds.has(id)) {
+        id = `profile_${baseNow + profiles.length}_${Math.floor(Math.random() * 1000)}`;
+      }
+      usedIds.add(id);
+      const finalPort = match && Number(match.debugPort) >= 1024
+        ? Number(match.debugPort)
+        : allocPort(port);
       profiles.push({
         id,
         name: profName || id,
@@ -13333,7 +13364,7 @@ function parseCredentialsTxtToBackup(rawText) {
           account: username,
           lastCharName: charName !== '-' ? charName : (match?.lastCharName || ''),
           charClass: charClass !== '-' ? charClass : (match?.charClass || 'Archer'),
-          ...(port ? { debugPort: port } : {})
+          debugPort: finalPort
         }
       });
     }

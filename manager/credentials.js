@@ -33,32 +33,30 @@ function readJsonObj(filePath) {
 
 function loadAll() {
   const primary = readJsonObj(FILE);
-  if (primary && Object.keys(primary).length > 0) {
-    memCache = primary;
+  if (primary !== null) {
+    memCache = { ...primary };
     if (!fs.existsSync(BACKUP_FILE)) {
       try { writeAtomic(BACKUP_FILE, primary); } catch (_) {}
     }
     return { ...primary };
   }
   const backup = readJsonObj(BACKUP_FILE);
-  if (backup && Object.keys(backup).length > 0) {
-    memCache = backup;
+  if (backup !== null) {
+    memCache = { ...backup };
     try { writeAtomic(FILE, backup); } catch (_) {}
     return { ...backup };
   }
-  if (memCache && Object.keys(memCache).length > 0) {
+  if (memCache !== null) {
     return { ...memCache };
   }
-  return primary || {};
+  return {};
 }
 
 function saveAll(all) {
   const safe = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
   memCache = { ...safe };
   writeAtomic(FILE, safe);
-  if (Object.keys(safe).length > 0) {
-    try { writeAtomic(BACKUP_FILE, safe); } catch (_) {}
-  }
+  try { writeAtomic(BACKUP_FILE, safe); } catch (_) {}
 }
 
 const getPassword = id => (loadAll()[id] || {}).password || '';

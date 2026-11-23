@@ -384,6 +384,8 @@ const pushJs = cfg => `(() => {
     c.verifiedLoginAt = 0;
     c.registerError = '';
     c.registerDone = false;
+    c.charName = '';
+    c.forceManagerAuthAt = Date.now();
     try { if (window.sessionStorage) window.sessionStorage.removeItem('aetheria.session'); } catch (_) {}
   }
   const hasManualUserCreds = Boolean(
@@ -820,9 +822,9 @@ function createAuthSync({
       allProfiles.some(o => o && o.id !== profile.id && String(o.account || '').trim().toLowerCase() === cur.username.toLowerCase())
     );
     const manualUserEditedAt = Number(cur.userEditedAt) || 0;
-    const lastManagerPushAt = Number(profile.lastAuthSyncPushAt) || 0;
+    const lastManagerPushAt = Math.max(Number(profile.lastAuthSyncPushAt) || 0, Number(profile.identityChangedAt) || 0);
     const identityChangedAt = Number(profile.identityChangedAt) || 0;
-    const staleClientCredsAfterReset = Boolean(profile.autoRegister && identityChangedAt > 0 && manualUserEditedAt <= identityChangedAt);
+    const staleClientCredsAfterReset = Boolean(identityChangedAt > 0 && manualUserEditedAt <= identityChangedAt && (profile.autoRegister || (profile.account && pw(profile))));
     const hasClientCreds = Boolean(cur.username && cur.password && !cur.register && !cur.registerError);
     const managerMissingCreds = !profile.account || !pw(profile);
     const isSameGeneratedAccount = Boolean(profile.generatedAccount && profile.account && cur.username === profile.account);
@@ -989,6 +991,7 @@ function createAuthSync({
 
     // Only push Manager credentials to the client when Manager actually has both account and password
     if (profile.account && pw(profile) && (profile.loginSyncPending || cur.username !== profile.account || cur.password !== pw(profile))) {
+      const switchingAccount = Boolean((cur.username && cur.username !== profile.account) || identityChangedAt > 0);
       const delivered = await evalProfilePort(profile.debugPort, pushJs({
         enabled: true,
         preserveUserToggle: !profile.loginSyncPending,
@@ -996,6 +999,7 @@ function createAuthSync({
         password: pw(profile),
         register: false,
         generatedUser: !!profile.generatedAccount,
+        ...(switchingAccount ? { forceResetAuth: true } : {}),
         ...(profile.loginSyncPending ? { registerDone: true, autoCreateChar: true, autoResumeBot: true } : {})
       }), 3000);
       if (delivered?.success && delivered.result?.success === true) {

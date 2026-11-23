@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "3b9a8c35802b6df1fdd38fa3a301e815b8dcf5bf",
+  "sourceCommit": "638546caaa14b59c3cdedfa5b54436f521769331",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "5055d8a82db80f219f010fc3634d8bd0859493ad21a509e4553e6a0d68cf1662"
+      "sha256": "1ad51e92dfbe12420100c33197f917bec438207d2bfdabc29f4caf34e8f5836e"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -36,7 +36,7 @@
     },
     {
       "path": "manager/credentials.js",
-      "sha256": "158828ca3ad7c269de5a744635de4fca1c56076f099a8552bb88a6886d391077"
+      "sha256": "7dc20934a0da36251083616e20fe42b57b246c87b59e3064d9eb403a411c9a97"
     },
     {
       "path": "manager/discord_bot.js",
@@ -208,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "306c59c3dcd31f01b8514a04b102351876c328b3a45cb9bfebe3126c0421d0fe"
+      "sha256": "2a5e02b7df34386ece494dc048e698413b3a3302ead86d9c672ee2279d7a34ed"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -288,7 +288,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "29df6663ff886adb10353937d3e86083f6de44e1a51aad27739d06b0889fd020"
+      "sha256": "da3c2a6ed1a75e64f1ab2acdc4735d0e093d36411367a11cea50b548f93b83d3"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -320,7 +320,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "87195edbf103e013f278bcb32d8e5ef45eeffaf82e6dc1ca9b8d4eb58a1a7a1c"
+      "sha256": "b6584a97aa21306926451f2d00f240a0718de7bcc3958488be882ceca1957088"
     },
     {
       "path": "manager/test_isolation.js",

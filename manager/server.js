@@ -563,6 +563,46 @@ function isProfileMarkedJailedOrBanned(p) {
   if (p.liveState && (p.liveState.accountBanned || p.liveState.charSelectInJail || checkMap(p.liveState.map))) return true;
   return false;
 }
+const DELETED_PROFILES_ARCHIVE_FILE = path.join(__dirname, "data", "deleted_profiles_archive.json");
+function loadDeletedProfilesArchive() {
+  try {
+    if (!fs.existsSync(DELETED_PROFILES_ARCHIVE_FILE)) return {};
+    const parsed = JSON.parse(fs.readFileSync(DELETED_PROFILES_ARCHIVE_FILE, "utf8"));
+    return (parsed && typeof parsed === "object" && !Array.isArray(parsed)) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+function archiveDeletedProfilesSnapshot(profilesList) {
+  if (!Array.isArray(profilesList) || profilesList.length === 0) return;
+  try {
+    const archive = loadDeletedProfilesArchive();
+    const now = Date.now();
+    let changed = false;
+    for (const p of profilesList) {
+      if (!p || !p.id || isSingleDefaultMockProfile(p)) continue;
+      const pid = String(p.id).trim();
+      if (!pid) continue;
+      const pw = (credentials.getArchivedPassword && credentials.getArchivedPassword(pid)) || credentials.getPassword(pid) || "";
+      const prev = archive[pid] || {};
+      const cleanCopy = { ...p };
+      delete cleanCopy.liveState;
+      delete cleanCopy.hasPassword;
+      archive[pid] = {
+        ...prev,
+        ...cleanCopy,
+        id: pid,
+        account: String(p.account || prev.account || "").trim(),
+        lastCharName: String(p.lastCharName || prev.lastCharName || "").trim(),
+        password: pw || prev.password || "",
+        deletedAt: now
+      };
+      changed = true;
+    }
+    if (changed) writeJsonAtomic(DELETED_PROFILES_ARCHIVE_FILE, archive);
+  } catch (_) {}
+}
+
 function writeCleanProfileAuthStorage(pid, { username = "", password = "", charName = "", generatedUser = false } = {}) {
   if (!pid) return;
   try {
@@ -576,11 +616,29 @@ function writeCleanProfileAuthStorage(pid, { username = "", password = "", charN
         if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) bsData = parsed;
       } catch (_) {}
     }
+    const u = String(username || "").trim();
+    const pw = String(password || "").trim();
+    // Preserve previous account credentials in deleted_profiles_archive.json if overwriting this slot with a different username
+    try {
+      const prevAuthRaw = bsData[`pelican_${pid}__auth_cfg`];
+      if (prevAuthRaw) {
+        const prevAuth = JSON.parse(prevAuthRaw);
+        const prevU = String(prevAuth && prevAuth.username || "").trim();
+        const prevPw = String(prevAuth && prevAuth.password || "").trim();
+        if (prevU && prevU.toLowerCase() !== u.toLowerCase()) {
+          archiveDeletedProfilesSnapshot([{
+            id: `${pid}__replaced_${prevU.toLowerCase()}`,
+            name: `${pid} (${prevU})`,
+            account: prevU,
+            lastCharName: String(prevAuth.charName || "").trim(),
+            password: prevPw
+          }]);
+        }
+      }
+    } catch (_) {}
     delete bsData["__ss:aetheria.session"];
     delete bsData["pelican_auth_cfg"];
     const now = Date.now();
-    const u = String(username || "").trim();
-    const pw = String(password || "").trim();
     if (u || pw) {
       bsData[`pelican_${pid}__auth_cfg`] = JSON.stringify({
         enabled: Boolean(u && pw),
@@ -615,7 +673,7 @@ function isVerifiedAuthConfig(auth) {
 
 function writeOrMergeProfileStorageFile(pid, incomingMap) {
   if (!pid || !incomingMap || typeof incomingMap !== "object") return false;
-  if (loadDeletedProfileIds().has(String(pid))) return false;
+  const isDeleted = loadDeletedProfileIds().has(String(pid));
   try {
     const bsDir = path.join(SESSIONS_DIR, "_browser_storage");
     fs.mkdirSync(bsDir, { recursive: true });
@@ -636,12 +694,14 @@ function writeOrMergeProfileStorageFile(pid, incomingMap) {
           cur[k] = merged;
           changed = true;
         }
-        try {
-          const auth = JSON.parse(cur[k]);
-          if (isVerifiedAuthConfig(auth) && auth.password && String(auth.password).trim() && !credentials.getPassword(pid)) {
-            credentials.setPassword(pid, String(auth.password).trim());
-          }
-        } catch (_) {}
+        if (!isDeleted) {
+          try {
+            const auth = JSON.parse(cur[k]);
+            if (isVerifiedAuthConfig(auth) && auth.password && String(auth.password).trim() && !credentials.getPassword(pid)) {
+              credentials.setPassword(pid, String(auth.password).trim());
+            }
+          } catch (_) {}
+        }
       } else if (k.endsWith("__sell_cfg") || k === "pelican_sell_cfg") {
         const merged = mergeSellConfigString(cur[k], v);
         if (merged !== cur[k]) {
@@ -662,21 +722,37 @@ function writeOrMergeProfileStorageFile(pid, incomingMap) {
   }
 }
 
-function recoverProfilesFromLocalEvidence() {
-  const deletedIds = loadDeletedProfileIds();
+function recoverProfilesFromLocalEvidence(opts = {}) {
+  const includeDeleted = Boolean(opts && opts.includeDeleted);
+  const deletedIds = includeDeleted ? new Set() : loadDeletedProfileIds();
   try {
     const dataDir = path.join(__dirname, "data");
     const map = new Map();
     let seededFromBackup = false;
     const ensure = (id, allowCreate = true) => {
       const s = String(id || "").trim();
-      if (!s.startsWith("profile_") || deletedIds.has(s)) return null;
+      if (!s.startsWith("profile_") || s.includes("__replaced_") || deletedIds.has(s)) return null;
       if (!map.has(s)) {
         if (!allowCreate || seededFromBackup) return null;
         map.set(s, { id: s });
       }
       return map.get(s);
     };
+    if (includeDeleted) {
+      const archive = loadDeletedProfilesArchive();
+      for (const [archId, archEntry] of Object.entries(archive)) {
+        if (!archId.startsWith("profile_") || archId.includes("__replaced_") || !archEntry) continue;
+        const p = ensure(archId, true);
+        if (!p) continue;
+        const copy = { ...archEntry };
+        delete copy.password;
+        delete copy.deletedAt;
+        Object.assign(p, copy, { id: archId, hasRealEvidence: Boolean(archEntry.account || archEntry.lastCharName || archEntry.password) });
+        if (archEntry.password && !credentials.getPassword(archId)) {
+          credentials.setPassword(archId, archEntry.password);
+        }
+      }
+    }
 
     // 1. Seed from dedicated backup file if present (enrich existing IDs only; do not resurrect unreferenced old session dirs)
     if (fs.existsSync(PROFILES_BACKUP_FILE)) {
@@ -7278,15 +7354,17 @@ async function restoreProfilesFromCentral(options = {}) {
     if (!accountSettings || !accountSettings.accountId) return { success: false, error: 'NO_ACCOUNT' };
     const deviceId = getEffectiveDeviceNickname();
     const hwidCode = String(accountSettings.hwidCode || '').trim() || undefined;
-    const deletedProfileIds = Array.from(loadDeletedProfileIds());
+    const includeDeleted = Boolean(options && options.includeDeleted);
+    const deletedProfileIds = includeDeleted ? [] : Array.from(loadDeletedProfileIds());
     const res = await humanCheckSolver.serviceRequest('/v1/aetheria/machine/profile-restore', {
       machineId: hwidCode || deviceId,
       machineName: deviceId,
       hwidCode,
-      deletedProfileIds
+      deletedProfileIds,
+      includeDeleted
     });
     if (res && res.success && Array.isArray(res.profiles) && res.profiles.length > 0) {
-      const result = applyProfileBackupPayload(res, options);
+      const result = applyProfileBackupPayload(res, includeDeleted ? { ...options, explicitUserImport: true } : options);
       console.log(`[Central Admin] 🛡️ กู้คืนโปรไฟล์จากเซิร์ฟเวอร์สำเร็จ ${result.restoredProfiles} จอ (รหัสผ่าน ${result.restoredCredentials} จอ)`);
       return { success: true, ...result };
     }
@@ -7931,7 +8009,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.17'
+  managerVersion: '4.63.18'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -7960,7 +8038,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.17',
+  managerVersion: '4.63.18',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -10457,23 +10535,44 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // POST /api/profiles/recover (Manual / explicit auto-recovery trigger — local evidence first, then central server backup)
+  // POST /api/profiles/recover (Manual / explicit recovery trigger — local evidence first, then central server backup; supports recovering soft-deleted profiles)
   if (req.method === "POST" && pathname === "/api/profiles/recover") {
-    await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
-    const recovered = recoverProfilesFromLocalEvidence();
-    if (recovered && recovered.length > 0) {
-      saveProfiles(recovered);
+    let bodyText = "";
+    req.on("data", chunk => bodyText += chunk);
+    req.on("end", async () => {
+      let parsedBody = {};
+      try { parsedBody = bodyText ? JSON.parse(bodyText) : {}; } catch (_) {}
+      const explicitIncludeDeleted = parsedBody.includeDeleted === true;
+      const wantDeleted = parsedBody.includeDeleted !== false;
       await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
-      const enriched = loadProfiles() || recovered;
-      return sendJSON({ success: true, source: "local", recoveredCount: enriched.length, profiles: enriched });
-    }
-    const cloud = await restoreProfilesFromCentral();
-    if (cloud && cloud.success && cloud.restoredProfiles > 0) {
-      await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
-      const fresh = loadProfiles();
-      return sendJSON({ success: true, source: "cloud", recoveredCount: cloud.restoredProfiles, restoredCredentials: cloud.restoredCredentials, profiles: fresh });
-    }
-    return sendJSON({ success: false, recoveredCount: 0, error: "ไม่พบข้อมูลโปรไฟล์สำรองในโฟลเดอร์นี้หรือบนเซิร์ฟเวอร์" }, 404);
+      let recovered = recoverProfilesFromLocalEvidence({ includeDeleted: explicitIncludeDeleted });
+      if ((!recovered || recovered.length === 0) && !explicitIncludeDeleted && wantDeleted) {
+        recovered = recoverProfilesFromLocalEvidence({ includeDeleted: true });
+      }
+      if (recovered && recovered.length > 0) {
+        const restoredIds = recovered.map(p => String(p.id));
+        removeDeletedProfileIds(restoredIds);
+        try { browserMode.unpurgeProfiles?.(restoredIds); } catch (_) {}
+        for (const id of restoredIds) {
+          try { credentials.restorePasswordFromBackup?.(id); } catch (_) {}
+        }
+        saveProfiles(recovered);
+        await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
+        const enriched = loadProfiles() || recovered;
+        return sendJSON({ success: true, source: "local", recoveredCount: enriched.length, profiles: enriched });
+      }
+      let cloud = await restoreProfilesFromCentral({ includeDeleted: false });
+      if ((!cloud || !cloud.success || !cloud.restoredProfiles) && wantDeleted) {
+        cloud = await restoreProfilesFromCentral({ includeDeleted: true });
+      }
+      if (cloud && cloud.success && cloud.restoredProfiles > 0) {
+        await recoverAndEnrichProfilesFromBrowserAndLocal().catch(() => {});
+        const fresh = loadProfiles();
+        return sendJSON({ success: true, source: "cloud", recoveredCount: cloud.restoredProfiles, restoredCredentials: cloud.restoredCredentials, profiles: fresh });
+      }
+      return sendJSON({ success: false, recoveredCount: 0, error: "ไม่พบข้อมูลโปรไฟล์สำรองในโฟลเดอร์นี้หรือบนเซิร์ฟเวอร์" }, 404);
+    });
+    return;
   }
 
   // GET /api/profiles/export-backup (Export all local profiles + credentials as JSON)
@@ -10536,9 +10635,10 @@ const server = http.createServer(async (req, res) => {
         const deletedIds = toDelete.map(p => String(p.id));
         const jailedOrBannedDeletedIds = toDelete.filter(isProfileMarkedJailedOrBanned).map(p => String(p.id));
 
+        archiveDeletedProfilesSnapshot(toDelete);
         recordDeletedProfileIds(deletedIds);
 
-        // Mark tainted Device/Machine IDs BEFORE purging storage files so disk device identities are captured
+        // Mark tainted Device/Machine IDs so future profiles do not reuse jailed device fingerprints
         if (jailedOrBannedDeletedIds.length > 0) {
           try { browserMode.markProfilesDeviceTainted?.(jailedOrBannedDeletedIds); } catch (_) {}
         }
@@ -10555,10 +10655,7 @@ const server = http.createServer(async (req, res) => {
           }
           screenProxy.releaseProfile(id, "deleted").catch(() => {});
           try { credentials.setPassword(id, ""); } catch (_) {}
-          try {
-            const bsFile = path.join(SESSIONS_DIR, "_browser_storage", `${id}.json`);
-            if (fs.existsSync(bsFile)) fs.unlinkSync(bsFile);
-          } catch (_) {}
+          // Soft-delete preservation: keep sessions/_browser_storage/<id>.json intact on disk for future recovery
           if (browserMode.isOpen(id)) {
             await browserMode.stop(id).catch(() => {});
           }
@@ -10596,6 +10693,7 @@ const server = http.createServer(async (req, res) => {
     if (idx === -1) return sendJSON({ success: false, error: "Profile not found" }, 404);
 
     const targetProf = profiles[idx];
+    archiveDeletedProfilesSnapshot([targetProf]);
     const wasJailedOrBanned = isProfileMarkedJailedOrBanned(targetProf);
     if (wasJailedOrBanned) {
       try { browserMode.markProfilesDeviceTainted?.([id]); } catch (_) {}
@@ -10609,10 +10707,7 @@ const server = http.createServer(async (req, res) => {
     screenProxy.releaseProfile(id, "deleted").catch(() => {});
     recordDeletedProfileId(id);
     try { credentials.setPassword(id, ""); } catch (_) {}
-    try {
-      const bsFile = path.join(SESSIONS_DIR, "_browser_storage", `${id}.json`);
-      if (fs.existsSync(bsFile)) fs.unlinkSync(bsFile);
-    } catch (_) {}
+    // Soft-delete preservation: keep sessions/_browser_storage/<id>.json intact on disk for future recovery
     if (browserMode.isOpen(id)) {
       await browserMode.stop(id).catch(() => {});
     }

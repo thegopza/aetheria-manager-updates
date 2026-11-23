@@ -56,14 +56,51 @@ function saveAll(all) {
   const safe = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
   memCache = { ...safe };
   writeAtomic(FILE, safe);
-  try { writeAtomic(BACKUP_FILE, safe); } catch (_) {}
+  // Soft-delete preservation: never erase historical passwords from credentials.backup.json
+  // so deleted accounts can always be recovered later (while active credentials.json stays clean).
+  try {
+    const prevBackup = readJsonObj(BACKUP_FILE) || {};
+    const mergedBackup = { ...prevBackup };
+    for (const [id, entry] of Object.entries(safe)) {
+      if (entry && entry.password) {
+        mergedBackup[id] = entry;
+      }
+    }
+    writeAtomic(BACKUP_FILE, mergedBackup);
+  } catch (_) {}
 }
 
 const getPassword = id => (loadAll()[id] || {}).password || '';
+function getArchivedPassword(id) {
+  if (!id) return '';
+  const active = getPassword(id);
+  if (active) return active;
+  const backup = readJsonObj(BACKUP_FILE) || {};
+  return (backup[id] && backup[id].password) || '';
+}
+function restorePasswordFromBackup(id) {
+  if (!id) return '';
+  const pw = getArchivedPassword(id);
+  if (pw && !getPassword(id)) {
+    setPassword(id, pw);
+  }
+  return pw;
+}
 function setPassword(id, password) {
   const all = loadAll();
-  if (password) all[id] = { password, updatedAt: Date.now() };
-  else delete all[id];
+  if (password) {
+    all[id] = { password, updatedAt: Date.now() };
+  } else {
+    // Archive existing password into backup before removing from active credentials.json
+    if (all[id] && all[id].password) {
+      try {
+        const prevBackup = readJsonObj(BACKUP_FILE) || {};
+        prevBackup[id] = all[id];
+        writeAtomic(BACKUP_FILE, prevBackup);
+      } catch (_) {}
+    }
+    delete all[id];
+  }
   saveAll(all);
 }
 function listProfileIds() {
@@ -71,5 +108,5 @@ function listProfileIds() {
   return Object.keys(all).filter(id => Boolean(all[id] && all[id].password));
 }
 
-module.exports = { getPassword, setPassword, listProfileIds };
+module.exports = { getPassword, getArchivedPassword, restorePasswordFromBackup, setPassword, listProfileIds };
 

@@ -745,7 +745,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
   }
   function saveProfileStorage(profileId, entries, opts = {}) {
     if (!storageDir || !profileId || !entries || typeof entries !== 'object') return;
-    if (!opts.ignorePurged && isPurgedProfile(profileId)) return;
+    const isSoftDeleted = !opts.ignorePurged && isPurgedProfile(profileId);
     try {
       fs.mkdirSync(storageDir, { recursive: true });
       const f = path.join(storageDir, `${profileId}.json`);
@@ -799,19 +799,19 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
       }
       const devKey = `pelican_${profileId}__aetheria_device`;
       const incomingDev = typeof entries[devKey] === 'string' ? entries[devKey].trim() : '';
-      if (profileDeviceIds.has(profileId)) {
+      if (!isSoftDeleted && profileDeviceIds.has(profileId)) {
         merged[devKey] = profileDeviceIds.get(profileId);
       } else if (UUID_V4_RE.test(incomingDev)) {
-        profileDeviceIds.set(profileId, incomingDev);
+        if (!isSoftDeleted) profileDeviceIds.set(profileId, incomingDev);
         usedDeviceIds.add(incomingDev.toLowerCase());
         merged[devKey] = incomingDev;
       }
       const machKey = `pelican_${profileId}__aetheria_machine`;
       const incomingMach = typeof entries[machKey] === 'string' ? entries[machKey].trim().toLowerCase() : '';
-      if (profileMachineIds.has(profileId)) {
+      if (!isSoftDeleted && profileMachineIds.has(profileId)) {
         merged[machKey] = profileMachineIds.get(profileId);
       } else if (SHA256_HEX_RE.test(incomingMach)) {
-        profileMachineIds.set(profileId, incomingMach);
+        if (!isSoftDeleted) profileMachineIds.set(profileId, incomingMach);
         usedMachineIds.add(incomingMach);
         merged[machKey] = incomingMach;
       }
@@ -1637,6 +1637,8 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
     return { taintedDevices: addedDevices, rotatedCustomGroups };
   }
 
+  // Soft-delete detach: removes deleted profile IDs from active Device/Target tracking so they never
+  // auto-resurrect on reboot, while keeping _browser_storage/<id>.json and Chromium LevelDB intact for recovery.
   async function purgeProfilesStorage(profileIds) {
     if (!Array.isArray(profileIds) || profileIds.length === 0) return { purgedCount: 0 };
     const cleanIds = Array.from(new Set(profileIds.map(x => String(x || '').trim()).filter(Boolean)));
@@ -1648,43 +1650,11 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
       profileDeviceGroupIndex.delete(pid);
       profileDeviceSpecs.delete(pid);
       knownTargets.delete(pid);
-      if (storageDir) {
-        try {
-          const f = path.join(storageDir, `${pid}.json`);
-          if (fs.existsSync(f)) fs.unlinkSync(f);
-        } catch (_) {}
-      }
     }
     savePurgedProfiles();
     saveKnownTargets();
     orderedProfileIdsCache = null;
     rebalanceDeviceGroups(null, true);
-
-    // Actively purge pelican_<pid>__* keys from any live Chromium window so LevelDB drops deleted profiles immediately
-    const openClients = Array.from(clients.values()).filter(c => c && c.sessionId);
-    if (openClients.length > 0) {
-      const prefixes = cleanIds.map(id => `pelican_${id}__`);
-      const purgeExpr = `(() => {
-        try {
-          if (!window.localStorage) return 0;
-          const pfxs = ${JSON.stringify(prefixes)};
-          const rawDel = (window.__pmRawStorage && window.__pmRawStorage.del) || Storage.prototype.removeItem;
-          const toDelete = [];
-          for (let i = 0; i < window.localStorage.length; i++) {
-            const k = window.localStorage.key(i);
-            if (!k) continue;
-            for (let j = 0; j < pfxs.length; j++) {
-              if (k.indexOf(pfxs[j]) === 0) { toDelete.push(k); break; }
-            }
-          }
-          for (const k of toDelete) {
-            try { rawDel.call(window.localStorage, k); } catch (_) {}
-          }
-          return toDelete.length;
-        } catch (_) { return 0; }
-      })()`;
-      await Promise.all(openClients.slice(0, 4).map(c => evaluate(c, purgeExpr, 3000, true).catch(() => {})));
-    }
     return { purgedCount: cleanIds.length };
   }
 
@@ -2399,13 +2369,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
       if (!Object.prototype.hasOwnProperty.call(orderedSaved, k)) orderedSaved[k] = v;
     }
     const hasSaved = Object.keys(orderedSaved).length > 0;
-    const purgedPrefixes = Array.from(purgedProfileIds).slice(-200).map(id => `pelican_${id}__`);
-    const purgeJs = purgedPrefixes.length > 0
-      ? `try { if (window.localStorage) { const __pfxs = ${JSON.stringify(purgedPrefixes)}; const __rd = (window.__pmRawStorage && window.__pmRawStorage.del) || Storage.prototype.removeItem; const __delK = []; for (let i = 0; i < window.localStorage.length; i++) { const lk = window.localStorage.key(i); if (!lk || lk.indexOf('pelican_') !== 0) continue; for (let j = 0; j < __pfxs.length; j++) { if (lk.indexOf(__pfxs[j]) === 0) { __delK.push(lk); break; } } } for (const lk of __delK) { try { __rd.call(window.localStorage, lk); } catch (_) {} } } } catch (_) {}`
-      : '';
     const restoreJs = hasSaved
-      ? `${purgeJs} try { const __s = ${JSON.stringify(orderedSaved)}; const __rawGet = (window.__pmRawStorage && window.__pmRawStorage.get) || Storage.prototype.getItem; const __rawSet = (window.__pmRawStorage && window.__pmRawStorage.set) || Storage.prototype.setItem; const __rawDel = (window.__pmRawStorage && window.__pmRawStorage.del) || Storage.prototype.removeItem; if (window.localStorage && window.__pmProfileId && __rawGet.call(window.localStorage, 'pelican_auth_cfg') !== null) { const __rm = []; for (let i = 0; i < window.localStorage.length; i++) { const lk = window.localStorage.key(i); if (lk && lk.startsWith('pelican_') && lk.indexOf('__') === -1 && lk !== 'pelican_icon_manifest' && lk !== 'pelican_item_catalog') __rm.push(lk); } for (const lk of __rm) { try { __rawDel.call(window.localStorage, lk); } catch (_) {} } } for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string' || k === 'aetheria.device' || k === 'aetheria.machine') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && __rawGet.call(window.sessionStorage, sk) === null) { try { __rawSet.call(window.sessionStorage, sk, v); } catch (_) {} } } else if (window.localStorage) { const curV = __rawGet.call(window.localStorage, k); const isClobberedSell = (k.endsWith('__sell_cfg') || k === 'pelican_sell_cfg') && curV !== null && curV.indexOf('"weaponRarity"') === -1 && v.indexOf('"weaponRarity"') !== -1; let isUpdatedAuth = false; if ((k.endsWith('__auth_cfg') || k === 'pelican_auth_cfg') && curV !== null && curV !== v) { try { const sv = JSON.parse(v); const cv = JSON.parse(curV); const sForce = Number(sv && sv.forceManagerAuthAt) || 0; const cStamp = Math.max(Number(cv && cv.userEditedAt) || 0, Number(cv && cv.verifiedLoginAt) || 0, Number(cv && cv.forceManagerAuthAt) || 0); if (sForce > 0 && sForce >= cStamp) { isUpdatedAuth = true; if (window.sessionStorage && sv && cv && sv.username !== cv.username) { try { __rawDel.call(window.sessionStorage, 'aetheria.session'); } catch (_) {} } } } catch (_) {} } if (k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine') || curV === null || isClobberedSell || isUpdatedAuth) { try { __rawSet.call(window.localStorage, k, v); } catch (_) { if (typeof __freeStorageQuota === 'function') __freeStorageQuota(window.localStorage, __rawDel); try { __rawSet.call(window.localStorage, k, v); } catch (__) {} } } } } window.__pmStorageRestored = true; if (typeof window.reloadBotConfigsFromLocalStorage === 'function') { try { window.reloadBotConfigsFromLocalStorage(); } catch (_) {} } } catch (_) { window.__pmStorageRestored = true; }`
-      : `${purgeJs} window.__pmStorageRestored = true;`;
+      ? `try { const __s = ${JSON.stringify(orderedSaved)}; const __rawGet = (window.__pmRawStorage && window.__pmRawStorage.get) || Storage.prototype.getItem; const __rawSet = (window.__pmRawStorage && window.__pmRawStorage.set) || Storage.prototype.setItem; const __rawDel = (window.__pmRawStorage && window.__pmRawStorage.del) || Storage.prototype.removeItem; if (window.localStorage && window.__pmProfileId && __rawGet.call(window.localStorage, 'pelican_auth_cfg') !== null) { const __rm = []; for (let i = 0; i < window.localStorage.length; i++) { const lk = window.localStorage.key(i); if (lk && lk.startsWith('pelican_') && lk.indexOf('__') === -1 && lk !== 'pelican_icon_manifest' && lk !== 'pelican_item_catalog') __rm.push(lk); } for (const lk of __rm) { try { __rawDel.call(window.localStorage, lk); } catch (_) {} } } for (const [k, v] of Object.entries(__s)) { if (typeof v !== 'string' || k === 'aetheria.device' || k === 'aetheria.machine') continue; if (k.startsWith('__ss:')) { const sk = k.slice(5); if (window.sessionStorage && __rawGet.call(window.sessionStorage, sk) === null) { try { __rawSet.call(window.sessionStorage, sk, v); } catch (_) {} } } else if (window.localStorage) { const curV = __rawGet.call(window.localStorage, k); const isClobberedSell = (k.endsWith('__sell_cfg') || k === 'pelican_sell_cfg') && curV !== null && curV.indexOf('"weaponRarity"') === -1 && v.indexOf('"weaponRarity"') !== -1; let isUpdatedAuth = false; if ((k.endsWith('__auth_cfg') || k === 'pelican_auth_cfg') && curV !== null && curV !== v) { try { const sv = JSON.parse(v); const cv = JSON.parse(curV); const sForce = Number(sv && sv.forceManagerAuthAt) || 0; const cStamp = Math.max(Number(cv && cv.userEditedAt) || 0, Number(cv && cv.verifiedLoginAt) || 0, Number(cv && cv.forceManagerAuthAt) || 0); if (sForce > 0 && sForce >= cStamp) { isUpdatedAuth = true; if (window.sessionStorage && sv && cv && sv.username !== cv.username) { try { __rawDel.call(window.sessionStorage, 'aetheria.session'); } catch (_) {} } } } catch (_) {} } if (k.endsWith('__aetheria_device') || k.endsWith('__aetheria_machine') || curV === null || isClobberedSell || isUpdatedAuth) { try { __rawSet.call(window.localStorage, k, v); } catch (_) { if (typeof __freeStorageQuota === 'function') __freeStorageQuota(window.localStorage, __rawDel); try { __rawSet.call(window.localStorage, k, v); } catch (__) {} } } } } window.__pmStorageRestored = true; if (typeof window.reloadBotConfigsFromLocalStorage === 'function') { try { window.reloadBotConfigsFromLocalStorage(); } catch (_) {} } } catch (_) { window.__pmStorageRestored = true; }`
+      : 'window.__pmStorageRestored = true;';
     // IMPORTANT: Do NOT use regex literals (/.../) inside this template string, because \/ unescapes to / and // becomes a JS line comment!
     const deviceHookJs = `try {
       const __isTransientStorageKey = function(k) {
@@ -4339,7 +4305,6 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
         const diskHarvest = extractPelicanStorageFromLevelDb(levelDbDir);
         if (diskHarvest && diskHarvest.byProfile) {
           for (const [pid, map] of Object.entries(diskHarvest.byProfile)) {
-            if (isPurgedProfile(pid)) continue;
             if (!byProfile[pid]) byProfile[pid] = {};
             for (const [k, v] of Object.entries(map)) {
               if (k.endsWith('__auth_cfg') && byProfile[pid][k]) {
@@ -4351,7 +4316,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
             }
           }
           for (const [pid, map] of Object.entries(byProfile)) {
-            if (!isPurgedProfile(pid)) saveProfileStorage(pid, map);
+            saveProfileStorage(pid, map);
           }
         }
         const donor = Array.from(clients.values()).find(x => !x.browserContextId && x.sessionId) || Array.from(clients.values()).find(x => x.sessionId);
@@ -4373,7 +4338,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
               for (const [k, v] of Object.entries(allKeys)) {
                 if (typeof v !== 'string') continue;
                 const m = k.match(/^pelican_(profile_[a-zA-Z0-9_]+)__/);
-                if (m && m[1] && !isPurgedProfile(m[1])) {
+                if (m && m[1]) {
                   if (!byProfile[m[1]]) byProfile[m[1]] = {};
                   if (k.endsWith('__auth_cfg') && byProfile[m[1]][k]) {
                     byProfile[m[1]][k] = mergeAuthConfigString(byProfile[m[1]][k], v);
@@ -4384,7 +4349,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
                 }
               }
               for (const [pid, map] of Object.entries(byProfile)) {
-                if (!isPurgedProfile(pid)) saveProfileStorage(pid, map);
+                saveProfileStorage(pid, map);
               }
             }
           } catch (_) {}

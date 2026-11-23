@@ -7,6 +7,8 @@ const path = require('path');
 const FILE = path.join(__dirname, 'data', 'credentials.json');
 const BACKUP_FILE = path.join(__dirname, 'data', 'credentials.backup.json');
 let memCache = null;
+let memCacheMtimeMs = -1;
+let memCacheCheckedAt = 0;
 
 function writeAtomic(filePath, obj) {
   const dir = path.dirname(filePath);
@@ -31,10 +33,29 @@ function readJsonObj(filePath) {
   return null;
 }
 
+function getFileMtimeMs(filePath) {
+  try {
+    return fs.statSync(filePath).mtimeMs;
+  } catch (_) {
+    return -1;
+  }
+}
+
 function loadAll() {
+  const now = Date.now();
+  if (memCache !== null && (now - memCacheCheckedAt < 3000)) {
+    return { ...memCache };
+  }
+  const mtime = getFileMtimeMs(FILE);
+  if (memCache !== null && mtime >= 0 && mtime === memCacheMtimeMs) {
+    memCacheCheckedAt = now;
+    return { ...memCache };
+  }
   const primary = readJsonObj(FILE);
   if (primary !== null) {
     memCache = { ...primary };
+    memCacheMtimeMs = mtime >= 0 ? mtime : getFileMtimeMs(FILE);
+    memCacheCheckedAt = now;
     if (!fs.existsSync(BACKUP_FILE)) {
       try { writeAtomic(BACKUP_FILE, primary); } catch (_) {}
     }
@@ -44,9 +65,12 @@ function loadAll() {
   if (backup !== null) {
     memCache = { ...backup };
     try { writeAtomic(FILE, backup); } catch (_) {}
+    memCacheMtimeMs = getFileMtimeMs(FILE);
+    memCacheCheckedAt = now;
     return { ...backup };
   }
   if (memCache !== null) {
+    memCacheCheckedAt = now;
     return { ...memCache };
   }
   return {};
@@ -56,6 +80,8 @@ function saveAll(all) {
   const safe = (all && typeof all === 'object' && !Array.isArray(all)) ? all : {};
   memCache = { ...safe };
   writeAtomic(FILE, safe);
+  memCacheMtimeMs = getFileMtimeMs(FILE);
+  memCacheCheckedAt = Date.now();
   // Soft-delete preservation: never erase historical passwords from credentials.backup.json
   // so deleted accounts can always be recovered later (while active credentials.json stays clean).
   try {

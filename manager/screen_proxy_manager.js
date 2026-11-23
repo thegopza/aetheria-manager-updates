@@ -606,7 +606,26 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     return false;
   }
 
+  let blockedCacheRev = 1;
+  let cachedSettings = null;
+  let cachedSettingsMtimeMs = -1;
+  let cachedSettingsCheckedAt = 0;
+  let cachedPool = null;
+  let cachedPoolMtimeMs = -1;
+  let cachedPoolCheckedAt = 0;
+  let cachedPoolMaxPerIp = 0;
+  let cachedPoolBlockedRev = 0;
+
+  function statMtimeMs(file) {
+    try {
+      return fs.statSync(file).mtimeMs;
+    } catch (_) {
+      return -1;
+    }
+  }
+
   function saveBlockedProxies() {
+    blockedCacheRev++;
     try {
       writeJson(blockedFile, {
         updatedAt: now(),
@@ -1362,6 +1381,15 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
   }
 
   function loadSettings() {
+    const t = now();
+    if (cachedSettings && (t - cachedSettingsCheckedAt < 3000)) {
+      return { ...cachedSettings };
+    }
+    const mtime = statMtimeMs(settingsFile);
+    if (cachedSettings && mtime === cachedSettingsMtimeMs) {
+      cachedSettingsCheckedAt = t;
+      return { ...cachedSettings };
+    }
     const raw = readJson(settingsFile, {});
     if (raw && typeof raw === 'object' && raw.enabled !== true && Number(raw.maxScreensPerIp) === 3 && !raw.default6Migrated) {
       raw.maxScreensPerIp = 6;
@@ -1371,7 +1399,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     const maxScreensPerIp = Math.max(1, Math.min(20, parseInt(raw.maxScreensPerIp, 10) || DEFAULT_MAX_SCREENS_PER_IP));
     const mode = raw.mode === 'local-pool' ? 'local-pool' : 'owner-queue';
     const localAssetCache = raw.localAssetCache !== false;
-    return {
+    cachedSettings = {
       enabled: raw.enabled === true,
       mode,
       maxScreensPerIp,
@@ -1383,6 +1411,9 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       lastTestedAt: raw.lastTestedAt || null,
       updatedAt: raw.updatedAt || null
     };
+    cachedSettingsMtimeMs = statMtimeMs(settingsFile);
+    cachedSettingsCheckedAt = t;
+    return { ...cachedSettings };
   }
 
   function saveSettings(patch = {}) {
@@ -1401,6 +1432,9 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       updatedAt: now()
     };
     writeJson(settingsFile, next);
+    cachedSettings = null;
+    cachedSettingsMtimeMs = -1;
+    cachedSettingsCheckedAt = 0;
     if (assetCache && typeof assetCache.setEnabled === 'function') {
       assetCache.setEnabled(next.localAssetCache !== false);
     }
@@ -1418,6 +1452,25 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
 
   function loadPool() {
     const settings = loadSettings();
+    const t = now();
+    if (
+      cachedPool &&
+      cachedPoolMaxPerIp === settings.maxScreensPerIp &&
+      cachedPoolBlockedRev === blockedCacheRev &&
+      (t - cachedPoolCheckedAt < 5000)
+    ) {
+      return cachedPool;
+    }
+    const mtime = statMtimeMs(poolFile);
+    if (
+      cachedPool &&
+      cachedPoolMaxPerIp === settings.maxScreensPerIp &&
+      cachedPoolBlockedRev === blockedCacheRev &&
+      mtime === cachedPoolMtimeMs
+    ) {
+      cachedPoolCheckedAt = t;
+      return cachedPool;
+    }
     const raw = readJson(poolFile, { rawText: '', proxies: [] });
     const rawText = typeof raw.rawText === 'string' ? raw.rawText : '';
     const parsed = parseProxyPoolText(rawText || raw.proxies || [], settings.maxScreensPerIp);
@@ -1429,7 +1482,12 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
         blockInfo: blockInfo || null
       };
     });
-    return { rawText, proxies };
+    cachedPool = { rawText, proxies };
+    cachedPoolMtimeMs = mtime;
+    cachedPoolCheckedAt = t;
+    cachedPoolMaxPerIp = settings.maxScreensPerIp;
+    cachedPoolBlockedRev = blockedCacheRev;
+    return cachedPool;
   }
 
   function savePool(rawText, maxScreensPerIp) {
@@ -1451,7 +1509,12 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       rawText: text,
       proxies
     });
-    return { rawText: text, proxies };
+    cachedPool = { rawText: text, proxies };
+    cachedPoolMtimeMs = statMtimeMs(poolFile);
+    cachedPoolCheckedAt = now();
+    cachedPoolMaxPerIp = s.maxScreensPerIp;
+    cachedPoolBlockedRev = blockedCacheRev;
+    return cachedPool;
   }
 
   function getBlockedProxies() {

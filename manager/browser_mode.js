@@ -858,6 +858,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
   }
 
   let orderedProfileIdsCache = null;
+  let orderedProfileIdsCacheSet = null;
   let orderedProfileIdsCacheAt = 0;
   let orderedProfileIdsLiveSig = '';
   function getOrderedProfileIds(extraProfileId) {
@@ -870,38 +871,41 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
         liveSig = liveList.map(p => (p && p.id) || '').join('|');
       }
     } catch (_) {}
-    if (!extraProfileId && orderedProfileIdsCache && liveSig === orderedProfileIdsLiveSig && (now - orderedProfileIdsCacheAt < 5000)) {
-      return orderedProfileIdsCache;
-    }
-    const seen = new Set();
-    const ordered = [];
-    const addId = (pid) => {
-      const id = typeof pid === 'string' ? pid.trim() : '';
-      if (!id || id.startsWith('_') || isPurgedProfile(id) || seen.has(id)) return;
-      seen.add(id);
-      ordered.push(id);
-    };
-    for (const p of liveList) {
-      if (p && p.id) addId(p.id);
-    }
-    try {
-      if (storageDir && fs.existsSync(storageDir)) {
-        const files = fs.readdirSync(storageDir)
-          .filter(f => f.endsWith('.json') && !f.endsWith('.tmp') && !f.startsWith('_'))
-          .map(f => f.slice(0, -5))
-          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-        for (const pid of files) addId(pid);
+    if (!orderedProfileIdsCache || liveSig !== orderedProfileIdsLiveSig || (now - orderedProfileIdsCacheAt >= 15000)) {
+      const seen = new Set();
+      const ordered = [];
+      const addId = (pid) => {
+        const id = typeof pid === 'string' ? pid.trim() : '';
+        if (!id || id.startsWith('_') || isPurgedProfile(id) || seen.has(id)) return;
+        seen.add(id);
+        ordered.push(id);
+      };
+      for (const p of liveList) {
+        if (p && p.id) addId(p.id);
       }
-    } catch (_) {}
-    for (const pid of profileDeviceIds.keys()) addId(pid);
-    if (!extraProfileId) {
+      try {
+        if (storageDir && fs.existsSync(storageDir)) {
+          const files = fs.readdirSync(storageDir)
+            .filter(f => f.endsWith('.json') && !f.endsWith('.tmp') && !f.startsWith('_'))
+            .map(f => f.slice(0, -5))
+            .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+          for (const pid of files) addId(pid);
+        }
+      } catch (_) {}
+      for (const pid of profileDeviceIds.keys()) addId(pid);
       orderedProfileIdsCache = ordered;
+      orderedProfileIdsCacheSet = seen;
       orderedProfileIdsCacheAt = now;
       orderedProfileIdsLiveSig = liveSig;
-      return ordered;
     }
-    addId(extraProfileId);
-    return ordered;
+    if (!extraProfileId) {
+      return orderedProfileIdsCache;
+    }
+    const extra = typeof extraProfileId === 'string' ? extraProfileId.trim() : '';
+    if (!extra || extra.startsWith('_') || isPurgedProfile(extra) || (orderedProfileIdsCacheSet && orderedProfileIdsCacheSet.has(extra))) {
+      return orderedProfileIdsCache;
+    }
+    return [...orderedProfileIdsCache, extra];
   }
 
   function getScreensPerIp() {
@@ -1823,6 +1827,10 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
   function ensureProfileDeviceId(profileId) {
     initDeviceIdsFromStorage();
     if (!profileId) return mintUniqueDeviceId();
+    if (profileDeviceIds.has(profileId)) {
+      rebalanceDeviceGroups(null, false);
+      if (profileDeviceIds.has(profileId)) return profileDeviceIds.get(profileId);
+    }
     rebalanceDeviceGroups(profileId, false);
     if (profileDeviceIds.has(profileId)) return profileDeviceIds.get(profileId);
     rebalanceDeviceGroups(profileId, true);

@@ -517,13 +517,42 @@ function isUntouchedDefaultMockProfiles(profiles) {
 }
 
 const DELETED_PROFILES_FILE = path.join(__dirname, "data", "deleted_profiles.json");
-function loadDeletedProfileIds() {
+let deletedProfilesCacheSet = null;
+let deletedProfilesCacheMtimeMs = -1;
+let deletedProfilesCacheCheckedAt = 0;
+function getDeletedProfilesMtimeMs() {
   try {
-    if (!fs.existsSync(DELETED_PROFILES_FILE)) return new Set();
-    const arr = JSON.parse(fs.readFileSync(DELETED_PROFILES_FILE, "utf8"));
-    return new Set(Array.isArray(arr) ? arr.map(String) : []);
+    return fs.statSync(DELETED_PROFILES_FILE).mtimeMs;
   } catch (_) {
-    return new Set();
+    return -1;
+  }
+}
+function loadDeletedProfileIds() {
+  const now = Date.now();
+  if (deletedProfilesCacheSet !== null && (now - deletedProfilesCacheCheckedAt < 5000)) {
+    return deletedProfilesCacheSet;
+  }
+  const mtime = getDeletedProfilesMtimeMs();
+  if (deletedProfilesCacheSet !== null && mtime === deletedProfilesCacheMtimeMs) {
+    deletedProfilesCacheCheckedAt = now;
+    return deletedProfilesCacheSet;
+  }
+  try {
+    if (mtime < 0) {
+      deletedProfilesCacheSet = new Set();
+      deletedProfilesCacheMtimeMs = -1;
+      deletedProfilesCacheCheckedAt = now;
+      return deletedProfilesCacheSet;
+    }
+    const arr = JSON.parse(fs.readFileSync(DELETED_PROFILES_FILE, "utf8"));
+    deletedProfilesCacheSet = new Set(Array.isArray(arr) ? arr.map(String) : []);
+    deletedProfilesCacheMtimeMs = mtime;
+    deletedProfilesCacheCheckedAt = now;
+    return deletedProfilesCacheSet;
+  } catch (_) {
+    deletedProfilesCacheSet = new Set();
+    deletedProfilesCacheCheckedAt = now;
+    return deletedProfilesCacheSet;
   }
 }
 function recordDeletedProfileId(id) {
@@ -533,22 +562,30 @@ function recordDeletedProfileId(id) {
 function recordDeletedProfileIds(ids) {
   if (!Array.isArray(ids) || !ids.length) return;
   try {
-    const set = loadDeletedProfileIds();
+    const set = new Set(loadDeletedProfileIds());
     for (const id of ids) {
       if (id) set.add(String(id));
     }
     writeJsonAtomic(DELETED_PROFILES_FILE, Array.from(set));
+    deletedProfilesCacheSet = set;
+    deletedProfilesCacheMtimeMs = getDeletedProfilesMtimeMs();
+    deletedProfilesCacheCheckedAt = Date.now();
   } catch (_) {}
 }
 function removeDeletedProfileIds(ids) {
   if (!Array.isArray(ids) || !ids.length) return;
   try {
-    const set = loadDeletedProfileIds();
+    const set = new Set(loadDeletedProfileIds());
     let changed = false;
     for (const id of ids) {
       if (id && set.delete(String(id))) changed = true;
     }
-    if (changed) writeJsonAtomic(DELETED_PROFILES_FILE, Array.from(set));
+    if (changed) {
+      writeJsonAtomic(DELETED_PROFILES_FILE, Array.from(set));
+      deletedProfilesCacheSet = set;
+      deletedProfilesCacheMtimeMs = getDeletedProfilesMtimeMs();
+      deletedProfilesCacheCheckedAt = Date.now();
+    }
   } catch (_) {}
 }
 function isProfileMarkedJailedOrBanned(p) {
@@ -1077,11 +1114,26 @@ function recoverProfilesFromLocalEvidence(opts = {}) {
 function premiumDirOrData(dataDir) { return dataDir; }
 
 let lastValidProfilesCache = null;
+let profilesDiskCache = null;
+let profilesDiskMtimeMs = -1;
+let profilesBackupExistsKnown = false;
+
+function getProfilesFileMtimeMs() {
+  try {
+    return fs.statSync(PROFILES_FILE).mtimeMs;
+  } catch (_) {
+    return -1;
+  }
+}
 
 function loadProfiles() {
+  const diskMtime = getProfilesFileMtimeMs();
+  if (profilesDiskCache !== null && diskMtime >= 0 && diskMtime === profilesDiskMtimeMs) {
+    return profilesDiskCache.map(p => ({ ...p }));
+  }
   let parsed = null;
   let readFailed = false;
-  if (fs.existsSync(PROFILES_FILE)) {
+  if (diskMtime >= 0) {
     try {
       const raw = JSON.parse(fs.readFileSync(PROFILES_FILE, "utf8"));
       if (Array.isArray(raw)) parsed = raw;
@@ -1102,6 +1154,8 @@ function loadProfiles() {
         if (Array.isArray(backup) && backup.length > 0) {
           lastValidProfilesCache = backup.map(p => ({ ...p }));
           try { writeJsonAtomic(PROFILES_FILE, backup); } catch (_) {}
+          profilesDiskCache = backup.map(p => ({ ...p }));
+          profilesDiskMtimeMs = getProfilesFileMtimeMs();
           return backup;
         }
       } catch (_) {}
@@ -1116,18 +1170,27 @@ function loadProfiles() {
         if (Array.isArray(backup) && backup.length > 0) {
           lastValidProfilesCache = backup.map(p => ({ ...p }));
           try { writeJsonAtomic(PROFILES_FILE, backup); } catch (_) {}
+          profilesDiskCache = backup.map(p => ({ ...p }));
+          profilesDiskMtimeMs = getProfilesFileMtimeMs();
           return backup;
         }
       } catch (_) {}
     }
     const defaultProfiles = getDefaultMockProfiles();
     writeJsonAtomic(PROFILES_FILE, defaultProfiles);
+    profilesDiskCache = defaultProfiles.map(p => ({ ...p }));
+    profilesDiskMtimeMs = getProfilesFileMtimeMs();
     return defaultProfiles;
   }
 
+  profilesDiskCache = parsed.map(p => ({ ...p }));
+  profilesDiskMtimeMs = diskMtime;
   lastValidProfilesCache = parsed.map(p => ({ ...p }));
-  if (!fs.existsSync(PROFILES_BACKUP_FILE)) {
-    try { writeJsonAtomic(PROFILES_BACKUP_FILE, parsed); } catch (_) {}
+  if (!profilesBackupExistsKnown) {
+    if (!fs.existsSync(PROFILES_BACKUP_FILE)) {
+      try { writeJsonAtomic(PROFILES_BACKUP_FILE, parsed); } catch (_) {}
+    }
+    profilesBackupExistsKnown = true;
   }
   return parsed;
 }
@@ -1140,9 +1203,11 @@ function saveProfiles(profiles, options = {}) {
     return;
   }
   try { writeJsonAtomic(PROFILES_FILE, profiles); } catch (_) {}
+  profilesDiskCache = profiles.map(p => ({ ...p }));
+  profilesDiskMtimeMs = getProfilesFileMtimeMs();
   if (!isUntouchedDefaultMockProfiles(profiles)) {
     lastValidProfilesCache = profiles.map(p => ({ ...p }));
-    try { writeJsonAtomic(PROFILES_BACKUP_FILE, profiles); } catch (_) {}
+    try { writeJsonAtomic(PROFILES_BACKUP_FILE, profiles); profilesBackupExistsKnown = true; } catch (_) {}
     if (typeof scheduleCentralProfileBackupSync === "function") {
       scheduleCentralProfileBackupSync();
     }
@@ -8009,7 +8074,7 @@ const remoteFleet = createRemoteFleetService({
       discordService.setDeviceNickname(clean);
     }
   },
-  managerVersion: '4.63.18'
+  managerVersion: '4.63.19'
 });
 humanCheckSolver.addAccountChangedListener?.(() => { remoteFleet.poke(); });
 
@@ -8038,7 +8103,7 @@ const fleetZenyService = createFleetZenyConsolidationService({
   humanCheckSolver,
   getEffectiveDeviceNickname,
   os,
-  managerVersion: '4.63.18',
+  managerVersion: '4.63.19',
   runningProcesses,
   isProcessAlive,
   browserMode,
@@ -9272,6 +9337,8 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && pathname === "/api/profiles") {
     lastProfilesZenyPollAt = Date.now();
     const profiles = loadProfiles();
+    const isBrowserLaunchMode = (installer.loadSettings()?.launchMode || "browser") === "browser";
+    try { browserMode?.rebalanceDeviceGroups?.(null, false); } catch (_) {}
     const enriched = await mapWithConcurrency(
       profiles,
       8,
@@ -9282,11 +9349,18 @@ const server = http.createServer(async (req, res) => {
         let liveState = null;
         let hasFreshLiveState = false;
 
-        // Auto-detect online state if debugPort is responding
+        // Auto-detect online state if debugPort is responding.
+        // IMPORTANT: On Windows TCP/IP, connecting to a closed loopback port takes ~2,030ms (SYN retries).
+        // In Browser Mode, browserMode owns all client proxy ports inside this process, so probing 39 closed
+        // ports synchronously inside GET /api/profiles would stall the request by 10+ seconds!
         let adoptedAuthFromClient = null;
         if (p.debugPort) {
+          const hasWarmPortCache = clientStateCacheByPort.has(p.debugPort);
           const lastFail = clientStateLastFailureByPort.get(p.debugPort);
-          const skipClosedPortProbe = !alive && lastFail && lastFail.reason === 'ECONNREFUSED' && (Date.now() - lastFail.ts < 5000);
+          const skipClosedPortProbe = !alive && (
+            (!TEST_INSTANCE && isBrowserLaunchMode && !hasWarmPortCache) ||
+            (lastFail && lastFail.reason === 'ECONNREFUSED' && (Date.now() - lastFail.ts < 30000))
+          );
           if (!skipClosedPortProbe) {
             liveState = await queryClientState(p.debugPort);
             hasFreshLiveState = Boolean(liveState && !liveState.error);

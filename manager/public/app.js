@@ -6017,6 +6017,10 @@ function initDeviceNickname() {
     const guestView = overlay.querySelector("#access-lock-guest-view");
     const pendingView = overlay.querySelector("#access-lock-pending-view");
     const loginNickEl = overlay.querySelector("#lock-login-nickname");
+    const loginUserEl = overlay.querySelector("#lock-login-username");
+    if (loginUserEl && document.activeElement !== loginUserEl && /^[A-Za-z]:[\\/]/.test(loginUserEl.value || "")) {
+      loginUserEl.value = "";
+    }
     const regNickEl = overlay.querySelector("#lock-reg-nickname");
     const pendingUserEl = overlay.querySelector("#lock-pending-username");
     const pendingDeviceEl = overlay.querySelector("#lock-pending-device");

@@ -298,7 +298,7 @@
     })();
   </script>
   <!-- MANDATORY FULL-SCREEN USER LOGIN / REGISTER GATE OVERLAY (Replaces legacy HWID machine approval) -->
-  <div id="access-lock-overlay" style="display:flex;position:fixed;inset:0;z-index:9999999;background:radial-gradient(circle at top,#1e1b4b 0%,#090d16 55%,#020617 100%);align-items:center;justify-content:center;padding:18px;overflow-y:auto;font-family:'IBM Plex Sans Thai','Plus Jakarta Sans',sans-serif;color:#f8fafc;">
+  <div id="access-lock-overlay" style="display:none;position:fixed;inset:0;z-index:9999999;background:radial-gradient(circle at top,#1e1b4b 0%,#090d16 55%,#020617 100%);align-items:center;justify-content:center;padding:18px;overflow-y:auto;font-family:'IBM Plex Sans Thai','Plus Jakarta Sans',sans-serif;color:#f8fafc;">
     <div style="width:100%;max-width:500px;background:linear-gradient(155deg,rgba(15,23,42,0.97),rgba(30,27,75,0.93));border:1.5px solid rgba(56,189,248,0.45);border-radius:18px;padding:22px 24px;box-shadow:0 30px 80px rgba(0,0,0,0.88),0 0 40px rgba(56,189,248,0.16);display:flex;flex-direction:column;gap:14px;">
       <div style="display:flex;align-items:center;gap:14px;">
         <div id="access-lock-icon" style="width:48px;height:48px;border-radius:14px;background:linear-gradient(145deg,#0b152e,#1e1b4b);border:1px solid rgba(56,189,248,0.55);box-shadow:0 6px 20px rgba(14,165,233,0.28),inset 0 1px 0 rgba(255,255,255,0.18);display:flex;align-items:center;justify-content:center;flex-shrink:0;">
@@ -338,7 +338,7 @@
         </div>
 
         <div id="access-lock-pane-login" style="background:rgba(2,6,23,0.68);border:1px solid rgba(148,163,184,0.2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
-          <input type="text" id="lock-login-username" maxlength="32" autocomplete="username" placeholder="Username (เช่น user01)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
+          <input type="text" id="lock-login-username" name="pm_account_login_username" maxlength="32" spellcheck="false" autocomplete="username" placeholder="Username (เช่น user01)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
           <input type="password" id="lock-login-password" maxlength="128" autocomplete="current-password" placeholder="รหัสผ่าน (Password)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #334155;border-radius:8px;color:#f8fafc;font-size:13px;padding:10px 12px;outline:none;">
           <input type="text" id="lock-login-nickname" maxlength="32" placeholder="ชื่อเล่นเครื่องนี้ เช่น PC-บ้าน (ไม่บังคับ)" style="width:100%;box-sizing:border-box;background:#090d16;border:1px solid #1e293b;border-radius:8px;color:#cbd5e1;font-size:12px;padding:8px 12px;outline:none;">
           <button type="button" id="btn-lock-login-submit" style="width:100%;background:linear-gradient(135deg,#0ea5e9,#0284c7);border:1px solid #38bdf8;color:#fff;border-radius:10px;padding:10px 14px;font-size:13.5px;font-weight:800;cursor:pointer;">🔓 เข้าสู่ระบบ &amp; เชื่อมส่วนบุญ</button>
@@ -1717,7 +1717,7 @@
   </div>
 
   <script src="image_board_solver.js?v=4.53.35"></script>
-  <script src="app.js?v=4.63.18"></script>
+  <script src="app.js?v=4.63.19"></script>
   <script src="patcher_module.js?v=4.63.11"></script>
   <script src="builder_module.js?v=4.53.5"></script>
   <script src="gear_builder.js?v=4.61.1"></script>
@@ -1737,7 +1737,7 @@
   <script src="support_chat.js?v=4.60.0.1"></script>
   <script src="tower_manager.js?v=4.63.5.1"></script>
   <script src="announcements.js?v=4.63.6.1"></script>
-  <script src="update_log.js?v=4.63.18"></script>
+  <script src="update_log.js?v=4.63.19"></script>
   <!-- FLOATING IN-GAME BOT HUDS CONTAINER -->
   <div id="web-huds-container"></div>
 

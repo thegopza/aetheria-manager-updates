@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "sourceCommit": "638546caaa14b59c3cdedfa5b54436f521769331",
+  "sourceCommit": "a838ba9b553a2614dadaf571b3478e3a7f2eb8b8",
   "files": [
     {
       "path": "manager/asset_cache.js",
@@ -16,7 +16,7 @@
     },
     {
       "path": "manager/browser_mode.js",
-      "sha256": "1ad51e92dfbe12420100c33197f917bec438207d2bfdabc29f4caf34e8f5836e"
+      "sha256": "8f7f38cb129ef31cb401c5bb5d9d5267f6c9fe3ef9557a47e1de3d9a223f63f1"
     },
     {
       "path": "manager/captcha_stats.js",
@@ -36,7 +36,7 @@
     },
     {
       "path": "manager/credentials.js",
-      "sha256": "7dc20934a0da36251083616e20fe42b57b246c87b59e3064d9eb403a411c9a97"
+      "sha256": "d823c4e6233be69e774d7e66ea034073b454e5af9559dca17ab3e906028b495c"
     },
     {
       "path": "manager/discord_bot.js",
@@ -140,7 +140,7 @@
     },
     {
       "path": "manager/public/app.js",
-      "sha256": "43f9d5fc1bf610bfe2b6ad109634a49d0d0cfdd5f8d24038798f6d52d094a160"
+      "sha256": "1b1aba2f6294391c69097ac2efa07692e8536388b03d77367c5acdff8259b2b1"
     },
     {
       "path": "manager/public/bot_update.css",
@@ -208,7 +208,7 @@
     },
     {
       "path": "manager/public/index.html",
-      "sha256": "2a5e02b7df34386ece494dc048e698413b3a3302ead86d9c672ee2279d7a34ed"
+      "sha256": "a7f3985597d4a6f1a50cbe2e5950e1b1ea70cd878614ce5dbc3f19097cc1e2aa"
     },
     {
       "path": "manager/public/inventory_market.css",
@@ -288,7 +288,7 @@
     },
     {
       "path": "manager/public/update_log.js",
-      "sha256": "da3c2a6ed1a75e64f1ab2acdc4735d0e093d36411367a11cea50b548f93b83d3"
+      "sha256": "f82ce0c4453806559f3937f9a978f78de969cc4bb58af10c36ae1072b26979fc"
     },
     {
       "path": "manager/remote_fleet.js",
@@ -296,7 +296,7 @@
     },
     {
       "path": "manager/screen_proxy_manager.js",
-      "sha256": "ee37527817f9c52b879d31fbd71beec32f5b935d29d5996872148efb0248b1a6"
+      "sha256": "50ab689b2991965546c0ea87e19c9b21e0fe9ce1ec803d62f8dcf89c8e286b3e"
     },
     {
       "path": "manager/script_bootstrap.js",
@@ -320,7 +320,7 @@
     },
     {
       "path": "manager/server.js",
-      "sha256": "b6584a97aa21306926451f2d00f240a0718de7bcc3958488be882ceca1957088"
+      "sha256": "640e96ee555b32996de2ae0bfdd04dfe0d2a27114ce159e5ae8d75e9035ff02f"
     },
     {
       "path": "manager/test_isolation.js",

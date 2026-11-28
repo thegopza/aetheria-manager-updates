@@ -31,6 +31,7 @@
 
   const STORAGE_SORT_KEY = 'pelican_pm_sort';
   const STORAGE_CFG_COLLAPSED_KEY = 'pelican_pm_cfg_collapsed';
+  const STORAGE_ONLINE_ONLY_KEY = 'pelican_pm_online_only';
   const VALID_SORTS = new Set(['exp_asc', 'exp_desc', 'novip_first', 'zeny_desc', 'tokens_desc', 'default']);
   const loadSavedSort = () => {
     try {
@@ -47,11 +48,30 @@
     } catch (_) {}
     return true;
   };
+  const loadSavedOnlineOnly = () => {
+    try {
+      const v = localStorage.getItem(STORAGE_ONLINE_ONLY_KEY);
+      if (v === '0') return false;
+      if (v === '1') return true;
+    } catch (_) {}
+    return true;
+  };
 
   let data = { settings: {}, market: null, clients: [] };
   let open = false, pollTimer = null, busy = false, filter = 'all', pointerDown = false, pendingRender = false;
   let sortMode = loadSavedSort();
   let cfgCollapsed = loadSavedCfgCollapsed();
+  let onlineOnly = loadSavedOnlineOnly();
+
+  function isClientOnline(c) {
+    if (!c) return false;
+    if (c.online) return true;
+    if (c.checkedAt == null && typeof currentProfiles !== 'undefined' && Array.isArray(currentProfiles)) {
+      const cp = currentProfiles.find(x => x && String(x.id) === String(c.id));
+      if (cp && cp.isRunning) return true;
+    }
+    return false;
+  }
   let searchQuery = '';
   let lastPlansSig = '';
   let openForceId = null;
@@ -180,6 +200,12 @@
         </div>
       </section>
       <div class="pm-toolbar">
+        <label class="pm-online-bar${onlineOnly ? ' on' : ''}" id="pm-online-bar" for="pm-online-only" title="เปิดเพื่อแสดงเฉพาะจอที่ออนไลน์อยู่ หรือปิดเพื่อแสดงรวมจอที่ออฟไลน์ด้วย">
+          <span class="pm-online-dot" aria-hidden="true"></span>
+          <span class="pm-online-title">เฉพาะจอออนไลน์</span>
+          <span class="pm-online-meta" id="pm-online-meta"></span>
+          <span class="pm-switch pm-online-switch"><input type="checkbox" id="pm-online-only"${onlineOnly ? ' checked' : ''}><span></span></span>
+        </label>
         <nav class="pm-filter" id="pm-filter">
           <button type="button" data-f="all" class="on">ทุกจอ</button>
           <button type="button" data-f="on">เปิดอยู่</button>
@@ -274,8 +300,20 @@
         renderList();
       });
     }
+    const onlineOnlyChk = drawer.querySelector('#pm-online-only');
+    if (onlineOnlyChk) {
+      onlineOnlyChk.checked = onlineOnly;
+      onlineOnlyChk.addEventListener('change', () => {
+        onlineOnly = Boolean(onlineOnlyChk.checked);
+        try { localStorage.setItem(STORAGE_ONLINE_ONLY_KEY, onlineOnly ? '1' : '0'); } catch (_) {}
+        syncOnlineOnlyUI();
+        renderSettings();
+        renderList();
+      });
+    }
     syncCfgCollapsedUI();
     syncSortControlsUI();
+    syncOnlineOnlyUI();
     drawer.querySelector('#pm-all-on').addEventListener('click', () => toggle('*', true));
     drawer.querySelector('#pm-all-off').addEventListener('click', () => toggle('*', false));
     drawer.querySelector('#pm-sell-all-open').addEventListener('click', () => {
@@ -365,6 +403,24 @@
       const consOn = Boolean(s.consolidateBeforeExpire);
       const urgentCount = consOn ? data.clients.filter(c => c.enabled && c.inConsolidateWindow && c.needsConsolidation).length : 0;
       sumConsBtn.hidden = !(consOn && cfgCollapsed && !(liveCons && liveCons.running) && urgentCount === 0);
+    }
+  }
+
+  function syncOnlineOnlyUI() {
+    const bar = document.getElementById('pm-online-bar');
+    if (bar) bar.classList.toggle('on', Boolean(onlineOnly));
+    const chk = document.getElementById('pm-online-only');
+    if (chk && chk.checked !== Boolean(onlineOnly)) chk.checked = Boolean(onlineOnly);
+    const meta = document.getElementById('pm-online-meta');
+    if (meta) {
+      const total = data.clients.length;
+      const onCnt = data.clients.filter(isClientOnline).length;
+      const offCnt = Math.max(0, total - onCnt);
+      if (onlineOnly) {
+        setText(meta, offCnt > 0 ? `(${onCnt}/${total} จอ · ซ่อนออฟไลน์ ${offCnt})` : `(${onCnt}/${total} จอ)`);
+      } else {
+        setText(meta, offCnt > 0 ? `(แสดงทุกจอ · ออนไลน์ ${onCnt} · ออฟไลน์ ${offCnt})` : `(แสดงทุกจอ · ${onCnt} จอ)`);
+      }
     }
   }
 
@@ -603,12 +659,14 @@
 
     syncCfgCollapsedUI();
     syncSortControlsUI();
+    syncOnlineOnlyUI();
 
-    // Update counts on filter buttons
+    // Update counts on filter buttons (scoped to online-only when enabled)
     const nowMs = Date.now();
-    const allCount = data.clients.length;
-    const onCount = data.clients.filter(c => c.enabled).length;
-    const vipCount = data.clients.filter(c => getPremiumUntilMs(c) > nowMs).length;
+    const scopedClients = onlineOnly ? data.clients.filter(isClientOnline) : data.clients;
+    const allCount = scopedClients.length;
+    const onCount = scopedClients.filter(c => c.enabled).length;
+    const vipCount = scopedClients.filter(c => getPremiumUntilMs(c) > nowMs).length;
     const noVipCount = allCount - vipCount;
     const filterEl = document.getElementById('pm-filter');
     if (filterEl) {
@@ -1082,7 +1140,7 @@
   function renderList() {
     const body = document.getElementById('pm-body'); if (!body) return;
     const nowMs = Date.now();
-    let list = data.clients.slice();
+    let list = onlineOnly ? data.clients.filter(isClientOnline) : data.clients.slice();
     if (filter === 'on') list = list.filter(c => c.enabled);
     if (filter === 'active') list = list.filter(c => getPremiumUntilMs(c) > nowMs);
     if (filter === 'inactive') list = list.filter(c => !(getPremiumUntilMs(c) > nowMs));
@@ -1096,10 +1154,16 @@
 
     if (!list.length) {
       body.querySelectorAll('.pm-row').forEach(r => r.remove());
+      const hasHiddenOffline = onlineOnly && data.clients.some(c => !isClientOnline(c));
+      const emptyMsg = searchQuery
+        ? 'ไม่พบตัวละครที่ตรงกับคำค้นหา'
+        : (hasHiddenOffline
+          ? 'ไม่มีจอที่ออนไลน์ในหมวดนี้ (ปิดสวิตช์ "เฉพาะจอออนไลน์" เพื่อดูจอที่ออฟไลน์ด้วย)'
+          : 'ไม่มีจอในหมวดนี้');
       if (!body.querySelector('.pm-empty')) {
-        body.innerHTML = `<div class="pm-empty">${searchQuery ? 'ไม่พบตัวละครที่ตรงกับคำค้นหา' : 'ไม่มีจอในหมวดนี้'}</div>`;
+        body.innerHTML = `<div class="pm-empty">${esc(emptyMsg)}</div>`;
       } else {
-        setText(body.querySelector('.pm-empty'), searchQuery ? 'ไม่พบตัวละครที่ตรงกับคำค้นหา' : 'ไม่มีจอในหมวดนี้');
+        setText(body.querySelector('.pm-empty'), emptyMsg);
       }
       return;
     }

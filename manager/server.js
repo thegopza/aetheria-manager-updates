@@ -9143,7 +9143,7 @@ const server = http.createServer(async (req, res) => {
           screenProxy.saveSettings({ enabled: true });
         }
         const applied = isBrowserMode()
-          ? await browserMode.applyProxyModeToOpenWindows({ onlyProfileIds: data.profileIds })
+          ? await browserMode.applyProxyModeToOpenWindows({ onlyProfileIds: data.profileIds, recreateDeadProxy: data.recreateDeadProxy !== false })
           : { switched: 0, updatedTunnels: (await syncScreenProxyForOpenProfiles()).length };
         if (isBrowserMode() && typeof browserMode.syncAssetCacheToOpenWindows === "function") {
           await browserMode.syncAssetCacheToOpenWindows().catch(() => {});

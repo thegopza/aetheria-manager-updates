@@ -16,6 +16,15 @@ const LEASE_TTL_MS = 180000;
 const FORCE_DISABLE_REVISION = '2026-10-21-off';
 
 
+function computePreferredTunnelPort(debugPort, explicitPreferredPort) {
+  const exp = Number(explicitPreferredPort);
+  if (Number.isInteger(exp) && exp >= 1024 && exp <= 65535) return exp;
+  const dp = Number(debugPort) || 49876;
+  if (dp >= 49876 && dp < 50876) return 51000 + (dp - 49876);
+  if (dp >= 38760 && dp < 39760) return 52000 + (dp - 38760);
+  return 53000 + (Math.abs(Math.floor(dp)) % 1000);
+}
+
 function isGameOrIpCheckHost(hostname) {
   const h = String(hostname || '').toLowerCase().replace(/:\d+$/, '');
   if (!h) return false;
@@ -2271,7 +2280,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     };
   }
 
-  const EXPECTED_DAEMON_VERSION = 3;
+  const EXPECTED_DAEMON_VERSION = 4;
 
   async function ensureDaemonRunning() {
     if (!usePersistentDaemon) return false;
@@ -2328,11 +2337,14 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
               await daemonRequest('POST', '/sync', buildDaemonSyncPayload(), 2000).catch(() => {});
               for (const dt of prevTunnelsToRestore) {
                 if (dt && dt.profileId && dt.port) {
-                  const inferredDebugPort = dt.port >= 51000 ? (49876 + (dt.port - 51000)) : 49876;
+                  const inferredDebugPort = dt.port >= 52000 && dt.port < 53000
+                    ? (38760 + (dt.port - 52000))
+                    : (dt.port >= 51000 && dt.port < 52000 ? (49876 + (dt.port - 51000)) : 49876);
                   await daemonRequest('POST', '/ensure-tunnel', {
                     supervisorPid,
                     profileId: dt.profileId,
                     debugPort: inferredDebugPort,
+                    preferredPort: dt.port,
                     settings: loadSettings(),
                     lease: activeLeases.get(dt.profileId) || null
                   }, 2000).catch(() => {});
@@ -2531,7 +2543,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
     t.sockets.clear();
   }
 
-  async function ensureProfileTunnel(profileId, debugPort = 49876) {
+  async function ensureProfileTunnel(profileId, debugPort = 49876, opts = {}) {
     if (usePersistentDaemon) {
       try {
         const daemonOk = await ensureDaemonRunning();
@@ -2540,6 +2552,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
             supervisorPid,
             profileId,
             debugPort,
+            preferredPort: Number(opts?.preferredPort) || 0,
             settings: loadSettings(),
             lease: activeLeases.get(profileId) || null
           }, 3000);
@@ -2773,7 +2786,7 @@ function createScreenProxyManager({ dataDir, solver, loadProfiles, assetCache: p
       }
     });
 
-    const preferredPort = 51000 + Math.max(0, (Number(debugPort) || 49876) - 49876);
+    const preferredPort = computePreferredTunnelPort(debugPort, opts?.preferredPort);
     const starting = new Promise((resolve, reject) => {
       const tryListen = portToTry => {
         const onError = err => {
@@ -3826,5 +3839,6 @@ module.exports = {
   createScreenProxyManager,
   parseProxyPoolText,
   parseProxyPoolLines: parseProxyPoolText,
-  isGameOrIpCheckHost
+  isGameOrIpCheckHost,
+  computePreferredTunnelPort
 };

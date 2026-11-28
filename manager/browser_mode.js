@@ -4148,6 +4148,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
       : { url: 'about:blank', newWindow: true };
     const { targetId } = await send('Target.createTarget', createParams);
     const c = await attach(profile.id, targetId, true, browserContextId);
+    if (tunnelInfo && tunnelInfo.proxyServerUrl) c.proxyServerUrl = tunnelInfo.proxyServerUrl;
     c.initialHealthChecked = true;
     startProxy(c, profile.debugPort);
     await send('Page.navigate', { url: gameUrl }, c.sessionId);
@@ -4197,7 +4198,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
   }
   const isOpen = profileId => clients.has(profileId);
 
-  async function applyProxyModeToOpenWindows({ onlyProfileIds } = {}) {
+  async function applyProxyModeToOpenWindows({ onlyProfileIds, recreateDeadProxy = false } = {}) {
     if (!screenProxy) return { switched: 0, updatedTunnels: 0, details: [] };
     await connect().catch(() => {});
     const customContexts = await getCustomBrowserContexts();
@@ -4220,14 +4221,33 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
       }
       const tunnelInfo = await screenProxy.acquireForProfile(c.profileId, { debugPort: profile.debugPort });
       if (c.browserContextId && customContexts.has(c.browserContextId)) {
-        // Already running in a proxy-enabled BrowserContext pointing to 127.0.0.1:<tunnelPort>
-        updatedTunnels++;
-        details.push({ profileId: c.profileId, action: 'tunnel-updated', proxyHost: tunnelInfo?.lease?.proxyHost || null });
-        continue;
+        let needsRecreate = Boolean(
+          c.proxyServerUrl &&
+          tunnelInfo &&
+          tunnelInfo.proxyServerUrl &&
+          c.proxyServerUrl !== tunnelInfo.proxyServerUrl
+        );
+        if (!needsRecreate && recreateDeadProxy && tunnelInfo && tunnelInfo.proxyServerUrl && c.sessionId) {
+          try {
+            const probeOk = await evaluate(
+              c,
+              `(async () => { try { const r = await fetch(${JSON.stringify(gameUrl)}, { method: 'HEAD', cache: 'no-store' }); return r.status > 0; } catch (_) { return false; } })()`,
+              3500
+            );
+            if (probeOk === false) needsRecreate = true;
+          } catch (_) {}
+        }
+        if (!needsRecreate) {
+          // Already running in a healthy proxy-enabled BrowserContext pointing to 127.0.0.1:<tunnelPort>
+          updatedTunnels++;
+          details.push({ profileId: c.profileId, action: 'tunnel-updated', proxyHost: tunnelInfo?.lease?.proxyHost || null });
+          continue;
+        }
       }
-      // Migrate from default context to isolated proxy BrowserContext while preserving window bounds
+      // Migrate from default or dead-port context to isolated proxy BrowserContext while preserving window bounds
       if (tunnelInfo && tunnelInfo.proxyServerUrl) {
         try {
+          const oldBrowserContextId = c.browserContextId || null;
           let savedBounds = null;
           let savedCookies = [];
           try {
@@ -4252,6 +4272,7 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
             const { targetId: newTargetId } = await send('Target.createTarget', { url: 'about:blank', newWindow: true, browserContextId });
             drop(c);
             const newClient = await attach(profile.id, newTargetId, false, browserContextId);
+            newClient.proxyServerUrl = tunnelInfo.proxyServerUrl;
             startProxy(newClient, profile.debugPort);
             if (savedBounds) {
               try {
@@ -4273,6 +4294,9 @@ function createBrowserMode({ rootDir, sessionsDir, getSettings, loadProfiles, is
             }
             await send('Page.navigate', { url: gameUrl }, newClient.sessionId);
             await send('Target.closeTarget', { targetId: oldTargetId }).catch(() => {});
+            if (oldBrowserContextId && oldBrowserContextId !== browserContextId) {
+              await send('Target.disposeBrowserContext', { browserContextId: oldBrowserContextId }).catch(() => {});
+            }
             switched++;
             details.push({ profileId: c.profileId, action: 'recreated-with-proxy', proxyHost: tunnelInfo?.lease?.proxyHost || null });
           }

@@ -9,8 +9,17 @@ const fs = require('fs');
 const path = require('path');
 const { createAssetCache } = require('./asset_cache');
 
-const DAEMON_VERSION = 3;
+const DAEMON_VERSION = 4;
 const DEFAULT_CONTROL_PORT = Number(process.env.PELICAN_TUNNEL_DAEMON_PORT) || 18989;
+
+function computePreferredTunnelPort(debugPort, explicitPreferredPort) {
+  const exp = Number(explicitPreferredPort);
+  if (Number.isInteger(exp) && exp >= 1024 && exp <= 65535) return exp;
+  const dp = Number(debugPort) || 49876;
+  if (dp >= 49876 && dp < 50876) return 51000 + (dp - 49876);
+  if (dp >= 38760 && dp < 39760) return 52000 + (dp - 38760);
+  return 53000 + (Math.abs(Math.floor(dp)) % 1000);
+}
 
 function isJailOnlyBlockRecord(obj) {
   if (!obj || typeof obj !== 'object') return false;
@@ -365,7 +374,7 @@ function startDaemon() {
     return count;
   }
 
-  async function ensureProfileTunnel(profileId, debugPort = 49876) {
+  async function ensureProfileTunnel(profileId, debugPort = 49876, explicitPreferredPort = 0) {
     const existing = tunnels.get(profileId);
     if (existing && existing.server && existing.server.listening) {
       return existing;
@@ -578,7 +587,7 @@ function startDaemon() {
       }
     });
 
-    const preferredPort = 51000 + Math.max(0, (Number(debugPort) || 49876) - 49876);
+    const preferredPort = computePreferredTunnelPort(debugPort, explicitPreferredPort);
     const starting = new Promise((resolve, reject) => {
       let retries = 0;
       const tryListen = portToTry => {
@@ -701,7 +710,7 @@ function startDaemon() {
           if (body.lease && body.lease.assigned) {
             activeLeases.set(profileId, body.lease);
           }
-          const t = await ensureProfileTunnel(profileId, debugPort);
+          const t = await ensureProfileTunnel(profileId, debugPort, body.preferredPort);
           return sendJson({
             ok: true,
             profileId,
@@ -793,4 +802,4 @@ if (require.main === module) {
   startDaemon();
 }
 
-module.exports = { startDaemon, DEFAULT_CONTROL_PORT };
+module.exports = { startDaemon, DEFAULT_CONTROL_PORT, computePreferredTunnelPort };
